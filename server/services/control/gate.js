@@ -28,6 +28,8 @@ const READ_ONLY_RPCS = new Set([
   'referrals_representative_options',
   // CASHIER_HEAD_V1 — кого касса может поставить исполнителем и почём. Чистое чтение.
   'cashier_line_performers',
+  // DUP_STOP_V1 — что уже назначено в визите дня (экраны записи до первой записи). Чистое чтение.
+  'visit_dup_check',
   // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» кассы. Чистое чтение.
   'cashier_refunds',
   // REFERRAL_BILL_V1 — «Ждут счёта» кассы: визиты со строками без счёта. Чистое чтение.

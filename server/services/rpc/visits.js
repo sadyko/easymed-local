@@ -146,6 +146,20 @@ function parseBook(book) {
   };
 }
 
+// DUP_STOP_V1 — ВИЗИТ ДНЯ ПАЦИЕНТА — одно правило для ensure_visit и visit_dup_check
+// (rpc/dup-order-check.js): местный день, свой (sync_origin пуст), не отменён и не «не
+// пришёл». BILLING_AUDIT_FIX_V1 (A1, A8) — почему именно так, см. ensureVisit ниже.
+const DAY_VISIT_SQL = `
+  SELECT * FROM visits
+   WHERE patient_id = ? AND ${localDate('visit_date')} = ?
+     AND status NOT IN ('cancelled', 'no_show')
+     AND sync_origin IS NULL
+   ORDER BY id LIMIT 1`;
+/** @returns {object|null} визит дня `day` ('YYYY-MM-DD', местный) пациента или null */
+export function dayVisitOf(db, patientId, day) {
+  return db.prepare(DAY_VISIT_SQL).get(patientId, day) || null;
+}
+
 // args: { patient_id, date (ISO datetime or YYYY-MM-DD), doctor_id?,
 //         visit_type?, referral_source_id?, branch_id?, notes?,
 //         desk?: true (CRM_UNIFY_V1 — регистрация на стойке; CRM_LINK_ALL_V1 (R3) — с book
@@ -229,13 +243,7 @@ export async function ensureVisit(db, args, user, internal = {}) {
   // здесь не правится (BRANCH_MONEY_GUARD_V1 — ни счёт, ни услугу в нём не
   // выставить), и пациент, побывавший утром в филиале, получал в этом здании
   // чужой визит, в который ничего нельзя было записать.
-  const DAY_VISIT_SQL = `
-    SELECT * FROM visits
-     WHERE patient_id = ? AND ${localDate('visit_date')} = ?
-       AND status NOT IN ('cancelled', 'no_show')
-       AND sync_origin IS NULL
-     ORDER BY id LIMIT 1`;
-  const dayVisit = () => db.prepare(DAY_VISIT_SQL).get(patientId, day);
+  const dayVisit = () => dayVisitOf(db, patientId, day);   // DUP_STOP_V1 — правило вынесено (dayVisitOf)
 
   if (book) {
     const durationMin = book.durationMin || bookDuration(db, book.serviceId);
@@ -264,7 +272,7 @@ export async function ensureVisit(db, args, user, internal = {}) {
     // One visit per patient per day: match on the DATE part of visit_date.
     // Cancelled/no-show days don't swallow new bookings — a fresh visit row
     // is opened for the same day instead.
-    const existing = db.prepare(DAY_VISIT_SQL).get(patientId, day);
+    const existing = dayVisitOf(db, patientId, day);   // DUP_STOP_V1
     if (existing) {
       // Backfill a doctor onto a doctor-less day visit (first assigned wins).
       if (doctorId && existing.doctor_id == null) {

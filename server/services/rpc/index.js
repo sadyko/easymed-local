@@ -54,6 +54,7 @@ import {
   admissionMealMark, admissionMealsList, kitchenSheet,
 } from './diet.js';   // DIET_TABLES_V1
 import { ensureVisit, discardEmptyVisit } from './visits.js';
+import { visitDupCheck } from './dup-order-check.js';   // DUP_STOP_V1 — что уже назначено в визите дня (только чтение)
 import { bookingLinesAdd, bookingLineRemove } from './booking-lines.js';   // CRM_CALENDAR_MIRROR_V1 — услуги записи от колл-центра
 import { removeOwnVisitLine, visitSetReferralSource } from './visit-lines.js';   // LIVE_AUDIT_FIX_V1 — врач снимает свою невыставленную услугу
 import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
@@ -353,6 +354,9 @@ export const RPC = {
   // одна строка (свой, пустой, только что заведённый); врач снимает свою
   // невыставленную услугу (visit-lines.js — правило там).
   discard_empty_visit:       (db, args, user) => discardEmptyVisit(db, args, user),
+  // DUP_STOP_V1 — экраны записи спрашивают ДО ensure_visit: та же услуга уже назначена в
+  // визите дня — отказ без пустого визита и счёта (dup-order-check.js).
+  visit_dup_check:           (db, args, user) => visitDupCheck(db, args, user),
   remove_own_visit_line:     (db, args, user) => removeOwnVisitLine(db, args, user),
   visit_set_referral_source: (db, args, user) => visitSetReferralSource(db, args, user),   // вкладка «Детали» окна визита
   // CALENDAR_BOOKING_V1 — «Календарь записи».

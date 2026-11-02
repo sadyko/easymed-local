@@ -146,3 +146,35 @@ test('DUP_STOP_V1 (К1): «Вернуть услугу» — возвращён�
   assert.ok(call('cashier_line_add', db, { visit_id: vid, service_id: 40 }, cashier).line, 'возвращённая строка мешает назначить анализ снова');
   assert.equal(count(db, vid, 40), 2);
 });
+
+test('DUP_STOP_V1: visit_dup_check — визит дня пациента, назначенное, повторы, поблажки и право обхода', () => {
+  const { db, pid, vid } = clinic();
+  const day = db.prepare("SELECT date(visit_date, 'localtime') d FROM visits WHERE id = ?").get(vid).d;
+  line(db, vid, { service_id: 40, created_by: DOC });
+  line(db, vid, { service_id: 60 });
+  line(db, vid, { service_id: 50, status: 'cancelled' });
+  const out = call('visit_dup_check', db, { patient_id: pid, date: day, lines: [{ service_id: 40 }, { service_id: 50 }, { service_id: 60 }] }, registrar);
+  assert.equal(out.visit_id, vid);
+  assert.deepEqual(out.ordered.map((o) => [o.service_id, o.key, o.who]), [[40, 's:40', 'Врач Первый']], 'процедура и отменённая — не назначение');
+  assert.deepEqual(out.duplicates.map((d) => d.index), [0]);
+  assert.match(out.duplicates[0].message, /«Анализ крови» — Врач Первый/);
+  assert.ok(out.duplicates[0].template && out.duplicates[0].params);
+  assert.equal(out.can_override, false);
+  assert.equal(call('visit_dup_check', db, { visit_id: vid, lines: [] }, admin).can_override, true);
+  assert.deepEqual(call('visit_dup_check', db, { patient_id: pid, date: '2030-01-01', lines: [{ service_id: 40 }] }, registrar),
+    { visit_id: null, ordered: [], duplicates: [], can_override: false }, 'визита в этот день нет — повторов нет');
+  assert.equal(call('visit_dup_check', db, { visit_id: vid, lines: [{ service_id: 40 }], exclude_ids: [out.ordered[0].id] }, registrar).duplicates.length, 0, 'строку, которую экран снимет сам, не считаем');
+  assert.throws(() => call('visit_dup_check', db, { lines: [] }, registrar), (e) => e.status === 400);
+  assert.throws(() => call('visit_dup_check', db, { visit_id: vid }, { id: 99, role: 'lab', extra_roles: [] }), (e) => e.status === 403);
+});
+
+test('DUP_STOP_V1: visit_dup_check — строка записи колл-центра — не «уже назначено»: строка регистратуры займёт её место', () => {
+  const { db, pid } = clinic();
+  const future = new Date(); future.setDate(future.getDate() + 3); future.setHours(10, 0, 0, 0);
+  const v = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, ?, 'scheduled')").run(pid, future.toISOString()).lastInsertRowid);
+  const added = call('booking_lines_add', db, { visit_id: v, lines: [{ service_id: 40 }] }, callcenter).added;
+  assert.equal(added.length, 1);
+  const out = call('visit_dup_check', db, { visit_id: v, lines: [{ service_id: 40 }] }, registrar);
+  assert.deepEqual(out.ordered, []);
+  assert.deepEqual(out.duplicates, []);
+});
