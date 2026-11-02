@@ -3,6 +3,16 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор (views/pick-day.js, visit-wizard.js, service-picker-modal.js)
+  "Сегодня у врача нет свободного времени": {"en":"The doctor has no free time today","ru":"Сегодня у врача нет свободного времени","uz":"Bugun shifokorning bo‘sh vaqti yo‘q"},   // PICK_DAY_V1
+  "В этот день у врача нет свободного времени": {"en":"The doctor has no free time on this day","ru":"В этот день у врача нет свободного времени","uz":"Bu kuni shifokorning bo‘sh vaqti yo‘q"},   // PICK_DAY_V1
+  "Ближайшее: {when}": {"en":"Nearest: {when}","ru":"Ближайшее: {when}","uz":"Eng yaqini: {when}"},   // PICK_DAY_V1
+  "Выбрать день": {"en":"Choose a day","ru":"Выбрать день","uz":"Kunni tanlash"},   // PICK_DAY_V1
+  "Услуги на {n} дня → {n} визита, {n} счёта": {"en":"Services on {n} days → {n} visits, {n} invoices","ru":"Услуги на {n} дня → {n} визита, {n} счёта","uz":"Xizmatlar {n} kunga → {n} ta tashrif, {n} ta hisob"},   // PICK_DAY_V1
+  "Услуги на {n} дней → {n} визитов, {n} счетов": {"en":"Services on {n} days → {n} visits, {n} invoices","ru":"Услуги на {n} дней → {n} визитов, {n} счетов","uz":"Xizmatlar {n} kunga → {n} ta tashrif, {n} ta hisob"},   // PICK_DAY_V1
+  "Всё на один день": {"en":"All on one day","ru":"Всё на один день","uz":"Hammasi bir kunga"},   // PICK_DAY_V1
+  "сегодня у врача нет свободного времени — выберите день или уберите услугу": {"en":"the doctor has no free time today — choose a day or remove the service","ru":"сегодня у врача нет свободного времени — выберите день или уберите услугу","uz":"bugun shifokorning bo‘sh vaqti yo‘q — kunni tanlang yoki xizmatni olib tashlang"},   // PICK_DAY_V1
+  "Визит — {day}: все услуги сметы в этот день": {"en":"Visit — {day}: all services in the estimate on this day","ru":"Визит — {day}: все услуги сметы в этот день","uz":"Tashrif — {day}: smetadagi barcha xizmatlar shu kuni"},   // PICK_DAY_V1
   // DISK_GUARD_V1 — «Место на диске» на «Данных клиники» (views/system-disk.js, system-logic.js) и колокол администратора
   "Место на диске": {"en":"Disk space","ru":"Место на диске","uz":"Diskdagi joy"},   // DISK_GUARD_V1
   "База данных": {"en":"Database","ru":"База данных","uz":"Ma’lumotlar bazasi"},   // DISK_GUARD_V1
