@@ -82,3 +82,30 @@ test('роль без картотеки получает отказ, а чте�
     assert.ok(isReadOnlyRpc('patient_base_aggregates'), 'это чтение — клиника обязана видеть картотеку и с просроченной лицензией');
   } finally { db.close(); }
 });
+
+// LAST_VISIT_TRUE_V1 — «последний визит» — последний СОСТОЯВШИЙСЯ, ближайшая
+// запись — отдельным полем, визиты — только состоявшиеся. Даты далеко от
+// сегодняшнего дня — тест не зависит ни от часового пояса, ни от полуночи.
+test('LAST_VISIT_TRUE_V1: будущая запись и отменённый визит не «последний визит»; next_visit отдельно', () => {
+  const { db, p1, p2 } = seed();
+  try {
+    const add = db.prepare('INSERT INTO visits (patient_id, visit_date, status) VALUES (?,?,?)');
+    add.run(p1, '2020-01-01T09:00:00Z', 'arrived');
+    add.run(p1, '2021-06-01T09:00:00Z', 'cancelled');
+    add.run(p1, '2022-03-01T09:00:00Z', 'no_show');
+    add.run(p1, '2099-01-01T09:00:00Z', 'scheduled');
+    add.run(p1, '2099-02-01T09:00:00Z', 'scheduled');
+    add.run(p2, '2099-05-05T09:00:00Z', 'scheduled');
+    db.prepare("UPDATE patients SET registration_date = '2019-12-31T12:00:00Z' WHERE id = ?").run(p2);
+    const rows = patientBaseAggregates(db, { p_ids: [p1, p2] }, registrar);
+    const a = rows.find((r) => r.patient_id === p1);
+    const b = rows.find((r) => r.patient_id === p2);
+    assert.equal(a.visit_count, 1, 'отменённый, неявка и будущие — не визиты');
+    assert.equal(Date.parse(a.last_visit), Date.parse('2020-01-01T09:00:00Z'), 'последним визитом стала будущая запись');
+    assert.equal(a.last_visit_day, '2020-01-01');
+    assert.equal(Date.parse(a.next_visit), Date.parse('2099-01-01T09:00:00Z'), 'ближайшая запись — самая ранняя будущая');
+    assert.equal(a.next_visit_day, '2099-01-01');
+    assert.deepEqual([b.visit_count, b.last_visit, b.next_visit_day], [0, null, '2099-05-05'], 'только будущая запись — визитов не было');
+    assert.equal(b.registration_day, '2019-12-31', 'день регистрации — местный день, а не пусто');
+  } finally { db.close(); }
+});
