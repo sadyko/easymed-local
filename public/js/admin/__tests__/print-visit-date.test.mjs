@@ -66,3 +66,35 @@ test('лист диагностики: dateOut — его день; старый
         assert.ok(bare.includes(TODAY), v + ': лист без даты остался без даты');
     }
 });
+
+// PRINT_VISIT_DATE_V1 (ревью M1) — ПРОТОКОЛ НЕ ДАТИРУЕТСЯ БУДУЩИМ. «Мои приёмы» показывают
+// и будущие записи, «Начать» предлагается на любой оплаченной строке: приём, записанный на
+// послезавтра и проведённый сегодня, печатался послезавтрашним днём. Правило: день визита,
+// но не позже «потолка» — дня первой подписи записи, а пока подписи нет — сегодняшнего дня.
+const NOW = new Date(2026, 10, 2, 15, 0);   // 02.11.2026 15:00 местного
+const at = (d, hh = 10, mm = 0) => new Date(2026, 10, d, hh, mm).toISOString();
+const signedOn = (...days) => days.map((d) => ({ kind: 'signed', savedAt: at(d, 14) }));
+
+test('визит послезавтра, подпись сегодня → сегодня (не день визита в будущем)', () => {
+    assert.equal(docDayText({ visitDate: at(4), history: signedOn(2), now: NOW }), '02.11.2026');
+    assert.equal(docDayText({ visitDate: '2026-11-04', history: signedOn(2), now: NOW }), '02.11.2026', 'дата без времени');
+    // Переподпись в день визита и позже не двигает день: потолок — ПЕРВАЯ подпись.
+    assert.equal(docDayText({ visitDate: at(4), history: signedOn(2, 5), now: new Date(2026, 10, 6, 9, 0) }), '02.11.2026');
+    // То же на настоящих часах — как у пробы ревью (визит через 2 дня, подписан сейчас).
+    const later = new Date(); later.setDate(later.getDate() + 2); later.setHours(10, 0, 0, 0);
+    assert.equal(docDayText({ visitDate: later.toISOString(), history: [{ kind: 'signed', savedAt: new Date().toISOString() }] }), TODAY);
+});
+
+test('визит позавчера, подпись сегодня → позавчера (день приёма, а не день подписи)', () => {
+    assert.equal(docDayText({ visitDate: at(0, 9), history: signedOn(2), now: NOW }), '31.10.2026');
+    // Подпись в тот же день, что визит, поздно вечером — день визита.
+    assert.equal(docDayText({ visitDate: at(2, 9), history: [{ kind: 'signed', savedAt: at(2, 23, 30) }], now: NOW }), '02.11.2026');
+});
+
+test('неподписанный будущий визит → сегодня; неподписанный прошлый — день визита', () => {
+    assert.equal(docDayText({ visitDate: at(4), now: NOW }), '02.11.2026');
+    assert.equal(docDayText({ visitDate: at(4), history: [{ kind: 'draft', savedAt: at(2, 11) }], now: NOW }), '02.11.2026', 'черновик — не подпись');
+    assert.equal(docDayText({ visitDate: at(1, 9), now: NOW }), '01.11.2026');
+    // Испорченная подпись — потолок сегодня, а не «нет потолка».
+    assert.equal(docDayText({ visitDate: at(4), history: [{ kind: 'signed', savedAt: 'не дата' }], now: NOW }), '02.11.2026');
+});

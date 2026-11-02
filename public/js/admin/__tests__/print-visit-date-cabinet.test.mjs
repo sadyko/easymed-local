@@ -155,3 +155,32 @@ test('очередь кабинета передаёт в приём день в
     assert.match(open, /visitDate:\s+r\.visitDate \|\| null,/);
     assert.match(open, /priceTier:\s+r\.priceTier \|\| null,/, 'приём не получает ступень цены строки');
 });
+
+// PRINT_VISIT_DATE_V1 (ревью M1) — день визита, но не позже первой подписи (пока подписи
+// нет — не позже сегодня): «Мои приёмы» показывают будущие записи, и «Начать» на них есть.
+test('приём записан на послезавтра, проведён сегодня — шапка, «Печать» и архив — сегодня, не будущий день', async () => {
+    const ahead = dateNumeric(daysAgo(-2));
+    const ctx = cabinet(79, { visitDate: daysAgo(-2).toISOString() });
+    const before = ctx.container.querySelector('.a4-lh-date');
+    assert.ok(before && before.textContent.includes(TODAY), 'шапка формы до чтения записей — будущий день: ' + (before && before.textContent));
+    await WS.hydrateLine(ctx);
+    const lh = ctx.container.querySelector('.a4-lh-date');
+    assert.ok(lh && lh.textContent.includes(TODAY) && !lh.textContent.includes(ahead), 'шапка формы — будущий день: ' + (lh && lh.textContent));
+    const snap = WS.docSnapshot(ctx, 'conclusion');
+    assert.equal(snap.issueDate, TODAY, '«Печать» датирована будущим днём');
+    ARCHIVE.length = 0;
+    await WS.signDocument(ctx);
+    assert.equal(ARCHIVE.length, 1, 'архивная копия не записана');
+    assert.equal(ARCHIVE[0].body.issueDate, TODAY, 'архивная копия датирована будущим днём');
+});
+
+test('подписано заранее (вчера) для визита послезавтра — при новом открытии шапка и «Печать» — день подписи', async () => {
+    const signedDay = daysAgo(1);
+    const SIGNED = { kind: 'signed', savedAt: signedDay.toISOString(), by: 3, byName: 'Иванова А.', fields: { chief_complaint: 'Кашель' } };
+    const ctx = cabinet(80, { visitDate: daysAgo(-2).toISOString() }, notesOf({ chief_complaint: 'Кашель' }, { history: [SIGNED] }));
+    await WS.hydrateLine(ctx);
+    const want = dateNumeric(signedDay);
+    assert.equal(WS.docSnapshot(ctx, 'conclusion').issueDate, want, '«Печать» — не день подписи');
+    const lh = ctx.container.querySelector('.a4-lh-date');
+    assert.ok(lh && lh.textContent.includes(want), 'шапка формы не пересчитана по подписи: ' + (lh && lh.textContent));
+});

@@ -1041,7 +1041,7 @@ export function soapForm(ctx) {
                 // начинался с двух строк служебных данных.
                 a4Letterhead({
                     title: 'Приём (осмотр, консультация)',
-                    date: docDayText({ visitDate: svc.visitDate }),   // PRINT_VISIT_DATE_V1 — «от …» на экране — день приёма, а не сегодня
+                    date: formDayText(ctx),   // PRINT_VISIT_DATE_V1 — «от …» на экране — день приёма, а не сегодня (ревью M1 — и не будущий)
                     ids: [
                         { label: 'ID', value: String(p.mrn || p.id || '') },
                         { label: '№ приёма', value: String(ctx.visitServiceId || '') },
@@ -3103,6 +3103,22 @@ function unsavedFor(ctx) {
     return u && u.vs === Number(ctx.visitServiceId) ? u : null;
 }
 
+// PRINT_VISIT_DATE_V1 (ревью M1) — «от …» В ШАПКЕ ФОРМЫ — ТЕМ ЖЕ ПРАВИЛОМ, ЧТО У ЛИСТА
+// (docDayText): день визита, но не позже первой подписи записи, а пока подписи нет —
+// не позже сегодня. Шапка строится до чтения записей строки (soapForm): тогда подписи
+// ещё не известны и потолок — сегодня. Записи легли (hydrateWorkspace) — день ставится
+// заново: подписанное заранее (визит послезавтра, подпись вчера) не «уезжает» в день визита.
+function formDayText(ctx) {
+    const svc = (ctx && ctx.patient && ctx.patient.__service) || {};
+    const payload = (ctx && wsState.ctx === ctx && wsState.payload) || null;
+    return docDayText({ visitDate: svc.visitDate, history: payload && payload.history });
+}
+function paintDocDay(ctx) {
+    if (!ctx || wsState.ctx !== ctx || !ctx.container) return;   // рисует только открытая строка (данные в wsState — её)
+    const el = ctx.container.querySelector('.a4-lh-date');
+    if (el) el.textContent = tr('от') + ' ' + formDayText(ctx);
+}
+
 async function hydrateWorkspace(ctx) {
     if (ctx.__hydrating) return;
     ctx.__hydrating = true;
@@ -3129,6 +3145,7 @@ async function hydrateWorkspace(ctx) {
         lockA4Inputs(ctx, false);
         syncLoadingUi(ctx);
         paintHistoryList(ctx);
+        paintDocDay(ctx);                             // PRINT_VISIT_DATE_V1 (ревью M1) — «от …» по подписям записи
         paintPrescriptions(ctx);
         paintDispensed(ctx);                          // RX_SEPARATE_V1 — show empty/guard state immediately
         loadDispensedItems(ctx).then(() => paintDispensed(ctx));  // then fill async

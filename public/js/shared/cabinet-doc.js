@@ -9,7 +9,7 @@
 // печатала такую запись через bodyHtml, который рендерер бланка не читает, и на
 // бумагу выходил ОБРАЗЕЦ — чужой пациент «Алиев Бобур».
 import { sanitizeStoredHtml, htmlToText, hasMarkup, textBreaks, richHasContent } from './rich-text.js';
-import { dateNumeric } from './date-words.js';   // PRINT_VISIT_DATE_V1 — день документа местной датой ДД.ММ.ГГГГ
+import { dateNumeric, toDateValue } from './date-words.js';   // PRINT_VISIT_DATE_V1 — день документа местной датой ДД.ММ.ГГГГ
 
 /**
  * Текст поля — для текстовых мест (диагноз, visits.conclusion, сводки, журнал).
@@ -116,21 +116,32 @@ export function notesDocData(fields, { head = {}, diagnoses = [], prescriptions 
  *
  * Протокол приёма и лист диагностики датируются днём ПРИЁМА, а не днём, когда
  * их открыли, напечатали или подписали: экран, «Печать» и архивная копия при
- * подписи (buildBlankData кабинета) берут день отсюда. По порядку:
- *   1. местный день визита — visits.visit_date хранится ISO в UTC, и день из
- *      него берётся МЕСТНЫЙ (dateNumeric), а не slice(0, 10): приём в 00:30 по
- *      Ташкенту хранится вчерашним 19:30Z;
- *   2. нет визита — день ПЕРВОЙ подписи записи (history[].kind === 'signed');
- *   3. нет и её — сегодня.
+ * подписи (buildBlankData кабинета) берут день отсюда. Правило:
+ *   • день — МЕСТНЫЙ день визита: visits.visit_date хранится ISO в UTC, и день
+ *     из него берётся местный, а не slice(0, 10) — приём в 00:30 по Ташкенту
+ *     хранится вчерашним 19:30Z;
+ *   • но НЕ ПОЗЖЕ «потолка»: потолок — местный день ПЕРВОЙ подписи записи
+ *     (history[].kind === 'signed'; переподпись день не двигает), а пока подписи
+ *     нет — сегодня (ревью M1). «Мои приёмы» показывают и будущие записи, и
+ *     «Начать» есть на любой оплаченной строке: приём, записанный на
+ *     послезавтра и проведённый сегодня, печатался послезавтрашним днём;
+ *   • нет визита (или дата испорчена) — день потолка.
  * Строка — как её печатает бланк: ДД.ММ.ГГГГ (MONTH_WORDS_V1).
  *
  * @param {{visitDate?: string|Date|null, history?: Array|null, now?: Date}} src
  * @returns {string}
  */
 export function docDayText({ visitDate = null, history = null, now = new Date() } = {}) {
-    const fromVisit = dateNumeric(visitDate);
-    if (fromVisit) return fromVisit;
-    const firstSigned = (Array.isArray(history) ? history : []).find((e) => e && e.kind === 'signed' && e.savedAt);
-    const fromSign = firstSigned ? dateNumeric(firstSigned.savedAt) : '';
-    return fromSign || dateNumeric(now);
+    const firstSigned = (Array.isArray(history) ? history : [])
+        .find((e) => e && e.kind === 'signed' && localDay(e.savedAt));
+    const cap = (firstSigned && localDay(firstSigned.savedAt)) || localDay(now);
+    const visit = localDay(visitDate);
+    const day = visit && (!cap || visit.getTime() <= cap.getTime()) ? visit : cap;
+    return day ? dateNumeric(day) : '';
+}
+
+// PRINT_VISIT_DATE_V1 (ревью M1) — местная полночь дня значения (Date | ISO | 'YYYY-MM-DD'), либо null.
+function localDay(value) {
+    const dt = toDateValue(value);
+    return dt ? new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()) : null;
 }
