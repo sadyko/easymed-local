@@ -49,12 +49,18 @@ test('chip totals exclude payer invoices too', () => {
   assert.equal(counts.all.sum, 30000);
 });
 
+// INVOICE_APPEND_V1 — второй вызов по визиту, пока счёт пациента не оплачен,
+// дописывает строки в него: в кассе одна строка на 80 000, а не две.
 test('with no payer invoices the queue is unchanged (no regression)', () => {
   const { db, vs } = seed();
   const a = createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [vs[0]] }, registrar);
   const b = createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [vs[1]] }, registrar);
+  assert.equal(b.appended, true);
+  assert.equal(b.invoice.id, a.invoice.id);
   const { rows, counts } = cashierInvoices(db, {}, cashier);
-  assert.deepEqual(rows.map(r => r.id).sort(), [a.invoice.id, b.invoice.id].sort());
+  assert.deepEqual(rows.map(r => r.id), [a.invoice.id]);
+  assert.equal(rows[0].items_count, 2);
+  assert.equal(counts.unpaid.n, 1);
   assert.equal(counts.unpaid.sum, 80000);
 });
 

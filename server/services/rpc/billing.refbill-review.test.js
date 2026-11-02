@@ -216,6 +216,11 @@ test('врач с денежной ролью, касса и регистрат�
   const vid = visit(db, pid, { by: 7 });
   for (const who of [doctorCashier, cashier, registrar, admin]) {
     const l = line(db, vid, { service_id: CARD, by: 7, tier: 'secondary' });
-    assert.equal(createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [l] }, who).invoice.total_amount, 60000, who.full_name);
+    // INVOICE_APPEND_V1 — со второго вызова строки дописываются в тот же
+    // неоплаченный счёт визита: сверяется позиция ЭТОЙ строки.
+    const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [l] }, who);
+    assert.equal(out.items[0].total, 60000, who.full_name);
   }
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM invoices WHERE visit_id = ?').get(vid).n, 1, 'один счёт на визит');
+  assert.equal(db.prepare('SELECT total_amount FROM invoices WHERE visit_id = ?').get(vid).total_amount, 240000);
 });

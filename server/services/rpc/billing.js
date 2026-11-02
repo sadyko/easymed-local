@@ -432,7 +432,9 @@ function doctorLineName(db, row) {
 // не должна упираться в список ролей выставления.
 // REFBILL_REVIEW_V1 — doctorOnly: зовёт create_invoice_for_visit для врача без
 // денежной роли — его строки сверяет doctorLinesRefusal.
-function issueVisitInvoice(db, args, user, { doctorOnly = false } = {}) {
+// INVOICE_APPEND_V1 — append (по умолчанию да): строки дописываются в
+// редактируемый счёт пациента визита (appendTargetInvoice), если он есть.
+function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true } = {}) {
 
   const visitId = args && args.visit_id;
   if (!isPositiveInt(visitId)) {
@@ -602,7 +604,8 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false } = {}) {
     const restDiscount = round2(Math.min(Math.max(discountRaw, categoryDiscount), restSubtotal));
     const discount = round2(lineDiscounts + restDiscount);
     const total = round2(subtotal - discount);
-    const invoiceNumber = nextInvoiceNumber(db);
+    // INVOICE_APPEND_V1 — номер счёта берётся ниже, после выбора «дописать или
+    // новый»: дописывание в счёт номера не тратит.
     // A zero-balance invoice (all-free services or 100% discount) has nothing
     // to collect: mark it paid at creation so it doesn't get stuck 'unpaid'
     // forever (record_payment refuses payments against a balance <= 0).
@@ -626,6 +629,20 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false } = {}) {
         throw rpcT(RpcError, 'Плательщик №{id} выключен.', { id: payerRaw }, 400);
       }
     }
+
+    // INVOICE_APPEND_V1 (решение владельца 2026-11-02) — у визита уже есть
+    // неоплаченный счёт пациента, к которому не прикасались деньги: новые строки
+    // ложатся В НЕГО (тот же номер, новая сумма), а не вторым счётом. Счёт
+    // плательщику не дописывается никогда (payerRaw), бесплатная новая часть —
+    // своим счётом, как прежде: она закрыта сразу и строки идут в очередь
+    // (FREE_SERVICE_V1), а в чужом неоплаченном счёте ждали бы кассу.
+    // append: false — «Добавить услугу» кассы (cashier_line_add): счёт она
+    // выбирает своим правилом, и раз не выбрала — нужен новый, как прежде.
+    if (append && payerRaw === null && total > 0) {
+      const target = appendTargetInvoice(db, visitId);
+      if (target) return appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubtotal, restDiscount }, user);
+    }
+    const invoiceNumber = nextInvoiceNumber(db);   // INVOICE_APPEND_V1 — только у нового счёта
 
     const insertInvoice = db.prepare(`
       INSERT INTO invoices
@@ -717,6 +734,78 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false } = {}) {
   // а приходом является оплата (crmInvoiceEvidence).
   if (out.invoice && out.invoice.payer_id) crmVisitEvidence(db, visitId);
   return out;
+}
+
+// INVOICE_APPEND_V1 — «РЕДАКТИРУЕМЫЙ СЧЁТ ПАЦИЕНТА» ВИЗИТА: куда дописываются
+// новые строки вместо второго счёта. Правило то же, что у cashier_line_add
+// (editableInvoiceRefusal), но строже: только 'unpaid' (бесплатный, закрытый
+// при выставлении, не берётся — его строки уже в очереди), и без отказа словами
+// — подходящего нет, значит будет новый счёт:
+//   • пациенту (payer_id IS NULL) — счёт плательщику не сливается никогда;
+//   • 'unpaid' и paid_amount = 0, и по нему НИКОГДА не было платежей (оплата и
+//     возврат оставляют post_sale_discount и возвраты по строкам);
+//   • своего здания (sync_origin IS NULL — BRANCH_MONEY_GUARD_V1);
+//   • не госпитализация и не DEP-/CARD- (у них visit_id и так NULL — страж на
+//     случай, если появится).
+// Самый новый — как у cashier_line_add.
+function appendTargetInvoice(db, visitId) {
+  return db.prepare(`
+    SELECT i.* FROM invoices i
+     WHERE i.visit_id = ?
+       AND i.payer_id IS NULL
+       AND i.admission_id IS NULL
+       AND i.status = 'unpaid'
+       AND COALESCE(i.paid_amount, 0) = 0
+       AND i.sync_origin IS NULL
+       AND COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%'
+       AND COALESCE(i.invoice_number, '') NOT LIKE 'CARD-%'
+       AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+     ORDER BY i.id DESC
+     LIMIT 1`).get(visitId) || null;
+}
+
+// INVOICE_APPEND_V1 — ДОПИСАТЬ ОЦЕНЁННЫЕ СТРОКИ В СЧЁТ. Строки оценены, как
+// для нового счёта (issueVisitInvoice: цена, своя скидка пакета, пол группы и
+// ручная скидка НОВОЙ части — restDiscount). Скидка уже выставленной части не
+// меняется: ручная часть счёта (manual_discount, мигр. 219) = прежний остаток
+// скидки счёта + остаток новой части, база (manual_base) = вся база строк без
+// своей скидки; repriceUnpaidInvoice(absolute) собирает итог тем же правилом,
+// что cashier_line_add и правки строк кассы, и закрывает ноль (settleZeroTotal).
+// rest_discount — скидка НОВОЙ части: мастер переносит остаток своей скидки на
+// счёт следующего дня (DISCOUNT_CARRY_V1) и вычитает ровно её.
+// items — позиции НОВОЙ части в порядке строк вызова (BILLING_AUDIT_FIX_V1 A2:
+// быстрая регистрация сверяет их со своими строками по месту).
+function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubtotal, restDiscount }, user) {
+  assertOwnBuilding(db, target, 'Счёт');
+  const oldOwn = invoiceOwnDiscount(db, target.id);
+  const oldBase = invoiceRestBase(db, target.id);
+  const oldRest = Math.max(round2((Number(target.discount_amount) || 0) - oldOwn), 0);
+  const insertItem = db.prepare(`
+    INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total, discount_amount)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const linkVisitService = db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?');
+  const syncVisitService = db.prepare('UPDATE visit_services SET unit_price = ?, total = ? WHERE id = ?');
+  const itemIds = [];
+  for (const { row, unit, qty, line, svcName, ownDiscount } of priced) {
+    const itemInfo = insertItem.run(target.id, row.service_id, svcName || '', qty, unit, line, ownDiscount);
+    itemIds.push(Number(itemInfo.lastInsertRowid));
+    linkVisitService.run(itemInfo.lastInsertRowid, row.id);
+    clearRefundRelease(db, 'out', [row.id]);   // FINAL_MONEY_FIX_V1 (M1) — как при новом счёте
+    syncVisitService.run(unit, line, row.id);
+  }
+  const base = round2(oldBase + restSubtotal);
+  db.prepare('UPDATE invoices SET manual_discount = ?, manual_base = ? WHERE id = ?')
+    .run(round2(oldRest + restDiscount), base, target.id);
+  const fresh = db.prepare('SELECT * FROM invoices WHERE id = ?').get(target.id);
+  const invoice = repriceUnpaidInvoice(db, fresh, oldOwn, { oldBase: base, absolute: true });
+  lineAudit(db, {
+    inv: invoice, number: target.invoice_number, visitId, action: 'line_add',
+    fromStatus: target.status, toStatus: invoice.status, amount: invoice.total_amount,
+    notes: 'Добавлено в счёт: ' + priced.map((p) => lineLabel(db, p.row, { description: p.svcName })).join('; ') + ' · ' + moneyWords(subtotal),
+  }, user);
+  const items = db.prepare(`SELECT * FROM invoice_items WHERE id IN (${itemIds.map(() => '?').join(',')}) ORDER BY id`).all(...itemIds);
+  return { invoice, items, rest_discount: restDiscount, appended: true };
 }
 
 export function recordPayment(db, args, user) {
@@ -1681,7 +1770,10 @@ export function addServiceToVisitInvoice(db, args, user, { rpc = 'cashier_line_a
       if (invoice.status === 'paid') db.prepare("UPDATE visit_services SET status = 'queued' WHERE id = ? AND status = 'added'").run(vsId);
     } else {
       // Роль выставления не спрашиваем: право проверено выше (ревью).
-      invoice = issueVisitInvoice(db, { visit_id: visitId, visit_service_ids: [vsId] }, user).invoice;
+      // INVOICE_APPEND_V1 — append: false: счёт касса выбрала своим правилом
+      // выше; не выбрала — новый счёт, как прежде (а не более старый счёт,
+      // о котором журнал написал бы «новым счётом»).
+      invoice = issueVisitInvoice(db, { visit_id: visitId, visit_service_ids: [vsId] }, user, { append: false }).invoice;
       created = true;
     }
     const line = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);

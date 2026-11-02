@@ -96,10 +96,13 @@ test('отменённый, но с платежами в истории — т�
 });
 
 test('соседние счета не затрагиваются', () => {
-  const { db, vid, invoice } = seed();
+  const { db, pid, invoice } = seed();
+  // INVOICE_APPEND_V1 — второй неоплаченный счёт ТОГО ЖЕ визита не появляется
+  // (строки дописываются в первый): соседний счёт — у соседнего визита.
+  const vid2 = db.prepare("INSERT INTO visits (patient_id, visit_date) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now','+1 day'))").run(pid).lastInsertRowid;
   const sid2 = db.prepare("INSERT INTO services (name, price) VALUES ('УЗИ', 50000)").run().lastInsertRowid;
-  const vs2 = db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,?,1,50000,50000,'added')").run(vid, sid2).lastInsertRowid;
-  const other = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs2] }, REG).invoice;
+  const vs2 = db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,?,1,50000,50000,'added')").run(vid2, sid2).lastInsertRowid;
+  const other = createInvoiceForVisit(db, { visit_id: vid2, visit_service_ids: [vs2] }, REG).invoice;
   voidInvoice(db, { invoice_id: invoice.id }, CASH);
   deleteInvoice(db, { invoice_id: invoice.id }, ADMIN);
   assert.equal(count(db, 'SELECT COUNT(*) n FROM invoices WHERE id = ?', other.id), 1);

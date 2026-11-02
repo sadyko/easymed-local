@@ -250,10 +250,13 @@ test('cashier_invoices returns joined rows and per-status chip aggregates', () =
 
 test('void_invoice cancels only money-free invoices and re-opens visit services', () => {
   const { db, vid, vs1, vs2 } = seed();
-  const inv1 = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar).invoice;
+  // INVOICE_APPEND_V1 — второй счёт того же визита появляется, только когда
+  // первый уже не редактируемый (по нему приняты деньги): сначала inv2 и оплата.
   const inv2 = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs2] }, registrar).invoice;
   openCashShift(db, { opening_float: 0 }, cashier);
   recordPayment(db, { invoice_id: inv2.id, amount: 5000, method: 'cash' }, cashier);
+  const inv1 = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar).invoice;
+  assert.notEqual(inv1.id, inv2.id);
 
   const res = voidInvoice(db, { invoice_id: inv1.id }, cashier);
   assert.equal(res.invoice.status, 'void');
