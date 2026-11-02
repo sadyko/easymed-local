@@ -127,7 +127,8 @@ test('MAJOR: calendar_book без visit_id не заводит второй жи
     // REPEAT_VISIT_V1 — под ДРУГОГО врача пустая запись не переезжает: «визит дня есть».
     const foreign = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 11, service_id: 30, start: at(D, 15), duration_minutes: 30 });
     assert.equal(foreign.status, 409, JSON.stringify(foreign.json));
-    assert.equal(foreign.json.error.code, 'day_visit_busy');
+    assert.equal(foreign.json.error.code, 'day_visit_other_doctor');   // REPEAT_VISIT_V1 (поправка 2) — работы нет, есть чужая запись
+    assert.match(foreign.json.error.message, /уже есть запись к .+ в 09:00\. Перенесите её или выберите другой день\./);
     const again = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 10, service_id: 30, start: at(D, 15), duration_minutes: 30 });
     assert.equal(again.status, 200, JSON.stringify(again.json));
     assert.equal(again.json.data.visit.id, first.json.data.visit.id, 'заведён второй визит вместо переноса');

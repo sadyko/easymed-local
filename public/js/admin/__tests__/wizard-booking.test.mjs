@@ -1350,3 +1350,26 @@ test('CRM_LINK_ALL_V1 (ревью денег S2, защита): строка «�
   assert.deepEqual(lineRowsOf(22).map((r) => r.visit_id), [vid], 'строка записи вставлена в другой визит');
   assert.ok(TOASTS.some((m) => m.includes('другой визит')), 'нет отказа словами: ' + JSON.stringify(TOASTS));
 });
+
+// REPEAT_VISIT_V1 (поправка 2) — ПУСТАЯ ЗАПИСЬ К ДРУГОМУ ВРАЧУ. Сервер её больше не
+// переносит и отказывает своим кодом (day_visit_other_doctor): окно спрашивает
+// «Добавить в этот визит» ЭТИМИ словами — «уже есть запись к … в …», — а не
+// «по нему уже идёт работа» (работы нет). Отказ — ничего не записано; согласие —
+// визит дня, как у day_visit_busy.
+test('REPEAT_VISIT_V1 (поправка 2): пустая запись к другому врачу — «уже есть запись к … в …», без «идёт работа»', async () => {
+  const { day } = seed();
+  DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, working_hours) VALUES (8,'doc2','x','Каримова Нигора','doctor',1,'')").run();
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status) VALUES (3, 8, ?, 30, 'scheduled')").run(at(day, 11, 0)).lastInsertRowid);
+  const before = countVisits();
+  const args = { patient_id: 3, doctor_id: 7, service_id: 21, start: at(day, 14, 0), status: 'scheduled' };
+  let asked = null;
+  await assert.rejects(
+    () => calendarBookOrAsk(args, { askAddToDayVisit: async (text) => { asked = text; return false; } }),
+    (e) => e.message === asked);
+  assert.equal(asked, 'У пациента в этот день уже есть запись к Каримова Нигора в 11:00. Перенесите её или выберите другой день.');
+  assert.equal(countVisits(), before, 'отказ что-то записал');
+  const row = DB.prepare('SELECT doctor_id, visit_date FROM visits WHERE id = ?').get(vid);
+  assert.deepEqual([row.doctor_id, Date.parse(row.visit_date)], [8, Date.parse(at(day, 11, 0))], 'чужая запись сдвинута');
+  const out = await calendarBookOrAsk(args, { askAddToDayVisit: async () => true });
+  assert.deepEqual([out.added_to_day_visit, out.visit.id], [true, vid], '«Добавить в этот визит» не дало визит дня');
+});

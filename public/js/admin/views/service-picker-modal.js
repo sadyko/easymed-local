@@ -3676,6 +3676,8 @@ const BOOK_ERROR_TEMPLATES = {
     emergency_reason_required: 'Экстренная запись поверх занятого времени требует причины — укажите её.',
     // V3120_FIX — у пациента на этот день уже есть визит с работой (DAY_VISIT_V1).
     day_visit_busy: 'У пациента на этот день уже есть визит ({start}, врач {doctor}), и по нему уже идёт работа. Второй визит на день не заводится — добавьте услугу в этот визит.',
+    // REPEAT_VISIT_V1 (поправка 2) — визит дня — пустая запись к другому врачу: работы нет.
+    day_visit_other_doctor: 'У пациента в этот день уже есть запись к {doctor} в {start}. Перенесите её или выберите другой день.',
 };
 export function bookErrorText(error) {
     const tpl = error && error.code ? BOOK_ERROR_TEMPLATES[error.code] : null;
@@ -3766,7 +3768,9 @@ export async function calendarBookOrAsk(args, opts = {}) {
         // отказал: у пациента сегодня уже есть визит, и по нему идёт работа.
         // Предлагаем добавить услуги в него; согласие — тот же запрос с
         // add_to_day_visit, ответом приходит сам визит дня.
-        if (error.code === 'day_visit_busy') {
+        // REPEAT_VISIT_V1 (поправка 2) — пустая запись к другому врачу (day_visit_other_doctor):
+        // тот же выбор, свои слова — работы по ней нет.
+        if (error.code === 'day_visit_busy' || error.code === 'day_visit_other_doctor') {
             const ask = opts.askAddToDayVisit || askAddToDayVisit;
             if (!(await ask(bookErrorText(error)))) throw new Error(bookErrorText(error));
             const add = await supabase.rpc('calendar_book', { ...attempt, add_to_day_visit: true });

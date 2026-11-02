@@ -13418,4 +13418,8 @@ export const STRINGS = {
   // LAST_VISIT_TRUE_V1
   "запись: {d}": {"en":"booked: {d}","ru":"запись: {d}","uz":"yozuv: {d}"},   // LAST_VISIT_TRUE_V1 — ближайшая запись под «последним визитом»
   // /LAST_VISIT_TRUE_V1
+  // REPEAT_VISIT_V1
+  "У пациента в этот день уже есть запись к {doctor} в {start}. Перенесите её или выберите другой день.": {"en":"The patient already has a booking with {doctor} at {start} on this day. Move it or choose another day.","ru":"У пациента в этот день уже есть запись к {doctor} в {start}. Перенесите её или выберите другой день.","uz":"Bemorning bu kunda {start} da {doctor} qabuliga yozuvi bor. Uni ko‘chiring yoki boshqa kunni tanlang."},   // REPEAT_VISIT_V1 (поправка 2) — отказ day_visit_other_doctor
+  "У пациента в этот день уже есть запись к {doctor} в {start}. Предложите партнёру другое время или, договорившись с пациентом, перенесите ту запись на другой день.": {"en":"The patient already has a booking with {doctor} at {start} on this day. Offer the partner another time, or agree with the patient and move that booking to another day.","ru":"У пациента в этот день уже есть запись к {doctor} в {start}. Предложите партнёру другое время или, договорившись с пациентом, перенесите ту запись на другой день.","uz":"Bemorning bu kunda {start} da {doctor} qabuliga yozuvi bor. Hamkorga boshqa vaqt taklif qiling yoki bemor bilan kelishib, o‘sha yozuvni boshqa kunga ko‘chiring."},   // REPEAT_VISIT_V1 (поправка 2) — онлайн-запись, day_visit_other_doctor
+  // /REPEAT_VISIT_V1
 };

@@ -32,6 +32,7 @@
 import { firstStageKey } from '../crm/contact-window.js';
 import { displayLinkSql } from '../crm/display-links.js';   // CRM_LINK_ALL_V1 (ред. 2б, P-1)
 import { dayVisitMovableFor, visitHasWork, PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { dayVisitOtherDoctor } from '../crm/booking-mirror.js';   // REPEAT_VISIT_V1 (поправка 2)
 import { crmLinkVisit } from '../crm/visit-link.js';   // повторная проверка 8a — доведение прерванного подтверждения
 import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';
 import { findPatientsByPhone } from '../telegram/documents.js';
@@ -326,9 +327,12 @@ export async function confirmBooking(db, { id, patientId }, user, { now = Date.n
   // партнёру другое время.
   if (dv) {
     const movable = dayVisitMovableFor(db, dv.id, row.doctor_id);
+    // REPEAT_VISIT_V1 (поправка 2) — пустая запись к ДРУГОМУ врачу больше не переносима,
+    // но и «визит с работой» о ней неправда: свой код, тот же, что у calendar_book.
+    const other = !movable && dayVisitOtherDoctor(db, dv.id, row.doctor_id);
     const doc = dv.doctor_id ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(dv.doctor_id) : null;
-    const err = rpcT(BookingError, movable ? MSG.dayVisitExists : MSG.dayVisitBusy, { start: hhmmLocal(dv.visit_date), doctor: (doc && doc.full_name) || '—' }, 409);
-    err.code = movable ? 'day_visit_exists' : 'day_visit_busy';
+    const err = rpcT(BookingError, movable ? MSG.dayVisitExists : (other ? MSG.dayVisitOtherDoctor : MSG.dayVisitBusy), { start: hhmmLocal(dv.visit_date), doctor: (doc && doc.full_name) || '—' }, 409);
+    err.code = movable ? 'day_visit_exists' : (other ? 'day_visit_other_doctor' : 'day_visit_busy');
     throw err;
   }
 

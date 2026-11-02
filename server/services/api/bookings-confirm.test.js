@@ -164,6 +164,25 @@ test('I7: у пациента на этот день уже есть запис�
   assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM visits').n, 1);
 });
 
+// REPEAT_VISIT_V1 (поправка 2) — пустая запись пациента к ДРУГОМУ врачу больше не
+// переносима (dayVisitMovableFor), и отказ «визит с работой» был бы неправдой: работы
+// нет, есть запись. Код тот же, что у calendar_book, — day_visit_other_doctor.
+test('REPEAT_VISIT_V1 (поправка 2): у пациента на этот день пустая запись к другому врачу — отказ day_visit_other_doctor словами, та запись не сдвинута', async () => {
+  const s = bookingSeed();
+  const id = await pending(s);
+  patient(s);
+  const PHONE_AT = localAt('2030-03-12', '15:00');
+  const ph = await calendarBook(s.db, { patient_id: 1, doctor_id: 8, start: new Date(PHONE_AT).toISOString(), duration_minutes: 15 }, s.cc);
+  const e = await refusal(confirmBooking(s.db, { id, patientId: 1 }, s.reg, { now: NOW, kekPath: s.kekPath }));
+  assert.deepEqual([e.status, e.code], [409, 'day_visit_other_doctor']);
+  assert.deepEqual(e.params, { start: '15:00', doctor: 'Каримова Нигора' });
+  assert.equal(e.message, 'У пациента в этот день уже есть запись к Каримова Нигора в 15:00. Предложите партнёру другое время или, договорившись с пациентом, перенесите ту запись на другой день.');
+  const v = one(s.db, 'SELECT doctor_id, visit_date FROM visits WHERE id = ?', ph.visit.id);
+  assert.deepEqual([v.doctor_id, Date.parse(v.visit_date)], [8, PHONE_AT], 'та запись сдвинута');
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', id).status, 'pending');
+  assert.equal(one(s.db, 'SELECT COUNT(*) AS n FROM visits').n, 1);
+});
+
 // ─── РЕВЬЮ 8a, I8: ЗДАНИЕ ЗАПИСИ — ЗДАНИЕ ВРАЧА, А НЕ ТО, ЧТО НАЗВАЛ ПАРТНЁР ─
 
 test('I8: врач филиала Б, партнёр назвал главное здание — заявка и визит в здании врача (запись в чужое здание, cross_branch Б)', async () => {

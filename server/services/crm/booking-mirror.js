@@ -143,6 +143,24 @@ export function dayVisitMovableFor(db, visitId, doctorId) {
 }
 
 /**
+ * REPEAT_VISIT_V1 (поправка 2) — ВИЗИТ ДНЯ — ПУСТАЯ ЗАПИСЬ К ДРУГОМУ ВРАЧУ.
+ *
+ * Такую запись правило выше больше не переносит, и прежний отказ day_visit_busy
+ * («…и по нему уже идёт работа…») был бы неправдой: работы нет, есть чужая запись.
+ * true — запись до прихода, без работы и без живых строк, у неё назван врач, и это
+ * не `doctorId` (или новая запись без врача). Тогда двери отказывают своим кодом
+ * day_visit_other_doctor: «уже есть запись к <врач> в <время>». Запись со строками
+ * чужого врача (G3) и запись с работой — прежний day_visit_busy.
+ */
+export function dayVisitOtherDoctor(db, visitId, doctorId) {
+  const v = db.prepare('SELECT status, doctor_id FROM visits WHERE id = ?').get(visitId);
+  if (!v || !PRE_ARRIVAL.includes(v.status) || v.doctor_id == null) return false;
+  if (Number(v.doctor_id) === (Number(doctorId) || null)) return false;
+  if (visitHasWork(db, visitId)) return false;
+  return !db.prepare("SELECT 1 FROM visit_services WHERE visit_id = ? AND status <> 'cancelled' LIMIT 1").get(visitId);
+}
+
+/**
  * Заявка, которой принадлежит запись: по её строкам, иначе по привязке.
  * CRM_LINK_ALL_V1 (редакция 2) — привязку «только для воронки» (crm/display-links.js:
  * шаг C′, телефон) зеркало не видит: по ней услуги записи в карточку не пишутся.

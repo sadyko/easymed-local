@@ -154,7 +154,9 @@ import { crmVisitStatus } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 · CRM_ONE_WAY_V1 — запись календаря и карточка CRM: услуги записи живут
 // только в визите; перенос ведёт за собой строки записи карточки (crm/one-way.js followVisitMove, O6).
 import { dayVisitMovableFor, requestOfVisit } from '../crm/booking-mirror.js';
+import { dayVisitOtherDoctor } from '../crm/booking-mirror.js';   // REPEAT_VISIT_V1 (поправка 2) — честные слова отказа
 import { followVisitMove } from '../crm/one-way.js';
+import { rpcT } from '../server-message.js';   // REPEAT_VISIT_V1 — отказы визита дня шаблоном
 import { crmLinkVisit, crmBookingMoved } from '../crm/visit-link.js';   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 — crmBookingMoved (дата карточки при переносе)
 // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
 import { localDate } from '../domain/day.js';
@@ -1116,6 +1118,15 @@ export async function calendarBook(db, args, user, deps = {}) {
         start: formatHhmm(minutesOfLocal(Date.parse(dayVisit.visit_date))),
         doctor: (doc && doc.full_name) || '—',
       };
+      // REPEAT_VISIT_V1 (поправка 2) — пустая запись к другому врачу: работы по ней нет,
+      // и «по нему уже идёт работа» было бы неправдой. Свой код и свои слова; экран
+      // предлагает то же «добавить в этот визит», что и при day_visit_busy.
+      if (dayVisitOtherDoctor(db, dayVisit.id, a.doctor_id)) {
+        const err = rpcT(RpcError,
+          'У пациента в этот день уже есть запись к {doctor} в {start}. Перенесите её или выберите другой день.', params, 409);
+        err.code = 'day_visit_other_doctor';
+        throw err;
+      }
       // i18n-exempt: сообщение сервера; экран переводит его по коду day_visit_busy.
       throw new RpcError(
         `У пациента на этот день уже есть визит (${params.start}, врач ${params.doctor}), и по нему уже идёт работа. Второй визит на день не заводится — добавьте услугу в этот визит.`,
