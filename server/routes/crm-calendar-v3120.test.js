@@ -121,14 +121,18 @@ test('MAJOR: слияние двух карточек, каждая со СВО�
 test('MAJOR: calendar_book без visit_id не заводит второй живой визит на день', async () => {
   const t = await start();
   try {
-    // Пустая запись дня (без работы) — перенос, а не второй визит.
+    // Пустая запись дня (без работы) того же врача — перенос, а не второй визит.
     const first = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 10, service_id: 30, start: at(D, 9), duration_minutes: 30 });
     assert.equal(first.status, 200, JSON.stringify(first.json));
-    const again = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 11, service_id: 30, start: at(D, 15), duration_minutes: 30 });
+    // REPEAT_VISIT_V1 — под ДРУГОГО врача пустая запись не переезжает: «визит дня есть».
+    const foreign = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 11, service_id: 30, start: at(D, 15), duration_minutes: 30 });
+    assert.equal(foreign.status, 409, JSON.stringify(foreign.json));
+    assert.equal(foreign.json.error.code, 'day_visit_busy');
+    const again = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 10, service_id: 30, start: at(D, 15), duration_minutes: 30 });
     assert.equal(again.status, 200, JSON.stringify(again.json));
     assert.equal(again.json.data.visit.id, first.json.data.visit.id, 'заведён второй визит вместо переноса');
     assert.equal(again.json.data.moved, true);
-    assert.equal(again.json.data.visit.doctor_id, 11);
+    assert.equal(again.json.data.visit.doctor_id, 10);
     const live = () => t.db.prepare("SELECT COUNT(*) n FROM visits WHERE patient_id = 77 AND status NOT IN ('cancelled','no_show')").get().n;
     assert.equal(live(), 1);
 

@@ -121,7 +121,9 @@ export function visitHasWork(db, visitId) {
  * держит строку его консультации в смете ('added', без счёта), и новая запись
  * к Петрову на 14:00 переносила её целиком — время, врача (mirrorReschedule, с CRM_ONE_WAY_V1 — crm/one-way.js followVisitMove
  * переписывал и строки), освобождая слот Иванова. Переносится только
- *   • по-настоящему пустая запись (ни одной живой строки), или
+ *   • пустая запись (ни одной живой строки), у которой врача нет или это тот
+ *     же врач (REPEAT_VISIT_V1: пустая запись врача А переезжала под запись
+ *     врача Б — повторный визит Б забирал её, и слот А освобождался молча), или
  *   • запись, все строки которой — того же врача, к которому записывают (это
  *     перенос его же приёма); строка без врача (анализ «на дату») допустима,
  *     только если и у записи врача нет или он тот же.
@@ -132,8 +134,9 @@ export function dayVisitMovableFor(db, visitId, doctorId) {
   if (!v || !PRE_ARRIVAL.includes(v.status)) return false;
   if (visitHasWork(db, visitId)) return false;
   const lines = db.prepare("SELECT doctor_id FROM visit_services WHERE visit_id = ? AND status <> 'cancelled'").all(visitId);
-  if (!lines.length) return true;
   const doc = Number(doctorId) || null;
+  // REPEAT_VISIT_V1 — пустая запись: врача нет или тот же врач.
+  if (!lines.length) return v.doctor_id == null || (doc != null && Number(v.doctor_id) === doc);
   if (!doc) return false;
   const visitDocOk = v.doctor_id == null || Number(v.doctor_id) === doc;
   return lines.every((l) => (l.doctor_id == null ? visitDocOk : Number(l.doctor_id) === doc));

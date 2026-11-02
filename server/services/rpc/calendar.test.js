@@ -106,8 +106,12 @@ test('запись создаётся, длительность берётся �
   const none = await book(db, { patient_id: 4, doctor_id: 8, service_id: 23, start: at(12) });
   assert.equal(none.visit.duration_minutes, 15);
 
-  // Без услуги вовсе — тоже 15.
-  const bare = await book(db, { patient_id: 3, doctor_id: 8, start: at(14) });
+  // Без услуги вовсе — тоже 15. REPEAT_VISIT_V1 — НОВАЯ запись нового
+  // пациента: у пациента 3 в этот день уже есть пустая запись к врачу 7, и
+  // под врача 8 она больше не переезжает (dayVisitMovableFor).
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (5,'Третий Пациент')").run();
+  const bare = await book(db, { patient_id: 5, doctor_id: 8, start: at(14) });
+  assert.equal(bare.created, true);
   assert.equal(bare.visit.duration_minutes, 15);
   db.close();
 });

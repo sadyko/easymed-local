@@ -458,16 +458,17 @@ test('CRM_REAL_BOOKING_V1: выставленный счёт делает виз
 // значения, чтобы экран мог сказать это словами.
 test('CRM_REAL_BOOKING_V1: перенос отдаёт прежнее время и врача, а в базе — новые', async () => {
   const db = freshDb();
-  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_active, specialty) VALUES (3,'d2','x','Петров','doctor',1,'')").run();
   const first = await ensureVisit(db, {
     patient_id: 1, date: '2026-08-09',
     book: { doctor_id: 2, start: '2026-08-09T11:00:00Z' },
   }, REG);
   assert.equal(first.booked, true);
 
+  // REPEAT_VISIT_V1 — пустая запись переносится только под СВОЕГО врача (или
+  // если врача у неё нет): тот же врач, новое время.
   const moved = await ensureVisit(db, {
     patient_id: 1, date: '2026-08-09',
-    book: { doctor_id: 3, start: '2026-08-09T04:15:00Z' },
+    book: { doctor_id: 2, start: '2026-08-09T04:15:00Z' },
   }, REG);
 
   assert.equal(moved.moved, true);
@@ -476,9 +477,31 @@ test('CRM_REAL_BOOKING_V1: перенос отдаёт прежнее время
     'перенос не назвал, откуда: экрану нечего сказать оператору');
   const row = db.prepare('SELECT visit_date, doctor_id FROM visits WHERE id=?').get(first.visit.id);
   assert.equal(Date.parse(row.visit_date), Date.parse('2026-08-09T04:15:00Z'), 'в базе осталось старое время');
-  assert.equal(row.doctor_id, 3, 'в базе остался старый врач');
-  assert.equal(moved.visit.doctor_id, 3);
+  assert.equal(row.doctor_id, 2);
+  assert.equal(moved.visit.doctor_id, 2);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM visits WHERE patient_id=1').get().n, 1, 'один пациент — один визит дня');
+});
+
+// REPEAT_VISIT_V1 — пустая запись к одному врачу НЕ переезжает под запись к
+// другому: повторный визит врача Б забирал пустую запись врача А, и слот А
+// освобождался молча. Теперь это «визит дня есть» — booked:false с его временем.
+test('REPEAT_VISIT_V1: пустая запись к Doc не переносится под запись к Петрову — booked:false', async () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_active, specialty) VALUES (3,'d2','x','Петров','doctor',1,'')").run();
+  const first = await ensureVisit(db, {
+    patient_id: 1, date: '2026-08-09',
+    book: { doctor_id: 2, start: '2026-08-09T11:00:00Z' },
+  }, REG);
+  const other = await ensureVisit(db, {
+    patient_id: 1, date: '2026-08-09',
+    book: { doctor_id: 3, start: '2026-08-09T04:15:00Z' },
+  }, REG);
+  assert.equal(other.booked, false, 'чужая пустая запись перенесена');
+  assert.equal(other.reason, 'day_visit_busy');
+  assert.deepEqual([other.day_visit.id, other.day_visit.doctor_id], [first.visit.id, 2]);
+  const row = db.prepare('SELECT visit_date, doctor_id FROM visits WHERE id=?').get(first.visit.id);
+  assert.equal(row.doctor_id, 2, 'врач записи переписан');
+  assert.equal(Date.parse(row.visit_date), Date.parse('2026-08-09T11:00:00Z'), 'время записи переписано');
 });
 
 test('CRM_REAL_BOOKING_V1: у переноса визита без врача from.doctor_id пуст, а не выдуман', async () => {
