@@ -297,3 +297,18 @@ test('логин: не-администратору с «Сотрудники: �
     assert.ok(isDisabled(loginInput(card)), 'от имени сотрудника логин правится');
   } finally { window.easymed.state.user = ADMIN_ME; }
 });
+
+test('своя карточка: поля «Новый пароль» нет, «Сменить пароль» — есть; у чужой и у нового — autocomplete="new-password"', async () => {
+  let card = await openCard('boss');
+  await tab(card, 'Вход и доступ');
+  assert.equal(passwordInputs(card).length, 0, 'своя карточка меняет пароль без текущего');
+  assert.ok(buttonWith(card, 'Сменить пароль'), 'кнопка смены своего пароля пропала');
+  card = await openCard('nurse.k');
+  await tab(card, 'Вход и доступ');
+  const [pw] = passwordInputs(card);
+  assert.ok(pw, 'у чужой карточки поле пароля пропало');
+  assert.equal(pw.getAttribute('autocomplete'), 'new-password', 'браузер подставит сюда сохранённый пароль');
+  card = await openNew();
+  await tab(card, 'Вход и доступ');
+  assert.equal(passwordInputs(card)[0].getAttribute('autocomplete'), 'new-password');
+});

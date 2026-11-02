@@ -625,6 +625,9 @@ function openEditor(user, root) {
     // учётной записи (не «вход как сотрудник»); сервер проверит то же
     // (routes/users.js loginChange). Отказ сервера — под полем «Логин».
     const canRenameLogin = isEdit && acc.admin && !isActingNow() && !readOnly;
+    // STAFF_EDIT_V1 — своя ли это карточка: решает поле пароля (renderBody) и окно
+    // «Сменить пароль» (ниже). Перенесено сюда из подвала карточки.
+    const isSelf = isEdit && selfUserId() != null && String(selfUserId()) === String(user.id);
     let loginError = '';
     const loginErrorBox = h('div');
     function paintLoginError() {
@@ -1029,7 +1032,11 @@ function openEditor(user, root) {
                     ctrls.username = i; return i;
                 })(), loginErrorBox), { required: true }),
                     field('Основная роль', roleSel, { required: true }),
-                    field(isEdit ? 'Новый пароль (пусто — не менять)' : 'Пароль', (() => { const i = h('input', { type: 'password', value: '', placeholder: '••••••••' }); i.addEventListener('input', () => markDirty({ password: i.value })); ctrls.password = i; return i; })(), { required: !isEdit })),
+                    // STAFF_EDIT_V1 — в СВОЕЙ карточке поля пароля нет: свой пароль меняют кнопкой
+                    // «Сменить пароль» с текущим (PATCH без текущего — право администратора на
+                    // чужую учётную запись). autocomplete="new-password": браузер не подставит
+                    // сюда сохранённый пароль того, кто сидит за компьютером.
+                    isSelf ? null : field(isEdit ? 'Новый пароль (пусто — не менять)' : 'Пароль', (() => { const i = h('input', { type: 'password', value: '', placeholder: '••••••••', autocomplete: 'new-password' }); i.addEventListener('input', () => markDirty({ password: i.value })); ctrls.password = i; return i; })(), { required: !isEdit })),
                 h('div', { style: { marginTop: '14px' } }, h('div', { style: { fontSize: '13.5px', fontWeight: 600, marginBottom: '7px' } }, 'Дополнительные роли'), extraRoles,
                     hint('Сотруднику открывается объединение разделов всех его ролей. Права на данные определяются основной ролью.')),
                 h('div', { style: { marginTop: '12px' } }, checkField('Активен', (() => { const c = h('input', { type: 'checkbox', checked: emp.is_active }); c.addEventListener('change', () => markDirty({ is_active: c.checked })); return c; })())),
@@ -1081,7 +1088,7 @@ function openEditor(user, root) {
     // паролем (/api/auth/change-password). PATCH без текущего — право
     // администратора на чужую учётную запись; на своей он обходил бы проверку
     // «докажи, что это ты».
-    const isSelf = isEdit && selfUserId() != null && String(selfUserId()) === String(user.id);
+    // isSelf — выше, рядом с readOnly (STAFF_EDIT_V1).
     // ADMIN_ACT_AS_V1 (R6) — работая от имени сотрудника, его пароль не меняют:
     // своя карточка (это карточка сотрудника) кнопки не показывает, сервер
     // отказал бы passwordWhileActing.
@@ -1215,7 +1222,7 @@ function openEditor(user, root) {
             payload.role = full.role;
             payload.custom_role_code = full.custom_role_code;
         }
-        if (String(emp.password).trim()) payload.password = emp.password;
+        if (!isSelf && String(emp.password).trim()) payload.password = emp.password;   // STAFF_EDIT_V1 — своя карточка пароль не шлёт
         // STAFF_EDIT_V1 — логин: только если изменён — без пробелов и нижним регистром,
         // как его хранит сервер; тот же логин в другом регистре — не смена.
         if (canRenameLogin) {
