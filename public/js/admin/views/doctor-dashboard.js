@@ -86,6 +86,7 @@ import { h, Icon, clear, initials, fmtDate } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { selfDoctorId } from '../permissions.js';   // ADMIN_DOCTOR_V2
 import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4, п. 9c) — возвращённые строки не считаются
+import { onLineStatus } from '../queue-fresh.js';   // QUEUE_FRESH_V1 — подписанный приём сразу «завершён» в «Моём дне» (один экземпляр: без ?v=)
 import { pastelFor, pastelForDashTile } from '../pastel.js';   // PASTEL_IDENTITY_V1 — оттенок = личность, не тяжесть
 // HEAD_DOCTOR_WARD_VIEW_V1 — «в койке» одним списком на сервер и браузер.
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';
@@ -494,6 +495,20 @@ const state = {
 let hostRef = null;
 let openWorkRef = null;
 let openInpatientsRef = null;   // HEAD_DOCTOR_WARD_VIEW_V1
+
+// QUEUE_FRESH_V1 (3.21.0) — «МОЙ ДЕНЬ» НЕ ЖДЁТ F5. Окно приёма записало строке
+// новый статус (queue-fresh.js): строка дня меняется сразу, и завершённый визит
+// уходит в «Завершённые · N» при первом же показе дашборда — buildDayColumn
+// считает визит завершённым, когда завершены все его строки, а дашборд рисуется
+// из этого состояния. Сам дашборд здесь не перерисовывается (панель кабинета
+// сейчас скрыта) и день не перечитывает: числа денег обновит его «Обновить» или
+// новое открытие кабинета. Экспорт — для проверки.
+export function noteDashLineStatus(lineId, status) {
+    let hit = false;
+    for (const s of state.services) if (String(s.id) === String(lineId)) { s.status = String(status); hit = true; }
+    return hit;
+}
+onLineStatus(noteDashLineStatus);
 
 const money = (n) => Math.round(Number(n) || 0).toLocaleString('ru-RU');
 

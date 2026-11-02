@@ -335,3 +335,32 @@ test('подпись группы — в словаре на трёх языка
     assert.ok(e[lang].includes('{n}'), lang + ' без {n}');
   }
 });
+
+// --- «Мой день» -------------------------------------------------------------
+test('«Мой день»: подписанный приём сразу уходит в «Завершённые · N» — без F5', async (t) => {
+  VISITS = BASE.filter((r) => r.status !== 'completed').map((r) => ({
+    id: r.visit_id, visit_date: r.visits.visit_date, status: 'arrived', patient_id: r.visits.patient_id,
+    service_id: 's-1', doctor_id: 'u-doc', sync_origin: null, duration_minutes: 30, room_id: null,
+    patients: { id: r.visits.patient_id, mrn: r.visits.patients.mrn, full_name: r.visits.patients.full_name,
+                last_name: r.visits.patients.last_name, first_name: r.visits.patients.first_name },
+    services: { id: 's-1', name: 'Приём терапевта' }, rooms: null }));
+  t.after(() => { VISITS = []; reseed(); });
+  const root = await openWork();
+  const dayCards = () => byClass(root, 'dd-appt');
+  const doneHead = () => byClass(root, 'dd-done-h')[0];
+  buttonByText(root, /Дашборд/).click();
+  await tick(80);
+  assert.ok(dayCards().some((c) => textOf(c).includes('Гаипов')), 'стенд: в «Моём дне» нет идущего приёма');
+  assert.strictEqual(doneHead(), undefined, 'стенд: завершённых сегодня ещё нет');
+  buttonByText(root, /Мои приёмы/).click();
+  await tick(60);
+  // Окно приёма подписало строку p1.
+  setServerStatus('p1', 'completed');
+  QF.noteLineStatus('p1', 'completed');
+  buttonByText(root, /Дашборд/).click();   // сразу, без ожидания сервера
+  assert.ok(doneHead() && textOf(doneHead()).includes('Завершённые · 1'), '«Мой день» не увёл завершённый приём в «Завершённые»');
+  assert.ok(!dayCards().some((c) => textOf(c).includes('Гаипов')), 'завершённый приём остался в ленте дня');
+  assert.ok(dayCards().some((c) => textOf(c).includes('Аминов')), 'незавершённые пропали из ленты');
+  await tick(80);
+  assert.ok(doneHead() && textOf(doneHead()).includes('Завершённые · 1'));
+});
