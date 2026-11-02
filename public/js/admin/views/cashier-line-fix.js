@@ -109,6 +109,13 @@ function sheet(title, icon, width, onClose = null) {
     return { overlay, body, foot, close };
 }
 
+/** DUP_STOP_V1 (ревью m5) — врач строки: doctor_id(id, full_name) приходит объектом, иначе — числом. */
+function lineDoctorId(line) {
+    const d = line && line.doctor_id;
+    if (d && typeof d === 'object') return d.id ?? null;
+    return d ?? null;
+}
+
 let servicesCache = null;
 async function loadServices() {
     if (servicesCache) return servicesCache;
@@ -124,8 +131,10 @@ async function loadServices() {
  * DUP_STOP_V1 — `visitId`: услуги, уже назначенные в этом визите, погашены («уже
  * назначено») — замена или добавление на них — повтор, сервер откажет (409). Строка,
  * которую меняют (`exceptLineId`), не мешает: ту же услугу у другого врача выбрать можно.
+ * DUP_STOP_V1 (ревью m5) — `doctorId`: врач, который останется у строки (замена услуги его
+ * не меняет). Консультация, уже назначенная у этого врача, — повтор: погашена; у другого — нет.
  */
-export function pickService(title, { visitId = null, exceptLineId = null } = {}) {
+export function pickService(title, { visitId = null, exceptLineId = null, doctorId = null } = {}) {
     return new Promise((resolve) => {
         let done = false;
         const finish = (v) => { if (done) return; done = true; resolve(v); };
@@ -143,7 +152,7 @@ export function pickService(title, { visitId = null, exceptLineId = null } = {})
             const rows = (q ? all.filter((x) => String(x.name || '').toLowerCase().includes(q)) : all).slice(0, 60);
             if (!rows.length) { list.appendChild(h('div', { class: 'muted', style: { padding: '8px' } }, 'Ничего не найдено.')); return; }
             for (const svc of rows) {
-                const onVisit = orderedMatch(svc, ordered);   // DUP_STOP_V1
+                const onVisit = orderedMatch(svc, ordered, doctorId);   // DUP_STOP_V1 · ревью m5 — врач строки
                 const locked = !!(onVisit && onVisit.blocked);
                 list.appendChild(h('button', {
                     type: 'button', class: 'btn btn-ghost', 'data-service-id': String(svc.id), disabled: locked,
@@ -601,7 +610,7 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
             const actions = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' } });
             if (editable && line && lineFixable(line)) {
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
-                    const svc = await pickService(tr('Заменить услугу'), { visitId: st.invoice.visit_id, exceptLineId: line.id });   // DUP_STOP_V1
+                    const svc = await pickService(tr('Заменить услугу'), { visitId: st.invoice.visit_id, exceptLineId: line.id, doctorId: lineDoctorId(line) });   // DUP_STOP_V1 · ревью m5
                     if (!svc) return;
                     if (await runRpc('cashier_line_change_service', { visit_service_id: line.id, new_service_id: svc.id }, tr('Услуга заменена.'))) { await paint(); await changed(); }
                 } }, 'Заменить услугу'));
@@ -618,7 +627,7 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
             } else if (swappable && line && lineFixable(line)) {
                 // CASHIER_PAID_SWAP_V1 — «Убрать» здесь нет: оплаченное снимает «Вернуть услугу».
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', 'data-swap': 'service', onclick: async () => {
-                    const svc = await pickService(tr('Заменить услугу'), { visitId: st.invoice.visit_id, exceptLineId: line.id });   // DUP_STOP_V1
+                    const svc = await pickService(tr('Заменить услугу'), { visitId: st.invoice.visit_id, exceptLineId: line.id, doctorId: lineDoctorId(line) });   // DUP_STOP_V1 · ревью m5
                     if (!svc) return;
                     await openSwapConfirm({ visit_service_id: line.id, new_service_id: svc.id }, { onDone: afterSwap });
                 } }, 'Заменить услугу'));
@@ -826,7 +835,7 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
             const actions = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' } });
             if (canFix && lineFixable(l)) {
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
-                    const svc = await pickService(tr('Заменить услугу'), { visitId: row.visit_id, exceptLineId: id });   // DUP_STOP_V1
+                    const svc = await pickService(tr('Заменить услугу'), { visitId: row.visit_id, exceptLineId: id, doctorId: lineDoctorId(l) });   // DUP_STOP_V1 · ревью m5
                     if (!svc) return;
                     if (await runRpc('cashier_line_change_service', { visit_service_id: id, new_service_id: svc.id }, tr('Услуга заменена.'))) await paint();
                 } }, 'Заменить услугу'));

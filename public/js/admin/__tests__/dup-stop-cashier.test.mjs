@@ -66,6 +66,8 @@ function seed() {
   s.run(40, 'Анализ крови', 40000, 'lab');
   s.run(50, 'УЗИ', 80000, 'imaging');
   s.run(60, 'Капельница', 30000, 'procedure');
+  db.prepare("INSERT INTO services (id, name, price, type, active, requires_doctor) VALUES (30, 'Приём терапевта', 100000, 'consultation', 1, 1)").run();   // DUP_STOP_V1 (ревью m5)
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (11, 'doc2', 'x', 'Петров', 'doctor', 1)").run();
   db.prepare("INSERT INTO patients (id, full_name) VALUES (77, 'Пациент Тест')").run();
   const vid = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (77, '2026-11-02T05:00:00Z', 'arrived')").run().lastInsertRowid);
   const ins = db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, created_by) VALUES (?, ?, 1, 0, 0, 'added', 10)");
@@ -106,6 +108,29 @@ test('DUP_STOP_V1 (ревью m3): строка записи колл-центр
   assert.match(textOf(btn(40)), /уже назначено/);
   btn(50).click();
   assert.equal((await pending).id, 50);
+});
+
+test('DUP_STOP_V1 (ревью m5): «Заменить услугу» знает врача строки — консультация, уже назначенная у этого врача, погашена; у другого — нет', async () => {
+  const { vid, usg } = seed();
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, 30, 10, 1, 0, 0, 'added', 10)").run(vid);
+  // строка УЗИ — у врача 10: замена оставит врача, и «Приём терапевта» у него — повтор
+  let { pending, btn } = await openPicker({ visitId: vid, exceptLineId: usg, doctorId: 10 });
+  assert.ok('disabled' in btn(30).attrs, 'консультация у того же врача — сервер откажет');
+  btn(50).click();
+  await pending;
+  ({ pending, btn } = await openPicker({ visitId: vid, exceptLineId: usg, doctorId: 11 }));
+  assert.ok(!('disabled' in btn(30).attrs), 'у другого врача консультацию назначить можно');
+  assert.match(textOf(btn(30)), /уже назначено: Иванов/);
+  btn(30).click();
+  assert.equal((await pending).id, 30);
+});
+
+test('DUP_STOP_V1 (ревью m5): окна замены услуги передают врача строки', () => {
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(HERE, '..', 'views', 'cashier-line-fix.js'), 'utf8').replace(/\/\/[^\n]*/g, '');
+  const swaps = [...src.matchAll(/pickService\(tr\('Заменить услугу'\), \{([^\n]*)\}\)/g)].map((m) => m[1]);
+  assert.equal(swaps.length, 3, 'окон «Заменить услугу» не три: ' + swaps.length);
+  for (const c of swaps) assert.match(c, /doctorId: lineDoctorId\(/, 'окно замены без врача строки: ' + c);
 });
 
 test('DUP_STOP_V1 (К1): без визита окно выбора ничего не гасит (как прежде)', async () => {
