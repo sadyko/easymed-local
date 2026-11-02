@@ -23,6 +23,7 @@ import { logPatientActivity } from './activity-log.js';
 import { actorShownName } from '../act-as-client.js';   // ADMIN_ACT_AS_V1 — имя «от имени» в журнале счёта
 import { printableSheet } from './doc-settings.js?v=noqr1';   // must match every other importer (one module instance)
 import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX — счёт визита той же сборкой, что у кассы
+import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 // VISITS_ONE_DOOR_V1 — окно визита правило двойной записи не знало вовсе:
 // «Сохранить» писало visit_date прямым UPDATE, а кнопки статуса — status.
 // Переезд на другой день и возврат отменённой записи в «записан» проходили
@@ -1198,23 +1199,29 @@ export async function generateInvoiceFromSelection(state, selectedIds, onReload)
     }
     const inv = res.invoice;
     const subtotal = Number(inv.subtotal || 0);
-    await logInvoiceAction(state, inv, {
-        action: 'created',
-        fromStatus: null,
-        toStatus:   'unpaid',
-        amount:     Number(inv.total_amount || subtotal),
-        notes:      `${lineItems.length} line item${lineItems.length === 1 ? '' : 's'}`,
-    });
+    // INVOICE_APPEND_V1 — строки легли в уже выставленный неоплаченный счёт
+    // визита: «создан» в журнал счёта не пишется (сервер сам записал
+    // «line_add»), и тост называет тот же номер и новую сумму.
+    const appended = isAppended(res);
+    if (!appended) {
+        await logInvoiceAction(state, inv, {
+            action: 'created',
+            fromStatus: null,
+            toStatus:   'unpaid',
+            amount:     Number(inv.total_amount || subtotal),
+            notes:      `${lineItems.length} line item${lineItems.length === 1 ? '' : 's'}`,
+        });
+    }
     await logPatientActivity({
         patientId:   state.visit?.patient_id || state.patient?.id,
         visitId:     state.visit?.id,
         entityType:  'invoice',
         entityId:    inv.id,
         entityLabel: inv.invoice_number || String(inv.id),
-        action:      'created',
-        summary:     `Invoice for ${Number(inv.total_amount || 0).toLocaleString('ru-RU')} UZS · ${lineItems.length} service${lineItems.length === 1 ? '' : 's'}`,
+        action:      appended ? 'updated' : 'created',
+        summary:     `Invoice for ${Number(inv.total_amount || 0).toLocaleString('ru-RU')} UZS · ${lineItems.length} service${lineItems.length === 1 ? '' : 's'}${appended ? ' added' : ''}`,
     });
-    toast(trf('Счёт {number} создан — передан в кассу.', { number: inv.invoice_number || String(inv.id) }));
+    toast(appended ? invoiceAppendNote(res) : trf('Счёт {number} создан — передан в кассу.', { number: inv.invoice_number || String(inv.id) }));
     state._selectedForInvoice = new Set();
     // Tell the parent (calendar, patient card) to refresh so the visit
     // status / billed indicator updates immediately.

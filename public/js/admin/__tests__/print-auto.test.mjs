@@ -411,7 +411,7 @@ const CALLERS = {
   'patient-documents.js':    { calls: 3, view: 0 },   // «Print» (анализы, заключение)
   'payer-act.js':            { calls: 1, view: 0 },   // вызывающий передаёт принтер (касса — показ)
   'receipt-print.js':        { calls: 3, view: 1 },   // чек — печать; счёт — autoPrint вызывающего; квитанция — показ
-  'service-picker-modal.js': { calls: 2, view: 2 },   // счёт и акт мастера после сохранения
+  'service-picker-modal.js': { calls: 2, view: 3 },   // счёт и акт мастера после сохранения; INVOICE_APPEND_V1 — дописанный счёт (printInvoiceSheetById) — тоже показ
   'service-workspace.js':    { calls: 2, view: 0 },   // «Печать» кабинета; маршрутный лист (обёртка, печатает сама)
   'title-sheet.js':          { calls: 1, view: 0 },   // «Печать» бумаг при поступлении
   'visit-wizard.js':         { calls: 1, view: 2 },   // акт и счета мастера (printInvoiceSheetById) после сохранения

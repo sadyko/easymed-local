@@ -932,3 +932,45 @@ test('строка пакета в смете: в срок пакета — це
   assert.match(src, /function itemPrice\(a\) \{[^}]*?\{ day: localDayOf\(cartVisitDateIso\(\)\) \}\)/, 'смета называет день визита — тот же, что запись строки');
   assert.match(src, /const inPkg = [^;]*packageValidOn\(a\.package, localDayOf\(cartVisitDateIso\(\)\)\)/, 'таблица подтверждения — пакетная цена только в срок пакета');
 });
+
+// INVOICE_APPEND_V1 — второй «Сформировать счёт» окна визита, пока первый счёт
+// не оплачен: строки ложатся в ТОТ ЖЕ счёт; тост называет номер и новую сумму,
+// «создан» второй раз в журнал счёта не пишется (сервер записал «line_add»).
+test('INVOICE_APPEND_V1: окно визита — второй счёт по неоплаченному визиту дописывается в первый', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101]), () => {});
+  const first = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  assert.ok(first, 'первый счёт не создан: ' + JSON.stringify(RPC));
+  const created = () => DB.prepare("SELECT COUNT(*) c FROM invoice_audit_log WHERE invoice_id = ? AND action = 'created'").get(first.id).c;
+  const before = created();
+  TOASTS.length = 0;
+  await VM.generateInvoiceFromSelection(vmState(), new Set([102]), () => {});
+  const all = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').all();
+  assert.equal(all.length, 1, 'второй счёт по неоплаченному визиту');
+  assert.equal(all[0].total_amount, 980000, '900 000 + 80 000 по пакету');
+  assert.ok(TOASTS.some((t) => t === 'Добавлено в счёт № ' + first.invoice_number + ' — новая сумма 980 000 сум'), 'нет фразы: ' + TOASTS.join(' | '));
+  assert.equal(created(), before, '«создан» записан второй раз');
+  assert.equal(DB.prepare("SELECT COUNT(*) c FROM invoice_audit_log WHERE invoice_id = ? AND action = 'line_add'").get(first.id).c, 1);
+});
+
+// INVOICE_APPEND_V1 — калькулятор: счёт по визиту, у которого уже есть
+// неоплаченный счёт (запись легла в существующий приём), — дописывание.
+// Экран калькулятора говорит «Добавлено в счёт № …» и печатает ВЕСЬ счёт с
+// сервера, а не бланк из позиций этого вызова; «Счёт визита» — та же фраза.
+test('INVOICE_APPEND_V1: калькулятор и «Счёт визита» — дописанный счёт: appended доходит до экрана, тост и печать всего счёта', async () => {
+  seed();
+  const one = await invoicePickerLines({ visitId: 40, lines: [LINES[0]] });
+  assert.equal(one.error, null);
+  const two = await invoicePickerLines({ visitId: 40, lines: [LINES[1]] });
+  assert.equal(two.error, null);
+  assert.equal(two.data.appended, true);
+  assert.equal(two.data.invoice.id, one.data.invoice.id);
+  assert.equal(DB.prepare('SELECT COUNT(*) c FROM invoices WHERE visit_id = 40').get().c, 1);
+  const fs = await import('node:fs');
+  const spm = fs.readFileSync(new URL('../views/service-picker-modal.js', import.meta.url), 'utf8');
+  assert.match(spm, /const appended = isAppended\(bill\.data\);/, 'калькулятор не читает appended');
+  assert.match(spm, /note = appended \? ', ' \+ invoiceAppendNote\(bill\.data\)/, 'калькулятор не говорит «Добавлено в счёт № …»');
+  assert.match(spm, /if \(appended\) \{\s*try \{\s*const r = await printInvoiceSheetById\(\{ supabase, printableSheet, invoiceId: inv\.id,/, 'дописанный счёт печатается не с сервера');
+  const vb = fs.readFileSync(new URL('../views/visit-bill.js', import.meta.url), 'utf8');
+  assert.match(vb, /toast\(isAppended\(data\) \? invoiceAppendNote\(data\) : 'Счёт выставлен', 'ok'\);/, '«Счёт визита» молчит о дописывании');
+});

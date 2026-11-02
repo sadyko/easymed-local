@@ -74,6 +74,8 @@ import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 import { listTemplates, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // SERVICES_PACKAGES_V1 — cartPackage: цена услуги в пакете
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';
 import { nearestFree, noFreeText, nearestButtonText, visitDayNote } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
+import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
+import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // INVOICE_APPEND_V1 — дописанный счёт печатается целиком, из строк сервера
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
 // попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
@@ -3264,7 +3266,9 @@ export function openServicePickerModal({
                     note = ' ' + trf('(счёт не создан: {msg})', { msg });
                 } else {
                     const inv = bill.data.invoice;
-                    note = inv.invoice_number ? ', ' + trf('счёт №{no}', { no: inv.invoice_number }) : ', ' + tr('счёт выставлен');
+                    const appended = isAppended(bill.data);   // INVOICE_APPEND_V1 — строки легли в уже выставленный счёт визита
+                    note = appended ? ', ' + invoiceAppendNote(bill.data)
+                        : inv.invoice_number ? ', ' + trf('счёт №{no}', { no: inv.invoice_number }) : ', ' + tr('счёт выставлен');
                     if (bill.promoOff > 0) note += ' · ' + trf('промокод −{sum}', { sum: formatMoney(bill.promoOff) });
                     let invTotal = Number(inv.total_amount || 0);
                     if (invTotal === 0) note += ' · полностью покрыт промокодом';
@@ -3272,7 +3276,8 @@ export function openServicePickerModal({
                     // баланс и проводит платёж 'wallet' в одной транзакции.
                     // CARD_BALANCE_V1 — и картой (остатком), первой.
                     const tNow = wizTotals();
-                    const cardCap = cardRow && canSpendStoredValue() ? { id: cardRow.id, remaining: cardRemaining(cardRow) } : null;
+                    // INVOICE_APPEND_V1 — дописанный счёт держит и прежние строки: карта платит не больше этой сметы.
+                    const cardCap = cardRow && canSpendStoredValue() ? { id: cardRow.id, remaining: Math.min(cardRemaining(cardRow), tNow.payable) } : null;
                     if (cardRow && !canSpendStoredValue()) note += ' · ' + tr('картой оплатит касса');
                     if ((tNow.bal > 0 || cardCap) && invTotal > 0) {
                         const paidRes = await payFromStoredValue([inv], { wallet: Math.min(tNow.bal, invTotal), card: cardCap });
@@ -3282,11 +3287,20 @@ export function openServicePickerModal({
                         for (const m of paidRes.errors) toast(trf('Баланс не списан: {msg}', { msg: m }), 'fail');
                     }
                     invTotal = Number(inv.total_amount || 0);
+                    // INVOICE_APPEND_V1 — дописанный счёт печатается ЦЕЛИКОМ, из строк
+                    // сервера (receipt-print.js, как в мастере визита): бланк ниже
+                    // собран из позиций ЭТОГО вызова и разошёлся бы с номером и суммой.
+                    if (appended) {
+                        try {
+                            const r = await printInvoiceSheetById({ supabase, printableSheet, invoiceId: inv.id, title: 'Амбулаторные услуги', withPerformer: true, autoPrint: false });   // i18n-exempt: печатный счёт (бланк) — печатный документ
+                            if (r && !r.ok) console.warn('[wizard] invoice print:', inv.id, r.reason);
+                        } catch (e) { console.warn('[wizard] invoice print:', e); }
+                    }
                     // WIZ_INVOICE_PRINT_V1 — сразу открываем печатную форму счёта для
                     // пациента (тот же printableSheet/бланк, которым печатается акт).
                     // RPC_PORT_V1 — строки бланка — ответ сервера, то есть ровно то,
                     // что выставлено.
-                    try {
+                    if (!appended) try {
                         const invItems = (bill.data.items || []).map((it, i) => ({
                             name: it.description || 'Услуга', qty: Number(it.quantity || 1), price: Number(it.unit_price || 0), _alt: i % 2 === 1,
                         }));

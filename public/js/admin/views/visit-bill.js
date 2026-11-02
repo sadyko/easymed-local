@@ -18,6 +18,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, StatusTag, Tag, fmtDateTime, field } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ; V3120_FIX — tr для textContent
 import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
+import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 import { linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — исполнитель строки
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 // BRANCH_BILL_GUARD_V1 — тот же предикат, на котором стоят рабочие списки
@@ -344,12 +345,13 @@ export function openVisitBillModal(visit, onChanged) {
         if (unInvoicedIds.length === 0) return;
         generateBtn.disabled = true;
         try {
-            const { error } = await supabase.rpc('create_invoice_for_visit', {
+            const { data, error } = await supabase.rpc('create_invoice_for_visit', {
                 visit_id: visit.id,
                 visit_service_ids: unInvoicedIds.slice(),
             });
             if (error) throw error;
-            toast('Счёт выставлен', 'ok');
+            // INVOICE_APPEND_V1 — строки легли в уже выставленный неоплаченный счёт: тот же номер, новая сумма.
+            toast(isAppended(data) ? invoiceAppendNote(data) : 'Счёт выставлен', 'ok');
             await reloadAll();
             if (typeof onChanged === 'function') await onChanged();
         } catch (e) {
