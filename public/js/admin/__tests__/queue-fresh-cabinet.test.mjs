@@ -1,0 +1,242 @@
+// QUEUE_FRESH_V1 (3.21.0) — «МОИ ПРИЁМЫ»: ЗАВЕРШЁННЫЙ ПРИЁМ НЕ ВИСИТ В ОЧЕРЕДИ.
+//
+// Кабинет — панель из кэша оболочки: при возврате его показывают, а не
+// перерисовывают (admin.js, страж app-shell.test.mjs). Владелец: после
+// «Завершить приём» строка «Идёт приём / Продолжить» висела сверху до F5.
+//
+// Что здесь закреплено:
+//   1. Окно приёма сообщило «строка завершена» (queue-fresh.js) — строка СРАЗУ
+//      уходит из «Активных»; возврат ({ sub: 'work' } → ctx.onPayload)
+//      перечитывает очередь, а фильтр и поиск врача остаются.
+//   2. Возврат без сообщения (черновик, «Пауза») — ничего не перечитывается:
+//      строка остаётся «Идёт приём» сверху.
+//   3. Сбой перечитывания — прежний список на месте, следующий возврат пробует снова.
+// Стенд тот же, что у cabinet-queue-order.test.mjs: честный /api/db с фильтрами.
+
+import { test } from 'node:test';
+import assert from 'node:assert';
+
+// --- fake DOM (тот же харнесс, что у cabinet-queue-order.test.mjs) ----------
+class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={setProperty(k,v){this[k]=v;},getPropertyValue(k){return this[k];}};this.children=[];this.attrs={};this.className='';this._t='';this._l={};this.dataset={};this.value='';}
+ appendChild(c){this.children.push(c);return c;} removeChild(c){const i=this.children.indexOf(c);if(i>-1)this.children.splice(i,1);return c;}
+ get firstChild(){return this.children[0]||null;} replaceChildren(){this.children.length=0;}
+ setAttribute(k,v){this.attrs[k]=String(v); if (k === 'value') this.value = String(v);} getAttribute(k){return this.attrs[k]??null;} hasAttribute(k){return k in this.attrs;}
+ addEventListener(t,fn){(this._l[t]||(this._l[t]=[])).push(fn);} removeEventListener(){}
+ dispatchEvent(e){for(const fn of this._l[e.type]||[])fn(e);return true;}
+ click(){this.dispatchEvent({type:'click',currentTarget:this,preventDefault(){},stopPropagation(){}});}
+ focus(){} blur(){} scrollTo(){} remove(){} select(){}
+ _desc(o=[]){for(const c of this.children||[]){o.push(c);if(c._desc)c._desc(o);}return o;}
+ _sel(n,s){ if(s[0]==='#')return (n.attrs&&n.attrs.id)===s.slice(1);
+            if(s[0]==='.')return String(n.className||'').split(/\s+/).includes(s.slice(1));
+            return String(n.tagName||'').toLowerCase()===s.toLowerCase(); }
+ querySelector(s){return this._desc().find((n)=>this._sel(n,s))||null;}
+ querySelectorAll(s){return this._desc().filter((n)=>this._sel(n,s));}
+ get textContent(){return this._t;} set textContent(v){this._t=String(v);this.children.length=0;}
+ get classList(){const s=this;return{contains:c=>String(s.className).split(/\s+/).includes(c),add(){},remove(){},toggle(){}};}
+ get isConnected(){return true;}}
+class TX extends F{constructor(t){super('#text');this.nodeType=3;this._t=String(t);}}
+function mk(t){
+  const el = new F(t);
+  if (el.tagName === 'TEMPLATE') {
+    el.content = { firstChild: null };
+    Object.defineProperty(el, 'innerHTML', { set(v) { const s = new F('svg'); s._t = String(v); el.content.firstChild = s; }, get() { return ''; } });
+  }
+  return el;
+}
+globalThis.Node = F;
+globalThis.Event = class { constructor(t, o) { this.type = t; Object.assign(this, o || {}); } };
+const TOASTS = [];
+const toastEl = mk('div');
+Object.defineProperty(toastEl, 'textContent', { get() { return ''; }, set(v) { TOASTS.push(String(v)); }, configurable: true });
+globalThis.document = {
+  createElement: mk, createElementNS: (_n, t) => mk(t), createTextNode: (t) => new TX(t),
+  head: mk('head'), body: mk('body'), documentElement: mk('html'),
+  addEventListener() {}, removeEventListener() {},
+  getElementById(id) { return id === 'toast' ? toastEl : null; },
+};
+function makeLocalStorage() {
+  const store = new Map();
+  return { getItem: (k) => (store.has(k) ? store.get(k) : null),
+           setItem: (k, v) => { store.set(k, String(v)); },
+           removeItem: (k) => { store.delete(k); }, clear: () => store.clear() };
+}
+const fakeLocalStorage = makeLocalStorage();
+globalThis.localStorage = fakeLocalStorage;
+// I18N_LOCALE_PIN_V1 — i18n.js выбирает язык ОДИН раз при загрузке модуля.
+fakeLocalStorage.setItem('admin.lang', 'ru');
+globalThis.window = {
+  location: { hostname: 'localhost' }, localStorage: fakeLocalStorage,
+  addEventListener() {}, dispatchEvent() { return true; },
+  easymed: { state: { user: null } },
+  confirm: () => true,
+  easymedSetTabSub() {},
+};
+globalThis.MutationObserver = class { observe() {} disconnect() {} };
+globalThis.requestAnimationFrame = (fn) => fn();
+globalThis.history = { state: null, replaceState(st) { this.state = st; }, pushState(st) { this.state = st; } };
+
+const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
+const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
+const buttonByText = (root, re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
+const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
+const byClass = (root, c) => walk(root).filter((n) => hasClass(n, c));
+const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------
+// ПОСЕВ: четыре услуги одного врача на сегодня (сервер отдаёт новые сверху).
+// ---------------------------------------------------------------------------
+const DOC = { id: 'u-doc', full_name: 'Каримова Азиза', specialty: 'Терапевт', is_doctor: true, active: true, role: 'doctor' };
+const SVC = { name: 'Приём терапевта', type: 'consultation', duration_minutes: 30,
+              service_types: { name: 'Консультация' }, departments: { kind: 'consultation' } };
+const dayAt = (offset, hh = 9) => { const d = new Date(); d.setDate(d.getDate() + offset); d.setHours(hh, 0, 0, 0); return d.toISOString(); };
+const TODAY = dayAt(0);
+let seq = 0;
+const created = () => { const d = new Date(); d.setHours(8, 59 - (seq++), 0, 0); return d.toISOString(); };
+const vs = (id, status, last, first, visitDate = TODAY) => ({
+  id, status, quantity: 1, unit_price: 100000, total: 100000, created_at: created(), price_tier: null,
+  invoice_item_id: null, visit_id: 'v-' + id, service_id: 's-1', doctor_id: 'u-doc',
+  consultation_type_id: null, sync_origin: null, services: SVC, consultation_types: null,
+  users: { full_name: DOC.full_name, specialty: DOC.specialty, rooms: null },
+  visits: { visit_date: visitDate, patient_id: 'p-' + id, status: 'arrived',
+            patients: { full_name: last + ' ' + first, last_name: last, first_name: first, mrn: 'MRN-' + id, phone: '' } },
+});
+const BASE = [
+  vs('q1', 'queued',      'Аминов',  'Олим'),
+  vs('p1', 'in_progress', 'Гаипов',  'Тимур'),
+  vs('q2', 'queued',      'Зокиров', 'Бобур'),
+  vs('c1', 'completed',   'Бакиев',  'Санжар'),
+];
+let ROWS = BASE.map((r) => ({ ...r }));
+const reseed = () => { ROWS = BASE.map((r) => ({ ...r })); };
+const setServerStatus = (id, status) => { ROWS = ROWS.map((r) => (r.id === id ? { ...r, status } : r)); };
+let VISITS = [];
+let FAIL_QUEUE = false;
+let QUEUE_READS = 0;
+let REFUNDED = new Set();   // строки, за которые касса вернула деньги (REFUND_ANY_V1, окно «Платежи»)
+
+function matches(row, f) {
+  if (f.or) return true;
+  const v = row[f.col];
+  switch (f.op) {
+    case 'eq':  return String(v) === String(f.val);
+    case 'is':  return f.val === null ? (v === null || v === undefined) : v === f.val;
+    case 'in':  return (f.val || []).map(String).includes(String(v));
+    case 'gte': return String(v) >= String(f.val);
+    case 'lt':  return String(v) <  String(f.val);
+    default:    return true;
+  }
+}
+const TABLES = () => ({ users: [DOC], visit_services: ROWS, invoice_items: [], visits: VISITS, recommended_services: [], admissions: [], patients: [] });
+globalThis.fetch = async (url, opts) => {
+  const body = opts && opts.body ? JSON.parse(opts.body) : null;
+  if (String(url).startsWith('/api/db')) {
+    // Чтение ОЧЕРЕДИ кабинета — то, у которого есть присоединение consultation_types(…).
+    const isQueue = body.table === 'visit_services' && /consultation_types\(/.test(String(body.columns || ''));
+    if (isQueue) {
+      QUEUE_READS++;
+      if (FAIL_QUEUE) return { ok: false, status: 500, json: async () => ({ error: { message: 'сбой сервера' } }) };
+    }
+    let rows = TABLES()[body.table] || [];
+    for (const f of (body.filters || [])) rows = rows.filter((r) => matches(r, f));
+    for (const o of (body.order || []).slice().reverse()) {
+      rows = rows.slice().sort((a, b) => (String(a[o.col]) < String(b[o.col]) ? -1 : String(a[o.col]) > String(b[o.col]) ? 1 : 0) * (o.asc ? 1 : -1));
+    }
+    if (body.limit) rows = rows.slice(0, body.limit);
+    return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(rows)) }) };
+  }
+  if (String(url) === '/api/rpc/refunded_lines') {
+    return { ok: true, json: async () => ({ data: { line_ids: (body.line_ids || []).filter((id) => REFUNDED.has(Number(id))) } }) };
+  }
+  return { ok: true, json: async () => ({ data: null }) };
+};
+
+const cabinet = await import('../views/consultation.js');
+const QF = await import('../queue-fresh.js');
+const perms = await import('../permissions.js');
+perms.setFullAccess('test');
+window.easymed.state.user = { ...DOC, is_admin: false, is_super_admin: false };
+
+let HOOK = null;
+const NAV = [];
+async function openWork() {
+  NAV.length = 0;
+  HOOK = null;
+  const root = mk('div');
+  await cabinet.renderConsultation(root, {
+    onNavigate: (v, p) => NAV.push([v, p]), tabId: 'consultation', payload: { sub: 'work' },
+    onPayload: (fn) => { HOOK = fn; },
+  });
+  await tick(60);
+  return root;
+}
+const NAMES = () => ROWS.map((r) => r.visits.patients.full_name);
+const statusSelect = (root) => walk(root).find((n) => n.tagName === 'SELECT');
+const selectedStatus = (root) => statusSelect(root).value;
+const pickStatus = (root, value) => { const sel = statusSelect(root); sel.dispatchEvent({ type: 'change', target: { value }, currentTarget: sel }); };
+const bodyRows = (root) => { const tb = walk(root).find((n) => n.tagName === 'TBODY'); return tb ? tb.children.filter((n) => n.tagName === 'TR') : []; };
+const nameOf = (tr) => NAMES().find((n) => textOf(tr).includes(n)) || null;
+const visibleNames = (root) => bodyRows(root).map(nameOf).filter(Boolean);
+const rowOf = (root, name) => bodyRows(root).find((tr) => nameOf(tr) === name);
+const searchInput = (root) => walk(root).find((n) => n.tagName === 'INPUT');
+async function typeSearch(root, value) {
+  const inp = searchInput(root);
+  inp.dispatchEvent({ type: 'input', target: { value }, currentTarget: inp });
+  await tick(600);   // поиск — с задержкой (SEARCH_DEBOUNCE_V1, 500 мс)
+}
+const tileByLabel = (root, label) => byClass(root, 'ws-kpi-card').find((c) => textOf(c).includes(label));
+const tileValue = (tile) => textOf(byClass(tile, 'ws-kpi-val')[0]).trim();
+
+// ===========================================================================
+test('подписан приём: строка СРАЗУ уходит из «Активных»; возврат перечитывает очередь, фильтр и поиск врача на месте', async (t) => {
+  const root = await openWork();
+  t.after(async () => { reseed(); await typeSearch(root, ''); });   // поиск живёт в модуле — вернуть соседним проверкам
+  assert.strictEqual(typeof HOOK, 'function', 'кабинет не подписан на возврат (ctx.onPayload)');
+  assert.deepStrictEqual(visibleNames(root), ['Гаипов Тимур', 'Аминов Олим', 'Зокиров Бобур'], 'стенд: «Идёт приём» не сверху');
+  await typeSearch(root, 'Гаипов');
+  assert.deepStrictEqual(visibleNames(root), ['Гаипов Тимур']);
+  // Окно приёма подписало строку: сервер уже 'completed', кабинету сообщено.
+  setServerStatus('p1', 'completed');
+  QF.noteLineStatus('p1', 'completed');
+  assert.deepStrictEqual(visibleNames(root), [], 'завершённый приём остался в «Активных» до возврата');
+  const reads = QUEUE_READS;
+  HOOK({ sub: 'work' });
+  await tick(80);
+  assert.strictEqual(QUEUE_READS, reads + 1, 'возврат не перечитал очередь');
+  assert.strictEqual(selectedStatus(root), 'active', 'возврат сбросил фильтр');
+  assert.strictEqual(searchInput(root).value, 'Гаипов', 'возврат сбросил поиск');
+  assert.deepStrictEqual(visibleNames(root), []);
+  pickStatus(root, 'completed');
+  assert.deepStrictEqual(visibleNames(root), ['Гаипов Тимур'], 'завершённый приём не в «Завершённых»');
+  assert.ok(textOf(rowOf(root, 'Гаипов Тимур')).includes('Осмотрен'));
+  assert.strictEqual(tileValue(tileByLabel(root, 'Осмотрено сегодня')), '2');
+});
+
+test('возврат без сообщения (черновик, «Пауза») — очередь не перечитывается, «Идёт приём» сверху с «Продолжить»', async (t) => {
+  t.after(reseed);
+  const root = await openWork();
+  const reads = QUEUE_READS;
+  HOOK({ sub: 'work' });
+  await tick(80);
+  assert.strictEqual(QUEUE_READS, reads, 'возврат без изменений перечитал очередь');
+  const rows = bodyRows(root);
+  assert.strictEqual(nameOf(rows[0]), 'Гаипов Тимур');
+  assert.ok(textOf(rows[0]).includes('Идёт приём') && textOf(rows[0]).includes('Продолжить'), 'черновик выбил строку из «Идёт приём»');
+});
+
+test('сбой перечитывания: прежний список на месте, флаг «устарела» остаётся — следующий возврат пробует снова', async (t) => {
+  t.after(() => { reseed(); FAIL_QUEUE = false; });
+  const root = await openWork();
+  setServerStatus('q1', 'completed');
+  QF.noteLineStatus('q1', 'completed');
+  FAIL_QUEUE = true;
+  HOOK({ sub: 'work' });
+  await tick(80);
+  assert.deepStrictEqual(visibleNames(root), ['Гаипов Тимур', 'Зокиров Бобур'], 'сбой чтения опустошил список');
+  FAIL_QUEUE = false;
+  const reads = QUEUE_READS;
+  HOOK({ sub: 'work' });
+  await tick(80);
+  assert.strictEqual(QUEUE_READS, reads + 1, 'после сбоя очередь больше не перечитывается');
+  pickStatus(root, 'completed');
+  assert.deepStrictEqual(visibleNames(root), ['Аминов Олим', 'Бакиев Санжар']);
+});

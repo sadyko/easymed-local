@@ -41,6 +41,7 @@ import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-st
 import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor из базы — 1, а не true
 import { REFUNDED_LINE_MARK, REFUNDED_START_REFUSAL } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (поправка 3) — «Услуга возвращена»; отказ начать — ревью B4
 import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4) — один вопрос refunded_lines на список
+import { onLineStatus } from '../queue-fresh.js';   // QUEUE_FRESH_V1 — окно приёма сообщает новый статус строки (один экземпляр: без ?v=)
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -63,6 +64,9 @@ const state = {
     view:         'list',    // 'list' | 'calendar'
     dateRange:    'all',     // CABINET_DEFAULT_ALL_V1 — was 'today', which hid future-dated bookings; show all, doctor can filter
     search:       '',
+    // QUEUE_FRESH_V1 — очередь устарела: окно приёма завершило строку (queue-fresh.js).
+    // Экран перечитывает её при возврате (ctx.onPayload) и при переходе на вкладку.
+    queueStale:   false,
     workRootEl:   null,      // WORK_ONE_SCREEN_V1 — корень вкладки «Мои приёмы», ему подгоняется высота окна
     // Today's referrals THIS doctor made (for the KPI cards / RecsModal). Lazy
     // and tolerant — see loadTodayReferrals(). { loaded, rows: [...] }
@@ -123,6 +127,12 @@ let containerRef = null;
 let onNavigateRef = null;
 let tabIdRef = null;          // HASH_SUBROUTE_V1 — чем отчитываться оболочке
 let queueLoaded = false;      // рабочий список грузится, когда его открыли
+// QUEUE_FRESH_V1 — перечитывание «в пути» (два вызова подряд — одно чтение) и
+// сообщения о статусе строк с их номером по порядку: сообщение, пришедшее,
+// пока шло чтение, не теряется (reloadQueue).
+let queueReload = null;
+let lineNoteSeq = 0;
+const LINE_NOTES = new Map();   // id строки → { status, seq }
 
 // HASH_SUBROUTE_V1 — адрес ↔ вкладка. Пустой sub — дашборд: кабинет ОТКРЫВАЕТСЯ
 // им, поэтому у него бесхвостый '#consultation', а не '#consultation/dashboard'.
@@ -134,7 +144,7 @@ let queueLoaded = false;      // рабочий список грузится, �
 const SUB_TO_TAB = { work: 'appointments', inpatients: 'inpatients', pay: 'dashboard', profile: 'profile' };
 const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', profile: 'profile' };
 
-export async function renderConsultation(container, { onNavigate, payload, tabId } = {}) {
+export async function renderConsultation(container, { onNavigate, payload, tabId, onPayload } = {}) {
     containerRef = container;
     onNavigateRef = onNavigate || null;
     tabIdRef = tabId || null;
@@ -156,6 +166,12 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // «мой день» протухает быстрее всего на экране.
     resetDoctorDashboard();
     queueLoaded = false;
+    state.queueStale = false;   // QUEUE_FRESH_V1 — список и так читается заново
+    // QUEUE_FRESH_V1 — панель кабинета живёт в кэше оболочки, и при возврате её не
+    // перерисовывают (admin.js; страж app-shell.test.mjs). Возврат из приёма приходит
+    // сюда новым payload ({ sub: 'work' }) — устаревшая очередь перечитывается.
+    // Общего хука «при показе» в admin.js нет и не вводится.
+    if (typeof onPayload === 'function') onPayload(() => onCabinetShownAgain());
     // HEAD_DOCTOR_WARD_VIEW_V1 — стационар перечитывается при каждом входе в
     // кабинет, и вместе со списком заново спрашивается ОБЛАСТЬ ВИДИМОСТИ.
     // Оставленное состояние жило дольше сессии: список пациентов в койках
@@ -197,6 +213,59 @@ async function loadQueueOnce() {
     await markRefundedRows(fresh);   // REFUND_ANY_V1 (поправка 3) — один вопрос на загрузку списка
     state.rows = fresh;
     queueLoaded = true;
+}
+
+// QUEUE_FRESH_V1 (3.21.0) — ПЕРЕЧИТАТЬ ОЧЕРЕДЬ, НЕ ТРОГАЯ ВЫБОР ВРАЧА.
+// Фильтр, период и поиск живут в state и здесь не сбрасываются — их сбрасывает
+// только новое открытие кабинета (renderConsultation). Сбой чтения — на экране
+// остаётся прежний список (loadServices уже сказал об ошибке), флаг «устарела»
+// остаётся: следующий возврат попробует снова. Сообщение о статусе, пришедшее,
+// пока шло чтение, ложится и на новые строки: сервер мог ответить до подписи.
+async function reloadQueue() {
+    if (queueReload) return queueReload;
+    queueReload = (async () => {
+        const seq = lineNoteSeq;
+        const shown = state.rows;
+        const ok = await loadServices();
+        const fresh = state.rows;
+        state.rows = shown;
+        if (!ok) return false;
+        await markRefundedRows(fresh);   // REFUND_ANY_V1 — те же отметки, что у первой загрузки
+        for (const r of fresh) {
+            const n = LINE_NOTES.get(String(r.id));
+            if (n && n.seq > seq) r.status = n.status;
+        }
+        state.rows = fresh;
+        queueLoaded = true;
+        if (lineNoteSeq === seq) state.queueStale = false;
+        return true;
+    })();
+    try { return await queueReload; } finally { queueReload = null; }
+}
+
+// QUEUE_FRESH_V1 — окно приёма записало строке новый статус (queue-fresh.js).
+// Строка меняется СРАЗУ, до возврата и до перечитывания: «Активные» и
+// «Завершённые» не ждут сервера. Перерисовывается только список (без подгонки
+// высоты окна — панель сейчас скрыта); плитки — при возврате. Очередь
+// помечается устаревшей. Экспорт — для проверки.
+export function applyLineStatus(lineId, status) {
+    const key = String(lineId);
+    LINE_NOTES.set(key, { status: String(status), seq: ++lineNoteSeq });
+    let hit = false;
+    for (const r of state.rows) if (String(r.id) === key) { r.status = String(status); hit = true; }
+    state.queueStale = true;
+    if (hit && containerRef && state.tab === 'appointments') paintBody();
+    return hit;
+}
+onLineStatus(applyLineStatus);
+
+// QUEUE_FRESH_V1 — кабинет показали снова (возврат из приёма, ctx.onPayload).
+// Устаревшая очередь: сначала известное (подписанная строка уже «Осмотрен»,
+// плитки пересчитаны), потом — с сервера, с тем же фильтром и поиском.
+function onCabinetShownAgain() {
+    if (!state.queueStale) return;
+    paint();
+    reloadQueue().then((ok) => { if (ok && state.tab === 'appointments') paint(); });
 }
 
 // REFUND_ANY_V1 (2026-10-30, поправка 3) — СТРОКА, ЗА КОТОРУЮ КАССА ВЕРНУЛА
@@ -258,7 +327,7 @@ async function loadServices() {
         console.error('[my-services] load failed:', error);
         toast('Could not load services: ' + error.message, 'fail');
         state.rows = [];
-        return;
+        return false;   // QUEUE_FRESH_V1 — перечитывание узнаёт о сбое и оставляет прежний список
     }
     // SERVICE_ROUTING: lab services go to the Laboratory module, not the doctor queue.
     const LAB_RE = /^lab|laborator|лаборатор/i;
@@ -335,6 +404,7 @@ async function loadServices() {
             priceTier:       r.price_tier || null,   // PRINT_VISIT_DATE_V1 — «Тип визита» на заключении
         };
     });
+    return true;   // QUEUE_FRESH_V1 — чтение удалось (reloadQueue)
 }
 
 // Today's referrals THIS doctor recommended — powers KPI cards (3) & (4) and
@@ -774,7 +844,7 @@ function setTab(id) {
 // на два входа — щелчок и адрес: разъехавшись, они дали бы вкладку, которая
 // работает по кнопке и пуста по ссылке.
 function ensureTabData(id) {
-    if (id === 'appointments') return loadQueueOnce();
+    if (id === 'appointments') return state.queueStale ? reloadQueue() : loadQueueOnce();   // QUEUE_FRESH_V1 — устаревшая очередь перечитывается и на вкладке
     // CABINET_DASH_PAY_ONE_V1 — зарплата грузится вместе со страницей дашборда
     // (и только тому, кому её можно видеть: лишний запрос денег — не пустяк).
     if (id === 'dashboard' && !state.dash.loaded && grantAllows(TAB_GRANT.pay, 'view')) {
