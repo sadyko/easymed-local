@@ -992,7 +992,11 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         cancelBtn.style.display = 'none';
         openCardBtn.style.display = '';
         doneBtn.style.display = '';
-        footHint.textContent = tr('Пациент, визит и счёт созданы. Печать счёта — кнопкой в шапке таблицы.');
+        // INVOICE_APPEND_V1 (ревью m3) — дописанный счёт не «создан»: строки легли
+        // в уже выставленный счёт визита, так и сказано.
+        footHint.textContent = state.result && state.result.appended
+            ? trf('Пациент и визит записаны, услуги добавлены в счёт № {no}. Печать счёта — кнопкой в шапке таблицы.', { no: (inv && (inv.invoice_number || inv.id)) || '—' })
+            : tr('Пациент, визит и счёт созданы. Печать счёта — кнопкой в шапке таблицы.');
         paintTable();
         // INVOICE_APPEND_V1 — тот же номер, новая сумма: так и сказано.
         toast(state.result && state.result.appended

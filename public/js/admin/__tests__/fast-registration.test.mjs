@@ -961,6 +961,35 @@ test('INVOICE_APPEND_V1: строки легли в неоплаченный с�
   dlg.close();
 });
 
+// INVOICE_APPEND_V1 (ревью m3) — подвал окна после дописывания не говорит, что
+// счёт «создан»: строки легли в уже выставленный счёт.
+test('INVOICE_APPEND_V1 (ревью m3): после дописывания подвал — «Пациент и визит записаны, услуги добавлены в счёт», не «счёт созданы»', async () => {
+  reset();
+  invoiceAppended = true;
+  invoiceTotal = 300000;
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  dlg.state.addLine(SERVICES[1], null);
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(80);
+  assert.ok(dlg.state.result && dlg.state.result.appended);
+  const foot = textOf(dlg.card).replace(/\s+/g, ' ');
+  assert.ok(!foot.includes('Пациент, визит и счёт созданы'), 'подвал говорит «счёт создан» о дописанном счёте');
+  assert.ok(foot.includes('Пациент и визит записаны, услуги добавлены в счёт № INV-9. Печать счёта — кнопкой в шапке таблицы.'), foot.slice(-300));
+  dlg.close();
+  // Новый счёт — прежние слова.
+  reset();
+  const d2 = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(d2);
+  d2.state.addLine(SERVICES[1], null);
+  btnByText(d2.card, 'Сохранить').click();
+  await tick(80);
+  assert.ok(textOf(d2.card).replace(/\s+/g, ' ').includes('Пациент, визит и счёт созданы.'));
+  d2.close();
+});
+
 // INVOICE_APPEND_V1 (ревью M2) — «Печать» дописанного счёта берёт счёт с
 // сервера (receipt-print.js printInvoiceSheetById): номера очереди строк — те
 // же, что выдала регистрация (issue_queue_numbers отдаёт выданный номер), и
