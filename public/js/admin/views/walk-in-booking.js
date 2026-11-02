@@ -62,6 +62,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 // CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на три двери:
 // у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
 import { readEnsureVisit } from '../ensure-visit-answer.js';
+import { precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 — повтор услуги в визите дня — отказ до визита
 import { lineIdentity, isConsultPick, consultDoctorId, surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога
 import { isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (ред. 2) — строка той же услуги, что строка записи
 import { isAppended, appendedPartDiscount } from '../invoice-append.js';   // INVOICE_APPEND_V1 — строки легли в неоплаченный счёт визита
@@ -215,6 +216,22 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
     const twin = items.find((l) => !isPosInt(l.bookedVsId) && bookedKeys.some((b) => isBookedTwin(keyOf(l), b)));
     if (twin) throw new Error(trf('«{name}» уже из записи — вторая строка не нужна.', { name: (twin.service && twin.service.name) || '' }));
 
+    // DUP_STOP_V1 — та же услуга уже назначена в визите дня пациента (сегодня) — отказ ДО
+    // визита: иначе ensure_visit и строки до повтора уже были бы записаны. Строки «из записи»
+    // не вставляются, убранные строки записи снимутся ниже. Причина обхода (администратор,
+    // главный врач) — в строки.
+    const nowD = new Date(now());
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const pre = await precheckOrders({
+        patientId: pid, day: `${nowD.getFullYear()}-${pad2(nowD.getMonth() + 1)}-${pad2(nowD.getDate())}`,
+        lines: items.filter((l) => !isPosInt(l.bookedVsId)).map((l) => {
+            const ident = lineIdentity(l.service) || {};
+            return { service_id: ident.service_id ?? null, consultation_type_id: ident.consultation_type_id ?? null, doctor_id: lineDoctorOf(l) };
+        }),
+        excludeIds: (Array.isArray(dropVsIds) ? dropVsIds : []).filter(isPosInt).map(Number),
+    });
+    if (!pre.ok) throw new Error(pre.text || tr('Повторное назначение отменено — ничего не записано.'));
+
     // CRM_LINK_ALL_V1 (R7a) — строки записи, которые регистратор убрал, снимаются
     // с визита до всего остального — той же дверью, что в календаре
     // (booking_line_remove: только «в смете», без счёта и работы).
@@ -327,6 +344,7 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
         // PACKAGES_V1 — строка из пакета: скидку пакета и его срок считает сервер.
         if (!consult && isPosInt(line.packageId)) row.package_id = Number(line.packageId);
         if (isPosInt(createdBy)) row.created_by = Number(createdBy);
+        withRepeatReason(row, pre.reason);   // DUP_STOP_V1 — обход с причиной (сервер снимет поле)
         const res = await supabase.from('visit_services').insert(row).select().single();
         if (res.error) throw failAfterVisit(trf('Услуга «{name}»: {msg}', { name: svc.name || '', msg: msgOf(res.error) }));
         vsIds.push(res.data.id);

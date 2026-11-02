@@ -284,3 +284,26 @@ for (const order of ['patient-first', 'package-first']) {
     } finally { t.close(); }
   });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DUP_STOP_V1 (2026-11-02) — БЫСТРАЯ РЕГИСТРАЦИЯ: УСЛУГА УЖЕ НАЗНАЧЕНА В ВИЗИТЕ ДНЯ — ОТКАЗ ДО
+// ВИЗИТА. Пациент сегодня уже пришёл, врач назначил анализ крови (выставлен, в очереди). Стойка
+// оформляет тот же анализ ещё раз — registerWalkIn отказывает словами сервера (visit_dup_check) ДО
+// ensure_visit: ни строки, ни счёта. На настоящем сервере дверь /api/db отказала бы и сама (409).
+// ═══════════════════════════════════════════════════════════════════════════
+test('DUP_STOP_V1 (настоящий сервер): registerWalkIn — анализ уже назначен в визите дня: отказ до визита, в базе ничего не изменилось', async () => {
+  const t = await live(() => {});
+  try {
+    const now = new Date(); now.setHours(0, 30, 0, 0);
+    const vid = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'arrived', 10)").run(now.toISOString()).lastInsertRowid);
+    t.db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, created_by) VALUES (?, 40, 1, 40000, 40000, 'queued', 10)").run(vid);
+    const before = moneySnap(t, vid);
+    sent.length = 0;
+    const lab = { id: 40, name: 'Анализ крови', price: 40000, requires_doctor: 0, type: 'lab', tax_rate: 0 };
+    await assert.rejects(
+      registerWalkIn({ patientId: 77, actorRole: 'registrar', createdBy: 2, lines: [{ service: lab }] }),
+      /^Error: Эта услуга уже назначена в этом визите: «Анализ крови» — Иванов, .+, счёта ещё нет\.$/);
+    assert.deepEqual(writesOf().map((s) => s.name || s.table), ['visit_dup_check'], 'до отказа ушла запись');
+    assert.equal(moneySnap(t, vid), before, 'база изменилась');
+  } finally { t.close(); }
+});

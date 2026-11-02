@@ -226,7 +226,9 @@ test('ТОТ ЖЕ ДЕНЬ, ТА ЖЕ УСЛУГА: строка, уже леж�
   // спрашивать надо С НИМ.
   const todayIso = new Date().toISOString();
   DB.prepare("INSERT INTO visits (id, patient_id, visit_date, visit_type, status) VALUES (91, ?, ?, 'outpatient', 'arrived')").run(PATIENT, todayIso);
-  DB.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (91, ?, 1, 200000, 200000, 'added')").run(TIERED);
+  // DUP_STOP_V1 — первая строка — приём у врача 7: тот же приём без врача — другое назначение
+  // (у того же врача это был бы повтор в визите — 409, проверка тарифа здесь о другом).
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (91, ?, ?, 1, 200000, 200000, 'added')").run(TIERED, DOCTOR);
 
   const out = await registerWalkIn({ patientId: PATIENT, lines: [{ service: svc(TIERED), doctorId: null }] });
 

@@ -36,6 +36,7 @@ import { h, Icon, clear, toast, Avatar, initials, avColor } from '../ui.js';
 import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
 import { canWriteServiceTemplates, canAddVisitLines } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы
+import { precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 — повтор услуги в визите дня — отказ до записи
 import { surgeryBedRefusal, linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация, хирургия без койки; BACKLOG_1011_V1 — исполнитель по умолчанию
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
@@ -3107,6 +3108,20 @@ export function openServicePickerModal({
             // на строке услуги, когда визит уже заведён.
             const noBed = await surgeryBedRefusal(p.id, state.added.map(a => a.service));
             if (noBed) { toast(noBed, 'fail'); if (btn && btn.isConnected) btn.disabled = false; return; }
+            // DUP_STOP_V1 — та же услуга уже назначена в визите дня пациента: отказ ДО записи
+            // (calendar_book найдёт или заведёт визит дня, и строки ниже легли бы в него).
+            // Администратор и главный врач называют причину — она уходит в строки.
+            const pre = await precheckOrders({
+                patientId: p.id, day: localDayOf(visitDate),
+                lines: state.added.map((a) => (a.service.__consult
+                    ? { consultation_type_id: a.service.consultation_type_id || a.service.id, doctor_id: a.doctor?.id || a.service.__consultDoctorId || null }   // тот же вид, что уйдёт в строку ниже
+                    : { service_id: a.service.id, doctor_id: a.doctor?.id || null })),
+            });
+            if (!pre.ok) {
+                if (pre.text) toast(pre.text, 'fail');
+                if (btn && btn.isConnected) btn.disabled = false;
+                return;
+            }
             const booked = await calendarBookOrAsk({
                 patient_id:       p.id,
                 branch_id:        (p._raw && p._raw.branch_id) || p.branch_id || null,
@@ -3170,7 +3185,7 @@ export function openServicePickerModal({
             for (const a of state.added) {
                 const unitPrice = itemPrice(a);   // RPC_PORT_V1 (ревью I2)
                 const isConsult = !!a.service.__consult;
-                const { data: vs, error: vsErr } = await insertRow('visit_services', {
+                const { data: vs, error: vsErr } = await insertRow('visit_services', withRepeatReason({   // DUP_STOP_V1 — причина обхода (сервер снимет поле)
                     visit_id:     visit.id,
                     service_id:   isConsult ? null : a.service.id,
                     consultation_type_id: isConsult ? (a.service.consultation_type_id || a.service.id) : null,
@@ -3184,7 +3199,7 @@ export function openServicePickerModal({
                     // не действующий в местный день визита, не ставится — сервер
                     // отказал бы строке (routes/db.js); строка идёт по обычной цене.
                     package_id:   (!isConsult && a.package && packageValidOn(a.package, localDayOf(visitDate))) ? a.package.id : null,
-                });
+                }, pre.reason));
                 if (vsErr) { console.warn('[wizard] visit_services:', vsErr.message || vsErr); continue; }
                 vsRows.push({ vs, a, unitPrice });
                 try {

@@ -527,6 +527,7 @@ test('сохранение: пациент → визит → строки с в
   assert.deepStrictEqual(chain, [
     'insert:patients',
     'rpc:crm_link_new_patient',
+    'rpc:visit_dup_check',   // DUP_STOP_V1 — «уже назначено в визите дня» спрашивается ДО визита
     'rpc:ensure_visit',
     'rpc:service_price_quote',
     'insert:visit_services',

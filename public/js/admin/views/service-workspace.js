@@ -16,6 +16,7 @@ import { h, Icon, Avatar, Tag, StatusTag, clear, toast } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';
 import { linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — исполнитель строки   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openServicePickerModal } from './service-picker-modal.js?v=ownrep4';
+import { loadVisitOrders, blockedPickIds } from './dup-order-check.js';   // DUP_STOP_V1 — назначенное в визите приёма
 // WIZARD_ONE_ENGINE_V1 / VISITS_ONE_DOOR_V1 — «Повторный визит» держал ЧЕТВЁРТУЮ
 // реализацию расписания (loadBookedSlots: своя сетка 20 минут, свои 08:00–19:00,
 // свой обед 13:00–14:00 — ни графика врача, ни часов клиники) и записывал
@@ -435,7 +436,11 @@ function servicesCard(ctx) {
         h('div', { class: 'card-header' },
             h('h3', { style: { margin: 0 } }, Icon('Flask', { size: 15 }), ' Услуги приёма',
                 h('span', { class: 'h-count', 'data-own-svc-count': '', style: { marginLeft: '6px' } }, '')),
-            patientTabCanEdit('services') && h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openServicePickerModal({
+            patientTabCanEdit('services') && h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: async () => {
+                // DUP_STOP_V1 — каталог гасит и назначенное в этом визите другими (регистратура,
+                // касса, другой врач), а не только пункты этой карточки. Повтор отказывает сервер.
+                const { ordered } = await loadVisitOrders({ visitId: ctx.visitId });
+                openServicePickerModal({
                 // SVC_ATTACH_V1 — услуги ДОБАВЛЯЮТСЯ К ТЕКУЩЕМУ ПРИЁМУ (строка
                 // visit_services на ctx.visitId), а не в новый визит; карточка
                 // перерисовывается из addOwnService.
@@ -464,9 +469,10 @@ function servicesCard(ctx) {
                 ctaLabel:      'Добавить к приёму',
                 // Уже добавленные услуги в каталоге погашены — дважды одну и ту же
                 // в приём не добавить (вторую линию ловит и сам addOwnService).
-                excludeServiceIds: (wsState.payload?.services || []).map(s => s.serviceId).filter(Boolean),
+                excludeServiceIds: [...(wsState.payload?.services || []).map(s => s.serviceId).filter(Boolean), ...blockedPickIds(ordered)],   // DUP_STOP_V1 — и назначенное в визите
                 onPick: (p) => addOwnService(ctx, p.service, p.doctor, p.package),   // SERVICES_PACKAGES_V1 — пакет из каталога не теряется
-            }) }, Icon('Plus', { size: 12 }), ' Добавить'),
+                });
+            } }, Icon('Plus', { size: 12 }), ' Добавить'),
         ),
         h('div', { 'data-own-services-list': '', style: { padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '6px' } }),
     );
