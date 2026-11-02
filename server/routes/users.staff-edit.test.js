@@ -20,6 +20,8 @@ import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
 import { writePairing, clearPairing } from '../services/branch-sync/pairing.js';
+import { STRINGS } from '../../public/js/admin/i18n-strings.js';   // STAFF_EDIT_V1 — отказы переводятся экраном
+import { LOGIN_RULE_MESSAGE, LOGIN_TAKEN_MESSAGE, LOGIN_ADMIN_ONLY_MESSAGE, LOGIN_BRANCHES_MESSAGE } from './users.js';
 
 const BOSS = 1, REG = 2, NURSE = 3;
 
@@ -250,4 +252,11 @@ test('STAFF_EDIT_V1: пока установка в группе филиало�
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(usernameOf(db, NURSE), 'nurse.b');
   } finally { server.close(); }
+});
+
+test('STAFF_EDIT_V1: отказы смены логина — ключи словаря на трёх языках', () => {
+  for (const m of [LOGIN_RULE_MESSAGE, LOGIN_TAKEN_MESSAGE, LOGIN_ADMIN_ONLY_MESSAGE, LOGIN_BRANCHES_MESSAGE]) {
+    const e = STRINGS[m];
+    assert.ok(e && e.ru === m && e.uz && e.en, 'нет перевода: ' + m);
+  }
 });
