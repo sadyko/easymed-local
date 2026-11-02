@@ -6,7 +6,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import {
   liveOrders, duplicateHits, checkOrders, assertOrders, assertChangedOrder, logRepeatOrders,
-  takeRepeatReason, repeatReasonArg, canRepeatOrder, DUP_CODE,
+  takeRepeatReason, repeatReasonArg, canRepeatOrder, DUP_CODE, checkUpdatedOrders, updateTouchesOrders,
 } from './dup-order.js';
 import { bookedTwinFor } from '../crm/booked-twin.js';
 import { autoTwinFor } from '../crm/one-way.js';
@@ -229,6 +229,33 @@ test('DUP_STOP_V1: замена — проверка только если кл�
   const c2 = line(db, { visit_id: v1, service_id: null, consultation_type_id: 5, doctor_id: 11 });
   assert.throws(() => assertChangedOrder(db, rowOf(c2), { ...rowOf(c2), doctor_id: 10 }, { user: REG }), (e) => e.code === DUP_CODE, 'консультация к врачу, у которого этот вид уже есть');
   assert.deepEqual(assertChangedOrder(db, rowOf(c), { ...rowOf(c), doctor_id: 12 }, { user: REG }), {});
+});
+
+test('DUP_STOP_V1 (ревью m2): правка строк — из отмены и смена ключа проверяются; статус работы и задвоенные до 3.21.0 — нет', () => {
+  const { db, v1 } = clinic();
+  const rowOf = (id) => db.prepare('SELECT * FROM visit_services WHERE id = ?').get(id);
+  const a = line(db, { visit_id: v1, service_id: 40 });
+  const b = line(db, { visit_id: v1, service_id: 40 });   // задвоено до 3.21.0
+  assert.equal(updateTouchesOrders({ status: 'queued' }), true);
+  assert.equal(updateTouchesOrders({ status: 'cancelled' }), false);
+  assert.equal(updateTouchesOrders({ notes: 'x' }), false);
+  assert.equal(updateTouchesOrders({ consultation_type_id: 5 }), true);
+  assert.deepEqual(checkUpdatedOrders(db, [rowOf(a), rowOf(b)], { status: 'queued' }, { user: REG }), {}, 'статус живых строк');
+  assert.deepEqual(checkUpdatedOrders(db, [rowOf(a)], { status: 'cancelled' }, { user: REG }), {}, 'отмена');
+  db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = ?").run(a);
+  const back = checkUpdatedOrders(db, [rowOf(a)], { status: 'added' }, { user: REG });
+  assert.equal(back.error && back.error.code, DUP_CODE, 'из отмены рядом с живой той же услугой');
+  assert.equal(back.error.params.service, 'Анализ крови');
+  assert.ok(checkUpdatedOrders(db, [rowOf(a)], { status: 'added' }, { user: ADMIN, reason: 'повторный забор' }).repeats, 'обход с причиной');
+  db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = ?").run(b);
+  assert.deepEqual(checkUpdatedOrders(db, [rowOf(a)], { status: 'added' }, { user: REG }), {}, 'одна — можно');
+  assert.equal(checkUpdatedOrders(db, [rowOf(a), rowOf(b)], { status: 'added' }, { user: REG }).error.message,
+    'Услуга «Анализ крови» выбрана дважды — в визит её назначают один раз.', 'две разом');
+  const c5 = line(db, { visit_id: v1, service_id: null, consultation_type_id: 5, doctor_id: 10 });
+  db.prepare("INSERT INTO consultation_types (id, name, name_ru, price, active) VALUES (6, 'Повторный', 'Повторный приём', 60000, 1)").run();
+  const c6 = line(db, { visit_id: v1, service_id: null, consultation_type_id: 6, doctor_id: 10 });
+  assert.equal(checkUpdatedOrders(db, [rowOf(c6)], { consultation_type_id: 5 }, { user: REG }).error.code, DUP_CODE, 'вид приёма → уже назначенный у этого врача');
+  assert.deepEqual(checkUpdatedOrders(db, [rowOf(c5)], { consultation_type_id: 5 }, { user: REG }), {}, 'тот же вид — без смены ключа');
 });
 
 test('DUP_STOP_V1: __repeat_reason снимается со строк visit_services до compile(); у других таблиц не трогается', () => {

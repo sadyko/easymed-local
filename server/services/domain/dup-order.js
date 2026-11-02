@@ -240,3 +240,49 @@ export function assertChangedOrder(db, before, after, { user = null, reason = nu
   if (!now || now === was) return {};
   return assertOrders(db, [after], { user, reason, excludeIds: [before.id, ...excludeIds].filter((x) => x != null) });
 }
+
+// DUP_STOP_V1 (ревью m2) — колонки строки, от которых зависит «та же услуга в том же визите».
+export const ORDER_KEY_COLUMNS = Object.freeze(['visit_id', 'service_id', 'consultation_type_id', 'doctor_id']);
+
+/** Правка строк визита задевает назначение: возвращает из отмены (status) или меняет ключ. */
+export function updateTouchesOrders(values) {
+  const v = values && typeof values === 'object' && !Array.isArray(values) ? values : null;
+  if (!v) return false;
+  const has = (k) => Object.prototype.hasOwnProperty.call(v, k);
+  return ORDER_KEY_COLUMNS.some(has) || (has('status') && v.status !== 'cancelled');
+}
+
+/**
+ * DUP_STOP_V1 (ревью m2) — ПРАВКА СТРОК ВИЗИТА ТАБЛИЧНЫМ ПУТЁМ (/api/db update). Строка,
+ * которую возвращают из отмены (status 'cancelled' → другой), и строка, у которой меняется
+ * ключ «та же услуга» (вид приёма; у консультации — врач; услуга; визит), — снова
+ * назначение: проверка как у вставки, с поблажкой одной — правимые строки себе не повтор
+ * (excludeIds), а друг другу — да («выбрана дважды»). Строки без смены ключа (статусы
+ * работы, задвоенные до 3.21.0) не проверяются. Отменяющая правка не проверяется.
+ * @param {Array<object>} rows — строки ДО правки (id, visit_id, service_id, consultation_type_id,
+ *   doctor_id, status, clinic_item_id)
+ * @param {object} values — значения правки
+ * @returns то же, что checkOrders
+ */
+export function checkUpdatedOrders(db, rows, values, { user = null, reason = null } = {}) {
+  if (!updateTouchesOrders(values)) return {};
+  const v = values;
+  const has = (k) => Object.prototype.hasOwnProperty.call(v, k);
+  const typeOf = serviceTypeStmt(db);
+  const keyOf = (row) => {
+    const s = row && pos(row.service_id) != null ? typeOf.get(pos(row.service_id)) || {} : {};
+    return keyOfRow(row, s.type || null, s.requires_doctor ?? null);
+  };
+  const moved = [];
+  for (const r of rows || []) {
+    if (!r) continue;
+    const after = { ...r };
+    for (const k of ORDER_KEY_COLUMNS) if (has(k)) after[k] = v[k];
+    if (has('status')) after.status = v.status;
+    if (after.status === 'cancelled') continue;
+    const reopened = r.status === 'cancelled';
+    if (reopened || keyOf(after) !== keyOf(r) || String(after.visit_id) !== String(r.visit_id)) moved.push(after);
+  }
+  if (!moved.length) return {};
+  return checkOrders(db, moved, { user, reason, excludeIds: moved.map((r) => r.id) });
+}

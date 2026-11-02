@@ -37,6 +37,7 @@ async function start() {
   db.prepare("INSERT INTO services (id, name, price) VALUES (70,'Без типа (по умолчанию)',50000)").run();   // DUP_STOP_V1 (ревью m4) — type по умолчанию 'consultation', врач не нужен
   db.prepare("INSERT INTO services (id, name, price, type, requires_doctor) VALUES (80,'Приём терапевта',100000,'consultation',1)").run();
   db.prepare("INSERT INTO consultation_types (id, name, name_ru, price, active) VALUES (5, 'Первичный', 'Первичный приём', 90000, 1)").run();
+  db.prepare("INSERT INTO consultation_types (id, name, name_ru, price, active) VALUES (6, 'Повторный', 'Повторный приём', 60000, 1)").run();
   db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (77,'Пациент Тест','+998900000077')").run();
   const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -143,6 +144,74 @@ test('DUP_STOP_V1: пачка (массив) с одной услугой два
     assert.equal(up.status, 409, JSON.stringify(up.json));
     assert.equal(up.json.error.code, 'duplicate_order');
     assert.equal(live(t, v, 40), 1);
+  } finally { t.close(); }
+});
+
+test('DUP_STOP_V1 (ревью m1): upsert с id уже лежащей строки — id не пишется, вставилась бы вторая строка — 409', async () => {
+  const t = await start();
+  try {
+    const v = arrivedVisit(t);
+    assert.equal((await ins(t, 'reg', row(v, 40))).status, 200);
+    const firstId = t.db.prepare('SELECT id FROM visit_services WHERE visit_id = ?').get(v).id;
+    const up = await t.dbq('reg', { table: 'visit_services', op: 'upsert', onConflict: 'id', values: { ...row(v, 40), id: firstId } });
+    assert.equal(up.status, 409, JSON.stringify(up.json));
+    assert.equal(up.json.error.code, 'duplicate_order');
+    assert.equal(live(t, v, 40), 1, 'вторая живая строка той же услуги');
+  } finally { t.close(); }
+});
+
+test('DUP_STOP_V1 (ревью m2): правка /api/db — вернуть отменённую строку, когда та же услуга уже назначена заново, — 409; без новой — можно', async () => {
+  const t = await start();
+  try {
+    const v = arrivedVisit(t);
+    const upd = (who, values, id) => t.dbq(who, { table: 'visit_services', op: 'update', values, filters: [{ col: 'id', op: 'eq', val: id }] });
+    assert.equal((await ins(t, 'reg', row(v, 40))).status, 200);
+    const a = t.db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND service_id = 40').get(v).id;
+    assert.equal((await upd('reg', { status: 'cancelled' }, a)).status, 200);
+    assert.equal((await upd('reg', { status: 'added' }, a)).status, 200, 'вернуть единственную строку — можно');
+    assert.equal((await upd('reg', { status: 'cancelled' }, a)).status, 200);
+    assert.equal((await ins(t, 'reg', row(v, 40))).status, 200, 'новая строка после отмены');
+    const back = await upd('reg', { status: 'added' }, a);
+    assert.equal(back.status, 409, JSON.stringify(back.json));
+    assert.equal(back.json.error.code, 'duplicate_order');
+    assert.equal(live(t, v, 40), 1, 'отменённая строка вернулась второй живой');
+    // администратор с причиной — можно, обход в журнале
+    const boss = await upd('boss', { status: 'added', __repeat_reason: 'повторный забор' }, a);
+    assert.equal(boss.status, 200, JSON.stringify(boss.json));
+    assert.equal(live(t, v, 40), 2);
+    const log = t.db.prepare("SELECT reason, visit_id FROM invoice_audit_log WHERE action = 'line_repeat_order'").all();
+    assert.deepEqual(log, [{ reason: 'повторный забор', visit_id: v }]);
+  } finally { t.close(); }
+});
+
+test('DUP_STOP_V1 (ревью m2): правка /api/db — смена вида приёма на вид, который у этого врача уже назначен, — 409; у другого врача — можно; две отменённые строки разом — 409', async () => {
+  const t = await start();
+  try {
+    const v = arrivedVisit(t);
+    const ct = (type, doc) => row(v, null, { service_id: null, consultation_type_id: type, doctor_id: doc });
+    assert.equal((await ins(t, 'reg', ct(5, 10))).status, 200);
+    assert.equal((await ins(t, 'reg', ct(6, 10))).status, 200);
+    assert.equal((await ins(t, 'reg', ct(6, 11))).status, 200);
+    const idOf = (type, doc) => t.db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND consultation_type_id = ? AND doctor_id = ?').get(v, type, doc).id;
+    const upd = (values, filters) => t.dbq('reg', { table: 'visit_services', op: 'update', values, filters });
+    const sw = await upd({ consultation_type_id: 5 }, [{ col: 'id', op: 'eq', val: idOf(6, 10) }]);
+    assert.equal(sw.status, 409, JSON.stringify(sw.json));
+    assert.equal(sw.json.error.code, 'duplicate_order');
+    const n5 = () => t.db.prepare("SELECT COUNT(*) n FROM visit_services WHERE visit_id = ? AND consultation_type_id = 5 AND status <> 'cancelled'").get(v).n;
+    assert.equal(n5(), 1);
+    assert.equal((await upd({ consultation_type_id: 5 }, [{ col: 'id', op: 'eq', val: idOf(6, 11) }])).status, 200, 'у другого врача этого вида нет');
+    assert.equal(n5(), 2);
+    // две отменённые строки одной услуги возвращают одной правкой — второй раз та же услуга
+    assert.equal((await ins(t, 'reg', row(v, 50))).status, 200);
+    const u1 = t.db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND service_id = 50').get(v).id;
+    assert.equal((await upd({ status: 'cancelled' }, [{ col: 'id', op: 'eq', val: u1 }])).status, 200);
+    assert.equal((await ins(t, 'reg', row(v, 50))).status, 200);
+    const u2 = t.db.prepare("SELECT id FROM visit_services WHERE visit_id = ? AND service_id = 50 AND status <> 'cancelled'").get(v).id;
+    assert.equal((await upd({ status: 'cancelled' }, [{ col: 'id', op: 'eq', val: u2 }])).status, 200);
+    const both = await upd({ status: 'added' }, [{ col: 'id', op: 'in', val: [u1, u2] }]);
+    assert.equal(both.status, 409, JSON.stringify(both.json));
+    assert.match(both.json.error.message, /«УЗИ брюшной полости» выбрана дважды/);
+    assert.equal(live(t, v, 50), 0);
   } finally { t.close(); }
 });
 

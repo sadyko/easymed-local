@@ -35,7 +35,7 @@ import { PROXY_MODELS } from '../../public/js/shared/lisproxy-models.js';   // L
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
 import { retireBookedTwin, bookedTwinFor } from '../services/crm/booked-twin.js';   // CRM_LINK_ALL_V1 (R7b) · DUP_STOP_V1 (bookedTwinFor)
 import { autoTwinFor } from '../services/crm/one-way.js';   // DUP_STOP_V1 — строка CRM, которая уступит новой
-import { checkOrders, logRepeatOrders, takeRepeatReason, DUP_CODE } from '../services/domain/dup-order.js';   // DUP_STOP_V1
+import { checkOrders, checkUpdatedOrders, updateTouchesOrders, logRepeatOrders, takeRepeatReason, DUP_CODE } from '../services/domain/dup-order.js';   // DUP_STOP_V1 · ревью m2 (правка)
 import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 import { geoCodeRefusal } from '../services/geo-codes-guard.js';   // REFERENCE_LISTS_V1 (полировка) — коды географии не меняются
 import { stampWriteBody, stampUpdateRefusal } from '../services/domain/package-lines.js';   // SERVICES_PACKAGES_V1 — цена пакета на строке при записи
@@ -232,11 +232,28 @@ function refuseVisitLineWrite(db, meta, body, user) {
 // DUP_STOP_V1 — ПОВТОРНОЕ НАЗНАЧЕНИЕ В ТОМ ЖЕ ВИЗИТЕ (domain/dup-order.js): вставка,
 // пачка и upsert строк визита. Не мешают строки, которые эта же дверь уберёт под новой:
 // строка CRM, уступающая строке человека (onVisitLinesAdded — все вставки), и строка
-// записи колл-центра (R7b — только одиночная вставка, retireBookedTwin ниже). upsert
-// строки с id — правка самой строки: она себе не повтор (excludeIds).
+// записи колл-центра (R7b — только одиночная вставка, retireBookedTwin ниже).
+// DUP_STOP_V1 (ревью m1) — upsert строки «с id» — НЕ правка самой строки: id в список
+// записи не входит, и upsert вставляет новую строку рядом с прежней. Поэтому прежняя
+// строка мешает, как при вставке (excludeIds пуст).
+// DUP_STOP_V1 (ревью m2) — правка (update): строка, которую возвращают из отмены или
+// которой меняют вид приёма (ключ «та же услуга»), — снова назначение
+// (domain/dup-order.js checkUpdatedOrders). Строки берутся тем же compile(), что и сама
+// правка (те же права и отбор); правка без статуса и ключа не проверяется.
 // { error } — отказ 409; { repeats } — обход с причиной, журнал — после записи.
 function visitOrderCheck(db, meta, body, user, reason) {
-  if (!meta || meta.table !== 'visit_services' || (meta.op !== 'insert' && meta.op !== 'upsert')) return {};
+  if (!meta || meta.table !== 'visit_services') return {};
+  if (meta.op === 'update') {   // DUP_STOP_V1 (ревью m2)
+    const values = body && body.values && !Array.isArray(body.values) ? body.values : null;
+    if (!updateTouchesOrders(values)) return {};
+    let rows = [];
+    try {
+      const sel = compile({ table: body.table, op: 'select', columns: 'id,visit_id,service_id,consultation_type_id,doctor_id,status,clinic_item_id', filters: body.filters }, user, { db });
+      rows = db.prepare(sel.sql).all(...sel.params);
+    } catch { return {}; }   // тот же отбор, что у правки, — её compile() уже прошёл
+    return checkUpdatedOrders(db, rows, values, { user, reason });
+  }
+  if (meta.op !== 'insert' && meta.op !== 'upsert') return {};
   const rows = Array.isArray(body && body.values) ? body.values : (body && body.values ? [body.values] : []);
   const single = meta.op === 'insert' && !meta.multi;
   const spare = (line) => {
@@ -248,10 +265,7 @@ function visitOrderCheck(db, meta, body, user, reason) {
     } catch { /* нет поблажки — решает правило */ }
     return out;
   };
-  const excludeIds = meta.op === 'upsert'
-    ? rows.map((r) => (r ? Number(r.id) : NaN)).filter((n) => Number.isInteger(n) && n > 0)
-    : [];
-  return checkOrders(db, rows, { user, reason, spare, excludeIds });
+  return checkOrders(db, rows, { user, reason, spare, excludeIds: [] });   // DUP_STOP_V1 (ревью m1)
 }
 
 // CABINET_FIX_V1_R4 (ревью 4, п. 2) · CABINET_FIX_V1_R5 (ревью 5, A) — ЗАПИСИ КАБИНЕТА   // CABINET_FIX_V1_R5
@@ -815,6 +829,7 @@ export function dbRoutes(db, { storageDir = null } = {}) {
         if (evidence.length) crmServiceEvidence(db, evidence);
         mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
         rehomeAfterRolesWrite(db, meta);   // CRM_UNIFY_V1
+        if (updInfo.changes > 0) logRepeatOrders(db, orders, req.user);   // DUP_STOP_V1 (ревью m2) — обход с причиной — в журнал
         if (!meta.returning) return res.json({ data: null });
         // Re-select the affected rows using the SAME filters that scoped the
         // update (never the whole table) so `returning` reflects only what
