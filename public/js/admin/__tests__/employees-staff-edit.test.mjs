@@ -373,6 +373,22 @@ test('ревью 7: «Должность» администратора — бе
   assert.ok(!textOf(card).includes(ADMIN_DOCTOR_HINT));
 });
 
+// Ревью 6 — импорт сотрудников из Excel узнаёт сотрудника по логину: файл,
+// выгруженный ДО смены логина, при повторном импорте заведёт его заново со
+// старым логином. Подсказка колонки username говорит это — на трёх языках.
+test('ревью 6: подсказка колонки «username» импорта — после смены логина выгрузить заново; ru/uz/en', async () => {
+  const { importColumnHints } = await import('../views/section-import-export.js');
+  const hint = importColumnHints('users').username;
+  assert.match(hint, /По нему находится сотрудник при повторном импорте/, 'прежняя подсказка потеряна: ' + hint);
+  assert.match(hint, /Сменили логин в карточке — выгрузите список заново/, 'нет предупреждения о смене логина: ' + hint);
+  const e = STRINGS[hint];
+  assert.ok(e && e.ru === hint, 'подсказки нет в словаре');
+  for (const lang of ['uz', 'en']) {
+    assert.ok(e[lang] && e[lang] !== hint, lang + ' не переведено');
+    assert.doesNotMatch(e[lang], /[Ѐ-ӿ]/, lang + ' с кириллицей: ' + e[lang]);
+  }
+});
+
 test('окно «Сменить пароль»: отключённому — предупреждение «включите «Активен»», включённому — как прежде', async () => {
   document.body.children.length = 0;
   writes.length = 0;
