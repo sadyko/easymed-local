@@ -1,0 +1,148 @@
+// DUP_STOP_V1 (2026-11-02) — двери RPC, которые заводят или меняют строку визита:
+// касса добавляет услугу (cashier_line_add), заменяет услугу или врача в неоплаченном
+// счёте (cashier_line_change_service, change_unpaid_service, cashier_line_set_doctor,
+// patient_card_set_doctor), в оплаченном (cashier_line_swap_paid / _quote), возврат с новой
+// услугой (cashier_line_rebill_paid), повторное выставление возвращённой строки
+// (create_invoice_for_visit + rebill_refunded); и проверка экранов visit_dup_check.
+// Всё — через настоящую карту RPC (index.js) и SQLite после миграций.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { openDb } from '../../db/connection.js';
+import { migrate } from '../../db/migrate.js';
+import { RPC } from './index.js';
+import { createInvoiceForVisit, recordPayment } from './billing.js';
+import { openCashShift } from './cashier.js';
+import { hashPassword } from '../auth.js';
+
+const admin = { id: 1, role: 'admin', extra_roles: [], full_name: 'Админ' };
+const registrar = { id: 7, role: 'registrar', extra_roles: [], full_name: 'Регистратор' };
+const cashier = { id: 9, role: 'cashier', extra_roles: [], full_name: 'Кассир' };
+const callcenter = { id: 8, role: 'callcenter', extra_roles: [], full_name: 'Оператор' };
+const DOC = 20, DOC2 = 21;
+const DAY = '2026-09-10T05:00:00Z';
+
+function clinic() {
+  const db = openDb(':memory:'); migrate(db);
+  const u = db.prepare('INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, is_active, extra_roles) VALUES (?,?,?,?,?,?,1,?)');
+  u.run(1, 'adm', hashPassword('password1'), 'admin', 'Админ', 0, '[]');
+  u.run(7, 'reg', 'x', 'registrar', 'Регистратор', 0, '[]');
+  u.run(8, 'cc', 'x', 'callcenter', 'Оператор', 0, '[]');
+  u.run(9, 'cash', 'x', 'cashier', 'Кассир', 0, '[]');
+  u.run(DOC, 'doc', 'x', 'doctor', 'Врач Первый', 1, '[]');
+  u.run(DOC2, 'doc2', 'x', 'doctor', 'Врач Второй', 1, '[]');
+  const s = db.prepare('INSERT INTO services (id, name, price, type, requires_doctor) VALUES (?,?,?,?,?)');
+  s.run(30, 'Приём терапевта', 100000, 'consultation', 1);
+  s.run(40, 'Анализ крови', 40000, 'lab', 0);
+  s.run(50, 'УЗИ', 80000, 'imaging', 0);
+  s.run(60, 'Капельница', 30000, 'procedure', 0);
+  db.prepare("INSERT INTO consultation_types (id, name, name_ru, price, active) VALUES (5, 'Первичный', 'Первичный приём', 90000, 1)").run();
+  const perms = JSON.stringify({ sections: [], levels: {}, grants: { 'cashier.lines': 'edit' } });
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?) ON CONFLICT(role) DO UPDATE SET permissions = excluded.permissions').run('cashier', perms);
+  openCashShift(db, { opening_float: 0 }, cashier);
+  const pid = Number(db.prepare("INSERT INTO patients (full_name) VALUES ('Пациент')").run().lastInsertRowid);
+  const vid = Number(db.prepare('INSERT INTO visits (patient_id, visit_date) VALUES (?, ?)').run(pid, DAY).lastInsertRowid);
+  return { db, pid, vid };
+}
+const line = (db, vid, r) => {
+  const row = { visit_id: vid, quantity: 1, unit_price: 0, total: 0, status: 'added', created_by: 7, ...r };
+  const cols = Object.keys(row);
+  return Number(db.prepare(`INSERT INTO visit_services (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...Object.values(row)).lastInsertRowid);
+};
+const call = (name, db, args, user) => RPC[name](db, args, user);
+const dup = (fn) => assert.throws(fn, (e) => e.status === 409 && e.code === 'duplicate_order' && /уже назначена в этом визите/.test(e.message));
+const count = (db, vid, svc) => db.prepare("SELECT COUNT(*) n FROM visit_services WHERE visit_id = ? AND service_id = ? AND status <> 'cancelled'").get(vid, svc).n;
+
+test('DUP_STOP_V1: cashier_line_add — услуга уже в визите — 409, строки и счёта не прибавилось; процедура — можно', () => {
+  const { db, vid } = clinic();
+  line(db, vid, { service_id: 40 });
+  const invBefore = db.prepare('SELECT COUNT(*) n FROM invoices').get().n;
+  dup(() => call('cashier_line_add', db, { visit_id: vid, service_id: 40 }, cashier));
+  assert.equal(count(db, vid, 40), 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM invoices').get().n, invBefore, 'отказ не выставил счёт');
+  line(db, vid, { service_id: 60 });
+  assert.ok(call('cashier_line_add', db, { visit_id: vid, service_id: 60 }, cashier).line, 'процедура второй раз');
+  assert.ok(call('cashier_line_add', db, { visit_id: vid, service_id: 50 }, cashier).line, 'новая услуга');
+});
+
+test('DUP_STOP_V1: cashier_line_add — администратор с причиной назначает повтор, журнал счёта помнит; кассир с причиной — 409', () => {
+  const { db, vid } = clinic();
+  line(db, vid, { service_id: 40 });
+  dup(() => call('cashier_line_add', db, { visit_id: vid, service_id: 40, __repeat_reason: 'контрольный анализ' }, cashier));
+  const out = call('cashier_line_add', db, { visit_id: vid, service_id: 40, __repeat_reason: 'контрольный анализ' }, admin);
+  assert.ok(out.line);
+  assert.equal(count(db, vid, 40), 2);
+  const log = db.prepare("SELECT * FROM invoice_audit_log WHERE action = 'line_repeat_order'").all();
+  assert.deepEqual(log.map((r) => [r.visit_id, r.reason]), [[vid, 'контрольный анализ']]);
+});
+
+test('DUP_STOP_V1: замена услуги в неоплаченном счёте на уже назначенную — 409; на новую — можно', () => {
+  const { db, vid } = clinic();
+  line(db, vid, { service_id: 40 });
+  const usg = line(db, vid, { service_id: 50 });
+  createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [usg] }, registrar);
+  dup(() => call('cashier_line_change_service', db, { visit_service_id: usg, new_service_id: 40 }, cashier));
+  dup(() => call('change_unpaid_service', db, { visit_service_id: usg, new_service_id: 40 }, admin));
+  assert.equal(db.prepare('SELECT service_id FROM visit_services WHERE id = ?').get(usg).service_id, 50, 'строка не изменилась');
+  assert.equal(call('cashier_line_change_service', db, { visit_service_id: usg, new_service_id: 60 }, cashier).changed, true);
+});
+
+test('DUP_STOP_V1: смена врача консультации на врача, у которого этот вид уже назначен, — 409 (касса и карта пациента)', () => {
+  const { db, vid } = clinic();
+  line(db, vid, { service_id: null, consultation_type_id: 5, doctor_id: DOC });
+  const b = line(db, vid, { service_id: null, consultation_type_id: 5, doctor_id: DOC2 });
+  dup(() => call('cashier_line_set_doctor', db, { visit_service_id: b, doctor_id: DOC }, cashier));
+  dup(() => call('patient_card_set_doctor', db, { visit_service_id: b, doctor_id: DOC }, admin));
+  assert.equal(db.prepare('SELECT doctor_id FROM visit_services WHERE id = ?').get(b).doctor_id, DOC2);
+  // Анализ у другого исполнителя — тот же ключ (врач не входит): правка проходит.
+  const lab = line(db, vid, { service_id: 40, doctor_id: DOC });
+  line(db, vid, { service_id: 40, doctor_id: DOC2, status: 'cancelled' });
+  assert.equal(call('patient_card_set_doctor', db, { visit_service_id: lab, doctor_id: DOC2 }, admin).doctor_id, DOC2);
+});
+
+test('DUP_STOP_V1: замена в оплаченном счёте и её предпросмотр — новая услуга уже в визите — 409, деньги не двигались', () => {
+  const { db, vid } = clinic();
+  line(db, vid, { service_id: 40 });
+  const usg = line(db, vid, { service_id: 50 });
+  const invoice = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [usg] }, registrar).invoice;
+  recordPayment(db, { invoice_id: invoice.id, amount: invoice.total_amount, method: 'cash' }, cashier);
+  dup(() => call('cashier_line_swap_quote', db, { visit_service_id: usg, new_service_id: 40 }, cashier));
+  dup(() => call('cashier_line_swap_paid', db, { visit_service_id: usg, new_service_id: 40 }, cashier));
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM payments WHERE amount < 0').get().n, 0, 'возврата не было');
+});
+
+test('DUP_STOP_V1: возврат с новой услугой — новая уже в визите — 409; та же услуга у другого врача — можно (прежняя строка отпущена)', () => {
+  const { db, vid } = clinic();
+  line(db, vid, { service_id: 40 });
+  const usg = line(db, vid, { service_id: 50, doctor_id: DOC });
+  const invoice = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [usg] }, registrar).invoice;
+  recordPayment(db, { invoice_id: invoice.id, amount: invoice.total_amount, method: 'cash' }, cashier);
+  db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(usg);
+  dup(() => call('cashier_line_rebill_quote', db, { visit_service_id: usg, new_service_id: 40 }, cashier));
+  dup(() => call('cashier_line_rebill_paid', db, { visit_service_id: usg, new_service_id: 40 }, cashier));
+  const r = call('cashier_line_rebill_paid', db, { visit_service_id: usg, new_service_id: 50, doctor_id: DOC2 }, cashier);
+  assert.equal(r.rebill, true);
+  assert.equal(count(db, vid, 50), 2, 'прежняя строка в визите (отпущена с возвратом) и новая');
+});
+
+test('DUP_STOP_V1: возвращённую строку снова выставляют (rebill_refunded) — если та же услуга уже назначена заново, 409', () => {
+  const { db, vid } = clinic();
+  const old = line(db, vid, { service_id: 40, status: 'collected' });
+  db.prepare("INSERT INTO pay_refund_releases (kind, line_id, invoice_id) VALUES ('out', ?, 1)").run(old);
+  const fresh = line(db, vid, { service_id: 40 });   // назначили заново — можно: прежняя отпущена
+  dup(() => call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: [old], rebill_refunded: true }, registrar));
+  assert.ok(call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: [fresh] }, registrar).invoice);
+});
+
+test('DUP_STOP_V1 (К1): «Вернуть услугу» — возвращённая строка с начатой работой больше не мешает назначить ту же услугу снова', () => {
+  const { db, vid } = clinic();
+  const lab = line(db, vid, { service_id: 40 });
+  const invoice = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [lab] }, registrar).invoice;
+  recordPayment(db, { invoice_id: invoice.id, amount: invoice.total_amount, method: 'cash' }, cashier);
+  db.prepare("UPDATE visit_services SET status = 'collected' WHERE id = ?").run(lab);   // проба взята — строка останется в визите
+  dup(() => call('cashier_line_add', db, { visit_id: vid, service_id: 40 }, cashier));   // пока не возвращена — повтор
+  const item = db.prepare('SELECT invoice_item_id FROM visit_services WHERE id = ?').get(lab).invoice_item_id;
+  call('refund_invoice_line', db, { invoice_item_id: item, reason: 'пациент отказался' }, cashier);
+  assert.ok(db.prepare('SELECT 1 FROM visit_services WHERE id = ?').get(lab), 'начатая работа осталась в визите');
+  assert.ok(call('cashier_line_add', db, { visit_id: vid, service_id: 40 }, cashier).line, 'возвращённая строка мешает назначить анализ снова');
+  assert.equal(count(db, vid, 40), 2);
+});

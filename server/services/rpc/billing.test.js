@@ -307,9 +307,11 @@ test('товарную строку нельзя ПОДМЕНИТЬ услуго
   assert.equal(heldBy(db, 'staff', 11, 3), 2, 'отказ тронул подотчёт — транзакция не откатилась');
 
   // Обычную услугу по-прежнему меняют — запрет ровно про товар.
-  const ok = changeUnpaidService(db, { visit_service_id: vs1, new_service_id: s2 }, registrar);
+  // DUP_STOP_V1 — X-ray (s2) уже в визите: замена на неё — повтор; меняем на третью услугу.
+  const s3 = Number(db.prepare("INSERT INTO services (name, price) VALUES ('ECG', 40000)").run().lastInsertRowid);
+  const ok = changeUnpaidService(db, { visit_service_id: vs1, new_service_id: s3 }, registrar);
   assert.equal(ok.changed, true);
-  assert.equal(db.prepare('SELECT service_id FROM visit_services WHERE id=?').get(vs1).service_id, s2);
+  assert.equal(db.prepare('SELECT service_id FROM visit_services WHERE id=?').get(vs1).service_id, s3);
 });
 
 // DEBT_STICKY_V2 — «Оставить как долг» records an arrangement, not just an

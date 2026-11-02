@@ -145,7 +145,9 @@ test('замена услуги в строке пакета снимает с �
   const c = clinic();
   const a = c.line(1, { pkgId: c.packageId, status: 'added' });
   invoiceOf(c, [a, c.line(2, { status: 'added' })]);
-  const out = changeUnpaidService(c.db, { visit_service_id: a, new_service_id: 2 }, admin);
+  // DUP_STOP_V1 — анализ 2 уже в визите: замена на него — повтор; меняем на другой анализ той же цены.
+  c.db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (3, 'Анализ мочи', 50000, 0, 'lab')").run();
+  const out = changeUnpaidService(c.db, { visit_service_id: a, new_service_id: 3 }, admin);
   assert.equal(out.invoice.subtotal, 100000);
   assert.equal(out.invoice.discount_amount, 0);
   assert.equal(out.line.package_id, null);

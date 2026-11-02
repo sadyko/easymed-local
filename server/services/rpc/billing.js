@@ -9,7 +9,8 @@ import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
 import { crmInvoiceEvidence, crmVisitEvidence } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 (разбор ревью M6, M1) — строки записи из заявки CRM.
 import { pruneAutoLinesOnInvoice, syncLineFromVisit } from '../crm/booking-mirror.js';
-import { onVisitLinesAdded, releaseVisitLine } from '../crm/one-way.js';   // CRM_ONE_WAY_V1 — касса и строки записи карточки
+import { onVisitLinesAdded, releaseVisitLine, autoTwinFor } from '../crm/one-way.js';   // CRM_ONE_WAY_V1 — касса и строки записи карточки · DUP_STOP_V1 (autoTwinFor)
+import { assertOrders, assertChangedOrder, logRepeatOrders, repeatReasonArg } from '../domain/dup-order.js';   // DUP_STOP_V1
 import { invoiceStatusFor, idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 // PAY_BASIS_PERFORMED_V1 — «what will the invoice charge for this line» is one
 // function, shared with the doctor's pay (rpc/reports.js): own price over the
@@ -495,6 +496,14 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
       throw new RpcError(refundedIds.length === 1
         ? 'За эту услугу пациенту уже вернули деньги — снова её выставляют только явным выбором («выставить заново»).'
         : 'За ' + refundedIds.length + ' из выбранных услуг пациенту уже вернули деньги — снова их выставляют только явным выбором («выставить заново»).', 409);
+    }
+    // DUP_STOP_V1 — возвращённая строка, выставленная заново, снова назначение: если та же
+    // услуга уже назначена в визите (или выбрана дважды) — отказ. Журнал обхода — в этой же
+    // транзакции: отказ ниже откатит и его. Стоит ДО ветки дописывания (INVOICE_APPEND_V1):
+    // правило одно для нового счёта и для дописанного.
+    if (refundedIds.length) {
+      const back = new Set(refundedIds.map(Number));
+      logRepeatOrders(db, assertOrders(db, rows.filter((r) => back.has(Number(r.id))), { user, reason: repeatReasonArg(args) }), user);
     }
 
     // The CATALOG is authoritative for a real service or a dispensed product —
@@ -1387,6 +1396,8 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
     if (!svc) throw new RpcError('новая услуга не найдена или неактивна.', 400);
     // CASHIER_HEAD_V1 (ревью I4) — хирургию без койки не подставить и заменой.
     { const r = surgeryWithoutBedRefusal(db, newServiceId, vs.visit_id); if (r) throw new RpcError(r, 400); }
+    // DUP_STOP_V1 — новая услуга уже назначена в этом визите — отказ (или обход с причиной).
+    const orders = assertChangedOrder(db, vs, { ...vs, service_id: newServiceId, consultation_type_id: null }, { user, reason: repeatReasonArg(args) });
 
     const item = vs.invoice_item_id != null
       ? db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(vs.invoice_item_id)
@@ -1419,6 +1430,7 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
     // SERVICES_PACKAGES_V1 — и цена пакета, записанная на строке, уходит с ним.
     db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL, package_full = NULL, package_price = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')
       .run(newServiceId, unit, lineTotal, tier, vsId);
+    logRepeatOrders(db, orders, user);   // DUP_STOP_V1
 
     let invoice = null;
     if (item) {
@@ -1650,6 +1662,8 @@ export function setUnpaidLineDoctor(db, args, user, { rpc = 'cashier_line_set_do
 
     assertPerformer(db, doctorId, vs.service_id, vs.consultation_type_id);
     if (Number(vs.doctor_id) === doctorId) return idemRemember(db, rpc, args, user, { changed: false, line: vs, invoice: inv });
+    // DUP_STOP_V1 — консультация к врачу, у которого этот вид уже назначен в визите, — повтор.
+    const orders = assertChangedOrder(db, vs, { ...vs, doctor_id: doctorId }, { user, reason: repeatReasonArg(args) });
 
     const svc = vs.service_id != null ? db.prepare('SELECT * FROM services WHERE id = ?').get(vs.service_id) : null;
     const before = lineLabel(db, vs, item) + ' · ' + moneyWords(item ? item.total : vs.total);
@@ -1657,6 +1671,7 @@ export function setUnpaidLineDoctor(db, args, user, { rpc = 'cashier_line_set_do
     const lineTotal = round2(unit * (vs.quantity || 1));
     db.prepare('UPDATE visit_services SET doctor_id = ?, unit_price = ?, total = ?, queue_key = NULL, queue_no = NULL WHERE id = ?')
       .run(doctorId, unit, lineTotal, vsId);
+    logRepeatOrders(db, orders, user);   // DUP_STOP_V1
 
     let invoice = null;
     if (item) {
@@ -1733,11 +1748,18 @@ export function addServiceToVisitInvoice(db, args, user, { rpc = 'cashier_line_a
     if (doctorId !== null) assertPerformer(db, doctorId, serviceId);
     else if (Number(svc.requires_doctor) === 1) throw new RpcError('Для этой услуги нужен врач — выберите исполнителя.', 400);
 
+    // DUP_STOP_V1 — та же услуга уже назначена в этом визите — отказ. Строка CRM, которая
+    // уступит этой (onVisitLinesAdded ниже), повтором не считается.
+    const orders = assertOrders(db, [{ visit_id: visitId, service_id: serviceId, doctor_id: doctorId }], {
+      user, reason: repeatReasonArg(args), spare: (l) => { const a = autoTwinFor(db, l); return a ? [a.id] : []; },
+    });
+
     const tier = quoteTier(db, visit, visitId, serviceId);
     const unit = round2(lineUnitPrice(db, { service_id: serviceId, doctor_id: doctorId, price_tier: tier, clinic_item_id: null, consultation_type_id: null }, { service: svc }));
     const vsId = Number(db.prepare(`
       INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by)
       VALUES (?, ?, ?, 1, ?, ?, 'added', ?, ?)`).run(visitId, serviceId, doctorId, unit, unit, tier, user.id).lastInsertRowid);
+    logRepeatOrders(db, orders, user);   // DUP_STOP_V1
 
     // Куда положить: счёт этого визита, выставленный пациенту (не
     // плательщику), по которому нет и не было денег.
@@ -1989,6 +2011,14 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
   if (!serviceChanges && Number(targetDoctor) === Number(vs.doctor_id)) {
     return { changed: false, refunded: 0, due: 0, refund_plan: [], invoice: inv, line: vs };
   }
+  // DUP_STOP_V1 — новая услуга (у консультации — и новый врач) уже назначена в этом
+  // визите — отказ, и в предпросмотре тоже. У возврата с новой услугой прежняя строка
+  // уходит со счёта с возвратом — она не мешает (excludeIds через assertChangedOrder).
+  const orders = assertChangedOrder(db, rebill ? { ...vs, service_id: null, consultation_type_id: null } : vs,
+    serviceChanges
+      ? { ...vs, service_id: newServiceId, consultation_type_id: null, doctor_id: targetDoctor }
+      : { ...vs, doctor_id: targetDoctor },
+    { user, reason: repeatReasonArg(args), excludeIds: [vsId] });
 
   // 1. Строка и позиция счёта.
   const visitRow = db.prepare('SELECT patient_id, visit_date FROM visits WHERE id = ?').get(vs.visit_id);
@@ -2115,6 +2145,7 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
     try { issueQueueNumbers(db, { p_ids: [lineId] }, user); } catch (e) { if (!(e && e.status)) throw e; }
   }
 
+  if (!dryRun) logRepeatOrders(db, orders, user);   // DUP_STOP_V1
   // 4. Журнал.
   const after = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(lineId);
   const final = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);

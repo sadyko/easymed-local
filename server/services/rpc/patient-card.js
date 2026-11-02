@@ -40,6 +40,7 @@ import { getDataDir } from '../control/config.js';
 import { patientFileRefusal, refusalText } from '../../../public/js/shared/patient-file-limits.js';
 import { refundedOpenLineIds } from '../domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
 import { REFUNDED_SIGN_REFUSAL } from '../../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1
+import { assertChangedOrder, logRepeatOrders, repeatReasonArg } from '../domain/dup-order.js';   // DUP_STOP_V1
 import { refuseSignWhileActing, refuseDoctorDocWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документ врача в карте)
 
 const SECTION = 'patients';
@@ -621,7 +622,11 @@ export function patientCardSetServiceDoctor(db, args, user) {
       throw new RpcError('Исполнителем услуги может быть врач, медсестра или лаборант.', 400);
     }
   }
+  // DUP_STOP_V1 — консультация к врачу, у которого этот вид уже назначен в визите, — повтор.
+  const vsNow = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
+  const orders = assertChangedOrder(db, vsNow, { ...vsNow, doctor_id: doctorId }, { user, reason: repeatReasonArg(args) });
   db.prepare('UPDATE visit_services SET doctor_id = ? WHERE id = ?').run(doctorId, vsId);
+  logRepeatOrders(db, orders, user);   // DUP_STOP_V1
   return { id: vsId, doctor_id: doctorId };
 }
 
