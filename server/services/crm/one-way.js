@@ -249,6 +249,26 @@ export function wishYields(db, visitId) {
 }
 
 /**
+ * DUP_STOP_V1 — строка CRM, которая УСТУПИТ строке человека `y` (правило wishYields /
+ * yieldAutoLine выше), без изменений в базе. `y` — строка запроса (id ещё нет) или базы.
+ * Её зовёт запрет повтора (domain/dup-order.js): строка, под которой строка CRM уйдёт, —
+ * не повтор.
+ * @returns {object|null} строка visit_services, которая уйдёт
+ */
+export function autoTwinFor(db, y) {
+  const v = y ? visitRow(db, y.visit_id) : null;
+  if (!v || v.sync_origin != null || (!PRE_ARRIVAL.includes(v.status) && v.status !== 'arrived')) return null;
+  if (!lineKey(y) || y.clinic_item_id != null || y.sync_origin != null || y.status === 'cancelled') return null;
+  const x = { ...y, id: y.id != null ? Number(y.id) : 0 };
+  const auto = autoLineFor(db, v.id, x);
+  if (!auto) return null;
+  const old = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(auto.visit_service_id);
+  if (!old || old.visit_id !== v.id || !vsFree(db, old)) return null;
+  if (!sameBookedService(lineOf(old), lineOf(x), { needsDoctor: needsDoctorOf(db, old) })) return null;
+  return old;
+}
+
+/**
  * CRM_UNIFY_V1 (финальное ревью, A-C2) · CRM_ONE_WAY_V1 — ЖЕЛАНИЕ СБЫЛОСЬ. В визит встала
  * строка человека `x`, а у живой карточки, которая держит этот визит (строкой записи или
  * привязкой, кроме «только для воронки»), есть ждущее желание той же услуги без строки

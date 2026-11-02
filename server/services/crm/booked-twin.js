@@ -50,6 +50,32 @@ function creatorIsCallcenter(db, userId) {
 }
 
 /**
+ * DUP_STOP_V1 — строка записи X, которую сеть R7b уберёт под строкой Y (правило — шапка).
+ * Y — строка базы ИЛИ строка запроса (ещё не вставленная: id нет, статус по умолчанию 'added').
+ * Ничего не меняет; её же зовёт запрет повтора (domain/dup-order.js), чтобы не отказать
+ * строке, которая займёт место строки записи.
+ * @returns {object|null} строка X
+ */
+export function bookedTwinFor(db, y) {
+  if (!y || !lineKey(y) || (y.status ?? 'added') !== 'added' || y.invoice_item_id != null) return null;
+  if (y.clinic_item_id != null || y.sync_origin != null || Number(y.quantity || 1) !== 1) return null;
+  const v = visitRow(db, y.visit_id);
+  if (!v || v.sync_origin != null) return null;
+  const pre = PRE_ARRIVAL.includes(v.status);
+  if (!pre && !(v.status === 'arrived' && v.day === today(db))) return null;
+  const svc = y.service_id != null ? db.prepare('SELECT requires_doctor FROM services WHERE id = ?').get(y.service_id) : null;
+  const needsDoctor = !!(svc && Number(svc.requires_doctor));
+  const autoHeld = db.prepare(`SELECT 1 FROM crm_request_services
+                                WHERE visit_service_id = ? AND visit_service_auto = 1 AND status <> 'cancelled' LIMIT 1`);
+  const before = y.id != null ? Number(y.id) : Number.MAX_SAFE_INTEGER;
+  return db.prepare(`SELECT * FROM visit_services
+                         WHERE visit_id = ? AND id < ? AND status = 'added' AND invoice_item_id IS NULL
+                           AND clinic_item_id IS NULL AND sync_origin IS NULL AND COALESCE(quantity, 1) = 1
+                         ORDER BY id`).all(v.id, before)
+    .find((c) => sameBookedService(lineOf(c), lineOf(y), { needsDoctor }) && vsFree(db, c) && (creatorIsCallcenter(db, c.created_by) || !!autoHeld.get(c.id))) || null;
+}
+
+/**
  * @param {object} db
  * @param {number} vsId — только что вставленная строка visit_services (Y)
  * @returns {number|null} id ушедшей строки записи (X) или null
@@ -57,21 +83,7 @@ function creatorIsCallcenter(db, userId) {
 export function retireBookedTwin(db, vsId) {
   try {
     const y = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(Number(vsId));
-    if (!y || !lineKey(y) || y.status !== 'added' || y.invoice_item_id != null) return null;
-    if (y.clinic_item_id != null || y.sync_origin != null || Number(y.quantity || 1) !== 1) return null;
-    const v = visitRow(db, y.visit_id);
-    if (!v || v.sync_origin != null) return null;
-    const pre = PRE_ARRIVAL.includes(v.status);
-    if (!pre && !(v.status === 'arrived' && v.day === today(db))) return null;
-    const svc = y.service_id != null ? db.prepare('SELECT requires_doctor FROM services WHERE id = ?').get(y.service_id) : null;
-    const needsDoctor = !!(svc && Number(svc.requires_doctor));
-    const autoHeld = db.prepare(`SELECT 1 FROM crm_request_services
-                                  WHERE visit_service_id = ? AND visit_service_auto = 1 AND status <> 'cancelled' LIMIT 1`);
-    const x = db.prepare(`SELECT * FROM visit_services
-                           WHERE visit_id = ? AND id < ? AND status = 'added' AND invoice_item_id IS NULL
-                             AND clinic_item_id IS NULL AND sync_origin IS NULL AND COALESCE(quantity, 1) = 1
-                           ORDER BY id`).all(v.id, y.id)
-      .find((c) => sameBookedService(lineOf(c), lineOf(y), { needsDoctor }) && vsFree(db, c) && (creatorIsCallcenter(db, c.created_by) || !!autoHeld.get(c.id)));
+    const x = bookedTwinFor(db, y);   // DUP_STOP_V1 — правило вынесено без изменений
     if (!x) return null;
     db.transaction(() => {
       relinkHeld(db, x.id, y.id);
