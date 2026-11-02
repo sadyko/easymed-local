@@ -777,7 +777,11 @@ function openEditor(user, root) {
     function pickCategory(v) {
         const becomingDoctor = v === 'doctor';
         const patch = { staff_type: v, is_doctor: becomingDoctor };
-        if (becomingDoctor && emp.role !== 'doctor') patch.role = 'doctor';
+        // STAFF_EDIT_V1 — администратор, ставший врачом, остаётся администратором: роль
+        // не трогается, врачом его делает категория (сервер выводит is_doctor из
+        // staff_type, ADMIN_DOCTOR_V1). Прежде «Врачи» молча ставили роль «Врач», и
+        // сохранение снимало права администратора.
+        if (becomingDoctor && emp.role !== 'doctor' && emp.role !== 'admin') patch.role = 'doctor';
         if (!becomingDoctor && emp.role === 'doctor') patch.role = 'registrar';
         markDirty(patch);
         if (!railSections().some(s => s.key === active)) active = 'job';
@@ -923,6 +927,8 @@ function openEditor(user, root) {
             body.append(head('Должность', 'Роль, отдел и должность в клинике.'), statusBox,   // EMPLOYEE_CARD_SAVE_V1
                 field('Категория сотрудника', sel('staff_type', [['', 'Выберите категорию…']].concat(STAFF_TYPES), pickCategory), { required: true }),
                 hint('Врачи получают роль доступа «Врач», попадают в список врачей клиники, и для них открываются разделы Лицензия / Услуги и ставки / Вознаграждение за направления.'),
+                // STAFF_EDIT_V1 — у администратора «Врачи» роль не меняют (pickCategory).
+                ...(emp.role === 'admin' ? [hint('Администратор остаётся администратором: «Врачи» добавляет ему приём пациентов, права администратора не снимаются.')] : []),
                 // NULL_IN_APPEND_V1 — пустая ветка тут превратилась бы в слово «null»
                 // на экране: это родной Element.append, а не h(). У не-врача блок
                 // просто не строится.

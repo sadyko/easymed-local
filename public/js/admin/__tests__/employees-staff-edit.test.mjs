@@ -312,3 +312,16 @@ test('своя карточка: поля «Новый пароль» нет, «
   await tab(card, 'Вход и доступ');
   assert.equal(passwordInputs(card)[0].getAttribute('autocomplete'), 'new-password');
 });
+
+test('«Врачи» на карточке администратора: роль остаётся «Администратор», уходит категория врача', async () => {
+  const card = await openCard('chief');
+  await tab(card, 'Должность');
+  assert.ok(textOf(card).includes(ADMIN_DOCTOR_HINT), 'администратору не сказано, что роль останется');
+  pick(categorySelect(card), 'doctor');
+  await flush();
+  await save(card);
+  assert.equal(writes.length, 1, 'карточка не ушла на сервер');
+  const body = writes[0].body;
+  assert.equal(body.staff_type, 'doctor');
+  assert.ok(!('role' in body), 'роль ушла — администратор перестал бы быть администратором: ' + body.role);
+});
