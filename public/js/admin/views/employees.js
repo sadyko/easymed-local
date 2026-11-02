@@ -621,6 +621,16 @@ function openEditor(user, root) {
     // ADMIN_ROWS_GRANTABLE_V1 — «Сотрудники: Просмотр» открывает карточку, но не правит её.
     const acc = empAccess();
     const readOnly = managed || !acc.canEdit;
+    // STAFF_EDIT_V1 — логин существующего сотрудника меняет администратор из своей
+    // учётной записи (не «вход как сотрудник»); сервер проверит то же
+    // (routes/users.js loginChange). Отказ сервера — под полем «Логин».
+    const canRenameLogin = isEdit && acc.admin && !isActingNow() && !readOnly;
+    let loginError = '';
+    const loginErrorBox = h('div');
+    function paintLoginError() {
+        clear(loginErrorBox);
+        if (loginError) loginErrorBox.appendChild(h('div', { class: 'cpf-err', role: 'alert', 'data-login-error': '' }, Icon('Warning', { size: 13 }), ' ', loginError));
+    }
 
     const overlay = h('div', { class: 'modal' });
     const close = () => overlay.remove();
@@ -1011,7 +1021,13 @@ function openEditor(user, root) {
                 extraRoles.appendChild(h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13.5px', padding: '5px 10px', border: '1px solid ' + (on ? 'var(--primary-300, #9fd0cb)' : 'var(--ink-100)'), borderRadius: '20px', cursor: 'pointer', background: on ? 'var(--primary-50, #e8f3f2)' : 'transparent' } }, c, rl));
             }
             body.append(head('Вход и доступ', 'Логин, пароль и роли доступа. Каждый сотрудник входит в систему.'), statusBox,   // EMPLOYEE_CARD_SAVE_V1
-                grid(field('Логин', (() => { const i = h('input', { type: 'text', value: emp.username, placeholder: 'login', disabled: isEdit }); i.addEventListener('input', () => markDirty({ username: i.value })); ctrls.username = i; return i; })(), { required: true }),
+                // STAFF_EDIT_V1 — логин правит администратор (canRenameLogin). Уходит, только
+                // если изменён; отказ сервера (занят, неверный, подключены филиалы) — под полем.
+                grid(field('Логин', h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } }, (() => {
+                    const i = h('input', { type: 'text', value: emp.username, placeholder: 'login', autocomplete: 'off', disabled: isEdit && !canRenameLogin });
+                    i.addEventListener('input', () => { loginError = ''; paintLoginError(); markDirty({ username: i.value }); });
+                    ctrls.username = i; return i;
+                })(), loginErrorBox), { required: true }),
                     field('Основная роль', roleSel, { required: true }),
                     field(isEdit ? 'Новый пароль (пусто — не менять)' : 'Пароль', (() => { const i = h('input', { type: 'password', value: '', placeholder: '••••••••' }); i.addEventListener('input', () => markDirty({ password: i.value })); ctrls.password = i; return i; })(), { required: !isEdit })),
                 h('div', { style: { marginTop: '14px' } }, h('div', { style: { fontSize: '13.5px', fontWeight: 600, marginBottom: '7px' } }, 'Дополнительные роли'), extraRoles,
@@ -1027,6 +1043,10 @@ function openEditor(user, root) {
                 );
             if (!isEdit) {
                 body.append(hint('Логин 3–30 символов (латиница, цифры, . _ -). Пароль — любой, длину выбирает клиника.'));
+            }
+            // STAFF_EDIT_V1 — что будет со сменой логина: сеанс держится за сотрудника, не за логин.
+            if (canRenameLogin) {
+                body.append(hint('Новый логин действует со следующего входа; открытые входы сотрудника не закрываются.'));
             }
         } else if (active === 'actas' && showActAsLog) {
             // ADMIN_ACT_AS_V1 — кто работал от имени этого сотрудника (и, у
@@ -1196,6 +1216,12 @@ function openEditor(user, root) {
             payload.custom_role_code = full.custom_role_code;
         }
         if (String(emp.password).trim()) payload.password = emp.password;
+        // STAFF_EDIT_V1 — логин: только если изменён — без пробелов и нижним регистром,
+        // как его хранит сервер; тот же логин в другом регистре — не смена.
+        if (canRenameLogin) {
+            const loginNow = String(emp.username || '').trim().toLowerCase();
+            if (loginNow !== String(user.username || '').trim().toLowerCase()) payload.username = loginNow;
+        }
         // EMPLOYEE_CARD_SAVE_V1 — Фамилии или Имени нет, а ФИО не правили (одно
         // слово в full_name): части не уходят вовсе. Сервер пересобирает
         // full_name, только когда части присланы (routes/users.js), — без них
@@ -1236,6 +1262,12 @@ function openEditor(user, root) {
             toast('Сотрудник сохранён', 'ok'); close(); await paint(root);
         } catch (e) {
             saveBtn.disabled = false; saveBtn.textContent = prev;
+            // STAFF_EDIT_V1 — отказ логину (занят, неверный, подключены филиалы) — под полем «Логин».
+            if (e && e.field === 'username') {
+                loginError = e.message;
+                active = 'access'; renderRail(); renderBody(); paintLoginError();
+                return;
+            }
             // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — отказ сервера, названный полем
             // «Публичного профиля» (ссылки соцсетей), — под этим полем, не тостом.
             if (e && emp.is_doctor && PROFILE_LINK_KEYS.includes(e.field)) {

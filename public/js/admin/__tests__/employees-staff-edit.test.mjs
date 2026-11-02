@@ -240,3 +240,60 @@ test('новый сотрудник: уходит вся карточка', asyn
     assert.ok(k in body, k + ' не ушло у нового сотрудника');
   }
 });
+
+test('логин: администратор правит — уходит изменённый, без пробелов и нижним регистром; другой регистр — не смена', async () => {
+  let card = await openCard('nurse.k');
+  await tab(card, 'Вход и доступ');
+  const inp = loginInput(card);
+  assert.ok(inp, 'нет поля «Логин»');
+  assert.ok(!isDisabled(inp), 'администратору поле «Логин» закрыто');
+  assert.equal(inp.getAttribute('autocomplete'), 'off');
+  assert.ok(textOf(card).includes(LOGIN_HINT), 'не сказано, что будет с открытыми входами');
+  type(inp, '  Nurse.Karimova ');
+  await save(card);
+  assert.equal(writes.length, 1, 'карточка не ушла на сервер');
+  assert.equal(writes[0].method, 'PATCH');
+  assert.equal(writes[0].body.username, 'nurse.karimova');
+
+  card = await openCard('nurse.k');
+  await tab(card, 'Вход и доступ');
+  type(loginInput(card), 'NURSE.K');
+  await save(card);
+  assert.equal(writes.length, 1);
+  assert.ok(!('username' in writes[0].body), 'тот же логин в другом регистре ушёл сменой');
+});
+
+test('логин: отказ сервера — под полем, карточка открыта, тоста нет; правка логина снимает отказ', async () => {
+  const card = await openCard('nurse.k');
+  await tab(card, 'Вход и доступ');
+  type(loginInput(card), 'nurse2');
+  nextAnswer = { status: 409, json: { error: { code: 'conflict', message: BRANCH_MSG, field: 'username' } } };
+  await save(card);
+  assert.equal(writes.length, 1);
+  assert.ok(!card.removed, 'карточка закрылась после отказа');
+  assert.equal(loginErrorText(card), BRANCH_MSG, 'отказ не под полем «Логин»');
+  assert.ok(!toasts.includes(BRANCH_MSG), 'отказ показан тостом, а не под полем');
+  type(loginInput(card), 'nurse3');
+  assert.equal(loginErrorText(card), null, 'отказ остался после правки логина');
+});
+
+// Охрана: поле не открывается шире, чем решено.
+test('логин: не-администратору с «Сотрудники: Изменение» и «от имени сотрудника» поле закрыто', async () => {
+  const P = await import('../permissions.js');
+  window.easymed.state.user = { id: 5, role: 'nurse', extra_roles: [] };
+  P.setEffectiveFromRole({ name: 'nurse', permissions: { sections: ['settings'], levels: {}, grants: { settings: 'view', 'settings.employees': 'edit' } } });
+  try {
+    const card = await openCard('nurse.k');
+    await tab(card, 'Вход и доступ');
+    assert.ok(isDisabled(loginInput(card)), 'не-администратору логин открыт');
+  } finally {
+    P.setFullAccess();
+    window.easymed.state.user = ADMIN_ME;
+  }
+  window.easymed.state.user = { ...ADMIN_ME, acting_admin: { id: 9, full_name: 'Петров П.' } };
+  try {
+    const card = await openCard('nurse.k');
+    await tab(card, 'Вход и доступ');
+    assert.ok(isDisabled(loginInput(card)), 'от имени сотрудника логин правится');
+  } finally { window.easymed.state.user = ADMIN_ME; }
+});
