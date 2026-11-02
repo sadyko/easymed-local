@@ -404,3 +404,17 @@ test('EXTERNAL_LAB_V1: заказ анализа везёт отметку «В�
   assert.equal(after.services.find((r) => r.service_id != null).services.external_lab, 1);
   db.close();
 });
+
+// LAST_VISIT_TRUE_V1 — шапка карты: «последний визит» — последний
+// СОСТОЯВШИЙСЯ, ближайшая запись — отдельно; список «Визиты» — полный.
+test('LAST_VISIT_TRUE_V1: будущая запись и отменённый визит не становятся «последним визитом» карты', () => {
+  const { db, pid } = seed();
+  db.prepare("INSERT INTO visits (patient_id, doctor_id, branch_id, visit_date, status) VALUES (?,3,1,'2099-03-01T09:00:00Z','scheduled')").run(pid);
+  db.prepare("INSERT INTO visits (patient_id, doctor_id, branch_id, visit_date, status) VALUES (?,3,1,'2026-09-01T09:00:00Z','cancelled')").run(pid);
+  const out = patientCard(db, { patient_id: pid }, REGISTRAR);
+  assert.equal(out.visits.length, 3, 'вкладка «Визиты» показывает все визиты, и отменённые, и будущие');
+  assert.equal(out.visit_count, 1, 'визитов — только состоявшиеся');
+  assert.equal(Date.parse(out.last_visit_date), Date.parse('2026-08-12T09:00:00Z'), 'последним визитом стала будущая запись');
+  assert.equal(Date.parse(out.next_visit_date), Date.parse('2099-03-01T09:00:00Z'));
+  db.close();
+});

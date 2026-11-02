@@ -333,3 +333,18 @@ test('бейдж: без входа в систему не отдаётся', as
   const db = freshDb();
   assert.throws(() => telegramPatientStatus(db, { patient_id: 1 }, null), /вход/i);
 });
+
+// LAST_VISIT_TRUE_V1 — «когда последний раз приходил» у подключённого пациента —
+// последний СОСТОЯВШИЙСЯ визит: не будущая запись и не отменённый.
+test('LAST_VISIT_TRUE_V1: последний визит подключённого пациента — состоявшийся, а не будущая запись', () => {
+  const db = freshDb();
+  const pid = db.prepare("INSERT INTO patients (full_name, phone) VALUES ('Алиев А.','+998 90 111 22 33')").run().lastInsertRowid;
+  const add = db.prepare('INSERT INTO visits (patient_id, visit_date, status) VALUES (?,?,?)');
+  add.run(pid, '2020-01-01T09:00:00Z', 'arrived');
+  add.run(pid, '2021-01-01T09:00:00Z', 'cancelled');
+  add.run(pid, '2099-01-01T09:00:00Z', 'scheduled');
+  db.prepare("INSERT INTO telegram_links (chat_id, phone, tg_name) VALUES ('77','998901112233','А')").run();
+  const [link] = telegramLinksList(db, {}, admin);
+  assert.equal(Date.parse(link.patients[0].last_visit), Date.parse('2020-01-01T09:00:00Z'));
+  db.close();
+});

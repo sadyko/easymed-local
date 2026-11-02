@@ -33,6 +33,7 @@ import {
 import { canRead, canWrite, readableColumns, writableColumns } from '../../db/schema-registry.js';
 import { RpcError } from './crm-config.js';
 import { telegramPatientStatus } from './telegram.js';   // TELEGRAM_PATIENT_BADGE_V1
+import { patientVisitSummary } from '../domain/visit-summary.js';   // LAST_VISIT_TRUE_V1
 // PATIENT_FILE_ATTACH_V1
 import fs from 'node:fs';
 import path from 'node:path';
@@ -185,6 +186,7 @@ export function patientCard(db, args, user) {
     docs: null, doc_notes: null,
     history: null,   // PATIENT_HISTORY_TAB_V1 — { admissions, case_files }
     visit_count: null, last_visit_date: null,
+    next_visit_date: null,   // LAST_VISIT_TRUE_V1 — ближайшая запись, отдельно от последнего визита
   };
   // Дойдёт ли до человека результат — видно рядом с именем. Ошибку справочника
   // глушим: бейдж это справка, и из-за него карта открываться не перестанет.
@@ -234,8 +236,14 @@ export function patientCard(db, args, user) {
         patients: { id: v.patient_id, full_name: _p_name, mrn: _p_mrn, phone: _p_phone },
       };
     });
-    out.visit_count = out.visits.length;
-    out.last_visit_date = out.visits.length ? out.visits[0].visit_date : null;
+    // LAST_VISIT_TRUE_V1 — шапка карты считает по СОСТОЯВШИМСЯ визитам (то же
+    // правило, что картотека: domain/visit-summary.js). visits[0] — самая
+    // поздняя строка вообще, и будущая запись (или отменённый визит) была
+    // «последним визитом». Список вкладки «Визиты» остаётся полным.
+    const sum = canRead('visits', roles) ? patientVisitSummary(db, [id]).get(Number(id)) : null;
+    out.visit_count = sum ? sum.visit_count : 0;
+    out.last_visit_date = sum ? sum.last_visit : null;
+    out.next_visit_date = sum ? sum.next_visit : null;
   }
 
   // Строки услуг читают ТРИ вкладки — «Услуги» (сами строки), «Лаборатория»

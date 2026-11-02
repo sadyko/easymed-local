@@ -16,6 +16,7 @@ import { getMe, TelegramError } from '../telegram/api.js';
 import { setupBot } from '../telegram/setup.js';   // TELEGRAM_BOT_SETUP_V1
 import { wakeTelegramBot } from '../telegram/index.js';
 import { findPatientsByPhone, digitsOf } from '../telegram/documents.js';
+import { patientVisitSummary } from '../domain/visit-summary.js';   // LAST_VISIT_TRUE_V1
 import { uzLocalDigits, MIN_PHONE_DIGITS } from '../../../public/js/admin/views/crm-phone-match.js';   // TELEGRAM_PATIENT_BADGE_V1
 import { botStats, previewAudience, startBroadcast, broadcastStatus, broadcastHistory, broadcastOptions, resolveAudience } from '../telegram/broadcast.js';   // TG_BROADCAST_FILTERS_V1 — broadcastOptions; FIX_318_V1 (H2) — resolveAudience
 
@@ -140,10 +141,12 @@ export function telegramLinksList(db, _args, user) {
   }));
 }
 
+// LAST_VISIT_TRUE_V1 — последний СОСТОЯВШИЙСЯ визит, то же правило, что у
+// картотеки и карты пациента (domain/visit-summary.js). MAX(visit_date) здесь
+// называл «последним посещением» будущую запись и отменённый визит.
 function lastVisitOf(db, patientId) {
-  const row = db.prepare(
-    'SELECT MAX(visit_date) d FROM visits WHERE patient_id = ?').get(patientId);
-  return (row && row.d) || null;
+  const s = patientVisitSummary(db, [patientId]).get(Number(patientId));
+  return (s && s.last_visit) || null;
 }
 
 // «Отвязать» — средство против главного риска этой схемы: номер перешёл к
