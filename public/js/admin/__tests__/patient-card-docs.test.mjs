@@ -323,3 +323,21 @@ test('перепечатка записи без архива: известен 
   const ahead = await printDerivedConclusion({ tabs, services: [svcRow('2026-10-03T09:00:00.000Z')] });
   assert.ok(ahead.includes('01.10.2026') && !ahead.includes('03.10.2026'), 'визит позже подписи — лист датирован будущим днём визита');
 });
+
+// PRINT_VISIT_DATE_V1 (ревью-2) — роль с «Документами», но без «Услуг»: день визита брался
+// только из строк вкладки «Услуги», и запись, подписанная на следующий день после визита,
+// перепечатывалась днём подписи. Теперь день визита едет на строке заключения (doc_notes).
+test('перепечатка записи без архива у роли без «Услуг»: день визита со строки заключения', async () => {
+  const late = JSON.stringify({
+    __service_workspace_v1: 1, current: null,
+    history: [{ kind: 'signed', savedAt: '2026-10-01T08:00:00.000Z', byName: 'Каримов Алишер', fields: { chief_complaint: 'Кашель' } }],
+  });
+  const html = await printDerivedConclusion({
+    doc_notes: [{ id: 503, notes: late, visit_date: '2026-09-30T09:00:00.000Z',
+      services: { name: 'Приём терапевта' }, users: { full_name: 'Каримов Алишер' } }],
+  });
+  assert.equal(payload.tabs.services, 'none', 'у роли открыты «Услуги»');
+  assert.equal(payload.services, null);
+  assert.ok(html.includes('30.09.2026'), 'на листе нет дня визита');
+  assert.ok(!html.includes('01.10.2026'), 'лист датирован днём подписи, а не днём визита');
+});

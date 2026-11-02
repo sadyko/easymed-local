@@ -1720,8 +1720,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // пациент, врач записи, услуга и день подписи.
         // PRINT_VISIT_DATE_V1 (ревью m6) — день листа — то же правило, что у кабинета и
         // архивной копии (docDayText): день визита, но не позже ПЕРВОЙ подписи записи; дня
-        // визита нет (вкладка «Услуги» этой роли закрыта) — день первой подписи. Раньше —
-        // последняя подпись: переподписал через неделю, и протокол «уезжал» на неделю.
+        // визита нет — день первой подписи. Раньше — последняя подпись: переподписал через
+        // неделю, и протокол «уезжал» на неделю. Ревью-2: день визита едет на строке
+        // заключения (doc_notes.visit_date), а не только со строк вкладки «Услуги».
         function printWsDoc(d, view = null) {   // PRINT_AUTO_V1
             const data = notesDocData(d.fields, {
                 head: {
@@ -1749,6 +1750,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     const vsNotes = payloadDocNotes;
                     const archived = new Set((data || []).map(x => x.visit_service_id).filter(Boolean));
                     // PRINT_VISIT_DATE_V1 (ревью m6) — день визита строки, если карта его знает (вкладка «Услуги»).
+                    // PRINT_VISIT_DATE_V1 (ревью-2) — первым — день визита со строки заключения
+                    // (doc_notes.visit_date): он приходит и роли с «Документами», но без «Услуг».
                     const visitDayOf = new Map((payloadServices || []).map(s => [String(s.id), s.visit_date || null]));
                     for (const r of (vsNotes || [])) {
                         if (archived.has(r.id)) continue;
@@ -1768,7 +1771,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                             prescriptions: (p && Array.isArray(p.prescriptions)) ? p.prescriptions : [],
                             // PRINT_VISIT_DATE_V1 (ревью m6) — история записи и день визита — дню листа (printWsDoc)
                             history: (p && Array.isArray(p.history)) ? p.history : [],
-                            visitDate: visitDayOf.get(String(r.id)) || null,
+                            visitDate: r.visit_date || visitDayOf.get(String(r.id)) || null,
                         });
                     }
                 }

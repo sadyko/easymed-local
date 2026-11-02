@@ -333,10 +333,14 @@ export function patientCard(db, args, user) {
       + ' WHERE d.patient_id = ? ORDER BY d.created_at DESC LIMIT 300').all(id)
       .map((r) => ({ ...r, body: parseJson(r.body), file_available: fileOnThisMachine(r.file_path) }));
     // Подписанные заключения кабинета врача живут в visit_services.notes.
+    // PRINT_VISIT_DATE_V1 (ревью-2) — день визита едет НА СТРОКЕ заключения: перепечатка
+    // записи без архива датирует лист днём визита, а роль с «Документами», но без «Услуг»,
+    // иначе его не знала (вкладка «Услуги» ей не приходит).
     out.doc_notes = vsRows
       .filter((r) => r.notes != null && r.notes !== '')
       .map((r) => ({
         id: r.id, notes: r.notes,
+        visit_date: visitDate.get(r.visit_id) || null,
         services: { name: r._s_name },
         users: { full_name: r._d_name },
       }));
