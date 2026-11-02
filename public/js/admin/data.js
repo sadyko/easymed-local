@@ -114,7 +114,12 @@ function shapePatient(row) {
         allergies:     (row.allergies || '').split(/[,;\n]/).map(s => s.trim()).filter(Boolean),
         conditions:    (row.chronic_conditions || '').split(/[,;\n]/).map(s => s.trim()).filter(Boolean),
         status:        row.active === false ? 'discharged' : 'active',
-        lastVisit:     row.last_visit_date || (row.registration_date || row.created_at || '').slice(0, 10),
+        // LAST_VISIT_TRUE_V1 — ISO целиком, без slice(0, 10): обрезка давала день
+        // UTC, и карта, заведённая в 00:30 по Ташкенту, «регистрировалась»
+        // вчера. Дату пишет fmtDay (местный день); сервер затем подставляет
+        // свой местный день (patient_base_aggregates).
+        lastVisit:     row.last_visit_date || row.registration_date || row.created_at || '',
+        nextVisit:     '',                      // LAST_VISIT_TRUE_V1 — ближайшая запись (patient_base_aggregates)
         balance:       0,                       // computed later if invoices exist
         visitCount:    0,                       // RegBase: filled by patient_base_aggregates RPC
         registrar:     '',
@@ -318,7 +323,12 @@ export async function loadPatientsPaged({
                 r.insurance  = a.insurer || '';
                 r.payerType  = a.payer_type || '';
                 r.registrar  = a.registrar || '';
-                if (a.last_visit) r.lastVisit = a.last_visit;
+                // LAST_VISIT_TRUE_V1 — последний СОСТОЯВШИЙСЯ визит (местный день
+                // сервера); нет такого — местный день регистрации. Будущая запись —
+                // отдельно: «запись: 3 ноября» под датой.
+                if (a.last_visit_day) r.lastVisit = a.last_visit_day;
+                else if (a.registration_day) r.lastVisit = a.registration_day;
+                r.nextVisit = a.next_visit_day || '';
             }
         } catch (e) { console.warn('[patient_base_aggregates]', e.message); }
     }

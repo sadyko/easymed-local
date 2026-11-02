@@ -13415,4 +13415,7 @@ export const STRINGS = {
   "Назначить повторно": {"en":"Order again","ru":"Назначить повторно","uz":"Qayta tayinlang"},   // DUP_STOP_V1
   "Повторное назначение отменено — ничего не записано.": {"en":"The repeat order was cancelled — nothing was saved.","ru":"Повторное назначение отменено — ничего не записано.","uz":"Qayta tayinlash bekor qilindi — hech narsa saqlanmadi."},   // DUP_STOP_V1
   // /DUP_STOP_V1
+  // LAST_VISIT_TRUE_V1
+  "запись: {d}": {"en":"booked: {d}","ru":"запись: {d}","uz":"yozuv: {d}"},   // LAST_VISIT_TRUE_V1 — ближайшая запись под «последним визитом»
+  // /LAST_VISIT_TRUE_V1
 };

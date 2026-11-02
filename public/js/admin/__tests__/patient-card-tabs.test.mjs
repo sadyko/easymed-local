@@ -414,3 +414,19 @@ test('LIVE_AUDIT_FIX_V1: «Заменить» и «Убрать» — тольк
     'Заменять и убирать услуги может регистратура или администратор.');
   assert.equal(PC.unpaidServiceErrorText({ message: 'счёт оплачен' }), 'счёт оплачен');
 });
+
+// LAST_VISIT_TRUE_V1 — клетка «Последний визит» шапки берёт дату с сервера
+// (последний СОСТОЯВШИЙСЯ), а не первую строку списка визитов — там первой
+// стоит будущая запись. Ближайшая запись — в подписи клетки.
+test('LAST_VISIT_TRUE_V1: «Последний визит» шапки — с сервера, а не первая строка визитов; запись — в подписи', async () => {
+  const p = fullPayload();
+  const FUTURE = { ...VISIT, id: 12, visit_date: '2099-03-01T09:00:00Z', status: 'scheduled' };
+  p.visits = [FUTURE, VISIT];   // вкладка «Визиты» — от поздней к ранней
+  p.visit_count = 1; p.last_visit_date = VISIT.visit_date; p.next_visit_date = FUTURE.visit_date;
+  const box = await render(p);
+  const cell = buttons(box).find((b) => textOf(b).includes('Последний визит'));
+  assert.ok(cell, 'нет клетки «Последний визит»');
+  const t = textOf(cell);
+  assert.ok(t.includes('12 августа 2026'), 'в клетке не последний состоявшийся визит: ' + t);
+  assert.ok(t.includes('запись: 1 марта 2099'), 'ближайшая запись не названа: ' + t);
+});

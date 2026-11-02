@@ -918,6 +918,7 @@ function patientRow(p) {
     const phone = formatPhone(p.phone) || p.phone || '';
     const dob = fmtDay(p.dob);
     const last = fmtDay(p.lastVisit);
+    const next = fmtDay(p.nextVisit);   // LAST_VISIT_TRUE_V1 — ближайшая запись
     const visits = Number(p.visitCount || 0);
     const registrar = registrarOf(p);
 
@@ -980,6 +981,9 @@ function patientRow(p) {
         // дате, и стоять им врозь незачем.
         h('td', null,
             last ? h('div', { class: 'pt-when-main' }, last) : noneCell('—'),
+            // LAST_VISIT_TRUE_V1 — будущая запись — не «последний визит»: она
+            // стоит своей строкой под датой.
+            next ? h('div', { class: 'pt-when-sub pt-when-next' }, trf('запись: {d}', { d: next })) : null,
             h('div', { class: 'pt-when-sub' }, visits > 0 ? trf('визитов: {n}', { n: visits }) : 'визитов не было'),
         ),
         // 5 — Баланс: депозит пациента, под ним — долг (V3120_FIX).

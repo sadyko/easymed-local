@@ -306,6 +306,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     let payloadDocNotes = [];
     let payloadHistory = null;   // PATIENT_HISTORY_TAB_V1 — { admissions, case_files }
     let lastVisitDate = null;
+    let nextVisitDate = null;   // LAST_VISIT_TRUE_V1 — ближайшая запись
     let debt = null;   // DEBT_FLOW_V1 — { amount, invoices } по счетам со статусом «debt»
 
     function applyCardPayload(data) {
@@ -328,6 +329,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // «Визиты» закрыты → шапка не знает даты последнего визита и честно
         // ставит прочерк, а не «визитов не было».
         lastVisitDate = tabOpen('visits') ? (data.last_visit_date || null) : null;
+        nextVisitDate = tabOpen('visits') ? (data.next_visit_date || null) : null;   // LAST_VISIT_TRUE_V1
         shapeServicesAndLabs();
         // Активная вкладка могла быть закрыта у этой роли — уводим на первую
         // открытую, иначе карта открылась бы на отказе без причины.
@@ -638,10 +640,14 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // подчиняются тем же правам. Иначе закрытый «Счёт» всё равно называл бы
         // сумму долга, а закрытые «Визиты» — дату последнего приёма: право,
         // которое обходится взглядом на шапку, — не право.
-        const lastVisit = tabOpen('visits') ? visits[0] : null;
+        // LAST_VISIT_TRUE_V1 — «Последний визит» — последний СОСТОЯВШИЙСЯ, его
+        // называет сервер (last_visit_date). visits[0] была самой поздней строкой
+        // вообще: будущая запись и отменённый визит выигрывали у приёма.
+        const lastVisitAt = tabOpen('visits') ? lastVisitDate : null;
+        const nextVisitAt = tabOpen('visits') ? nextVisitDate : null;
         let daysAgo = null;
-        if (lastVisit) {
-            daysAgo = Math.max(0, Math.floor((Date.now() - new Date(lastVisit.visit_date).getTime()) / 86400000));
+        if (lastVisitAt) {
+            daysAgo = Math.max(0, Math.floor((Date.now() - new Date(lastVisitAt).getTime()) / 86400000));
         }
         let outstanding = 0;
         for (const inv of invoices) {
@@ -704,11 +710,15 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // shared/date-words.js), поэтому он одинаков с печатными бланками и
             // говорит на языке интерфейса, а не на языке системы.
             statCell(tabOpen('visits') ? 'Clock' : 'Lock', '#2563eb', 'Последний визит',
-                lastVisit ? fmtDate(lastVisit.visit_date) : '—',
+                lastVisitAt ? fmtDate(lastVisitAt) : '—',
                 !tabOpen('visits') ? 'вкладка закрыта'
-                    : (daysAgo != null
-                        ? (daysAgo === 0 ? tr('сегодня') : trf('{n} дн. назад', { n: daysAgo }))
-                        : 'визитов не было'),
+                    : [
+                        daysAgo != null
+                            ? (daysAgo === 0 ? tr('сегодня') : trf('{n} дн. назад', { n: daysAgo }))
+                            : tr('визитов не было'),
+                        // LAST_VISIT_TRUE_V1 — ближайшая запись своей частью строки.
+                        nextVisitAt ? trf('запись: {d}', { d: fmtDate(nextVisitAt) }) : null,
+                    ].filter(Boolean).join(' · '),
                 null, () => gotoTab('visits')),
             statCell('Warning',  'var(--ok-600, #16a34a)', 'Аллергии',
                 allergiesText || 'Нет данных', null,

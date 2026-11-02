@@ -751,3 +751,34 @@ test('V3120_FIX: «Баланс» в реестре показывает и де
     AGGS = null;
   }
 });
+
+// LAST_VISIT_TRUE_V1 — «Последний визит» в реестре — последний СОСТОЯВШИЙСЯ
+// (местный день от сервера), под датой — ближайшая запись; без состоявшихся
+// визитов — местный день регистрации и «визитов не было».
+test('LAST_VISIT_TRUE_V1: под датой последнего визита — «запись: …», будущая запись не «последний визит»', async () => {
+  reset();
+  setFullAccess('Admin');
+  AGGS = [{ patient_id: 'p-1', visit_count: 2, balance: 0, debt: 0, net_balance: 0,
+    last_visit: '2026-10-20T05:00:00Z', last_visit_day: '2026-10-20',
+    next_visit: '2026-11-03T04:00:00Z', next_visit_day: '2026-11-03', registration_day: '2026-09-01' }];
+  try {
+    const { renderPatients } = await import('../views/patients.js?v=lastvisit1');
+    const box = mk('div');
+    await renderPatients(box, { onNavigate() {}, embedded: true });
+    await tick(60);
+    const t = textOf(box);
+    assert.ok(t.includes('20 октября 2026'), 'нет даты последнего состоявшегося визита: ' + t.slice(0, 400));
+    assert.ok(t.includes('запись: 3 ноября 2026'), 'ближайшая запись не названа под датой: ' + t.slice(0, 400));
+    assert.ok(t.includes('визитов: 2'));
+    // Только будущая запись: дата — день регистрации, «визитов не было», запись — под датой.
+    AGGS = [{ patient_id: 'p-1', visit_count: 0, balance: 0, debt: 0, net_balance: 0,
+      last_visit: null, last_visit_day: null, next_visit: '2026-11-03T04:00:00Z', next_visit_day: '2026-11-03', registration_day: '2026-09-01' }];
+    const box2 = mk('div');
+    await renderPatients(box2, { onNavigate() {}, embedded: true });
+    await tick(60);
+    const t2 = textOf(box2);
+    assert.ok(t2.includes('1 сентября 2026') && t2.includes('визитов не было') && t2.includes('запись: 3 ноября 2026'), t2.slice(0, 400));
+  } finally {
+    AGGS = null;
+  }
+});
