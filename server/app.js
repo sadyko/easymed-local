@@ -158,7 +158,7 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // вкладки (X-Em-Act-As, 409 act_as_changed) и журнал действий от имени. Стоит
   // В МОНТИРОВАНИИ маршрута — что дошло до маршрута, то прошло и проверку,
   // каким бы ни был регистр пути (ревью безопасности, HIGH 1, MEDIUM 3).
-  app.use('/api/users', actAsRouterGuard(db, 'users'), userRoutes(db));
+  app.use('/api/users', actAsRouterGuard(db, 'users'), userRoutes(db, { dataDir }));   // STAFF_EDIT_V1 — dataDir: в группе ли филиалов
   app.use('/api/db', requireAuth, actAsRouterGuard(db, 'db'), dbRoutes(db, { storageDir: path.join(dataDir, 'storage') }));   // CLINIC_PROFILE_V1 (ревью M3) — копия прежнего логотипа перед заменой
   app.use('/api/rpc', requireAuth, actAsRouterGuard(db, 'rpc'), rpcRoutes(db));
   // PATIENT_FILE_ATTACH_V1 — хранилище получает базу: файлы документов

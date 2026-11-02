@@ -5,6 +5,8 @@ import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_
 import { isAdminUser, grantAllowsAdminOr } from '../services/grants.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { roleExceedsActor, isAdminRoleCode, isAdminAccount } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1 · ADMIN_ACT_AS_V1 (isAdminAccount — общий со входом от имени)
 import { ACT_AS_MESSAGES } from '../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 (R6)
+import { readPairing } from '../services/branch-sync/pairing.js';   // STAFF_EDIT_V1 — в группе ли филиалов (смена логина)
+import { getDataDir } from '../services/control/config.js';         // STAFF_EDIT_V1 — каталог данных, если app.js его не передал
 // DOCTOR_PUBLIC_PROFILE_V1 — публичный профиль врача: те же проверки, что у
 // «Моего профиля» врача (rpc/doctor-profile.js), и тот же вид для экранов.
 import { cleanProfileFields, publicProfileOf, specialtyCountOf } from '../services/rpc/doctor-profile.js';   // DOCTOR_PROFILE_V1 — specialtyCountOf
@@ -696,7 +698,52 @@ function assignRefusal(db, actor, codes) {
   return null;
 }
 
-export function userRoutes(db) {
+// STAFF_EDIT_V1 (2026-11-02) — ЛОГИН СОТРУДНИКА МЕНЯЕТ АДМИНИСТРАТОР.
+//
+// Прежде поле «Логин» в карточке было заблокировано, PATCH его не слал, а
+// сервер не читал (200 и ничего): опечатку в логине нельзя было исправить,
+// кроме как завести сотрудника заново. Теперь:
+//   • только администратор (isAdminUser) и не «вход как сотрудник»: логин
+//     решает, кто входит в программу, — то же, что пароль;
+//   • правило то же, что при заведении (POST ниже): обрезка пробелов, нижний
+//     регистр, 3–30 знаков латиницей, цифрами, «.», «_», «-»;
+//   • тот же логин в другом регистре — не смена: ничего не делается;
+//   • занятость — без учёта регистра и без самой строки; заняли в тот же миг
+//     (UNIQUE при записи) — тот же отказ «Такой логин уже занят.»;
+//   • пока установка в группе филиалов (data/branch-sync.json, readPairing:
+//     главная или филиал) — 409: сеть узнаёт сотрудника по логину
+//     (branch-sync/catalogue.js — естественный ключ username, отсутствующих
+//     отключает; врач в записях едет логином, journal.js). Смена логина на
+//     главной завела бы у филиалов нового сотрудника и отключила прежнего.
+// Открытые сеансы сотрудника остаются: сессия держится за id, а не за логин.
+export const LOGIN_RE = /^[a-z0-9._-]{3,30}$/;
+export const LOGIN_RULE_MESSAGE = 'Логин — от 3 до 30 символов: латинские буквы, цифры, точка, _ и -.';
+export const LOGIN_TAKEN_MESSAGE = 'Такой логин уже занят.';
+export const LOGIN_ADMIN_ONLY_MESSAGE = 'Логин меняет только администратор.';
+export const LOGIN_BRANCHES_MESSAGE = 'Логин нельзя менять, пока подключены филиалы: филиалы узнают сотрудника по логину.';
+
+/**
+ * STAFF_EDIT_V1 — что делать с присланным логином.
+ * @returns {{ username?: string, status?: number, error?: { code: string, message: string, field?: string } }}
+ *   {} — логин прежний; { username } — новый логин; { status, error } — отказ.
+ */
+function loginChange(db, actor, row, sent, dataDir) {
+  if (sent === undefined) return {};
+  const name = String(sent ?? '').trim().toLowerCase();
+  if (name === String(row.username || '').trim().toLowerCase()) return {};
+  if (!isAdminUser(actor) || (actor && actor.acting_admin)) {
+    return { status: 403, error: { code: 'forbidden', message: LOGIN_ADMIN_ONLY_MESSAGE } };
+  }
+  if (!LOGIN_RE.test(name)) return { status: 400, error: { code: 'bad_request', message: LOGIN_RULE_MESSAGE, field: 'username' } };
+  if (readPairing(dataDir)) return { status: 409, error: { code: 'conflict', message: LOGIN_BRANCHES_MESSAGE, field: 'username' } };
+  if (db.prepare('SELECT 1 FROM users WHERE username = ? COLLATE NOCASE AND id <> ?').get(name, row.id)) {
+    return { status: 400, error: { code: 'bad_request', message: LOGIN_TAKEN_MESSAGE, field: 'username' } };
+  }
+  return { username: name };
+}
+
+// STAFF_EDIT_V1 — dataDir: где лежит data/branch-sync.json (app.js передаёт свой).
+export function userRoutes(db, { dataDir } = {}) {
   const r = Router();
   // Staff roster is sensitive and these pages run on shared clinic PCs.
   r.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
@@ -714,7 +761,7 @@ export function userRoutes(db) {
     if (req.control?.locked) return lockedResponse(res, req.control);
     const { username, password, full_name = '', role } = req.body || {};
     const name = String(username || '').trim().toLowerCase();
-    if (!/^[a-z0-9._-]{3,30}$/.test(name)) return bad(res, 'Логин — от 3 до 30 символов: латинские буквы, цифры, точка, _ и -.');
+    if (!LOGIN_RE.test(name)) return bad(res, LOGIN_RULE_MESSAGE);   // STAFF_EDIT_V1 — правило одно с PATCH
     if (!validPassword(password)) return bad(res, 'Пароль не может быть пустым (не длиннее 72 байт).');
     if (typeof full_name !== 'string') return bad(res, 'ФИО должно быть текстом.');
     // INPATIENT_FLOW_V1 — ОСНОВНОЙ ролью может быть только профессия.
@@ -736,7 +783,7 @@ export function userRoutes(db) {
         return forbid(res, 'Зарплату и ставки сотрудника меняет роль с правом «Сотрудники → Цены и проценты».');
       }
     }
-    if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(name)) return bad(res, 'Такой логин уже занят.');
+    if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(name)) return bad(res, LOGIN_TAKEN_MESSAGE);   // STAFF_EDIT_V1 — текст один с PATCH
 
     const parsed = parseEmployeeFields(req.body, db, undefined, 0);   // CLINIC_API_FIX_V1 — новому сотруднику фото не ставится
     if (!parsed.ok) return bad(res, parsed.message, parsed.field);   // DOCTOR_PROFILE_V1 — с полем отказа
@@ -782,6 +829,11 @@ export function userRoutes(db) {
     if (password !== undefined && req.user.acting_admin && user.id === req.user.id) {
       return forbid(res, ACT_AS_MESSAGES.passwordWhileActing);
     }
+    // STAFF_EDIT_V1 — смена логина (loginChange выше). До прочих проверок: не-администратор
+    // получает ответ про логин, а не про чужую роль.
+    const loginStep = loginChange(db, req.user, user, req.body ? req.body.username : undefined, dataDir || getDataDir());
+    if (loginStep.error) return res.status(loginStep.status).json({ error: loginStep.error });
+    const newUsername = loginStep.username;   // undefined — логин прежний
 
     // is_active must be a real boolean: `0`/`null`/`""` would slip past the
     // self-protection check below, and `"false"` would truthy-coerce to 1.
@@ -879,6 +931,7 @@ export function userRoutes(db) {
     const efKeys = Object.keys(ef);
     const setClauses = [
       'full_name     = COALESCE(?, full_name)',
+      'username      = COALESCE(?, username)',   // STAFF_EDIT_V1
       'role          = COALESCE(?, role)',
       ...(cr.code !== undefined ? ['custom_role_code = ?'] : []),
       'is_active     = COALESCE(?, is_active)',
@@ -888,6 +941,7 @@ export function userRoutes(db) {
     ];
     const values = [
       finalFullName !== undefined ? finalFullName : null,
+      newUsername ?? null,   // STAFF_EDIT_V1
       roleToWrite ?? null,
       ...(cr.code !== undefined ? [cr.code] : []),
       active === undefined ? null : (active ? 1 : 0),
@@ -898,10 +952,18 @@ export function userRoutes(db) {
     // специальностей — одна транзакция, как в профиле врача
     // (rpc/doctor-profile.js): сбой на середине не оставляет ни стёртого списка,
     // ни новой основной специальности при старом списке.
-    db.transaction(() => {
-      db.prepare(`UPDATE users SET ${setClauses.join(', ')} WHERE id = ?`).run(...values, user.id);
-      if (specs.list) writeSpecialties(db, user.id, specs.list);
-    })();
+    try {
+      db.transaction(() => {
+        db.prepare(`UPDATE users SET ${setClauses.join(', ')} WHERE id = ?`).run(...values, user.id);
+        if (specs.list) writeSpecialties(db, user.id, specs.list);
+      })();
+    } catch (e) {
+      // STAFF_EDIT_V1 — логин заняли между проверкой и записью (два администратора разом).
+      if (newUsername !== undefined && e && e.code === 'SQLITE_CONSTRAINT_UNIQUE' && /users\.username/.test(String(e.message))) {
+        return bad(res, LOGIN_TAKEN_MESSAGE, 'username');
+      }
+      throw e;
+    }
     // Deactivation OR password reset must end the target's sessions (a reset
     // is the standard response to a suspected compromise). The acting admin's
     // own session survives a self password change.
@@ -911,6 +973,8 @@ export function userRoutes(db) {
     // STAFF_EDIT_V1 — новый пароль снимает блокировку входа (5 ошибок → 5 минут,
     // services/auth.js): сотрудник, забывший пароль, входит с новым сразу.
     if (password !== undefined) clearLoginLocks(user.username);
+    // Новый логин — тоже: чужие ошибки под этим именем, пока его не было, к сотруднику отношения не имеют.
+    if (newUsername !== undefined) clearLoginLocks(newUsername);
     const outRow = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
     const outView = withSpecialties(db, employeeView(outRow));
     // STAFF_EDIT_V1 — пароль поставлен, а сотрудник отключён: войти он не сможет,

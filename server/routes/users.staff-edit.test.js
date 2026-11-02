@@ -132,3 +132,122 @@ test('STAFF_EDIT_V1: значения, равные сохранённым, не
     assert.equal(r.status, 400);
   } finally { server.close(); }
 });
+
+const RULE_MSG = 'Логин — от 3 до 30 символов: латинские буквы, цифры, точка, _ и -.';
+const TAKEN_MSG = 'Такой логин уже занят.';
+const ADMIN_ONLY_MSG = 'Логин меняет только администратор.';
+const BRANCH_MSG = 'Логин нельзя менять, пока подключены филиалы: филиалы узнают сотрудника по логину.';
+
+test('STAFF_EDIT_V1: администратор меняет логин — новый входит, старый нет; пробелы и регистр приводятся; сеанс сотрудника жив', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const nurse = await login(base, 'nurse.a');
+    const boss = await login(base, 'boss');
+    // Под будущим логином кто-то ошибался, пока такого логина не было: эта
+    // блокировка к сотруднику отношения не имеет и снимается вместе со сменой.
+    for (let i = 0; i < 5; i += 1) await tryLogin(base, 'nurse.b', 'wrong');
+    const r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: '  Nurse.B ' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.user.username, 'nurse.b');
+    assert.equal(usernameOf(db, NURSE), 'nurse.b');
+    assert.equal((await tryLogin(base, 'nurse.a')).status, 401, 'старый логин всё ещё входит');
+    assert.equal((await tryLogin(base, 'nurse.b')).status, 200, 'новый логин не входит');
+    const me = await call(base, nurse, 'GET', '/api/auth/me');
+    assert.equal(me.status, 200, 'открытый сеанс сотрудника закрылся');
+    assert.equal(me.json.user.username, 'nurse.b');
+  } finally { server.close(); }
+});
+
+test('STAFF_EDIT_V1: тот же логин в другом регистре — ничего не меняется', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    const r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: 'NURSE.A' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(usernameOf(db, NURSE), 'nurse.a');
+  } finally { server.close(); }
+});
+
+test('STAFF_EDIT_V1: занятый логин (другой регистр, пробелы) и неверный — 400 с полем username', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    db.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('taken.one', 'x', 'Занятый З.', 'nurse')").run();
+    const boss = await login(base, 'boss');
+    let r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: ' TAKEN.ONE ' });
+    assert.equal(r.status, 400);
+    assert.deepEqual([r.json.error.message, r.json.error.field], [TAKEN_MSG, 'username']);
+    for (const bad of ['ab', 'имя.фамилия', 'a b c', 'x'.repeat(31), '']) {
+      r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: bad });
+      assert.equal(r.status, 400, JSON.stringify(bad));
+      assert.deepEqual([r.json.error.message, r.json.error.field], [RULE_MSG, 'username'], JSON.stringify(bad));
+    }
+    assert.equal(usernameOf(db, NURSE), 'nurse.a');
+  } finally { server.close(); }
+});
+
+test('STAFF_EDIT_V1: логин заняли между проверкой и записью — 400 «Такой логин уже занят.», ничего не записано', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    // Второй администратор «успевает» завести 'racer' ровно в миг записи:
+    // триггер вставляет его перед обновлением строки, UNIQUE срабатывает на записи.
+    db.exec(`CREATE TRIGGER race_login BEFORE UPDATE OF username ON users WHEN NEW.username = 'racer'
+             BEGIN INSERT INTO users (username, password_hash, full_name, role) VALUES ('racer', 'x', 'Гонщик Г.', 'nurse'); END;`);
+    const boss = await login(base, 'boss');
+    const r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: 'racer', phone: '+998901234567' });
+    assert.equal(r.status, 400, JSON.stringify(r.json));
+    assert.deepEqual([r.json.error.message, r.json.error.field], [TAKEN_MSG, 'username']);
+    assert.equal(usernameOf(db, NURSE), 'nurse.a');
+    assert.notEqual(db.prepare('SELECT phone FROM users WHERE id = ?').get(NURSE).phone, '+998901234567', 'правка записалась наполовину');
+  } finally { server.close(); }
+});
+
+test('STAFF_EDIT_V1: логин меняет только администратор — не-администратору с «Сотрудники: Изменение» 403', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const reg = await login(base, 'reg');
+    let r = await call(base, reg, 'PATCH', '/api/users/' + NURSE, { username: 'nurse.z' });
+    assert.equal(r.status, 403);
+    assert.equal(r.json.error.message, ADMIN_ONLY_MSG);
+    r = await call(base, reg, 'PATCH', '/api/users/' + REG, { username: 'reg.z' });
+    assert.equal(r.status, 403, 'свой логин — тоже через администратора');
+    assert.equal(r.json.error.message, ADMIN_ONLY_MSG);
+    assert.deepEqual([usernameOf(db, REG), usernameOf(db, NURSE)], ['reg', 'nurse.a']);
+    // Тот же логин (старая вкладка, импорт) — не смена и не отказ.
+    r = await call(base, reg, 'PATCH', '/api/users/' + REG, { username: 'REG', phone: '+998901234567' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+  } finally { server.close(); }
+});
+
+test('STAFF_EDIT_V1: работая от имени сотрудника, логин не меняется', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    const start = await call(base, boss, 'POST', '/api/auth/act-as', { user_id: REG });
+    assert.equal(start.status, 200, JSON.stringify(start.json));
+    TAB.set(boss, start.json.act_as_id);
+    let r = await call(base, boss, 'PATCH', '/api/users/' + REG, { username: 'reg.z' });
+    assert.equal(r.status, 403);
+    assert.equal(r.json.error.message, ADMIN_ONLY_MSG);
+    r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: 'nurse.z' });
+    assert.equal(r.status, 403);
+    assert.deepEqual([usernameOf(db, REG), usernameOf(db, NURSE)], ['reg', 'nurse.a']);
+  } finally { server.close(); }
+});
+
+test('STAFF_EDIT_V1: пока установка в группе филиалов — 409 и логин прежний; связь сняли — меняется', async () => {
+  const { db, server, base, dataDir } = await startServer();
+  try {
+    writePairing(dataDir, { role: 'main', group_id: 'BR-TEST', secret: 's3cret' });
+    const boss = await login(base, 'boss');
+    let r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: 'nurse.b' });
+    assert.equal(r.status, 409);
+    assert.deepEqual([r.json.error.message, r.json.error.field], [BRANCH_MSG, 'username']);
+    assert.equal(usernameOf(db, NURSE), 'nurse.a');
+    r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: 'nurse.a', phone: '+998901234567' });
+    assert.equal(r.status, 200, 'тот же логин при филиалах — не отказ');
+    clearPairing(dataDir);
+    r = await call(base, boss, 'PATCH', '/api/users/' + NURSE, { username: 'nurse.b' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(usernameOf(db, NURSE), 'nurse.b');
+  } finally { server.close(); }
+});
