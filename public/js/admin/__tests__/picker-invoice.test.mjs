@@ -844,7 +844,8 @@ test('LIVE_AUDIT_FIX_V1: окно визита — консультация ло
   assert.deepEqual({ ...row }, { service_id: null, consultation_type_id: 4, doctor_id: 7 });
   // отказ — исключением: окно визита, закрытое для записи строк, не «добавляет» молча
   state.services = DB.prepare('SELECT * FROM visit_services WHERE visit_id = 40').all();
-  await assert.rejects(() => VM.addServiceFromPicker(state, { service: consult, doctor: null }, () => {}), /already in this visit/);
+  // DUP_STOP_V1 (ревью M3) — повтор решает правило сервера (visit_dup_check) и называет его своими словами
+  await assert.rejects(() => VM.addServiceFromPicker(state, { service: consult, doctor: null }, () => {}), /уже назначена в этом визите: «Первичный приём»/);
   USER = { id: 1, role: 'cashier', extra_roles: [] };
   try {
     await assert.rejects(() => VM.addServiceFromPicker({ ...state, services: [] }, { service: { id: 21, name: 'МРТ', price: 900000 }, doctor: null }, () => {}));

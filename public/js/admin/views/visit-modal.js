@@ -29,7 +29,8 @@ import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOI
 // Переезд на другой день и возврат отменённой записи в «записан» проходили
 // мимо проверки. Расписание визита меняет теперь только calendar_book.
 import { bookVisit, setVisitStatus as bookStatus } from './visit-booking.js';
-import { lineIdentity, linePerformer, sameLine, isConsultPick } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога, исполнитель
+import { lineIdentity, linePerformer, isConsultPick } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога, исполнитель
+import { loadVisitOrders, blockedPickIds, precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 (ревью M3) — повтор услуги в визите — правило сервера
 import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B5) — «Услуга возвращена» в журнале счёта
 
 // BILLING_AUDIT_FIX_V1 (A1) — 'YYYY-MM-DD' местного дня для visit_date.
@@ -605,8 +606,10 @@ function servicesPane(state, onReload) {
             h('button', {
                 class: 'btn btn-outline btn-sm',
                 title: isVisitEnded(state.visit) ? VISIT_ENDED_MSG : 'Attach a service to this visit',
-                onclick: () => {
+                onclick: async () => {
                     if (isVisitEnded(state.visit)) { toast(VISIT_ENDED_MSG, 'fail'); return; }
+                    // DUP_STOP_V1 (ревью M3) — что погасить в каталоге, решает правило сервера.
+                    const excludeIds = await attachExcludeIds(state.visit.id);
                     // ATTACH_CATALOG_V1 — same catalog + смета UI as the booking
                     // wizard (search, group chips, cart) instead of the old
                     // 3-column cascade. No visit is created: the смета CTA hands
@@ -641,7 +644,9 @@ function servicesPane(state, onReload) {
                         packageDay:     state.visit?.visit_date || state.visit?.date || null,
                         // Already-attached services render disabled in the picker
                         // so the same service can't be added to this visit twice.
-                        excludeServiceIds: (state.services || []).map(s => s.service_id).filter(Boolean),
+                        // DUP_STOP_V1 (ревью M3) — только назначенное по правилу сервера:
+                        // отменённая, возвращённая строка и процедура не гасятся (К1).
+                        excludeServiceIds: excludeIds,
                         onPick: (pick) => addServiceFromPicker(state, pick, onReload),
                         // X on a session row → delete the matching visit_services
                         // row and refresh the list.
@@ -1111,6 +1116,17 @@ async function voidDispensedItem(row, state, onReload) {
     }
 }
 
+/**
+ * DUP_STOP_V1 (ревью M3) — что погасить в каталоге «Добавить услуги к визиту»: назначенное в
+ * визите по правилу сервера (visit_dup_check). Отменённая строка, строка, возвращённая
+ * «Вернуть услугу», и процедура не гасятся (раздел К1); администратору и главному врачу —
+ * ничего: повтор они назначают с причиной (addServiceFromPicker спросит её до записи).
+ */
+export async function attachExcludeIds(visitId) {
+    const { ordered, canOverride } = await loadVisitOrders({ visitId });
+    return canOverride ? [] : blockedPickIds(ordered);
+}
+
 // LIVE_AUDIT_FIX_V1 — onPick каталога: консультация врача ('c|врач|тип')
 // ложится строкой service_id NULL + consultation_type_id (как в кабинете
 // врача), а не 'c|7|3' в service_id (внешний ключ отказывал). Любой отказ —
@@ -1124,10 +1140,15 @@ export async function addServiceFromPicker(state, pick, onReload) {
     const ident = lineIdentity(service);
     if (!ident) fail(tr('Строка без услуги — выберите услугу из каталога.'));
     const performer = linePerformer(service, doctor && doctor.id, null);
-    // Reject duplicates — the same service can't be attached to the same visit twice.
-    if ((state.services || []).some(s => sameLine(s, service, performer))) {
-        fail(`"${service.name}" is already in this visit.`);
-    }
+    // DUP_STOP_V1 (ревью M3) — ПОВТОР ТОЙ ЖЕ УСЛУГИ В ВИЗИТЕ — ПРАВИЛО СЕРВЕРА (visit_dup_check),
+    // а не сравнение со списком окна: отменённая строка, строка, возвращённая «Вернуть
+    // услугу», и процедура не мешают (раздел К1); консультация — та же у того же врача.
+    // Администратор и главный врач назначают повтор с причиной — она уходит в строку
+    // (__repeat_reason) и в журнал счёта. Сервер не ответил — решит дверь записи (409).
+    const pre = await precheckOrders({ visitId: state.visit.id, lines: [{
+        service_id: ident.service_id, consultation_type_id: ident.consultation_type_id, doctor_id: performer,
+    }] });
+    if (!pre.ok) fail(pre.text || tr('Повторное назначение отменено — ничего не записано.'));
     // OWN_PRICE_REPEAT_V1 — цена строки — та, что назвала смета Калькулятора
     // (pickerLinePrice), а не цена яруса из котировки без врача.
     // OWN_PRICE_TIER_RATIO_V1 — у врача со своей ценой второй визит стоит его
@@ -1135,7 +1156,7 @@ export async function addServiceFromPicker(state, pick, onReload) {
     // Счёт всё равно считает сервер тем же правилом.
     const picked = Number(pickedPrice);
     const price = pickedPrice != null && Number.isFinite(picked) && picked >= 0 ? picked : Number(service.price || 0);
-    const { error } = await insertVisitServiceRow({
+    const { error } = await insertVisitServiceRow(withRepeatReason({   // DUP_STOP_V1 (ревью M3) — причина обхода (сервер снимет поле)
         visit_id:     state.visit.id,
         service_id:   ident.service_id,
         consultation_type_id: ident.consultation_type_id,
@@ -1146,7 +1167,7 @@ export async function addServiceFromPicker(state, pick, onReload) {
         scheduled_at: startISO || null,
         price_tier:   isConsultPick(service) ? null : (price_tier || null),   // VISIT_TIER_PRICING_V1 — quoted by the picker for this patient
         package_id:   !isConsultPick(service) && pkg && pkg.id ? pkg.id : null,   // PACKAGES_V1 — строка из пакета каталога
-    });
+    }, pre.reason));
     if (error) fail(error.message || String(error));
     await activateVisitIfPending(state);
     await logPatientActivity({
