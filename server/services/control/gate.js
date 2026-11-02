@@ -182,6 +182,8 @@ const READ_ONLY_RPCS = new Set([
   // (calendar_book) сюда НЕ входит: это запись, и через блокировку она не
   // проходит.
   'calendar_slots', 'calendar_windows',
+  // REPEAT_VISIT_V1 — «Записи вперёд» кабинета врача: свои будущие записи. Чтение.
+  'doctor_upcoming_visits',
   // DOCTOR_PROFILE_V1 — «Что увидят партнёры» карточки врача: окна, часы,
   // очередь, цены. Чистое чтение тем же движком, что calendar_slots.
   'doctor_public_preview',

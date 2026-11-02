@@ -59,6 +59,7 @@ import { bookingLinesAdd, bookingLineRemove } from './booking-lines.js';   // CR
 import { removeOwnVisitLine, visitSetReferralSource } from './visit-lines.js';   // LIVE_AUDIT_FIX_V1 — врач снимает свою невыставленную услугу
 import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
+import { doctorUpcomingVisits } from './doctor-upcoming.js';   // REPEAT_VISIT_V1 — «Записи вперёд» кабинета врача
 import { branchHoursImpact } from './branch-hours.js';   // BRANCH_PROFILE_V1
 import { doctorPublicPreview } from './doctor-public.js';   // DOCTOR_PROFILE_V1
 import { servicesPublicOverview, servicesSetOnline } from './services-public.js';   // SERVICES_PACKAGES_V1
@@ -378,6 +379,9 @@ export const RPC = {
   // в браузере — четвёртой реализацией того же правила.
   calendar_windows:          (db, args, user) => calendarWindows(db, args, user),
   calendar_book:             (db, args, user) => calendarBook(db, args, user),
+  // REPEAT_VISIT_V1 — «Записи вперёд»: свои записи врача на 30 дней. Только
+  // чтение (READ_ONLY_RPCS): чьи — решает сессия, аргумента «чей» нет.
+  doctor_upcoming_visits:    (db, args, user) => doctorUpcomingVisits(db, args, user),
   // BRANCH_PROFILE_V1 — «каким врачам какое время закроется» до сохранения
   // часов здания: тот же движок, что слоты. Только считает, ничего не пишет;
   // ворота — право записи в branches (реестр). В READ_ONLY_RPCS не входит:
