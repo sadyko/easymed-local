@@ -5,7 +5,8 @@
 // are in setting now and it should be bring here without process change in
 // registration and other places». Поэтому здесь НЕТ своей модели данных:
 // внешние и внутренние врачи — те же строки referral_sources, направления
-// внутреннего врача — те же recommended_services, деньги — те же строки отчёта
+// внутреннего врача — те же recommended_services и строки визитов с его источником
+// (REFERRAL_LINE_V1, visit_services.referred_by_source_id), деньги — те же строки отчёта
 // «Рефералы» (referralReportLines из reports.js: оплаченные позиции после
 // скидки и возвратов, закрытые месяцы из записи). Экран только показывает их
 // иначе: по представителям, по врачам, по активности.
@@ -63,6 +64,57 @@ const SOURCE_OF_VISIT = 'COALESCE(v.referral_source_id, pt.referral_source_id)';
 // ещё придут; «не пришёл» — не направление.
 const VISIT_LIVE = "v.status NOT IN ('cancelled', 'no_show')";
 
+// REFERRAL_LINE_V1 · К3/К5 — возвращённая строка направления: отпущена со счёта с возвратом
+// и не выставлена заново (pay_refund_releases 'out' на строке без позиции счёта — то же
+// правило, что у журнала услуг и выплаты врачу). «Вернуть услугу» — направление не
+// состоялось; «Вернуть и выставить новую» — направление продолжает НОВАЯ строка (billing.js
+// переносит на неё направившего), прежняя второй раз не считается.
+const LINE_NOT_REFUNDED = (vs) => `NOT (${vs}.invoice_item_id IS NULL
+                AND EXISTS (SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = 'out' AND prr.line_id = ${vs}.id))`;
+
+// REFERRAL_LINE_V1 — визит «по источнику»: источник визита (иначе карточки пациента) ИЛИ
+// источник живой строки этого визита (visit_services.referred_by_source_id — «Кто направил»
+// стойки, направление врача; не отменённой и не возвращённой). Пара (визит, источник) — один
+// раз. rangeSql — условие на v.visit_date (его параметры передаются ДВАЖДЫ: оно стоит в обеих
+// ветках).
+function sourceVisitsSql(rangeSql = '1=1') {
+  return `SELECT v.id AS visit_id, ${SOURCE_OF_VISIT} AS source_id
+            FROM visits v JOIN patients pt ON pt.id = v.patient_id
+           WHERE ${SOURCE_OF_VISIT} IS NOT NULL AND (${rangeSql})
+          UNION
+          SELECT v.id AS visit_id, vs.referred_by_source_id AS source_id
+            FROM visit_services vs JOIN visits v ON v.id = vs.visit_id
+           WHERE vs.referred_by_source_id IS NOT NULL AND vs.status NOT IN ('cancelled', 'removed')
+             AND ${LINE_NOT_REFUNDED('vs')} AND (${rangeSql})`;
+}
+
+// REFERRAL_LINE_V1 — направления врача строками визита: строка с его внутренним источником,
+// заведённая в период. Строка, которой закрыта рекомендация (recommended_services
+// .visit_service_id), — та же рекомендация и второй раз не считается; возвращённая — не
+// считается вовсе (отменённая — «Отменено»).
+function lineReferrals(db, from, to, doctorId = null) {
+  const lw = localRangeWhere('vs.created_at', from, to);
+  return db.prepare(`
+    SELECT rs.doctor_id AS doctor_id, v.patient_id, vs.status, ${localDate('vs.created_at')} AS date,
+           pt.full_name AS patient, COALESCE(s.name, ct.name_ru, ct.name, '') AS service
+      FROM visit_services vs
+      JOIN referral_sources rs ON rs.id = vs.referred_by_source_id
+      JOIN visits v ON v.id = vs.visit_id
+      LEFT JOIN patients pt ON pt.id = v.patient_id
+      LEFT JOIN services s ON s.id = vs.service_id
+      LEFT JOIN consultation_types ct ON ct.id = vs.consultation_type_id
+     WHERE rs.doctor_id IS NOT NULL${doctorId != null ? ' AND rs.doctor_id = ?' : ''}
+       AND ${lw.sql}
+       AND ${LINE_NOT_REFUNDED('vs')}
+       AND NOT EXISTS (SELECT 1 FROM recommended_services rr WHERE rr.visit_service_id = vs.id)
+     ORDER BY vs.created_at DESC, vs.id DESC`).all(...(doctorId != null ? [Number(doctorId)] : []), ...lw.params);
+}
+// Состояние строки направления словами рекомендации: выполнена — «Выполнено»,
+// отменена — «Отменено», иначе «Ожидает».
+const LINE_KIND = (s) => (s === 'completed' ? 'done' : (s === 'cancelled' || s === 'removed') ? 'cancelled' : 'waiting');
+const KIND_STATUS = { done: 'done', waiting: 'pending', cancelled: 'cancelled' };
+const REC_KIND = { done: 'done', pending: 'waiting', cancelled: 'cancelled' };
+
 function listRepresentatives(db) {
   const codes = representativeCodes(db);   // FIX_318_V1 (L4)
   return db.prepare(`SELECT id, full_name FROM users
@@ -81,11 +133,13 @@ function externalSources(db, { activeOnly = true } = {}) {
 /** Визиты за период по источникам: сколько визитов и разных пациентов. */
 function visitAggregates(db, from, to) {
   const w = localRangeWhere('v.visit_date', from, to);
+  // REFERRAL_LINE_V1 — и визиты, где источник только у строки.
   const rows = db.prepare(`
-    SELECT ${SOURCE_OF_VISIT} AS source_id, COUNT(*) AS visits, COUNT(DISTINCT v.patient_id) AS patients
-      FROM visits v JOIN patients pt ON pt.id = v.patient_id
-     WHERE ${VISIT_LIVE} AND ${SOURCE_OF_VISIT} IS NOT NULL AND ${w.sql}
-     GROUP BY source_id`).all(...w.params);
+    SELECT sv.source_id AS source_id, COUNT(*) AS visits, COUNT(DISTINCT v.patient_id) AS patients
+      FROM (${sourceVisitsSql(w.sql)}) sv
+      JOIN visits v ON v.id = sv.visit_id
+     WHERE ${VISIT_LIVE}
+     GROUP BY sv.source_id`).all(...w.params, ...w.params);
   return new Map(rows.map((r) => [r.source_id, r]));
 }
 
@@ -148,9 +202,10 @@ export function referralsRepresentatives(db, args, user) {
   const w = localRangeWhere('v.visit_date', from, to);
   const patients = db.prepare(`
     SELECT COUNT(DISTINCT v.patient_id) AS n
-      FROM visits v JOIN patients pt ON pt.id = v.patient_id
-      JOIN referral_sources rs ON rs.id = ${SOURCE_OF_VISIT}
-     WHERE rs.doctor_id IS NULL AND ${VISIT_LIVE} AND ${w.sql}`).get(...w.params).n;
+      FROM (${sourceVisitsSql(w.sql)}) sv
+      JOIN visits v ON v.id = sv.visit_id
+      JOIN referral_sources rs ON rs.id = sv.source_id
+     WHERE rs.doctor_id IS NULL AND ${VISIT_LIVE}`).get(...w.params, ...w.params).n;   // REFERRAL_LINE_V1
   const assigned = sources.filter((s) => s.representative_id != null).length;
   const totals = {
     representatives: representatives.length,
@@ -231,16 +286,22 @@ export function referralsInternal(db, args, user) {
   const { from, to } = resolveRange(db, args);
   const money = canSeeReferralMoney(db, user);
   const w = localRangeWhere('r.created_at', from, to);
-  const counts = new Map(db.prepare(`
-    SELECT r.recommended_by AS doctor_id,
-           COUNT(*) AS referrals,
-           SUM(CASE WHEN r.status = 'done' THEN 1 ELSE 0 END) AS done,
-           SUM(CASE WHEN r.status = 'pending' THEN 1 ELSE 0 END) AS waiting,
-           SUM(CASE WHEN r.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
-           COUNT(DISTINCT r.patient_id) AS patients
-      FROM recommended_services r
-     WHERE r.recommended_by IS NOT NULL AND ${w.sql}
-     GROUP BY r.recommended_by`).all(...w.params).map((r) => [r.doctor_id, r]));
+  // REFERRAL_LINE_V1 — направления врача: рекомендации и строки визитов с его источником
+  // (lineReferrals: строка, которой закрыта рекомендация, не считается второй раз).
+  const counts = new Map();
+  const bump = (doctorId, patientId, kind) => {
+    if (doctorId == null) return;
+    const c = counts.get(doctorId) || { referrals: 0, done: 0, waiting: 0, cancelled: 0, patients: new Set() };
+    c.referrals += 1;
+    if (kind) c[kind] += 1;
+    if (patientId != null) c.patients.add(patientId);
+    counts.set(doctorId, c);
+  };
+  for (const r of db.prepare(`SELECT r.recommended_by AS doctor_id, r.patient_id, r.status FROM recommended_services r
+                               WHERE r.recommended_by IS NOT NULL AND ${w.sql}`).all(...w.params)) {
+    bump(r.doctor_id, r.patient_id, REC_KIND[r.status] || null);
+  }
+  for (const l of lineReferrals(db, from, to)) bump(l.doctor_id, l.patient_id, LINE_KIND(l.status));
   const cash = money ? moneyBy(db, { from, to }, user, 'internal') : null;
   // FIX_318_V1 (M3, ревью 3.18.0) — КТО В СПИСКЕ. Был role = 'doctor': врачи-
   // администраторы (ADMIN_DOCTOR_V1, is_doctor = 1) пропадали, и итоги вкладки
@@ -260,7 +321,7 @@ export function referralsInternal(db, args, user) {
     const row = {
       id: d.id, full_name: d.full_name, specialty: d.specialty || '',
       referrals: c ? num(c.referrals) : 0, done: c ? num(c.done) : 0, waiting: c ? num(c.waiting) : 0,
-      cancelled: c ? num(c.cancelled) : 0, patients: c ? num(c.patients) : 0,
+      cancelled: c ? num(c.cancelled) : 0, patients: c ? c.patients.size : 0,   // REFERRAL_LINE_V1 — разные пациенты обоих видов
     };
     if (money) { row.amount = round2(m ? m.received : 0); row.reward = round2(m ? m.reward : 0); }
     return row;
@@ -297,9 +358,9 @@ export function referralsActivity(db, args, user) {
 
   const byDay = new Map();
   for (const r of db.prepare(`
-      SELECT ${SOURCE_OF_VISIT} AS source_id, ${localDate('v.visit_date')} AS day
-        FROM visits v JOIN patients pt ON pt.id = v.patient_id
-       WHERE ${VISIT_LIVE} AND ${SOURCE_OF_VISIT} IS NOT NULL`).all()) {
+      SELECT sv.source_id AS source_id, ${localDate('v.visit_date')} AS day
+        FROM (${sourceVisitsSql()}) sv JOIN visits v ON v.id = sv.visit_id
+       WHERE ${VISIT_LIVE}`).all()) {   // REFERRAL_LINE_V1 — и визиты, где источник только у строки
     if (!byDay.has(r.source_id)) byDay.set(r.source_id, []);
     byDay.get(r.source_id).push(r.day);
   }
@@ -343,8 +404,8 @@ export function referralsSourceDetail(db, args, user) {
               FROM visit_services vs LEFT JOIN services s ON s.id = vs.service_id
              WHERE vs.visit_id = v.id AND vs.status NOT IN ('cancelled', 'removed')) AS services
       FROM visits v JOIN patients pt ON pt.id = v.patient_id
-     WHERE ${VISIT_LIVE} AND ${SOURCE_OF_VISIT} = ? AND ${w.sql}
-     ORDER BY v.visit_date DESC`).all(sourceId, ...w.params);
+     WHERE ${VISIT_LIVE} AND v.id IN (SELECT sv.visit_id FROM (${sourceVisitsSql(w.sql)}) sv WHERE sv.source_id = ?) AND ${w.sql}
+     ORDER BY v.visit_date DESC`).all(...w.params, ...w.params, sourceId, ...w.params);   // REFERRAL_LINE_V1
   const cash = money ? (moneyBy(db, { from, to }, user, 'external').get(sourceId) || null) : null;
   const rows = visits.map((v) => {
     const row = { visit_id: v.id, date: v.day, status: v.status, patient_id: v.patient_id, patient: v.patient, services: v.services || '' };
@@ -368,7 +429,7 @@ export function referralsDoctorDetail(db, args, user) {
   const { from, to } = resolveRange(db, args);
   const money = canSeeReferralMoney(db, user);
   const w = localRangeWhere('r.created_at', from, to);
-  const referrals = db.prepare(`
+  const recRows = db.prepare(`
     SELECT ${localDate('r.created_at')} AS date, r.status, r.patient_id, pt.full_name AS patient,
            COALESCE(s.name, r.service_name, '') AS service
       FROM recommended_services r
@@ -376,6 +437,12 @@ export function referralsDoctorDetail(db, args, user) {
       LEFT JOIN services s ON s.id = r.service_id
      WHERE r.recommended_by = ? AND ${w.sql}
      ORDER BY r.created_at DESC`).all(doctorId, ...w.params);
+  // REFERRAL_LINE_V1 — и строки визитов с источником врача; новые сначала (сортировка
+  // устойчивая: в один день рекомендации идут раньше строк).
+  const lineRows = lineReferrals(db, from, to, doctorId).map((l) => ({
+    date: l.date, status: KIND_STATUS[LINE_KIND(l.status)], patient_id: l.patient_id, patient: l.patient, service: l.service,
+  }));
+  const referrals = [...recRows, ...lineRows].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const out = { doctor, from, to, money, referrals };
   if (money) {
     const lines = referralReportLines(db, { from, to, referrer: 'internal' }, buildingContext(db))   // FIX_318_V1 (L5)
