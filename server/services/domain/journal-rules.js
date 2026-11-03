@@ -127,12 +127,16 @@ export function indexRecommendations(recs) {
  * «Стационар». Амбулатория — ближайшая рекомендация этой услуги этому пациенту
  * не позже дня визита (с именем), иначе источник направления визита, иначе
  * «сам». doctorId — врач направившего (для диагноза консультации) или null.
+ * REFERRAL_LINE_V1 — у амбулаторной строки свой направивший (line_source: врач направил
+ * из кабинета, «Кто направил» стойки) — он и есть ответ, раньше рекомендации и источника визита.
  */
 export function referrerOf(line, recIndex, adm) {
   if (line.admission_id != null) {
     const name = String((adm && adm.attending) || '').trim();
     return { text: name || INPATIENT_REFERRER, doctorId: name ? (adm.attending_doctor_id ?? null) : null };
   }
+  const own = String(line.line_source || '').trim();   // REFERRAL_LINE_V1
+  if (own) return { text: own, doctorId: line.line_source_doctor_id ?? null };
   const recs = (recIndex && recIndex.get(line.patient_id + '|' + line.service_id)) || [];
   // JOURNALS_V1_RJ1 (ревью, п. 5) — за REC_WINDOW_DAYS до дня визита и не
   // закрытая раньше него (closed_day — день closed_at: «добавлена в визит» или

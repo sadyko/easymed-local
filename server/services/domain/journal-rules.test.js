@@ -242,3 +242,12 @@ test('DOC_RICH_FORMAT_V1: «Заключение» с оформлением в�
   // ревью T1 (LOW 5) — снимок до T1 (без метки rich): разделы — текст, набранное «<b>» — не тег
   assert.equal(conclusionOfDoc({ doc_type: 'protocol', conclusionText: 'Hb <b>ниже</b> нормы' }), 'Hb <b>ниже</b> нормы');
 });
+
+test('REFERRAL_LINE_V1: у строки свой направивший — он и есть «Кто направил», раньше рекомендации и источника визита', () => {
+  const recs = indexRecommendations([{ patient_id: 1, service_id: 1, day: '2026-03-05', doctor_id: 2, name: 'Терапевт Т.Т.' }]);
+  const line = { admission_id: null, patient_id: 1, service_id: 1, day: '2026-03-09', visit_source: 'Клиника «Шифо»', visit_source_doctor_id: null };
+  assert.deepEqual(referrerOf({ ...line, line_source: 'Хирург Х.Х.', line_source_doctor_id: 7 }, recs, null), { text: 'Хирург Х.Х.', doctorId: 7 });
+  assert.deepEqual(referrerOf({ ...line, line_source: '  ' }, recs, null), { text: 'Терапевт Т.Т.', doctorId: 2 });
+  assert.deepEqual(referrerOf({ admission_id: 3, line_source: 'Хирург Х.Х.' }, recs, { attending: 'Лечащий Л.Л.', attending_doctor_id: 3 }),
+    { text: 'Лечащий Л.Л.', doctorId: 3 });
+});

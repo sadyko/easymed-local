@@ -4516,6 +4516,7 @@ function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
            vs.service_id AS service_id, s.name AS service,
            COALESCE(NULLIF(pu.full_name, ''), pu.username) AS performer,
            rs.name AS visit_source, rs.doctor_id AS visit_source_doctor_id,
+           lrs.name AS line_source, lrs.doctor_id AS line_source_doctor_id,   -- REFERRAL_LINE_V1 — направивший строки
            -- JOURNALS_V1_CONCLUSION — статус строки для «Заключения» без документа: отмечена
            -- выполненной; день «Проверить и выдать» лаборатории (verified_at).
            CASE WHEN vs.status = 'completed' THEN 1 ELSE 0 END AS done, ${localDate('vs.verified_at')} AS released_day,
@@ -4525,6 +4526,7 @@ function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
       JOIN services s ON s.id = vs.service_id
       LEFT JOIN users pu ON pu.id = vs.doctor_id
       LEFT JOIN referral_sources rs ON rs.id = v.referral_source_id
+      LEFT JOIN referral_sources lrs ON lrs.id = vs.referred_by_source_id   -- REFERRAL_LINE_V1
       -- JOURNALS_V1_RJ2 (F6) — возвраты по счёту строки, как у выплаты врачу (PAY_REFUND_V1):
       -- счёт, оставленный открытым после полного возврата (void_when_zero: false), строку не оставляет.
       LEFT JOIN invoice_items jri ON jri.id = vs.invoice_item_id
@@ -4553,6 +4555,7 @@ function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
            ias.service_id AS service_id, s.name AS service,
            COALESCE(NULLIF(pu.full_name, ''), pu.username) AS performer,
            NULL AS visit_source, NULL AS visit_source_doctor_id,
+           NULL AS line_source, NULL AS line_source_doctor_id,   -- REFERRAL_LINE_V1 — у стационара своего направившего строки нет
            -- JOURNALS_V1_CONCLUSION — «Выполнено» строки акта — отметка performed_at; выдачи анализа у неё нет.
            CASE WHEN ias.performed_at IS NOT NULL THEN 1 ELSE 0 END AS done, NULL AS released_day,
            a.id AS admission_id
