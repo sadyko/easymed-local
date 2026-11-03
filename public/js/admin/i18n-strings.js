@@ -3,6 +3,19 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // PASTE_SOURCES_V1 — «Вставить результаты» кабинета врача: окно документов пациента (views/paste-sources.js, rpc patient_doc_sources)
+  "Файлы": {"en":"Files","ru":"Файлы","uz":"Fayllar"},   // PASTE_SOURCES_V1
+  "отметьте разделы и нажмите «Вставить выбранное»": {"en":"tick the sections and press “Insert selected”","ru":"отметьте разделы и нажмите «Вставить выбранное»","uz":"bo‘limlarni belgilang va «Tanlanganini qo‘yish» tugmasini bosing"},   // PASTE_SOURCES_V1
+  "Вставить выбранное": {"en":"Insert selected","ru":"Вставить выбранное","uz":"Tanlanganini qo‘yish"},   // PASTE_SOURCES_V1
+  "Выберите хотя бы один раздел": {"en":"Select at least one section","ru":"Выберите хотя бы один раздел","uz":"Kamida bitta bo‘limni tanlang"},   // PASTE_SOURCES_V1
+  "не проверено": {"en":"not verified","ru":"не проверено","uz":"tekshirilmagan"},   // PASTE_SOURCES_V1
+  "Не удалось загрузить документы пациента: {msg}": {"en":"Could not load the patient’s documents: {msg}","ru":"Не удалось загрузить документы пациента: {msg}","uz":"Bemor hujjatlarini yuklab bo‘lmadi: {msg}"},   // PASTE_SOURCES_V1
+  "Этот раздел закрыт для вашей роли.": {"en":"This section is closed for your role.","ru":"Этот раздел закрыт для вашей роли.","uz":"Bu bo‘lim sizning rolingiz uchun yopiq."},   // PASTE_SOURCES_V1
+  "Документов этого вида у пациента пока нет.": {"en":"The patient has no documents of this kind yet.","ru":"Документов этого вида у пациента пока нет.","uz":"Bemorda bu turdagi hujjatlar hozircha yo‘q."},   // PASTE_SOURCES_V1
+  "Показаны последние {n}. Остальные — в карте пациента.": {"en":"Showing the latest {n}. The rest are in the patient card.","ru":"Показаны последние {n}. Остальные — в карте пациента.","uz":"Oxirgi {n} tasi ko‘rsatilgan. Qolganlari — bemor kartasida."},   // PASTE_SOURCES_V1
+  "Госпитализация № {no}": {"en":"Admission No. {no}","ru":"Госпитализация № {no}","uz":"Yotqizish № {no}"},   // PASTE_SOURCES_V1
+  "Заключение визита": {"en":"Visit conclusion","ru":"Заключение визита","uz":"Tashrif xulosasi"},   // PASTE_SOURCES_V1 — название документа от сервера (rpc patient_doc_sources)
+
   // INVOICE_APPEND_V1 — новые услуги — в неоплаченный счёт (invoice-append.js, fast-registration.js)
   "Добавлено в счёт № {no} — новая сумма {sum} сум": {"en":"Added to invoice no. {no} — new total {sum} UZS","ru":"Добавлено в счёт № {no} — новая сумма {sum} сум","uz":"{no}-son hisobga qo‘shildi — yangi summa {sum} so‘m"},   // INVOICE_APPEND_V1
   "Счёт не напечатан: {msg}": {"en":"The invoice was not printed: {msg}","ru":"Счёт не напечатан: {msg}","uz":"Hisob chop etilmadi: {msg}"},   // INVOICE_APPEND_V1
