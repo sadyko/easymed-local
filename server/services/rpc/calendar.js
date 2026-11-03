@@ -161,6 +161,7 @@ import { onVisitLinesAdded } from '../crm/one-way.js';   // REPEAT_VISIT_V1 — 
 import { rpcT } from '../server-message.js';   // REPEAT_VISIT_V1 — отказы визита дня шаблоном
 // REPEAT_VISIT_V1 (поправка 3) — новая строка записи проходит проверку повтора U9, как другие двери.
 import { assertOrders, logRepeatOrders, repeatReasonArg } from '../domain/dup-order.js';
+import { lineReferralStamp } from '../domain/line-referral.js';   // REFERRAL_LINE_V1 (поправка 3) — направивший строки повторного визита
 import { crmLinkVisit, crmBookingMoved } from '../crm/visit-link.js';   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 — crmBookingMoved (дата карточки при переносе)
 // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
 import { localDate } from '../domain/day.js';
@@ -1306,8 +1307,12 @@ export async function calendarBook(db, args, user, deps = {}) {
           serviceId: lineSpec.serviceId, consultationTypeId: lineSpec.consultationTypeId,
           doctorId, createdBy: user && user.id, scheduledAt: visitDate,
         });
-        // REFERRAL_LINE_V1 (U10a) — штамп направления новой строки (lineReferralStamp) — здесь,
-        // после вставки и до журнала обхода, в той же транзакции.
+        // REFERRAL_LINE_V1 (поправка 3) — штамп направления новой строки: врач А записывает
+        // пациента к врачу Б — это направление, и строка получает внутренний источник врача А
+        // (то же правило, что у вставки через /api/db, domain/line-referral.js). Своя запись
+        // врача и запись стойки (источника строки она здесь не присылает) — без направившего.
+        const lineSrc = lineReferralStamp(db, user, { doctor_id: doctorId });
+        if (lineSrc != null) db.prepare('UPDATE visit_services SET referred_by_source_id = ? WHERE id = ?').run(lineSrc, lineId);
         logRepeatOrders(db, orders, user);
       }
     }

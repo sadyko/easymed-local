@@ -286,3 +286,21 @@ test('REPEAT_VISIT_V1 (К6): строку повторного визита ка
     assert.equal(back.refunded, 80000, 'возврат строки повторного визита не вернул деньги');
   } finally { db.close(); }
 });
+
+// REFERRAL_LINE_V1 (поправка 3) — врач А записывает пациента на повторный визит к врачу Б:
+// это направление, и строка записи получает внутренний источник врача А (как строка,
+// заведённая врачом через /api/db). Своя запись врача и запись стойки — без направившего.
+test('REFERRAL_LINE_V1: строка повторного визита к другому врачу — направивший врач, к себе и у стойки — нет', async () => {
+  const db = freshDb();
+  try {
+    const srcOf = (id) => db.prepare('SELECT id FROM referral_sources WHERE doctor_id = ?').get(id).id;
+    const stampOf = (out) => db.prepare('SELECT referred_by_source_id s FROM visit_services WHERE id = ?').get(out.line.id).s;
+    const other = await calendarBook(db, repeatArgs(), { id: 11, role: 'doctor', is_doctor: true, extra_roles: [] });
+    assert.equal(stampOf(other), srcOf(11), 'направление врача Петрова к Иванову без направившего');
+    const own = await calendarBook(db, repeatArgs({ patient_id: 78, start: at(9, 10) }), DOC);
+    assert.equal(stampOf(own), null, 'своя запись врача — «направление» самому себе');
+    db.prepare("INSERT INTO patients (id, full_name) VALUES (79, 'Третий Пациент')").run();
+    const desk = await calendarBook(db, repeatArgs({ patient_id: 79, start: at(8, 10) }), REG);
+    assert.equal(stampOf(desk), null, 'стойка без «Кто направил» поставила направившего');
+  } finally { db.close(); }
+});
