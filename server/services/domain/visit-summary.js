@@ -12,6 +12,22 @@
 //   • состоявшийся визит — статус не «отменён» и не «не пришёл», и МЕСТНЫЙ
 //     день визита ≤ сегодня клиники (domain/day.js — тот же 'localtime', что у
 //     отчётов: приём в 00:30 по Ташкенту хранится как 19:30Z накануне);
+//   • LAST_VISIT_TRUE_V1 (ревью, minor-1) — прошедший день состоялся только с
+//     ДОКАЗАТЕЛЬСТВОМ ПРИХОДА. Отметку «Не пришёл» в клинике не ставит никто
+//     (crm/no-show.js двигает только карточку CRM), «Пришёл» нажимают редко
+//     (на боевой базе все 390 визитов 'scheduled' при 389 оплаченных счетах —
+//     crm/visit-status.js): пустая запись, перенесённая автоматикой на
+//     воскресенье, наутро становилась «Последним визитом». Теперь:
+//       – визит СЕГОДНЯШНЕГО дня — состоялся (пациент ещё может прийти);
+//       – визит ПРОШЕДШЕГО дня — если он «Пришёл» (status 'arrived'), или у
+//         него есть строка в работе либо отпущенная кассой (WORKED_LINE_STATUSES:
+//         'queued' ставят оплата, долг, нулевой счёт и счёт плательщику;
+//         дальше — проба, приём, результат, выдача), или по счёту визита
+//         есть оплата (invoices.paid_amount > 0 — как у arrivedByEvidence CRM;
+//         полный возврат обнуляет её и отменяет счёт);
+//       – будущий визит не состоялся никогда.
+//     Строка «в смете» ('added') и неоплаченный счёт доказательством не
+//     являются: их заводят и при записи по телефону;
 //   • «визитов» — число состоявшихся;
 //   • «последний визит» — самый поздний состоявшийся;
 //   • «ближайшая запись» — самый ранний такой же визит ПОСЛЕ сегодняшнего дня.
@@ -24,6 +40,10 @@
 import { localDate, today as clinicToday } from './day.js';
 
 export const NOT_HAPPENED_STATUSES = Object.freeze(['cancelled', 'no_show']);
+// LAST_VISIT_TRUE_V1 (ревью, minor-1) — статусы строки визита, которые бывают
+// только после кассы или работы над пациентом (машина состояний — миграция 041:
+// added → queued → collected → in_progress → resulted → completed).
+export const WORKED_LINE_STATUSES = Object.freeze(['queued', 'collected', 'in_progress', 'resulted', 'completed']);
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 const CHUNK = 500;
 
@@ -49,6 +69,11 @@ export function patientVisitSummary(db, patientIds, { today = null } = {}) {
   if (!YMD.test(day)) throw new Error('patientVisitSummary: today must be YYYY-MM-DD, got ' + day);
   const local = localDate('v.visit_date');
   const gone = NOT_HAPPENED_STATUSES.map((s) => `'${s}'`).join(', ');
+  const worked = WORKED_LINE_STATUSES.map((s) => `'${s}'`).join(', ');
+  // LAST_VISIT_TRUE_V1 (ревью, minor-1) — «состоялся» считается один раз на
+  // визит (внутренний SELECT), доказательства — EXISTS по индексам
+  // idx_visit_services_visit и idx_invoices_visit, и только у прошедших дней
+  // без «Пришёл» (CASE останавливается на первой подошедшей ветке).
   for (let i = 0; i < ids.length; i += CHUNK) {
     const part = ids.slice(i, i + CHUNK);
     const rows = db.prepare(`
@@ -57,14 +82,23 @@ export function patientVisitSummary(db, patientIds, { today = null } = {}) {
              ${localDate('last_jd')}                  AS last_visit_day,
              strftime('%Y-%m-%dT%H:%M:%SZ', next_jd) AS next_visit,
              ${localDate('next_jd')}                  AS next_visit_day
-        FROM (SELECT v.patient_id AS pid,
-                     SUM(CASE WHEN ${local} <= ? THEN 1 ELSE 0 END)                AS happened,
-                     MAX(CASE WHEN ${local} <= ? THEN julianday(v.visit_date) END) AS last_jd,
-                     MIN(CASE WHEN ${local} >  ? THEN julianday(v.visit_date) END) AS next_jd
-                FROM visits v
-               WHERE v.patient_id IN (${part.map(() => '?').join(', ')})
-                 AND v.status NOT IN (${gone})
-               GROUP BY v.patient_id)`).all(day, day, day, ...part);
+        FROM (SELECT pid,
+                     SUM(ok)                           AS happened,
+                     MAX(CASE WHEN ok = 1 THEN jd END) AS last_jd,
+                     MIN(CASE WHEN d > ? THEN jd END)  AS next_jd
+                FROM (SELECT v.patient_id AS pid, julianday(v.visit_date) AS jd, ${local} AS d,
+                             CASE WHEN ${local} = ? THEN 1
+                                  WHEN ${local} > ? THEN 0
+                                  WHEN v.status = 'arrived' THEN 1
+                                  WHEN EXISTS (SELECT 1 FROM visit_services vs
+                                                WHERE vs.visit_id = v.id AND vs.status IN (${worked})) THEN 1
+                                  WHEN EXISTS (SELECT 1 FROM invoices iv
+                                                WHERE iv.visit_id = v.id AND iv.paid_amount > 0) THEN 1
+                                  ELSE 0 END AS ok
+                        FROM visits v
+                       WHERE v.patient_id IN (${part.map(() => '?').join(', ')})
+                         AND v.status NOT IN (${gone}))
+               GROUP BY pid)`).all(day, day, day, ...part);
     for (const r of rows) {
       out.set(Number(r.pid), {
         visit_count: Number(r.happened) || 0,

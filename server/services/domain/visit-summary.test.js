@@ -64,3 +64,61 @@ test('пациент без визитов — нули; мусор в спис�
     assert.throws(() => patientVisitSummary(db, [4], { today: '02.11.2026' }), /YYYY-MM-DD/);
   } finally { db.close(); }
 });
+
+// LAST_VISIT_TRUE_V1 (ревью, minor-1) — ПРОШЕДШАЯ ЗАПИСЬ, НА КОТОРУЮ НИКТО НЕ ПРИШЁЛ,
+// — НЕ ВИЗИТ. Отметку «Не пришёл» в клинике не ставит никто (crm/no-show.js двигает
+// только карточку CRM), и пустая запись, перенесённая автоматикой на воскресенье,
+// наутро становилась «Последним визитом». Состоялся: сегодняшний день — всегда (не
+// отменён, не неявка); прошедший — только с доказательством прихода: «Пришёл»
+// (status 'arrived'), строка в работе или оплаченная (queued, collected,
+// in_progress, resulted, completed) или оплата по счёту визита (paid_amount > 0).
+test('ревью minor-1: прошедшая запись без прихода не считается; «Пришёл», оплаченная строка, оплата и сегодня — считаются', () => {
+  const db = freshDb();
+  try {
+    db.prepare("INSERT INTO services (id, name, price) VALUES (5, 'Приём', 100000)").run();
+    const v = (pid, at, status = 'scheduled') => Number(visit(db, pid, at, status).lastInsertRowid);
+    const line = (vid, status) => db.prepare('INSERT INTO visit_services (visit_id, service_id, status) VALUES (?, 5, ?)').run(vid, status);
+    // 1 — пустая прошедшая запись (воскресенье, никто не пришёл) и прошедшая
+    //     «подтверждённая» со строкой в смете ('added') — ни одна не визит.
+    v(1, '2026-11-01T06:00:00Z');
+    line(v(1, '2026-10-30T06:00:00Z', 'confirmed'), 'added');
+    // 2 — «Пришёл» на прошлой неделе.
+    v(2, '2026-10-26T06:00:00Z', 'arrived');
+    // 3 — статус так и остался 'scheduled', но строка оплачена ('queued') — пациент был.
+    line(v(3, '2026-10-27T06:00:00Z'), 'queued');
+    // 4 — сегодняшняя запись (никто ещё не пришёл) — «сегодня».
+    v(4, '2026-11-02T04:00:00Z');
+    const m = patientVisitSummary(db, [1, 2, 3, 4], { today: TODAY });
+    assert.deepEqual([m.get(1).visit_count, m.get(1).last_visit, m.get(1).last_visit_day], [0, null, null], 'пустая прошедшая запись стала визитом');
+    assert.deepEqual([m.get(2).visit_count, m.get(2).last_visit_day], [1, '2026-10-26']);
+    assert.deepEqual([m.get(3).visit_count, m.get(3).last_visit_day], [1, '2026-10-27'], 'оплаченная строка — доказательство прихода');
+    assert.deepEqual([m.get(4).visit_count, m.get(4).last_visit_day, m.get(4).next_visit], [1, '2026-11-02', null], 'сегодняшняя запись — «сегодня»');
+  } finally { db.close(); }
+});
+
+test('ревью minor-1: оплата по счёту визита и работа над услугой — приход; пустая прошлая запись не перебивает настоящий визит', () => {
+  const db = freshDb();
+  try {
+    db.prepare("INSERT INTO services (id, name, price) VALUES (5, 'Приём', 100000)").run();
+    const v = (pid, at, status = 'scheduled') => Number(visit(db, pid, at, status).lastInsertRowid);
+    const line = (vid, status) => db.prepare('INSERT INTO visit_services (visit_id, service_id, status) VALUES (?, 5, ?)').run(vid, status);
+    // 1 — оплачен счёт, строки ещё «в смете»: деньги у кассы — человек был.
+    const paid = v(1, '2026-10-20T06:00:00Z');
+    line(paid, 'added');
+    db.prepare("INSERT INTO invoices (visit_id, patient_id, total_amount, paid_amount, status) VALUES (?, 1, 100000, 100000, 'paid')").run(paid);
+    // …а неоплаченный счёт приходом не является.
+    const unpaid = v(1, '2026-10-25T06:00:00Z');
+    db.prepare("INSERT INTO invoices (visit_id, patient_id, total_amount, paid_amount, status) VALUES (?, 1, 100000, 0, 'unpaid')").run(unpaid);
+    // 2 — в работе / завершено / проба / результат — каждая из работ.
+    for (const [i, st] of ['in_progress', 'completed', 'collected', 'resulted'].entries()) line(v(2, `2026-10-0${i + 1}T06:00:00Z`), st);
+    // 2 — позже всех: пустая запись — не последний визит.
+    v(2, '2026-10-31T06:00:00Z', 'confirmed');
+    // 3 — отменённый визит с оплатой (предоплата) — не визит, как и прежде.
+    const pre = v(3, '2026-10-29T06:00:00Z', 'cancelled');
+    db.prepare("INSERT INTO invoices (visit_id, patient_id, total_amount, paid_amount, status) VALUES (?, 3, 50000, 50000, 'paid')").run(pre);
+    const m = patientVisitSummary(db, [1, 2, 3], { today: TODAY });
+    assert.deepEqual([m.get(1).visit_count, m.get(1).last_visit_day], [1, '2026-10-20'], 'оплата — приход, неоплаченный счёт — нет');
+    assert.deepEqual([m.get(2).visit_count, m.get(2).last_visit_day], [4, '2026-10-04'], 'пустая запись 31.10 перебила настоящий визит');
+    assert.deepEqual([m.get(3).visit_count, m.get(3).last_visit], [0, null]);
+  } finally { db.close(); }
+});
