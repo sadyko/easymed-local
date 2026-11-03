@@ -356,16 +356,23 @@ export const REGISTRY = {
     read:  { roles: ALL_STAFF, columns: ['id','visit_id','service_id','clinic_item_id','doctor_id','quantity','unit_price','total','status','invoice_item_id','created_by','created_at','consultation_type_id','scheduled_at','queue_key','queue_no','notes',
              'sample_collected_at','verified_by','verified_at','sync_origin',
              'price_tier','package_id',
+             'referred_by_source_id','referral_note',   // REFERRAL_LINE_V1 · DOCTOR_REFERRAL_DESK_V1 (мигр. 270) — направивший строки (ставит сервер, stamps ниже) и рекомендация врача для регистратуры
              'package_full','package_price'] },   // SERVICES_PACKAGES_V1 (мигр. 244) — цена услуги без скидки и цена в пакете, записанные при записи (ставит routes/db.js)   // package_id: PACKAGES_V1 (mig 154) — the package the line came from; price_tier: VISIT_TIER_PRICING_V1 (mig 127) — primary/secondary/repeat, set by the screen from service_price_quote   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
     // FINAL_ROLES_SYNC_FIX_V1 (M3) — created_by ставит СЕРВЕР из сессии
     // (stamps ниже), а не браузер: по нему remove_own_visit_line решает, чья
     // это строка, и присланное значение позволяло бы выдать чужую строку за
     // свою. Поэтому колонки нет в списке записи — ни вставкой, ни upsert.
-    stamps: { created_by: { on: 'insert' } },
+    // REFERRAL_LINE_V1 (мигр. 270) — направившего строки тоже ставит СЕРВЕР, но не «я», а
+    // вычислением (domain/line-referral.js lineReferralStamp): врачу — его включённый
+    // внутренний источник (присланное браузером не читается), стойке — только явно
+    // присланный и включённый источник; своя строка — пусто. В списках записи колонки нет:
+    // правкой её не меняет никто, upsert её не пишет (компилятор штампов в upsert не ставит).
+    stamps: { created_by: { on: 'insert' }, referred_by_source_id: { on: 'insert', resolve: 'line_referral' } },
     write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','consultation_type_id','scheduled_at','price_tier','package_id',
                        // SERVICES_PACKAGES_V1 — в списке, чтобы их могла вписать сама дверь /api/db:
                        // routes/db.js затирает присланное и ставит цену пакета (domain/package-lines.js).
-                       'package_full','package_price'] },
+                       'package_full','package_price',
+                       'referral_note'] },   // DOCTOR_REFERRAL_DESK_V1 (мигр. 270) — «Рекомендация для регистратуры» мастера направления врача
              // V3120_FIX (M2) — doctor_id отсюда убран: врача строки меняет только
              // patient_card_set_doctor (проверяет счёт, закрытый период и что это
              // живой исполнитель). Экранов, писавших его табличным путём, нет.
@@ -960,7 +967,8 @@ export const REGISTRY = {
   // Doctor orders / referrals. consultation.js, service-workspace.js, visit-modal.js.
   recommended_services: {
     read:  { roles: ALL_STAFF, columns: ['id','patient_id','service_id','service_name','recommended_by',
-             'recommended_by_name','source_visit_id','notes','status','closed_at','created_at'] },
+             'recommended_by_name','source_visit_id','notes','status','closed_at','created_at',
+             'visit_service_id'] },   // DOCTOR_REFERRAL_DESK_V1 (мигр. 270) — строка, которой закрыта рекомендация; пишет только referral_recommendation_attach
     write: { insert: { roles: ['admin','registrar','doctor','nurse'], columns: ['patient_id','service_id','service_name',
                'recommended_by','recommended_by_name','source_visit_id','notes','status'] },
              update: { roles: ['admin','registrar','doctor','nurse'], columns: ['status','closed_at','notes'] },

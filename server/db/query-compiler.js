@@ -10,6 +10,7 @@ import { textColumns } from './schema-registry.js';   // CABINET_FIX_V1_TPL — 
 import { patientDataRefusal } from './patient-data-gate.js';   // V3120_FIX (M4)
 import { liftAllows } from './pay-visibility.js';
 import { withTemplate } from '../services/server-message.js';   // V3120_I18N
+import { lineReferralStamp } from '../services/domain/line-referral.js';   // REFERRAL_LINE_V1 — штамп «направивший строки»
 
 export class CompileError extends Error {
   constructor(message, status = 400) {
@@ -796,7 +797,18 @@ function sessionField(user, key) {
   if (key === 'full_name') return String(user.full_name || user.username || '').trim() || null;
   return null;
 }
-function stampValues(table, op, values, user) {
+// REFERRAL_LINE_V1 — штампы, значение которых СЕРВЕР ВЫЧИСЛЯЕТ по сессии и присланной
+// строке (а не номер сотрудника): { on: 'insert', resolve: '<имя>' }. null — колонка в
+// INSERT не попадает (SQL такой же, как без штампа). Отказ резолвера (e.status) — отказ
+// компилятора его словами (400).
+const STAMP_RESOLVERS = Object.freeze({ line_referral: lineReferralStamp });
+function resolveStamp(name, db, user, row) {
+  const fn = STAMP_RESOLVERS[name];
+  if (typeof fn !== 'function') throw new Error('stamp resolver missing: ' + name);   // ошибка реестра, не запроса — 500
+  try { return fn(db, user, row || {}); }
+  catch (e) { if (e && e.status) throw new CompileError(e.message, e.status); throw e; }
+}
+function stampValues(table, op, values, user, db = null) {
   const stamps = actorStamps(table);
   if (!stamps) return { values, extra: [] };
   const me = user && Number.isFinite(Number(user.id)) ? Number(user.id) : null;
@@ -804,6 +816,13 @@ function stampValues(table, op, values, user) {
   const extra = [];
   for (const [col, rule] of Object.entries(stamps)) {
     delete out[col];
+    if (rule.resolve) {   // REFERRAL_LINE_V1 — присланное значение читает только резолвер (из values), не запись
+      if (rule.on === op) {
+        const v = resolveStamp(rule.resolve, db, user, values);
+        if (v != null) { out[col] = v; extra.push(col); }
+      }
+      continue;
+    }
     // CABINET_FIX_V1_R1 — { on, from: 'full_name' }: не номер, а поле сессии (имя автора шаблона).
     if (rule.on === op) { out[col] = rule.from ? sessionField(user, rule.from) : me; extra.push(col); continue; }   // CABINET_FIX_V1_R1
     if (rule.with && Object.prototype.hasOwnProperty.call(out, rule.with)
@@ -845,7 +864,7 @@ function compileInsert(desc, table, user, db) {
     if (need && !need.columns.some((c) => row[c] !== undefined && row[c] !== null && String(row[c]).trim() !== '')) {
       throw new CompileError(need.message, 400);
     }
-    const { values, extra } = stampValues(table, 'insert', row, user);
+    const { values, extra } = stampValues(table, 'insert', row, user, db);   // REFERRAL_LINE_V1 — резолверу нужна база
     const stmt = insertStatement(table, values, [...writableColumns(table, 'insert'), ...extra]);
     return guardInsert(stmt, table, values, scope);
   };

@@ -501,3 +501,16 @@ test('visit_services: цена пакета читается; вставка —
   assert.deepEqual(REGISTRY.visit_services.write.update.onlyValues, { package_id: [null], package_full: [null], package_price: [null] });
   assert.ok(REGISTRY.visit_services.embed.service_templates.columns.includes('is_package'), 'чек узнаёт пакет по отметке');
 });
+
+test('REFERRAL_LINE_V1: направивший строки читается, но ни вставкой, ни правкой не пишется — его ставит сервер', () => {
+  for (const c of ['referred_by_source_id', 'referral_note']) assert.ok(readableColumns('visit_services').includes(c), 'чтение ' + c);
+  assert.ok(!writableColumns('visit_services', 'insert').includes('referred_by_source_id'), 'вставка referred_by_source_id');
+  assert.ok(!writableColumns('visit_services', 'update').includes('referred_by_source_id'), 'правка referred_by_source_id');
+  assert.ok(writableColumns('visit_services', 'insert').includes('referral_note'), 'рекомендация для регистратуры пишется вставкой');
+  assert.ok(!writableColumns('visit_services', 'update').includes('referral_note'));
+  assert.deepEqual(REGISTRY.visit_services.stamps.referred_by_source_id, { on: 'insert', resolve: 'line_referral' });
+  assert.deepEqual(REGISTRY.visit_services.stamps.created_by, { on: 'insert' });
+  assert.ok(readableColumns('recommended_services').includes('visit_service_id'));
+  assert.ok(!writableColumns('recommended_services', 'insert').includes('visit_service_id'));
+  assert.ok(!writableColumns('recommended_services', 'update').includes('visit_service_id'));
+});
