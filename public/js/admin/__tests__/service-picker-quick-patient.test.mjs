@@ -159,7 +159,7 @@ globalThis.fetch = async (url, opts = {}) => {
 
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
-const { openServicePickerModal } = await import('../views/service-picker-modal.js');
+const { openServicePickerModal } = await import('../views/service-picker-modal.js?v=ownrep4');
 const { setFullAccess } = await import('../permissions.js');
 
 // ---------------------------------------------------------------------------

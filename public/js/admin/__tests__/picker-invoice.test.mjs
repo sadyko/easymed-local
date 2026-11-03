@@ -120,7 +120,7 @@ globalThis.fetch = async (url, opts) => {
   return { ok: false, status: 404, json: async () => ({ error: { message: 'no route ' + u } }) };
 };
 
-const { pickerDiscount, invoicePickerLines } = await import('../views/service-picker-modal.js');
+const { pickerDiscount, invoicePickerLines } = await import('../views/service-picker-modal.js?v=ownrep4');
 
 // ─── посев ──────────────────────────────────────────────────────────────────
 // Визит на 900 000 + 100 000; вторая услуга — по пакету «Чек-ап» со скидкой 20 %.
@@ -470,7 +470,7 @@ test('M4: живые экраны не режут числовой id как с�
 });
 
 // ─── ревью I2 / M1 / M2 — смета == счёт ─────────────────────────────────────
-const { pickerLinePrice, pickerOwnPrice, pickerTierNote } = await import('../views/service-picker-modal.js');   // OWN_PRICE_TIER_RATIO_V1 — pickerTierNote
+const { pickerLinePrice, pickerOwnPrice, pickerTierNote } = await import('../views/service-picker-modal.js?v=ownrep4');   // OWN_PRICE_TIER_RATIO_V1 — pickerTierNote
 
 test('I2 / OWN_PRICE_TIER_RATIO_V1: цена строки сметы — как у кассы (pricing.js lineUnitPrice): своя цена врача, на втором/повторном — со скидкой яруса', () => {
   const svc = { id: 21, price: 900000 };
@@ -698,7 +698,7 @@ test('M2: срок пакета в смете и при записи строк�
 // молча выбрасывалась, и «Сформировать счёт» окна визита выставлял услугу,
 // которую покрывает страховая, ПАЦИЕНТУ. Теперь строка плательщика уходит в
 // счёт контрагента (payer_id) и в счёт пациента не попадает никаким путём.
-const { invoicePayerLines } = await import('../views/service-picker-modal.js');
+const { invoicePayerLines } = await import('../views/service-picker-modal.js?v=ownrep4');
 
 async function vmStateFromDb() {
   const st = vmState();

@@ -127,7 +127,7 @@ globalThis.fetch = async (url, opts) => {
   return { ok: false, status: 404, json: async () => ({ error: { message: 'no route ' + u } }) };
 };
 
-const SPM = await import('../views/service-picker-modal.js');
+const SPM = await import('../views/service-picker-modal.js?v=ownrep4');
 const DOOR = await import('../views/visit-booking.js');
 const { bookVisit, setVisitStatus } = DOOR;
 const { supabase } = await import('../../supabase.js');

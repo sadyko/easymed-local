@@ -116,7 +116,7 @@ globalThis.fetch = async (url, opts = {}) => {
     return gone();   // шлюз медкора: локальной клинике его нет, и окно живёт без него
 };
 
-const { openServicePickerModal } = await import('../views/service-picker-modal.js');
+const { openServicePickerModal } = await import('../views/service-picker-modal.js?v=ownrep4');
 
 const overlays = () => BODY.children.filter((c) => String(c.className || '').includes('modal'));
 const openPicker = async (opts) => {

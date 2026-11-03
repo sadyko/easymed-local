@@ -172,7 +172,7 @@ globalThis.fetch = async (url, opts) => {
 };
 
 // Клиент слотов и записи — ТОТ ЖЕ модуль, который зовут оба мастера.
-const SPM = await import('../views/service-picker-modal.js');
+const SPM = await import('../views/service-picker-modal.js?v=ownrep4');
 const { loadSlotDay, freeStartMinutes, calendarBookOrAsk, askEmergencyReason, forgetSlots, hhmmToMin } = SPM;
 
 // ─── посев ──────────────────────────────────────────────────────────────────

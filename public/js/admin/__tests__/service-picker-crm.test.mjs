@@ -151,7 +151,7 @@ globalThis.fetch = async (url, opts = {}) => {
     return gone();
 };
 
-const { openServicePickerModal } = await import('../views/service-picker-modal.js');
+const { openServicePickerModal } = await import('../views/service-picker-modal.js?v=ownrep4');
 
 const overlays = () => BODY.children.filter((c) => String(c.className || '').includes('modal'));
 const topOverlay = () => overlays()[overlays().length - 1];

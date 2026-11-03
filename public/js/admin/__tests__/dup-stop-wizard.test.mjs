@@ -76,7 +76,7 @@ const { getRpc } = await import('../../../../server/services/rpc/index.js');
 const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');
 const { readableColumns } = await import('../../../../server/db/schema-registry.js');
 const { takeRepeatReason } = await import('../../../../server/services/domain/dup-order.js');
-const { forgetSlots } = await import('../views/service-picker-modal.js');
+const { forgetSlots } = await import('../views/service-picker-modal.js?v=ownrep4');
 
 let USER = { id: 1, role: 'registrar', extra_roles: [] };
 let DB = null;

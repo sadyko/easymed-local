@@ -145,7 +145,7 @@ globalThis.fetch = async (url, opts) => {
     return fail(404, 'no route ' + u);
 };
 
-const { openServicePickerModal, forgetSlots } = await import('../views/service-picker-modal.js');
+const { openServicePickerModal, forgetSlots } = await import('../views/service-picker-modal.js?v=ownrep4');
 const VM = await import('../views/visit-modal.js');
 const WS = await import('../views/service-workspace.js');
 

@@ -140,7 +140,7 @@ globalThis.fetch = async (url, opts) => {
     return fail(404, 'no route ' + u);
 };
 
-const { openServicePickerModal, forgetSlots, calcLineDoctorId } = await import('../views/service-picker-modal.js');
+const { openServicePickerModal, forgetSlots, calcLineDoctorId } = await import('../views/service-picker-modal.js?v=ownrep4');
 const PATIENT = { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' };
 
 // ОАК (21) — анализ без врача; ЭКГ (23) — процедура без врача.

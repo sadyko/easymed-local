@@ -132,7 +132,7 @@ globalThis.fetch = async (url, opts) => {
   return { ok: false, status: 404, json: async () => ({ error: { message: 'no route ' + u } }) };
 };
 
-const { forgetSlots } = await import('../views/service-picker-modal.js');
+const { forgetSlots } = await import('../views/service-picker-modal.js?v=ownrep4');
 const { nearestButtonText, manyDaysWarning } = await import('../views/pick-day.js');
 
 // ─── посев ──────────────────────────────────────────────────────────────────

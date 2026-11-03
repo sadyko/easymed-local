@@ -132,7 +132,7 @@ globalThis.fetch = async (url, opts) => {
     return fail(404, 'no route ' + u);
 };
 
-const { openServicePickerModal, forgetSlots } = await import('../views/service-picker-modal.js');
+const { openServicePickerModal, forgetSlots } = await import('../views/service-picker-modal.js?v=ownrep4');
 const { nearestButtonText } = await import('../views/pick-day.js');
 
 // ОАК — без врача; УЗИ — врач нужен, назначен один (каталог выберет его сам).

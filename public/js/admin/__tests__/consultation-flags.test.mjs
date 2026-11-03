@@ -86,7 +86,7 @@ const ticked = (cb) => cb.hasAttribute('checked');
 
 const { isOn } = await import('../../shared/flags.js');
 const { renderConsultationTypes } = await import('../views/consultation-types.js');
-const { openServicePickerModal } = await import('../views/service-picker-modal.js');
+const { openServicePickerModal } = await import('../views/service-picker-modal.js?v=ownrep4');
 const WS = await import('../views/service-workspace.js');
 
 // ─── 0. Посылка: сервер отдаёт флаги числами ────────────────────────────────
