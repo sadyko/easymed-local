@@ -121,6 +121,7 @@ const USER = { id: 1, role: 'admin', extra_roles: [] };
 let DB = null;
 let FAIL_TABLE = null;   // «пусть этот запрос упадёт» — для проверки честности ошибки
 const DB_CALLS = [];     // что экран спросил у /api/db — «лишний запрос» это тоже поведение
+let FAIL_RPC = null;     // REPEAT_VISIT_V1 (полировка, п. 18) — «пусть этот RPC ответит отказом»: { name, error }
 
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -132,6 +133,7 @@ globalThis.fetch = async (url, opts) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     const handler = getRpc(name);
     if (!handler) return { ok: false, status: 501, json: async () => ({ error: { message: 'no rpc ' + name } }) };
+    if (FAIL_RPC && FAIL_RPC.name === name) return { ok: false, status: 409, json: async () => ({ error: FAIL_RPC.error }) };
     try { return ok(await handler(DB, body, USER)); }
     catch (e) { return { ok: false, status: e.status || 500, json: async () => ({ error: { code: e.code, message: e.message, params: e.params } }) }; }
   }
@@ -1201,4 +1203,25 @@ test('обычная запись метки «от врача» не несёт
   const card = byClass(box, 'rcal-appt').find((c) => /10:00–10:30/.test(textOf(c)));
   assert.ok(card, 'запись пропала из сетки');
   assert.equal(byClass(card, 'rcal-appt-ref').length, 0, 'метка «от врача» на записи без направления');
+});
+
+// REPEAT_VISIT_V1 (полировка 3.21.0, п. 18) — ОТКАЗ «ВРЕМЯ ЗАНЯТО» ТОЖЕ СБРАСЫВАЕТ КЭШ: время занял
+// кто-то другой, и прежнее «свободно» каталога (мастер, окно «Повторный визит», CRM) — уже неправда.
+test('REPEAT_VISIT_V1 (полировка, п. 18): отказ calendar_book «время занято» сбрасывает кэш свободного времени каталога', async () => {
+  document.body.children.length = 0;
+  const { loadSlotDay, slotDayCached } = await import('../views/service-picker-modal.js?v=ownrep4');
+  const { box, dayIso } = await render();
+  const before = DB.prepare('SELECT status FROM visits WHERE id = 55').get().status;
+  const day = await loadSlotDay(7, dayIso, 30);
+  assert.ok(day && slotDayCached(7, dayIso, 30), 'кэш дня врача не заполнился');
+  const modal = await openAppt(box);
+  const pill = walk(modal).find((n) => n.tagName === 'BUTTON' && String(n.className).includes('rcal-stbtn') && /Отменён/.test(textOf(n)));
+  assert.ok(pill, 'нет кнопки статуса «Отменён»');
+  FAIL_RPC = { name: 'calendar_book', error: { code: 'slot_taken', message: 'Это время занято.', params: { doctor: 'Петров', from: '10:00', to: '10:30' } } };
+  try {
+    pill.click();
+    await flush(20);
+  } finally { FAIL_RPC = null; }
+  assert.equal(DB.prepare('SELECT status FROM visits WHERE id = 55').get().status, before, 'стенд: отказ — статус прежний');
+  assert.equal(slotDayCached(7, dayIso, 30), null, 'после «время занято» каталог показывает прежнее свободное время');
 });

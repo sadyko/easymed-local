@@ -1457,6 +1457,10 @@ async function openRevisitModal(ctx) {
     // или основная роль 'doctor'.
     const rvIsDoctor = (u) => !!u && (isOn(u.is_doctor) || String(u.role || '') === 'doctor');
     let staff = await rvStaffRow(doctorId);
+    // REPEAT_VISIT_V1 (полировка 3.21.0, п. 17) — исполнителя не прочитали (staff === null:
+    // сбой запроса или строки нет) — это «не знаем», а не «не врач»: строки так же не будет,
+    // но окно говорит правду.
+    const staffUnknown = staff === null;
     let lineOff = false;
     if (!rvIsDoctor(staff)) {
         const me = currentUser();
@@ -1529,7 +1533,9 @@ async function openRevisitModal(ctx) {
     // REPEAT_VISIT_V1 (ревью, minor-7) — почему строки не будет.
     const noLineNote = lineOff
         ? h('div', { class: 'muted rv-noline', style: { fontSize: '12.5px', marginTop: '4px' } },
-            tr('Исполнитель — не врач: повторный визит запишется без услуги.'))
+            staffUnknown   // REPEAT_VISIT_V1 (полировка, п. 17)
+                ? tr('Исполнителя проверить не удалось: повторный визит запишется без услуги.')
+                : tr('Исполнитель — не врач: повторный визит запишется без услуги.'))
         : null;
     const commentInput = h('textarea', { rows: '2', placeholder: 'Например: с результатами анализов' });
     // DOCTOR_PROFILE_V1 (ревью шага 5, №1) — сколько длится визит выбранного вида.
@@ -1549,7 +1555,7 @@ async function openRevisitModal(ctx) {
     const footSel   = h('div', { class: 'rv-foot-sel muted' }, 'Слот не выбран');
     // REPEAT_VISIT_V1 — отказ сервера («в этот день уже есть приём…») пишется в
     // самом окне: окно остаётся открытым, врач выбирает другой день или время.
-    const errBox    = h('div', { class: 'rv-err', role: 'alert', style: { display: 'none', marginTop: '12px', fontSize: '13px', color: 'var(--crit-700)' } });
+    const errBox    = h('div', { class: 'rv-err', role: 'alert', style: { display: 'none', marginTop: '12px', fontSize: '13.5px', color: 'var(--crit-700)' } });   // TYPE_SCALE_V1 · REPEAT_VISIT_V1 (полировка, п. 19) — шаг шкалы, не 13px
     const showErr = (text) => { errBox.textContent = text || ''; errBox.style.display = text ? '' : 'none'; };
     const bookBtn   = h('button', { class: 'btn btn-primary', disabled: '', onclick: () => doBook() },
         Icon('Check', { size: 14 }), ' Записать');

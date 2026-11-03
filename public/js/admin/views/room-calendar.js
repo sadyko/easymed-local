@@ -673,6 +673,10 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         // время: кэш дней каталога (мастер, окно «Повторный визит», CRM) больше не
         // правда — как после записи через visit-booking.js.
         if (!error) { forgetSlots(); return data || true; }
+        // REPEAT_VISIT_V1 (полировка 3.21.0, п. 18) — «время занято» — значит, кэш свободных дней
+        // каталога врёт: время занял кто-то другой. Забываем его и при отказе, иначе мастер и окна
+        // записи снова предлагали бы это время свободным.
+        if (error.code === 'slot_taken') forgetSlots();
         if (error.code === 'slot_taken' && onSlotTaken) { onSlotTaken(error); return false; }
         toast(rpcErrorText(error), 'fail');
         return false;

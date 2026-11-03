@@ -54,9 +54,17 @@ assert.equal(login.status, 200, 'вход администратора');
 const COOKIE = login.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
 const bookCalls = [];
 const dbErrors = [];   // REPEAT_VISIT_V1 (поправка 2) — отказы /api/db (журнал действий окна)
+// REPEAT_VISIT_V1 (полировка, п. 17) — сбой чтения исполнителя окном (rvStaffRow) для этого номера.
+let failStaffLookupFor = null;
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     if (!u.startsWith('/')) return { ok: false, status: 404, json: async () => ({}) };
+    if (failStaffLookupFor != null && u === '/api/db') {
+        const b = JSON.parse(opts.body || '{}');
+        if (b.table === 'users' && String(b.columns || '').replace(/\s+/g, '') === 'id,role,is_doctor,service_rates' && JSON.stringify(b.filters || []).includes(String(failStaffLookupFor))) {
+            return new Response(JSON.stringify({ error: { code: 'internal', message: 'Запрос к базе не выполнен. Повторите позже.' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        }
+    }
     if (u === '/api/rpc/calendar_book') bookCalls.push(JSON.parse(opts.body || '{}'));
     const res = await realFetch(BASE + u, { ...opts, headers: { ...(opts.headers || {}), Cookie: COOKIE } });
     if (u === '/api/db' && !res.ok) dbErrors.push({ status: res.status, body: opts.body || '' });
@@ -272,4 +280,24 @@ test('REPEAT_VISIT_V1 (ревью, minor-7): исполнитель строки
         assert.equal(DB.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(v.id).n, 0);
         assert.ok(TOASTS.some((t) => t.includes('Пациент записан на повторный визит')));
     } finally { delete window.easymed; }
+});
+
+// REPEAT_VISIT_V1 (полировка 3.21.0, п. 17) — исполнителя окно прочитать не смогло (сбой запроса),
+// вошёл не врач: строки так же не будет, но окно не называет исполнителя «не врачом» — оно говорит,
+// что проверить не удалось.
+test('REPEAT_VISIT_V1 (полировка, п. 17): исполнителя не прочитали, вошёл не врач — «проверить не удалось», запись без строки', { timeout: 30000 }, async () => {
+    TOASTS.length = 0; bookCalls.length = 0;
+    DB.prepare("INSERT INTO patients (id, full_name) VALUES (84,'Пациент Без Проверки')").run();
+    addUser.run(16, 'nurse2', hashPassword('password1'), 'Сестра Нина', 'nurse', 0, WEEK);   // свой день у своего исполнителя — 10:00 у Марии занято тестом выше
+    window.easymed = { state: { user: { id: 1, role: 'admin', is_doctor: false, extra_roles: [] } } };
+    failStaffLookupFor = 16;
+    try {
+        let note = null;
+        await bookRevisit(84, { id: 16, name: 'Сестра Нина' }, { beforeBook: (dlg) => {
+            note = (dlg.querySelector('.rv-noline') || {}).textContent || null;
+        } });
+        assert.equal(note, 'Исполнителя проверить не удалось: повторный визит запишется без услуги.', 'окно назвало исполнителя «не врачом», не прочитав его');
+        assert.equal(bookCalls.length, 1);
+        assert.deepEqual([bookCalls[0].doctor_id, bookCalls[0].line], [16, undefined], 'строка ушла с непроверенным исполнителем');
+    } finally { failStaffLookupFor = null; delete window.easymed; }
 });

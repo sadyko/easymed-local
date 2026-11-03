@@ -122,3 +122,23 @@ test('ревью minor-1: оплата по счёту визита и рабо�
     assert.deepEqual([m.get(3).visit_count, m.get(3).last_visit], [0, null]);
   } finally { db.close(); }
 });
+
+// LAST_VISIT_TRUE_V1 (полировка 3.21.0, п. 16) — правило из шапки visit-summary.js: счёт, который
+// вернули целиком и отменили (оплата обнулена), прошедший визит состоявшимся не делает; «Пришёл»
+// или строка в работе — делают.
+test('полировка п. 16: полностью возвращённый и отменённый счёт — не приход; «Пришёл» и строка в работе — приход', () => {
+  const db = freshDb();
+  try {
+    db.prepare("INSERT INTO services (id, name, price) VALUES (5, 'Приём', 100000)").run();
+    const v = (pid, at, status = 'scheduled') => Number(visit(db, pid, at, status).lastInsertRowid);
+    const refunded = (vid, pid) => db.prepare("INSERT INTO invoices (visit_id, patient_id, total_amount, paid_amount, status) VALUES (?, ?, 100000, 0, 'refunded')").run(vid, pid);
+    const line = (vid, status) => db.prepare('INSERT INTO visit_services (visit_id, service_id, status) VALUES (?, 5, ?)').run(vid, status);
+    const a = v(1, '2026-10-20T06:00:00Z'); refunded(a, 1); line(a, 'added');           // ни прихода, ни работы
+    const b = v(2, '2026-10-21T06:00:00Z', 'arrived'); refunded(b, 2);                    // «Пришёл»
+    const c = v(3, '2026-10-22T06:00:00Z'); refunded(c, 3); line(c, 'in_progress');     // работа начата
+    const m = patientVisitSummary(db, [1, 2, 3], { today: TODAY });
+    assert.deepEqual([m.get(1).visit_count, m.get(1).last_visit], [0, null], 'возвращённый визит без прихода остался «последним»');
+    assert.deepEqual([m.get(2).visit_count, m.get(2).last_visit_day], [1, '2026-10-21']);
+    assert.deepEqual([m.get(3).visit_count, m.get(3).last_visit_day], [1, '2026-10-22']);
+  } finally { db.close(); }
+});

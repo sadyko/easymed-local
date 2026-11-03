@@ -13451,6 +13451,7 @@ export const STRINGS = {
   "Записей на ближайшие 30 дней нет": {"en":"No bookings in the next 30 days","ru":"Записей на ближайшие 30 дней нет","uz":"Keyingi 30 kunda yozuvlar yo'q"},   // REPEAT_VISIT_V1
   "Повторный": {"en":"Follow-up","ru":"Повторный","uz":"Takroriy"},   // REPEAT_VISIT_V1 — метка визита в «Записях вперёд»
   "Исполнитель — не врач: повторный визит запишется без услуги.": {"en":"The performer is not a doctor: the follow-up visit will be booked without a service.","ru":"Исполнитель — не врач: повторный визит запишется без услуги.","uz":"Ijrochi shifokor emas: takroriy tashrif xizmatsiz yoziladi."},   // REPEAT_VISIT_V1 (ревью, minor-7) — окно «Повторный визит»
+  "Исполнителя проверить не удалось: повторный визит запишется без услуги.": {"en":"The performer could not be checked: the follow-up visit will be booked without a service.","ru":"Исполнителя проверить не удалось: повторный визит запишется без услуги.","uz":"Ijrochini tekshirib bo'lmadi: takroriy tashrif xizmatsiz yoziladi."},   // REPEAT_VISIT_V1 (полировка, п. 17) — окно «Повторный визит»
   "Записи вперёд": {"en":"Upcoming bookings","ru":"Записи вперёд","uz":"Oldindagi yozuvlar"},   // REPEAT_VISIT_V1 (ревью, minor-5) — подпись группы без числа: не загрузилось
   "Не удалось загрузить записи вперёд": {"en":"Could not load the upcoming bookings","ru":"Не удалось загрузить записи вперёд","uz":"Oldindagi yozuvlarni yuklab bo'lmadi"},   // REPEAT_VISIT_V1 (ревью, minor-5) — кабинет врача
   // /REPEAT_VISIT_V1
