@@ -15,6 +15,10 @@
 // «направлением» его собственный приём. Рекомендация, добавленная в тот же
 // визит дня, поэтому вознаграждения не приносит — это предел модели
 // «направивший на визите».
+// REFERRAL_LINE_V1 (3.21.0) — этот предел снят на уровне СТРОКИ: строка, заведённая по
+// рекомендации, получает направившего сама (visit_services.referred_by_source_id —
+// rpc/referral-orders.js referral_recommendation_attach), и «Рефералы» платят ему за неё
+// (reports.js referralLines). Здесь по-прежнему — только источник визита.
 import { hasAnyRole, effectiveRoles } from '../roles.js';
 
 export class RpcError extends Error {

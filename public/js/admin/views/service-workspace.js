@@ -489,7 +489,7 @@ function recsCard(ctx) {
         ),
         h('div', { 'data-recommendations-list': '', style: { padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '8px' } }),
         h('div', { class: 'muted', style: { padding: '0 14px 12px', fontSize: '12.5px' } },
-            'Реферальный бонус начисляется при выполнении.'),
+            'Бонус за направление начисляется, когда счёт оплачен.'),   // REFERRAL_LINE_V1 — правило «Рефералов»: оплаченные счета (было «при выполнении» — неправда)
     );
 }
 
