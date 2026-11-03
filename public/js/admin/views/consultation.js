@@ -148,7 +148,8 @@ const LINE_NOTES = new Map();   // id строки → { status, seq }
 const SUB_TO_TAB = { work: 'appointments', inpatients: 'inpatients', pay: 'dashboard', profile: 'profile' };
 const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', profile: 'profile' };
 
-export async function renderConsultation(container, { onNavigate, payload, tabId, onPayload } = {}) {
+export async function renderConsultation(container, { onNavigate, payload, tabId, onPayload, onShow } = {}) {
+    stopAutoFresh();   // DIAG_ROUTE_V1 (D6) — новый экран — свой таймер (один на модуль)
     containerRef = container;
     onNavigateRef = onNavigate || null;
     tabIdRef = tabId || null;
@@ -176,7 +177,11 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // перерисовывают (admin.js; страж app-shell.test.mjs). Возврат из приёма приходит
     // сюда новым payload ({ sub: 'work' }) — устаревшая очередь перечитывается.
     // Общего хука «при показе» в admin.js нет и не вводится.
+    // DIAG_ROUTE_V1 (D6, решение владельца 2026-11-03) — «список врача обновляется сам»:
+    // кабинет подписывается на показ своей панели (ctx.onShow — только тот, кто попросил;
+    // остальные экраны оболочка не трогает) и перечитывает список при каждом показе.
     if (typeof onPayload === 'function') onPayload(() => onCabinetShownAgain());
+    if (typeof onShow === 'function') onShow(() => onCabinetShown());
     // HEAD_DOCTOR_WARD_VIEW_V1 — стационар перечитывается при каждом входе в
     // кабинет, и вместе со списком заново спрашивается ОБЛАСТЬ ВИДИМОСТИ.
     // Оставленное состояние жило дольше сессии: список пациентов в койках
@@ -287,6 +292,83 @@ function onCabinetShownAgain() {
     reloadQueue().then((ok) => { if (ok && state.tab === 'appointments') paint(); });
 }
 
+// ---------------------------------------------------------------------------
+// DIAG_ROUTE_V1 (D6, решение владельца 2026-11-03) — СПИСОК ВРАЧА ОБНОВЛЯЕТСЯ САМ.
+//
+// Пациент, которого регистратура записала после того, как врач открыл кабинет, не
+// появлялся до F5 или «Обновить» (расследование #6): панель кабинета живёт в кэше
+// оболочки и при возврате не перерисовывается. Теперь «Мои приёмы» перечитываются:
+//   • при каждом открытии вкладки — щелчок по ней (setTab → ensureTabData), показ
+//     панели из кэша (боковое меню, «Назад» — ctx.onShow), новое открытие раздела;
+//   • раз в 60 секунд, пока вкладка на экране.
+// Перечитывание — то же, что у «Обновить» (reloadQueue, QUEUE_FRESH_V1): фильтр,
+// период, поиск и раскрытая группа живут в state и не сбрасываются; перерисовываются
+// только список и плитки (paintBody/paintKpi) — поле поиска с курсором и
+// прокрутка списка остаются. Пока открыто окно (модальное) — тик пропускается;
+// документ приёма — другая панель, кабинет тогда скрыт. Таймер ОДИН на модуль:
+// его снимает новое открытие раздела и первый же тик, заставший кабинет скрытым,
+// другой вкладкой или вынутым из документа — с экрана ушли, сервер не спрашивается.
+// Таймер — цепочка setTimeout (следующий взводится после ответа): тики не
+// накладываются при медленной сети, и ежесекундных «часов» в кабинете нет
+// (страж app-shell.test.mjs, NO_GREETING_V1).
+export const AUTO_FRESH_MS = 60000;
+let autoTimer = null;
+
+/** Вкладка «Мои приёмы» на экране: панель в документе и не скрыта оболочкой. */
+function cabinetOnScreen() {
+    if (!containerRef || containerRef.isConnected === false) return false;
+    if (state.tab !== 'appointments') return false;
+    return !(containerRef.style && containerRef.style.display === 'none');
+}
+/** Открыто модальное окно (у всех окон приложения — .modal / .modal-backdrop). */
+function dialogOpen() {
+    try {
+        if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return false;
+        return !!document.querySelector('.modal-backdrop, .modal');
+    } catch (_) { return false; }
+}
+/** Снять таймер (новое открытие раздела, уход с экрана). Экспорт — для проверки. */
+export function stopAutoFresh() {
+    if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+}
+function ensureAutoFresh() {
+    if (autoTimer || !cabinetOnScreen()) return;
+    autoTimer = setTimeout(async () => {
+        autoTimer = null;
+        try { await autoFreshTick(); } catch (_) { /* сеть моргнула — следующий тик догонит */ }
+        ensureAutoFresh();   // вкладка всё ещё на экране — следующий через минуту
+    }, AUTO_FRESH_MS);
+    // Под Node (тесты экрана) таймер не держит процесс; в браузере unref нет.
+    if (autoTimer && typeof autoTimer.unref === 'function') autoTimer.unref();
+}
+/** Работает ли таймер. Экспорт — для проверки. */
+export function autoFreshRunning() { return !!autoTimer; }
+
+/** Один тик: вкладка ушла с экрана — таймер снимается; окно открыто — пропуск. Экспорт — для проверки. */
+export async function autoFreshTick() {
+    if (!cabinetOnScreen()) { stopAutoFresh(); return false; }
+    if ((typeof document !== 'undefined' && document.visibilityState === 'hidden') || dialogOpen()) return false;
+    return refreshQueueQuietly();
+}
+
+/** Перечитать очередь и перерисовать только список и плитки — фильтр, поиск и прокрутка на месте. */
+async function refreshQueueQuietly() {
+    const ok = await reloadQueue();
+    if (!ok || !cabinetOnScreen()) return false;
+    const body = containerRef.querySelector('#svc-body');
+    const top = body ? body.scrollTop : 0;
+    paintBody();
+    paintKpi();
+    if (body && top) body.scrollTop = top;
+    return true;
+}
+
+/** Панель кабинета показали снова (ctx.onShow): вкладка «Мои приёмы» перечитывается сразу. */
+function onCabinetShown() {
+    if (state.tab !== 'appointments' || !queueLoaded) return;
+    refreshQueueQuietly().then(() => ensureAutoFresh());
+}
+
 // REFUND_ANY_V1 (2026-10-30, поправка 3) — СТРОКА, ЗА КОТОРУЮ КАССА ВЕРНУЛА
 // ДЕНЬГИ, — НЕ РАБОТА ВРАЧА. Касса отпустила строку со счёта с возвратом
 // (refunded_lines: отметка pay_refund_releases 'out', строка без счёта), а
@@ -294,8 +376,8 @@ function onCabinetShownAgain() {
 // 'in_progress'. По одному статусу список ставил её в «Активные», а плитка
 // «В очереди / готовы к осмотру» её считала. Теперь сервер спрашивается на
 // загрузку списка номерами всех строк, а не по строке (refunded-lines.js:
-// партиями по 500, сервер принимает до 1000; список кабинета и так не длиннее
-// 300 — loadServices .limit(300), то есть это один вопрос). Отметка
+// партиями по 500, сервер принимает до 1000; DIAG_ROUTE_V1 (D7) — открытых строк
+// уже не 300, а сколько есть: партий столько, сколько нужно). Отметка
 // r.refunded ставится строкам после загрузки: loadServices не меняется.
 // Сбой чтения любой партии — отметок нет, список как был (подпись на
 // возвращённую строку сервер не примет сам: routes/db.js refundedSignRefusal).
@@ -520,6 +602,8 @@ function paint() {
     // when the appointments tab is the one being shown.
     if (state.tab === 'appointments') paintBody();
     if (state.tab === 'appointments' && state.workRootEl) fitViewport(state.workRootEl, { min: 520 });   // WORK_ONE_SCREEN_V1
+    // DIAG_ROUTE_V1 (D6) — «Мои приёмы» на экране — таймер есть (один); другая вкладка — снят.
+    if (state.tab === 'appointments') ensureAutoFresh(); else stopAutoFresh();
     // PAY_ONE_SCREEN_V1 подгонял зарплату под остаток окна, когда она была
     // своей вкладкой. CABINET_DASH_PAY_ONE_V1 — теперь она под дашбордом,
     // который сам занимает экран, и идёт по высоте содержимого (.pay-inline).
@@ -866,6 +950,8 @@ function inpatientsView() {
 function setTab(id) {
     if (state.tab === id) return;
     state.tab = id;
+    // DIAG_ROUTE_V1 (D6) — открыли вкладку «Мои приёмы» — список перечитывается (reloadQueue).
+    if (id === 'appointments' && queueLoaded) state.queueStale = true;
     syncSubUrl();
     paint();
     ensureTabData(id).then(() => paint());
@@ -980,7 +1066,7 @@ function appointmentsView() {
                 ),
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     'Показано ', h('b', { id: 'svc-count', style: { color: 'var(--ink-800)' } }, '0'),
-                    ' из ', String(state.rows.length)),
+                    ' из ', h('span', { id: 'svc-total' }, String(state.rows.length))),   // DIAG_ROUTE_V1 (D6) — число обновляется вместе со списком
             ),
             h('div', { id: 'svc-body', class: 'work-scroll' }),
         ),
@@ -1115,6 +1201,8 @@ function paintBody() {
     // «Показано». Вне «Активных» группы нет — считается всё.
     const countEl = containerRef.querySelector('#svc-count');
     if (countEl) countEl.textContent = String(main.length + (state.pastOpen ? past.length : 0));
+    const totalEl = containerRef.querySelector('#svc-total');   // DIAG_ROUTE_V1 (D6)
+    if (totalEl) totalEl.textContent = String(state.rows.length);
 
     clear(body);
 

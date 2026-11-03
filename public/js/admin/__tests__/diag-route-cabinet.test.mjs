@@ -207,3 +207,93 @@ test('«Мои приёмы»: группа «Диагностика» видн�
     assert.deepEqual(got.all, want, '«Все статусы»');
   } finally { s.close(); }
 });
+
+// ═══ DIAG_ROUTE_V1 (D6, решение владельца 2026-11-03) — СПИСОК ВРАЧА ОБНОВЛЯЕТСЯ САМ ═══
+// Пациент, записанный после открытия кабинета, появлялся только после F5 или «Обновить».
+// Теперь «Мои приёмы» перечитываются при каждом открытии вкладки (щелчок, показ панели
+// из кэша — ctx.onShow) и раз в 60 секунд, пока вкладка на экране; фильтр, поиск и сам
+// элемент поля поиска остаются; при открытом окне тик пропускается; таймер — один и
+// снимается, когда вкладка ушла с экрана.
+const INTERVALS = [];
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...rest) => { const t = realSetTimeout(fn, ms, ...rest); if (ms === 60000) INTERVALS.push({ ms, t }); return t; };
+
+/** Строка «на потом» — регистратура записала пациента, когда кабинет уже открыт. */
+function registerLater(db, code) {
+  const n = 7000 + Math.floor(Math.random() * 1000);
+  db.prepare("INSERT INTO services (id, name, price, type, requires_doctor, duration_minutes) VALUES (?, ?, 100000, 'imaging', 0, 20)").run(n, 'Svc-' + code);
+  db.prepare('INSERT INTO patients (id, full_name, last_name, first_name) VALUES (?,?,?,?)').run(n, 'Тест-' + code, 'Тест-' + code, '');
+  const vid = Number(db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (?, ?, ?, 'arrived')").run(n, DOC, at(TODAY, 11)).lastInsertRowid);
+  db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, unit_price, total, status) VALUES (?, ?, ?, 100000, 100000, 'queued')").run(vid, n, DOC);
+}
+
+async function openWork(extra = {}) {
+  const root = mk('div');
+  let show = null;
+  await cabinet.renderConsultation(root, { onNavigate() {}, tabId: 'consultation', payload: { sub: 'work' }, onShow: (fn) => { show = fn; }, ...extra });
+  for (let i = 0; i < 50 && !walk(root).some((n) => n.tagName === 'TBODY'); i++) await tick(60);
+  await tick(150);
+  return { root, show: () => show && show() };
+}
+const searchInput = (root) => walk(root).find((n) => n.tagName === 'INPUT' && /Поиск по ФИО/.test(n.getAttribute('placeholder') || ''));
+const statusSel = (root) => walk(root).find((n) => n.tagName === 'SELECT');
+
+test('D6: показ панели из кэша (ctx.onShow) перечитывает список — поиск, фильтр и само поле поиска на месте', async () => {
+  const s = await stand((db, add) => { add('N01', {}); });
+  try {
+    const w = await openWork();
+    const sel = statusSel(w.root);
+    sel.dispatchEvent({ type: 'change', target: { value: 'all' }, currentTarget: sel });
+    const inp = searchInput(w.root);
+    assert.ok(inp, 'нет поля поиска');
+    inp.dispatchEvent({ type: 'input', target: { value: 'Тест-N' }, currentTarget: inp });
+    await tick(650);   // SEARCH_DEBOUNCE_V1 — 500 мс
+    registerLater(s.t.db, 'N02');
+    assert.ok(!textOf(w.root).includes('Тест-N02'), 'стенд: новый пациент виден до перечитывания');
+    w.show();
+    for (let i = 0; i < 30 && !textOf(w.root).includes('Тест-N02'); i++) await tick(60);
+    assert.ok(textOf(w.root).includes('Тест-N02'), 'показ панели не перечитал список');
+    assert.ok(textOf(w.root).includes('Тест-N01'));
+    assert.equal(searchInput(w.root), inp, 'поле поиска перерисовано — курсор и набранное пропали бы');
+    assert.equal(statusSel(w.root).value, 'all', 'фильтр сброшен');
+    // поиск живёт в состоянии модуля и переживает новое открытие раздела — стенд его снимает
+    inp.dispatchEvent({ type: 'input', target: { value: '' }, currentTarget: inp });
+    await tick(650);
+  } finally { cabinet.stopAutoFresh(); s.close(); }
+});
+
+test('D6: таймер 60 с — один; тик перечитывает; при открытом окне — пропуск; вкладка ушла или панель скрыта — таймер снят', async () => {
+  const s = await stand((db, add) => { add('T01', {}); });
+  const prevQS = document.querySelector;
+  try {
+    INTERVALS.length = 0;
+    let w = await openWork();
+    w = await openWork();   // второе открытие раздела — прежний таймер снят, новый один
+    const mine = INTERVALS.filter((x) => x.ms === cabinet.AUTO_FRESH_MS);
+    assert.equal(cabinet.AUTO_FRESH_MS, 60000);
+    assert.equal(mine.length, 2, 'на каждое открытие — по таймеру');
+    assert.ok(cabinet.autoFreshRunning(), 'таймер не запущен на «Моих приёмах»');
+    registerLater(s.t.db, 'T02');
+    document.querySelector = (q) => (/\.modal/.test(q) ? mk('div') : null);
+    assert.equal(await cabinet.autoFreshTick(), false, 'тик при открытом окне не пропущен');
+    assert.ok(!textOf(w.root).includes('Тест-T02'), 'список перерисован под открытым окном');
+    document.querySelector = prevQS;
+    assert.equal(await cabinet.autoFreshTick(), true);
+    assert.ok(textOf(w.root).includes('Тест-T02'), 'тик не перечитал список');
+    // вкладку переключили — таймер снят
+    const dashTab = walk(w.root).find((n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab' && /Дашборд/.test(textOf(n)));
+    dashTab.click();
+    await tick(100);
+    assert.ok(!cabinet.autoFreshRunning(), 'таймер пережил уход с вкладки');
+    // вернулись на «Мои приёмы» — список перечитан, таймер снова один
+    registerLater(s.t.db, 'T03');
+    walk(w.root).find((n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab' && /Мои приёмы/.test(textOf(n))).click();
+    for (let i = 0; i < 30 && !textOf(w.root).includes('Тест-T03'); i++) await tick(60);
+    assert.ok(textOf(w.root).includes('Тест-T03'), 'открытие вкладки не перечитало список');
+    assert.ok(cabinet.autoFreshRunning());
+    // панель скрыта оболочкой (другой раздел) — первый же тик снимает таймер, сервер не спрашивается
+    w.root.style.display = 'none';
+    assert.equal(await cabinet.autoFreshTick(), false);
+    assert.ok(!cabinet.autoFreshRunning(), 'таймер скрытой панели не снят');
+  } finally { document.querySelector = prevQS; cabinet.stopAutoFresh(); s.close(); }
+});

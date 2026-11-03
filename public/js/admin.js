@@ -656,6 +656,13 @@ function navigate(view, payload, opts = {}) {
         if (payload && !opts.skipHistory && typeof existing.onPayload === 'function') {
             try { existing.onPayload(payload); } catch (_) { /* экран сам скажет, если не смог */ }
         }
+        // DIAG_ROUTE_V1 (D6, решение владельца 2026-11-03) — ctx.onShow(fn): экран, который
+        // САМ попросил (сегодня — кабинет врача), узнаёт, что его панель показали снова
+        // (боковое меню, «Назад»), и перечитывает свои данные, не перерисовываясь: панель
+        // по-прежнему из кэша. Экраны, не подписавшиеся, ничего не замечают.
+        if (typeof existing.onShow === 'function') {
+            try { existing.onShow(); } catch (_) { /* экран сам скажет, если не смог */ }
+        }
         if (!opts.skipHistory) pushHistory(view, existing.payload);
         return;
     }
@@ -1187,8 +1194,10 @@ async function renderViewInto(pane) {
     // CLINIC_API_STEP7_V1 (ревью №3) — onPayload(fn): экран просит звать fn(payload)
     // при каждом новом переходе в его УЖЕ смонтированную панель (navigate выше).
     pane.onPayload = null;
+    pane.onShow = null;   // DIAG_ROUTE_V1 (D6) — показ панели из кэша (navigate выше)
     const ctx = { onNavigate: navigate, payload: pane.payload, tabId: pane.key,
-        onPayload: (fn) => { pane.onPayload = typeof fn === 'function' ? fn : null; } };
+        onPayload: (fn) => { pane.onPayload = typeof fn === 'function' ? fn : null; },
+        onShow: (fn) => { pane.onShow = typeof fn === 'function' ? fn : null; } };
     // ONE_NAME_PER_SCREEN_V1 — экран назвал себя внутри себя; имя переезжает в
     // верхнюю панель, а дубль снимается. `finally`, а не после await: экран,
     // упавший на полпути, всё равно не должен оставить второе имя на месте.
