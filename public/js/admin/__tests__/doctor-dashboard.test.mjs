@@ -23,6 +23,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 
+// DOCTOR_DASHBOARD_V1 (ревью, остаток 12) — ПОЯС ПРОГОНА ЗАКРЕПЛЁН: Ташкент, как у клиник.
+// Дата рождения приходит строкой 'ГГГГ-ММ-ДД', а new Date() читает её как полночь UTC: в
+// поясе западнее Гринвича (America/New_York, GMT-12) это вечер ПРЕДЫДУЩЕГО местного дня, и
+// у пациентки, чей день рождения завтра, возраст выходил на год больше (25 вместо 24) —
+// тест падал по поясу машины, а не по коду клиники. Пояс ставится до первого new Date():
+// NOW, посев и проверки — в одном поясе.
+process.env.TZ = 'Asia/Tashkent';
+
 // --- fake DOM (тот же харнесс, что у lab-panels-mode.test.mjs) --------------
 class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={setProperty(k,v){this[k]=v;},getPropertyValue(k){return this[k];}};this.children=[];this.attrs={};this.className='';this._t='';this._l={};this.dataset={};this.value='';}
  appendChild(c){this.children.push(c);return c;} removeChild(c){const i=this.children.indexOf(c);if(i>-1)this.children.splice(i,1);return c;}
