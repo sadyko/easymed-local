@@ -536,6 +536,36 @@ onLineStatus(noteDashLineStatus);
 
 const money = (n) => Math.round(Number(n) || 0).toLocaleString('ru-RU');
 
+// DIAG_ROUTE_V1 (D2) — визиты окна «Моего дня», которые ведёт ДРУГОЙ врач (или никто), но где
+// у этого врача есть своя строка. Строки — свои (doctor_id), своего здания, живые; визиты —
+// в окне дня, своего здания, порциями по 500 (сервер принимает до 1000 номеров).
+const LINE_VISIT_STATUSES = ['added', 'queued', 'in_progress', 'completed'];
+const VISIT_COLUMNS = 'id, visit_date, duration_minutes, status, patient_id, service_id, room_id, patients(id, mrn, full_name, first_name, last_name, phone, date_of_birth), services(id, name, duration_minutes), rooms(id, name, code)';
+async function loadLineVisits(me, ownIds, from, to) {
+    const out = { rows: [], failed: false };
+    const { data: lines, error } = await supabase.from('visit_services')
+        .select('visit_id')
+        .eq('doctor_id', me)
+        .is('sync_origin', null)
+        .in('status', LINE_VISIT_STATUSES)
+        .order('created_at', { ascending: false })
+        .limit(2000);
+    if (error) { console.warn('[doctor-dash] line visits:', error.message); out.failed = true; return out; }
+    const ids = [...new Set((lines || []).map((l) => l.visit_id).filter((id) => id != null && !ownIds.has(String(id))))];
+    for (let i = 0; i < ids.length; i += 500) {
+        const { data, error: vErr } = await supabase.from('visits')
+            .select(VISIT_COLUMNS)
+            .in('id', ids.slice(i, i + 500))
+            .is('sync_origin', null)
+            .gte('visit_date', from.toISOString())
+            .lt('visit_date', to.toISOString())
+            .limit(800);
+        if (vErr) { console.warn('[doctor-dash] line visits:', vErr.message); out.failed = true; continue; }
+        out.rows.push(...(data || []));
+    }
+    return out;
+}
+
 /**
  * Всё, что нужно экрану, четырьмя запросами (три к данным + выплата с сервера).
  * КАЖДЫЙ сужен на СВОЙ id, и id берётся из dashboardDoctorId(), а не из
@@ -571,7 +601,14 @@ export async function loadDoctorDashboard() {
         .order('visit_date', { ascending: true })
         .limit(800);
     if (vErr) { console.warn('[doctor-dash] visits:', vErr.message); state.failed = true; }
-    state.visits = (visitRows || []).map((v) => {
+    // DIAG_ROUTE_V1 (D2) — И ВИЗИТЫ, ГДЕ У ВРАЧА ЕСТЬ СВОЯ СТРОКА. Визит «ведёт» первый врач
+    // его строк (мастер записи dayDoc, walk-in headDoctor): регистратура записала
+    // «консультация терапевта + УЗИ» одним визитом — визит терапевта, и сонолог видел
+    // свою строку в «Моих приёмах», но не в «Моём дне», с которого кабинет открывается.
+    // Те же окно и здание; услуга такого визита — его строка, а не головная услуга визита.
+    const lineOnly = await loadLineVisits(me, new Set((visitRows || []).map((v) => String(v.id))), from, to);
+    if (lineOnly.failed) state.failed = true;
+    const asVisit = (v, own) => {
         const p = v.patients || {};
         return {
             id: v.id,
@@ -581,23 +618,26 @@ export async function loadDoctorDashboard() {
             patientName: [p.last_name, p.first_name].filter(Boolean).join(' ').trim() || p.full_name || '',
             mrn: p.mrn || '',
             dob: p.date_of_birth || null,
-            serviceName: (v.services && v.services.name) || '',
+            serviceName: own ? ((v.services && v.services.name) || '') : '',
             room: (v.rooms && (v.rooms.name || v.rooms.code)) || '',
         };
-    });
+    };
+    state.visits = [...(visitRows || []).map((v) => asVisit(v, true)), ...lineOnly.rows.map((v) => asVisit(v, false))]
+        .sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
 
     // 3. Услуги ЭТИХ приёмов. Фильтр по visit_id, а не по created_at: услугу
     // могли завести за неделю до приёма, и окно по дате создания её потеряло бы.
     const visitIds = state.visits.map((v) => v.id).filter((x) => x != null);
     let svcRows = [];
-    if (visitIds.length) {
+    // DIAG_ROUTE_V1 (D2) — порциями по 500: визитов окна теперь и свои, и «по строке».
+    for (let i = 0; i < visitIds.length; i += 500) {
         const { data, error } = await supabase.from('visit_services')
             .select('id, visit_id, service_id, status, created_at, services(id, name)')
             .eq('doctor_id', me)
-            .in('visit_id', visitIds)
+            .in('visit_id', visitIds.slice(i, i + 500))
             .limit(2000);
         if (error) { console.warn('[doctor-dash] services:', error.message); state.failed = true; }
-        svcRows = data || [];
+        svcRows.push(...(data || []));
     }
     // REFUND_ANY_V1 (ревью B4, п. 9c) — какие из услуг дня касса вернула: один
     // вопрос на загрузку (refunded-lines.js). Сбой — отметок нет, числа как прежде.

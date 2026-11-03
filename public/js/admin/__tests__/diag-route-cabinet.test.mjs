@@ -132,6 +132,30 @@ async function myServices(codes) {
   return { root, active, all: shownCodes(root, codes) };
 }
 
+/** «Мой день» (дашборд — кабинет открывается им): коды, видные на странице. */
+async function myDay(codes) {
+  const root = mk('div');
+  await cabinet.renderConsultation(root, { onNavigate() {}, tabId: 'consultation', payload: {} });
+  for (let i = 0; i < 30 && !codes.some((c) => textOf(root).includes('Тест-' + c)); i++) await tick(60);
+  await tick(200);
+  return shownCodes(root, codes);
+}
+
+// DIAG_ROUTE_V1 (D2) — «Мой день» строился по ВИЗИТАМ врача (visits.doctor_id), а визит
+// «ведёт» первый врач его строк: «консультация терапевта + УЗИ» одним визитом — визит
+// терапевта, и сонолог видел свою строку в «Моих приёмах», но не в «Моём дне» (B10, B11).
+test('«Мой день»: визит, который ведёт другой врач или никто, но с МОЕЙ строкой, — в моём дне (B10, B11); чужой строки — нет', async () => {
+  const s = await stand((db, add) => {
+    add('B01', {});                                  // свой визит, своя строка
+    add('B10', {}, {}, { doctor: OTHER });           // визит терапевта, строка — моя
+    add('B11', {}, {}, { doctor: null });            // визит без врача, строка — моя
+    add('B12', {}, { doctor: OTHER }, { doctor: OTHER });   // визит и строка терапевта
+  });
+  try {
+    assert.deepEqual(await myDay(s.codes), ['B01', 'B10', 'B11']);
+  } finally { s.close(); }
+});
+
 test('«Мои приёмы»: группа «Диагностика» видна врачу при любом типе каталога и отделении (A01–A13); «Процедуры» — нет (A14)', async () => {
   const s = await stand((db, add) => {
     const typ = (name) => Number(db.prepare('INSERT INTO service_types (name) VALUES (?)').run(name).lastInsertRowid);

@@ -226,7 +226,10 @@ test('плитка «Зарплата» показывает долю врача
   assert.ok(textOf(tip).includes('40 000'), 'подсказка дня не сходится с долей: ' + textOf(tip));
   // PAY_BASIS_PERFORMED_V1 — кабинет больше не собирает деньги сам: ни строк
   // счетов, ни счетов, ни строк визита «для доли» он не читает.
-  assert.ok(!dbCalls.some((c) => ['invoice_items', 'invoices', 'visit_services'].includes(c.table)),
+  // DIAG_ROUTE_V1 (D2) — «Мой день» спрашивает строки врача только номером визита
+  // (какие визиты дня его — select 'visit_id'): ни цены, ни суммы в этом вопросе нет.
+  const lineVisitsAsk = (c) => c.table === 'visit_services' && String(c.columns || '').replace(/\s+/g, '') === 'visit_id';
+  assert.ok(!dbCalls.some((c) => ['invoice_items', 'invoices', 'visit_services'].includes(c.table) && !lineVisitsAsk(c)),
     'вкладка «Зарплата» читает таблицы денег напрямую: ' + dbCalls.map((c) => c.table).join(','));
 });
 
