@@ -521,3 +521,41 @@ test('REFERRAL_LINE_V1: возврат с новой услугой перено
   assert.notEqual(nl.id, a.vs);
   assert.deepEqual([nl.referred_by_source_id, nl.referral_note], [src, 'натощак']);
 });
+
+// REFERRAL_LINE_V1 · К3/К6 — ОБА ОКНА КАССЫ И БОНУС НАПРАВИВШЕГО СТРОКИ. «Заменить услугу» —
+// та же строка: направивший и рекомендация остаются, бонус — по НОВОЙ услуге; «Вернуть эту
+// услугу и выставить новую» — бонус за новую позицию, один раз; «Вернуть услугу» — бонуса нет.
+test('REFERRAL_LINE_V1 (К3/К6): замена, возврат с новой и возврат — бонус направившего строки идёт за позицией счёта', () => {
+  const { db, pid, CONS, USG } = clinic();
+  db.prepare('UPDATE referral_source_categories SET standard_percent = 10 WHERE is_internal = 1').run();
+  const src = db.prepare('SELECT id FROM referral_sources WHERE doctor_id = ?').get(DOC2).id;
+  const stamp = (vsId) => db.prepare("UPDATE visit_services SET referred_by_source_id = ?, referral_note = 'натощак' WHERE id = ?").run(src, vsId);
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const bonus = () => {
+    const r = runReport(db, { kind: 'referrals_detail', from: today, to: today }, admin);
+    return r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i]])))
+      .filter((o) => o['Источник'] === 'Врач Второй').map((o) => [o['Услуга'], o['Вознаграждение']]);
+  };
+
+  // Обычная замена оплаченной строки (работа не начата): строка та же, источник при ней.
+  const a = billed(db, pid, CONS, DOC);
+  stamp(a.vs);
+  recordPayment(db, { invoice_id: a.invoiceId, amount: a.invoice.total_amount, method: 'cash' }, cashier);
+  call('cashier_line_swap_paid', db, { visit_service_id: a.vs, new_service_id: USG }, cashier);
+  assert.deepEqual([vsRow(db, a.vs).service_id, vsRow(db, a.vs).referred_by_source_id, vsRow(db, a.vs).referral_note], [USG, src, 'натощак']);
+  assert.deepEqual(bonus(), [['УЗИ', 8000]], 'бонус — не по новой услуге (10 % от 80 000)');
+
+  // «Вернуть эту услугу и выставить новую»: бонус — за новую позицию, прежняя строка — ничего.
+  const b = started(db, pid, CONS, DOC);
+  stamp(b.vs);
+  call('cashier_line_rebill_paid', db, { visit_service_id: b.vs, new_service_id: USG, doctor_id: DOC }, cashier);
+  assert.deepEqual(bonus(), [['УЗИ', 8000], ['УЗИ', 8000]], 'возврат с новой: бонус дважды или пропал');
+
+  // «Вернуть услугу»: позиции счёта нет — бонуса нет.
+  const c = started(db, pid, CONS, DOC);
+  stamp(c.vs);
+  assert.equal(bonus().length, 3, 'стенд: оплаченная строка с направившим даёт бонус');
+  call('refund_invoice_line', db, { invoice_item_id: itemsOf(db, c.invoiceId)[0].id }, cashier);
+  assert.deepEqual(bonus(), [['УЗИ', 8000], ['УЗИ', 8000]], 'возвращённая строка приносит бонус');
+});
