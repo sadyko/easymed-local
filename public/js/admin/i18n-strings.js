@@ -15,6 +15,7 @@ export const STRINGS = {
   "Показаны последние {n}. Остальные — в карте пациента.": {"en":"Showing the latest {n}. The rest are in the patient card.","ru":"Показаны последние {n}. Остальные — в карте пациента.","uz":"Oxirgi {n} tasi ko‘rsatilgan. Qolganlari — bemor kartasida."},   // PASTE_SOURCES_V1
   "Госпитализация № {no}": {"en":"Admission No. {no}","ru":"Госпитализация № {no}","uz":"Yotqizish № {no}"},   // PASTE_SOURCES_V1
   "Заключение визита": {"en":"Visit conclusion","ru":"Заключение визита","uz":"Tashrif xulosasi"},   // PASTE_SOURCES_V1 — название документа от сервера (rpc patient_doc_sources)
+  "Раздел сокращён — полный текст в карте пациента": {"en":"Section shortened — the full text is in the patient card","ru":"Раздел сокращён — полный текст в карте пациента","uz":"Bo‘lim qisqartirilgan — to‘liq matn bemor kartasida"},   // PASTE_SOURCES_V1 (ревью L1)
 
   // INVOICE_APPEND_V1 — новые услуги — в неоплаченный счёт (invoice-append.js, fast-registration.js)
   "Добавлено в счёт № {no} — новая сумма {sum} сум": {"en":"Added to invoice no. {no} — new total {sum} UZS","ru":"Добавлено в счёт № {no} — новая сумма {sum} сум","uz":"{no}-son hisobga qo‘shildi — yangi summa {sum} so‘m"},   // INVOICE_APPEND_V1

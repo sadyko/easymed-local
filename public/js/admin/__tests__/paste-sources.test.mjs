@@ -213,3 +213,102 @@ test('файлы: только «Открыть», без вставки; фай
     assert.ok(TOASTS.some((t) => t.startsWith('Файл лежит на том компьютере, где его загрузили')), TOASTS.join(' | '));
     m.close();
 });
+
+// ---------------------------------------------------------------------------
+// PASTE_SOURCES_V1 — РЕВЬЮ U3 (2026-11-03).
+// ---------------------------------------------------------------------------
+const EMPTY = () => ({ consult: [], diag: [], labs: [], inpatient: [], files: [] });
+
+test('ревью M2: группа, обрезанная до нуля, говорит «показаны последние…», а не «документов пока нет»', async () => {
+    answer({ patient_id: 7, closed: [], truncated: { consult: true, diag: false, labs: false, inpatient: false, files: false }, groups: EMPTY() });
+    const m = PS.openPasteSourcesModal({ patientId: 7 });
+    await m.ready;
+    const text = String(m.overlay.querySelector('[data-paste-body]').textContent);
+    assert.ok(text.includes('Показаны последние 0. Остальные — в карте пациента.'), text);
+    assert.ok(!text.includes('Документов этого вида у пациента пока нет.'), 'обрезанная группа сказала «документов нет»');
+    m.close();
+});
+
+test('ревью L1: раздел, сокращённый пределом, назван в окне', async () => {
+    const data = FIXTURE();
+    data.groups.consult[0].sections[1] = { key: 'hpi', label: 'Анамнез', html: 'Длинный…', cut: true };
+    answer(data);
+    const m = PS.openPasteSourcesModal({ patientId: 7 });
+    await m.ready;
+    const card = m.overlay.querySelector('[data-paste-doc="line:61"]');
+    const cutNotes = card.querySelectorAll('[data-paste-cut]');
+    assert.deepEqual(cutNotes.map((n) => n.getAttribute('data-paste-cut')), ['hpi'], 'сокращённый раздел не назван (или назван не тот)');
+    assert.ok(String(cutNotes[0].textContent).includes('Раздел сокращён — полный текст в карте пациента'), cutNotes[0].textContent);
+    m.close();
+});
+
+test('ревью L2/L3: «Измерения» своего исследования — «Филиал X» и «не проверено» в окне и во вставке; у документа другого здания филиал не повторяется', async () => {
+    const data = FIXTURE();
+    data.groups.diag = [
+        { id: 'line:68', kind: 'diag', source: 'notes', visit_service_id: 68, title: 'ЭхоКГ', doctor: 'Врач Тестов', at: '2026-10-05T07:00:00Z', origin: null, unverified: true,
+            sections: [{ key: 'description', label: 'Описание', html: 'Камеры не расширены' },
+                { key: 'measurements', label: 'Измерения', html: '<table class="a4-restbl"><tbody><tr><td>ФВ</td><td>60 %</td><td></td></tr></tbody></table>', origin: 'B', unverified: true }] },
+        { id: 'line:70', kind: 'diag', source: 'lab', visit_service_id: 70, title: 'УЗИ', doctor: '', at: '2026-10-04T07:00:00Z', origin: 'C', unverified: false,
+            sections: [{ key: 'measurements', label: 'Измерения', html: '<table class="a4-restbl"><tbody><tr><td>Печень</td><td>14 см</td><td></td></tr></tbody></table>', origin: 'C', unverified: false }] },
+    ];
+    answer(data);
+    const calls = [];
+    const m = PS.openPasteSourcesModal({ patientId: 7, onInsert: (html, field) => calls.push({ html, field }) });
+    await m.ready;
+    tabBtn(m, 'diag').dispatch('click');
+    const own = m.overlay.querySelector('[data-paste-doc="line:68"]');
+    const label = own.querySelector('[data-paste-seclabel="measurements"]');
+    assert.ok(label && String(label.textContent).includes('Филиал B') && String(label.textContent).includes('не проверено'), label && label.textContent);
+    assert.ok(!String(own.querySelector('[data-paste-seclabel="description"]').textContent).includes('Филиал'), 'у описания своего здания пометка филиала');
+    own.querySelector('[data-paste-insert="line:68"]').dispatch('click');
+    assert.ok(calls.at(-1).html.includes('<div><b>Измерения (Филиал B, не проверено):</b></div>'), calls.at(-1).html);
+    assert.ok(calls.at(-1).html.includes('<div><b>Описание:</b></div>'), calls.at(-1).html);
+    const other = m.overlay.querySelector('[data-paste-doc="line:70"]');
+    assert.ok(!String(other.querySelector('[data-paste-seclabel="measurements"]').textContent).includes('Филиал'), 'филиал повторён у раздела');
+    other.querySelector('[data-paste-insert="line:70"]').dispatch('click');
+    assert.ok(calls.at(-1).html.includes(', Филиал C</div>') && calls.at(-1).html.includes('<div><b>Измерения:</b></div>'), calls.at(-1).html);
+    m.close();
+});
+
+test('ревью L5: день в заголовке вставки — день документа (docDayText): день визита, не позже первой подписи; у копии архива — напечатанный на ней', () => {
+    const notes = { id: 'line:61', kind: 'consult', title: 'Приём', doctor: 'Врач', at: '2026-10-08T07:00:00.000Z',
+        visit_date: '2026-10-01T05:00:00Z', first_signed_at: '2026-10-01T07:00:00.000Z', sections: [{ key: 'a', label: 'Жалобы', html: 'x' }] };
+    assert.ok(PS.docInsertHtml(notes, ['a']).startsWith('<div><b>Приём</b> — ' + PS.docDay('2026-10-01T05:00:00Z') + ', Врач</div>'), PS.docInsertHtml(notes, ['a']));
+    const future = { ...notes, visit_date: '2026-10-20T05:00:00Z' };   // запись на будущий день, проведённая раньше: потолок — первая подпись
+    assert.ok(PS.docInsertHtml(future, ['a']).includes(' — ' + PS.docDay('2026-10-01T07:00:00.000Z') + ','), PS.docInsertHtml(future, ['a']));
+    const copy = { ...notes, id: 'doc:9', first_signed_at: null, issue_date: '20.10.2026' };
+    assert.ok(PS.docInsertHtml(copy, ['a']).includes(' — 20.10.2026, Врач'), PS.docInsertHtml(copy, ['a']));
+    const bad = { ...copy, issue_date: '2026-10-20' };   // не ДД.ММ.ГГГГ — по визиту
+    assert.ok(PS.docInsertHtml(bad, ['a']).includes(' — ' + PS.docDay('2026-10-01T05:00:00Z') + ','), PS.docInsertHtml(bad, ['a']));
+});
+
+test('ревью L6: вкладки переносятся на узком экране — строка flex с переносом, не пять равных колонок сетки', async () => {
+    answer(FIXTURE());
+    const m = PS.openPasteSourcesModal({ patientId: 7 });
+    await m.ready;
+    const row = m.overlay.querySelector('[role="tablist"]');
+    assert.equal(row.style.display, 'flex');
+    assert.equal(row.style.flexWrap, 'wrap');
+    assert.ok(!row.style.gridTemplateColumns, 'осталась сетка из пяти колонок');
+    for (const b of row.querySelectorAll('[data-paste-tab]')) assert.equal(b.style.whiteSpace, 'nowrap', 'подпись вкладки ломается посередине');
+    m.close();
+});
+
+test('ревью (NIT): открывается первая вкладка с документами, если «Консультации» пусты или закрыты; выбор врача не перебивается', async () => {
+    const data = FIXTURE();
+    data.groups.consult = [];
+    answer(data);
+    const m = PS.openPasteSourcesModal({ patientId: 7 });
+    await m.ready;
+    assert.equal(tabBtn(m, 'labs').getAttribute('aria-selected'), 'true', 'открыта пустая вкладка');
+    assert.ok(m.overlay.querySelector('[data-paste-doc="labs:50"]'));
+    m.close();
+    data.groups.consult = null;
+    data.closed = ['consult', 'diag', 'files'];
+    answer(data);
+    const m2 = PS.openPasteSourcesModal({ patientId: 7 });
+    tabBtn(m2, 'inpatient').dispatch('click');   // врач выбрал вкладку, пока шёл ответ
+    await m2.ready;
+    assert.equal(tabBtn(m2, 'inpatient').getAttribute('aria-selected'), 'true', 'выбор врача перебит');
+    m2.close();
+});
