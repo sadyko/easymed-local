@@ -1151,3 +1151,24 @@ test('ОКНО ПРИЁМА: строки подписаны по правде �
     assert.ok(hasBtn(free));
   } finally { delete window.easymed; }
 });
+
+// REPEAT_VISIT_V1 (ревью) — ЗАПИСЬ И ПЕРЕНОС ИЗ КАЛЕНДАРЯ СБРАСЫВАЮТ КЭШ СВОБОДНОГО ВРЕМЕНИ.
+// Дни врача кэширует каталог (service-picker-modal.js loadSlotDay — один экземпляр на
+// приложение, тот же адрес ?v=ownrep4, страж picker-one-instance.test.mjs). Мастер,
+// окно «Повторный визит» и запись (visit-booking.js) сбрасывают его после записи, а
+// calendar_book календаря — нет: после переноса или смены статуса в календаре другие
+// окна показывали прежнее свободное время.
+test('REPEAT_VISIT_V1 (ревью): смена статуса записи в календаре сбрасывает кэш свободного времени каталога', async () => {
+  document.body.children.length = 0;
+  const { loadSlotDay, slotDayCached } = await import('../views/service-picker-modal.js?v=ownrep4');
+  const { box, dayIso } = await render();
+  const day = await loadSlotDay(7, dayIso, 30);
+  assert.ok(day && slotDayCached(7, dayIso, 30), 'кэш дня врача не заполнился');
+  const modal = await openAppt(box);
+  const pill = walk(modal).find((n) => n.tagName === 'BUTTON' && String(n.className).includes('rcal-stbtn') && /Отменён/.test(textOf(n)));
+  assert.ok(pill, 'нет кнопки статуса «Отменён»');
+  pill.click();
+  await flush(20);
+  assert.equal(DB.prepare('SELECT status FROM visits WHERE id = 55').get().status, 'cancelled', 'статус не сменился');
+  assert.equal(slotDayCached(7, dayIso, 30), null, 'после записи календаря каталог показывает прежнее свободное время');
+});

@@ -76,7 +76,7 @@ import { hasActorRole } from '../permissions.js';
 // модуле на три доски (календарь, очередь, канбан), чтобы «мятный» везде
 // означал одно и то же.
 import { pastelFor } from '../pastel.js?v=pastel1';
-import { openServicePickerModal } from './service-picker-modal.js?v=ownrep4';   // RESCAL_WIRE_V1 — same URL as other importers (one instance)
+import { openServicePickerModal, forgetSlots } from './service-picker-modal.js?v=ownrep4';   // RESCAL_WIRE_V1 — same URL as other importers (one instance) · REPEAT_VISIT_V1 (ревью) — forgetSlots
 import { registrarHeader } from './registrar-header.js?v=aurora5';   // NO_GREETING_V1 — same URL as patients.js (one instance)
 // RCAL_REFERENCE_LAYOUT_V1 — счётная часть новой раскладки (мини-месяц, сколько
 // дней помещается, загрузка колонки, рабочий набор оператора). Отдельным
@@ -642,7 +642,10 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
     /** Единственный путь записи/переноса/растягивания. Возвращает true при успехе. */
     async function commit(args, { onSlotTaken = null } = {}) {
         const { data, error } = await supabase.rpc('calendar_book', args);
-        if (!error) return data || true;
+        // REPEAT_VISIT_V1 (ревью) — запись, перенос или смена статуса меняют свободное
+        // время: кэш дней каталога (мастер, окно «Повторный визит», CRM) больше не
+        // правда — как после записи через visit-booking.js.
+        if (!error) { forgetSlots(); return data || true; }
         if (error.code === 'slot_taken' && onSlotTaken) { onSlotTaken(error); return false; }
         toast(rpcErrorText(error), 'fail');
         return false;
