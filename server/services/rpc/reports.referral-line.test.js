@@ -109,6 +109,36 @@ test('закрытый месяц не меняется: правка ставк
   assert.equal(doctorReferralReward(db, { doctor_id: 1, from: FROM, to: TO }, admin).reward, 10000);
 });
 
+// Ревью U10 MEDIUM-4 (вариант «б»): два внешних партнёра за одну строку не платятся — строка
+// остаётся за партнёром визита (или карточки пациента); «Кто направил» стойки у новой строки к
+// нему не добавляется. Врач строки — по-прежнему сверху (правило «обоим»).
+test('MEDIUM-4 (вариант «б»): партнёр визита или пациента + партнёр строки — платится партнёр визита/пациента', () => {
+  const { db, S1, P } = seed();
+  const extCat = db.prepare('SELECT category_id c FROM referral_sources WHERE id = ?').get(P).c;
+  const Q = Number(db.prepare("INSERT INTO referral_sources (name, category_id) VALUES ('Клиника Б', ?)").run(extCat).lastInsertRowid);
+  line(db, { pt: patient(db, 'Ергашев'), visitSource: P, lineSource: Q });
+  line(db, { pt: patient(db, 'Жураев', P), lineSource: Q });
+  line(db, { pt: patient(db, 'Зокиров'), visitSource: S1, lineSource: Q });
+  const rows = objects(run(db, 'referrals_detail')).map((o) => [o['Источник'], o['Вознаграждение']]);
+  assert.deepEqual(rows.filter((r) => r[0] === 'Клиника Х'), [['Клиника Х', 20000], ['Клиника Х', 20000]]);
+  assert.deepEqual(rows.filter((r) => r[0] === 'Клиника Б'), [['Клиника Б', 20000]], 'партнёр строки — только там, где у визита врач, а не партнёр');
+  assert.deepEqual(rows.filter((r) => r[0] === 'Направлялов Н.Н.'), [['Направлялов Н.Н.', 10000]]);
+});
+
+// Ревью U10 LOW-6: примечание не обещает больше, чем делает расчёт. Врач — источник ВИЗИТА — за
+// свою услугу вознаграждение получает (прежнее правило визита); «за свою услугу не получает» —
+// только направивший СТРОКИ.
+test('LOW-6: примечание «обоим» — правило своей строки названо для направившего строки, а не для любого врача', () => {
+  const { db, S1, P } = seed();
+  line(db, { pt: patient(db, 'Бобоев', P), lineSource: S1 });
+  line(db, { pt: patient(db, 'Валиев'), visitSource: S1, performer: 1 });
+  const rep = run(db, 'referrals_detail');
+  assert.deepEqual(objects(rep).filter((o) => o['Источник'] === 'Направлялов Н.Н.').map((o) => o['Вознаграждение']), [10000, 10000],
+    'стенд: врач — источник визита — получает и за свою услугу (правило визита не менялось)');
+  assert.ok(!rep.notes.some((n) => n.includes('за свою услугу врач вознаграждения не получает')), 'примечание обещает правило, которого нет у источника визита');
+  assert.ok(rep.notes.some((n) => n.includes('получают оба') && n.includes('по этой строке')), 'правило своей строки — для направившего строки: ' + JSON.stringify(rep.notes));
+});
+
 test('push-down и без него — одни и те же строки вознаграждения', () => {
   const { db, S1, P } = seed();
   line(db, { pt: patient(db, 'Бобоев', P), lineSource: S1 });

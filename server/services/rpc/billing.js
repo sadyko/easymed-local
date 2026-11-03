@@ -2127,6 +2127,11 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
       VALUES (?, ?, ?, ?, ?, ?, 'added', ?, ?, ?, ?, ?, ?)`)
       .run(vs.visit_id, newServiceId, targetDoctor, vs.quantity || 1, unit, lineTotal, tier, item.id, vs.scheduled_at || null, user.id,
         vs.referred_by_source_id ?? null, vs.referral_note ?? null).lastInsertRowid);
+    // Ревью U10 LOW-5 — и связь закрытой рекомендации (recommended_services.visit_service_id,
+    // DOCTOR_REFERRAL_DESK_V1): направление продолжает новая строка. Иначе «Внутренние врачи»
+    // считали новую строку отдельным направлением («Ожидает») рядом с той же рекомендацией.
+    // Обычная замена — та же строка, связь на месте.
+    db.prepare('UPDATE recommended_services SET visit_service_id = ? WHERE visit_service_id = ?').run(lineId, vsId);
   } else {
     if (serviceChanges) {
       db.prepare('UPDATE visit_services SET service_id = ?, doctor_id = ?, unit_price = ?, total = ?, package_id = NULL, package_full = NULL, package_price = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')   // SERVICES_PACKAGES_V1

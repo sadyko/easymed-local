@@ -91,7 +91,8 @@ function sourceVisitsSql(rangeSql = '1=1') {
 // REFERRAL_LINE_V1 — направления врача строками визита: строка с его внутренним источником,
 // заведённая в период. Строка, которой закрыта рекомендация (recommended_services
 // .visit_service_id), — та же рекомендация и второй раз не считается; возвращённая — не
-// считается вовсе (отменённая — «Отменено»).
+// считается вовсе (отменённая — «Отменено»); строки отменённого визита и визита «не пришёл» —
+// тоже не считаются, как визиты внешних врачей (VISIT_LIVE; ревью U10 LOW-9).
 function lineReferrals(db, from, to, doctorId = null) {
   const lw = localRangeWhere('vs.created_at', from, to);
   return db.prepare(`
@@ -105,6 +106,7 @@ function lineReferrals(db, from, to, doctorId = null) {
       LEFT JOIN consultation_types ct ON ct.id = vs.consultation_type_id
      WHERE rs.doctor_id IS NOT NULL${doctorId != null ? ' AND rs.doctor_id = ?' : ''}
        AND ${lw.sql}
+       AND ${VISIT_LIVE}   -- ревью U10 LOW-9: строка отменённого визита и «не пришёл» — не направление (и не «Ожидает»)
        AND ${LINE_NOT_REFUNDED('vs')}
        AND NOT EXISTS (SELECT 1 FROM recommended_services rr WHERE rr.visit_service_id = vs.id)
      ORDER BY vs.created_at DESC, vs.id DESC`).all(...(doctorId != null ? [Number(doctorId)] : []), ...lw.params);

@@ -84,3 +84,17 @@ test('К3/К5: возвращённая строка не считается н�
   const det = referralsDoctorDetail(db, { doctor_id: 3, ...period }, admin);
   assert.equal(det.referrals.length, 4);
 });
+
+// Ревью U10 LOW-9: строка направления отменённого визита или визита «не пришёл» — не направление
+// (как у визитов внешних врачей, VISIT_LIVE) и не «Ожидает».
+test('LOW-9: строки отменённого визита и визита «не пришёл» направлениями не считаются', () => {
+  const { db, internal, line, vis } = fresh();
+  for (const st of ['cancelled', 'no_show']) {
+    const v = Number(vis.run(11, atNoon(5)).lastInsertRowid);
+    line.run(v, 50, 'added', internal, atNoon(5));
+    db.prepare('UPDATE visits SET status = ? WHERE id = ?').run(st, v);
+  }
+  const d = referralsInternal(db, period, admin).doctors.find((r) => r.id === 3);
+  assert.deepEqual([d.referrals, d.done, d.waiting, d.patients], [3, 2, 1, 1], 'строки отменённых визитов посчитаны «Ожидает»');
+  assert.equal(referralsDoctorDetail(db, { doctor_id: 3, ...period }, admin).referrals.length, 3);
+});

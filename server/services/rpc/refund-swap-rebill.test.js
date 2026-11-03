@@ -21,6 +21,7 @@ import { createInvoiceForVisit, recordPayment } from './billing.js';
 import { openCashShift, shiftReport } from './cashier.js';
 import { createDeposit, acceptDeposit } from './deposits.js';
 import { doctorPaySummary, runReport } from './reports.js';
+import { referralsInternal } from './referrals.js';   // ревью U10 LOW-5 — «Внутренние врачи» после возврата с новой
 import { boardGroups, doctorQueueWaiting, issueQueueNumbers } from './queue.js';
 import { walletBalance } from '../domain/wallet.js';
 import { hashPassword } from '../auth.js';
@@ -520,6 +521,39 @@ test('REFERRAL_LINE_V1: возврат с новой услугой перено
   const nl = vsRow(db, r.line.id);
   assert.notEqual(nl.id, a.vs);
   assert.deepEqual([nl.referred_by_source_id, nl.referral_note], [src, 'натощак']);
+});
+
+// Ревью U10 LOW-5 (проба P3): строка, которой закрыта рекомендация, после «Вернуть эту услугу и
+// выставить новую» — направление то же, одно. Связь рекомендации переезжает на новую строку в той
+// же транзакции; иначе «Внутренние врачи» считали новую строку вторым направлением («Ожидает»).
+// Обычная замена — та же строка: связь на месте.
+test('REFERRAL_LINE_V1 (ревью LOW-5): возврат с новой услугой переносит и связь рекомендации — одно направление, не два', () => {
+  const { db, pid, CONS, USG, CT } = clinic();
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const src = db.prepare('SELECT id FROM referral_sources WHERE doctor_id = ?').get(DOC2).id;
+  const linkTo = (vsId) => {
+    db.prepare('UPDATE visit_services SET referred_by_source_id = ? WHERE id = ?').run(src, vsId);
+    return Number(db.prepare("INSERT INTO recommended_services (patient_id, service_id, service_name, recommended_by, status, closed_at, visit_service_id) VALUES (?, ?, 'Приём', ?, 'done', '2026-09-10T05:00:00Z', ?)")
+      .run(pid, CONS, DOC2, vsId).lastInsertRowid);
+  };
+  const doc2 = () => {
+    const x = referralsInternal(db, { from: today, to: today }, admin).doctors.find((r) => r.id === DOC2);
+    return [x.referrals, x.done, x.waiting];
+  };
+  const a = started(db, pid, CONS, DOC);
+  const recA = linkTo(a.vs);
+  assert.deepEqual(doc2(), [1, 1, 0], 'стенд: одна закрытая рекомендация');
+  const r = call('cashier_line_rebill_paid', db, { visit_service_id: a.vs, new_service_id: CT, doctor_id: DOC }, cashier);
+  assert.equal(db.prepare('SELECT visit_service_id v FROM recommended_services WHERE id = ?').get(recA).v, r.line.id, 'связь рекомендации осталась у возвращённой строки');
+  assert.deepEqual(doc2(), [1, 1, 0], 'одно направление посчитано дважды');
+  // Обычная замена оплаченной строки — та же строка, связь не трогается.
+  const b = billed(db, pid, CONS, DOC);
+  const recB = linkTo(b.vs);
+  recordPayment(db, { invoice_id: b.invoiceId, amount: b.invoice.total_amount, method: 'cash' }, cashier);
+  call('cashier_line_swap_paid', db, { visit_service_id: b.vs, new_service_id: USG }, cashier);
+  assert.equal(db.prepare('SELECT visit_service_id v FROM recommended_services WHERE id = ?').get(recB).v, b.vs);
+  assert.deepEqual(doc2(), [2, 2, 0]);
 });
 
 // REFERRAL_LINE_V1 · К3/К6 — ОБА ОКНА КАССЫ И БОНУС НАПРАВИВШЕГО СТРОКИ. «Заменить услугу» —
