@@ -231,11 +231,17 @@ function docSize(doc) {
  * которой нужно меньше равной доли, берёт своё; остаток поровну делят большие.
  * Внутри группы — новейшие первыми; документ, который не влез, пропускается
  * (следующий, поменьше, может влезть), а не обрывает группу.
+ * PASTE_SOURCES_V1 (полировка 3.21.0, п. 14; ревью R-L3) — ВТОРОЙ ПРОХОД: то, что
+ * доли не истратили (бюджет − взятое), получают пропущенные документы, новые первыми
+ * по всем группам (times — их `at`; без них — порядок групп и документов). Документ,
+ * который влезает в ответ целиком, больше не выпадает только потому, что он больше
+ * доли своей группы (М2f: два документа по 1 М при бюджете 1,5 М — прежде ни одного).
  * @param {Record<string, number[]>} sizes размеры документов группы, новые первыми
  * @param {number} budget
+ * @param {Record<string, Array<string|null>>} [times] время документов группы (для второго прохода)
  * @returns {Record<string, boolean[]>} кто остаётся в ответе
  */
-export function fitGroups(sizes, budget) {
+export function fitGroups(sizes, budget, times = null) {
   const keys = Object.keys(sizes);
   const need = Object.fromEntries(keys.map((k) => [k, sizes[k].reduce((a, b) => a + b, 0)]));
   const share = Object.fromEntries(keys.map((k) => [k, 0]));
@@ -249,9 +255,20 @@ export function fitGroups(sizes, budget) {
     pending = pending.filter((k) => !small.includes(k));
   }
   const out = {};
+  let used = 0;
   for (const k of keys) {
     let room = share[k];
-    out[k] = sizes[k].map((n) => { if (n <= room) { room -= n; return true; } return false; });
+    out[k] = sizes[k].map((n) => { if (n <= room) { room -= n; used += n; return true; } return false; });
+  }
+  // Полировка, п. 14 — второй проход (см. выше): остаток бюджета — пропущенным, новые первыми.
+  let rest = budget - used;
+  const skipped = [];
+  keys.forEach((k, gi) => sizes[k].forEach((n, i) => {
+    if (!out[k][i]) skipped.push({ k, i, n, gi, at: times && times[k] ? String(times[k][i] || '') : '' });
+  }));
+  skipped.sort((a, b) => (a.at !== b.at ? (a.at < b.at ? 1 : -1) : (a.gi - b.gi) || (a.i - b.i)));
+  for (const s of skipped) {
+    if (s.n <= rest) { out[s.k][s.i] = true; rest -= s.n; }
   }
   return out;
 }
@@ -264,21 +281,36 @@ const CABINET_SECTION = 'consultation';
 /**
  * PASTE_SOURCES_V1 (ревью M3) — окно вставки по ТЕКУЩЕЙ строке кабинета.
  * Роль с кабинетом врача, но без раздела «Пациенты», видит документы пациента
- * той строки, которую кабинет ей открывает: строка своего здания, не отменена,
- * назначена этому человеку (у администратора — любая с исполнителем) — тот же
- * отбор, что у «Мои услуги» (views/consultation.js loadServices, SERVICE_SCOPE_V3).
- * Пациент запроса — пациент строки; иначе null. Шире строки не открывает ничего:
- * уровни вкладок и реестр таблиц — те же, что у карты.
+ * той строки, которую кабинет ей открывает. PASTE_SOURCES_V1 (полировка 3.21.0,
+ * п. 12; ревью R-L1) — что именно пускает:
+ *   • строка — не товар, своего здания (vs.sync_origin пуст), не отменена, не снята
+ *     и не возвращена (status 'cancelled' / 'removed' / 'refunded' и отметка возврата
+ *     pay_refund_releases 'out' у строки без счёта — K5);
+ *   • визит строки — своего здания (v.sync_origin пуст), не отменён и не «не пришёл»;
+ *   • строка назначена этому человеку (у администратора — любая с исполнителем).
+ * Лабораторные и процедурные строки самого человека пускаются тоже: это НЕ ровно
+ * отбор «Мои услуги» (views/consultation.js loadServices), а его границы по зданию,
+ * отмене и исполнителю — данных шире, чем роль и так читает, окно не открывает.
+ * Пациент запроса — пациент строки; иначе null. Уровни вкладок и реестр таблиц — те
+ * же, что у карты.
  */
+const LINE_GONE = ['cancelled', 'removed', 'refunded'];   // PASTE_SOURCES_V1 (полировка, п. 12)
 function cabinetLineAccess(db, user, pid, vsId) {
   if (!pid || !vsId || !user) return null;
   if (!canViewSection(db, user, CABINET_SECTION)) return null;
   const roles = effectiveRoles(user);
   if (!canRead('patients', roles)) return null;
   const vsOrigin = hasColumn(db, 'visit_services', 'sync_origin') ? 'vs.sync_origin' : 'NULL';
-  const line = db.prepare(`SELECT vs.doctor_id, vs.status, vs.clinic_item_id, ${vsOrigin} AS vs_origin, v.patient_id
+  const vOrigin = hasColumn(db, 'visits', 'sync_origin') ? 'v.sync_origin' : 'NULL';   // полировка, п. 12
+  const refunded = hasColumn(db, 'pay_refund_releases', 'line_id')
+    ? `(vs.invoice_item_id IS NULL AND EXISTS (SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = 'out' AND prr.line_id = vs.id))`
+    : '0';
+  const line = db.prepare(`SELECT vs.doctor_id, vs.status, vs.clinic_item_id, ${vsOrigin} AS vs_origin, v.patient_id,
+         v.status AS visit_status, ${vOrigin} AS v_origin, ${refunded} AS refunded
       FROM visit_services vs JOIN visits v ON v.id = vs.visit_id WHERE vs.id = ?`).get(vsId);
-  if (!line || Number(line.patient_id) !== pid || line.status === 'cancelled' || line.clinic_item_id != null || line.vs_origin != null) return null;
+  if (!line || Number(line.patient_id) !== pid || LINE_GONE.includes(line.status) || line.clinic_item_id != null || line.vs_origin != null) return null;
+  // PASTE_SOURCES_V1 (полировка, п. 12) — визит отменён / «не пришёл» / другого здания; строка возвращена.
+  if (line.visit_status === 'cancelled' || line.visit_status === 'no_show' || line.v_origin != null || Number(line.refunded) === 1) return null;
   const me = posInt(user.id);
   const assigned = line.doctor_id != null && Number(line.doctor_id) === me;
   if (!assigned && !(roles.includes('admin') && line.doctor_id != null)) return null;
@@ -352,7 +384,8 @@ export function patientDocSources(db, args, user) {
     picked[g] = all.slice(0, limit);
     truncated[g] = c.cut[g] || all.length > limit;
   }
-  const keep = fitGroups(Object.fromEntries(Object.entries(picked).map(([g, list]) => [g, list.map(docSize)])), BUDGET);
+  const keep = fitGroups(Object.fromEntries(Object.entries(picked).map(([g, list]) => [g, list.map(docSize)])), BUDGET,
+    Object.fromEntries(Object.entries(picked).map(([g, list]) => [g, list.map((d) => d.at || null)])));   // полировка, п. 14 — время для второго прохода
   for (const g of PASTE_GROUPS) {
     if (!open[g]) { groups[g] = null; truncated[g] = false; continue; }
     groups[g] = picked[g].filter((_, i) => keep[g][i]);
@@ -488,16 +521,32 @@ function collectTextDocs(c, archiveRead) {
      LIMIT ?`).all(pid, SCAN_LIMIT + 1), SCAN_LIMIT);
   if (signedMore) { c.cut.consult = true; c.cut.diag = true; }
   const notesOf = textReader(db, 'visit_services', 'notes');
+  // Полировка, п. 13 — подпись диагностики в любом виде JSON (оба слова есть): спрашивается только у
+  // строк за пределом и только пока «Диагностика» не помечена — обычному пациенту не стоит ничего.
+  const diagMaybe = db.prepare(`SELECT (${hasText('notes', '"docType"')} AND ${hasText('notes', '"diag"')}) AS m FROM visit_services WHERE id = ?`);
   const parsed = { consult: 0, diag: 0 };
   for (const l of signedRows) {
-    docVisits.add(l.visit_id);
-    if (archivedLines.has(l.id) || (exclude && l.id === exclude)) continue;
+    // PASTE_SOURCES_V1 (полировка, п. 15; ревью N2) — визит «с документом» — только по строке,
+    // у которой и правда есть подписанная версия: черновик, где значение поля — «signed», или
+    // заметка с этим словом в кавычках «Заключение визита» больше не прячут. Строки с копией
+    // в архиве (визит уже отмечен выше), текущая и не разобранные из-за предела — как прежде.
+    if (archivedLines.has(l.id) || (exclude && l.id === exclude)) { docVisits.add(l.visit_id); continue; }
     const kind = lineKind(l);
     const part = kind === 'diag' || l.diag_hint ? 'diag' : 'consult';
-    if (parsed[part] >= NOTES_LIMIT) { c.cut[part] = true; c.cutLines.add(l.id); continue; }
+    if (parsed[part] >= NOTES_LIMIT) {
+      c.cut[part] = true; c.cutLines.add(l.id); docVisits.add(l.visit_id);
+      // PASTE_SOURCES_V1 (полировка, п. 13; ревью R-L2) — строка не диагностики, не разобранная из-за
+      // предела, может нести подпись бланка диагностики (подсказка "docType":"diag" ищет только
+      // плотный JSON; "docType": "diag" с пробелом она не видит): «Диагностика» тоже помечается
+      // сокращённой, а не молча «пустой». Только у строки, где оба слова есть ("docType" и "diag"):
+      // обычные приёмы за пределом «Диагностику» сокращённой не делают.
+      if (kind !== 'diag' && !c.cut.diag) { const r = diagMaybe.get(l.id); if (r && Number(r.m) === 1) c.cut.diag = true; }
+      continue;
+    }
     parsed[part] += 1;
     const got = lastSignedEntry(notesOf(l.id));
     if (!got) continue;
+    docVisits.add(l.visit_id);   // полировка, п. 15
     const { entry, payload } = got;
     const fields = entry.fields && typeof entry.fields === 'object' ? entry.fields : {};
     const data = notesDocData(fields, {

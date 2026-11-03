@@ -563,3 +563,74 @@ test('ревью L5: у записи строки — день визита и �
   assert.equal(a.issue_date, '20.10.2026');
   assert.equal(a.visit_date, '2026-10-20T05:00:00Z');
 });
+
+// PASTE_SOURCES_V1 (полировка 3.21.0, п. 12; ревью R-L1) — строка кабинета открывает окно роли без
+// «Пациентов», только если она живая: визит не отменён, не «не пришёл» и своего здания; строка не
+// отменена, не снята и не возвращена. Свои строки анализов и процедур — по-прежнему открывают.
+test('полировка п. 12: строка кабинета — визит отменён / «не пришёл» / другого здания, строка снята или возвращена — 403; своя строка анализа и процедуры — можно', () => {
+  const db = seed();
+  db.prepare("INSERT INTO role_permissions (role, permissions) VALUES ('uzi_doc', ?)").run(JSON.stringify({ sections: ['consultation'] }));
+  const uzi = { id: 3, role: 'doctor', custom_role_code: 'uzi_doc' };
+  const own = (id, visit, svc, opts = {}) => line(db, id, visit, svc, { doctor: 3, ...opts });
+  for (const [vid, status, origin] of [[70, 'cancelled', null], [71, 'no_show', null], [72, 'scheduled', 'B'], [73, 'scheduled', null]]) {
+    db.prepare('INSERT INTO visits (id, patient_id, doctor_id, visit_date, status, sync_origin) VALUES (?, 1, 3, ?, ?, ?)').run(vid, '2026-10-25T05:00:00Z', status, origin);
+  }
+  own(80, 70, 902); own(81, 71, 902); own(82, 72, 902);
+  own(83, 73, 902, { status: 'removed' });
+  own(84, 73, 902);
+  db.prepare("INSERT INTO invoices (id, patient_id, visit_id, status) VALUES (90, 1, 73, 'refunded')").run();
+  db.prepare("INSERT INTO pay_refund_releases (kind, line_id, invoice_id) VALUES ('out', 84, 90)").run();
+  const denied = (vs, why) => assert.throws(() => patientDocSources(db, { patient_id: 1, exclude_visit_service_id: vs }, uzi), (e) => e.status === 403, why);
+  denied(80, 'визит отменён');
+  denied(81, 'пациент не пришёл');
+  denied(82, 'визит другого здания');
+  denied(83, 'строка снята');
+  denied(84, 'строка возвращена');
+  own(85, 73, 903, { status: 'resulted' });   // свой анализ
+  own(86, 73, 905, { status: 'in_progress' });   // своя процедура
+  for (const vs of [85, 86]) assert.ok(patientDocSources(db, { patient_id: 1, exclude_visit_service_id: vs }, uzi).groups, 'своя строка ' + vs);
+});
+
+// PASTE_SOURCES_V1 (полировка, п. 13; ревью R-L2) — подпись бланка диагностики на строке приёма в
+// «красивом» JSON подсказка "docType":"diag" не видит; строка уходит под предел приёмов — и
+// «Диагностика» молча оставалась «пустой». Теперь она помечена сокращённой.
+test('полировка п. 13: строка приёма, не разобранная из-за предела записей, помечает сокращённой и «Диагностику»', () => {
+  const db = seed();
+  visitRow(db, 700, '2025-01-01T05:00:00Z');
+  const pretty = JSON.stringify(JSON.parse(signedNotes({ instrumental_text: 'КРАСИВЫЙ-JSON' }, { docType: 'diag' })), null, 2);
+  line(db, 7000, 700, 901, { notes: pretty });
+  let id = 7000;
+  for (let i = 0; i < 300; i++) {
+    visitRow(db, 701 + i, dayIso('2026-01-01T05:00:00Z', i));
+    line(db, ++id + 1, 701 + i, 901, { notes: signedNotes({ chief_complaint: 'Приём ' + i }) });
+  }
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  assert.equal(out.groups.diag.length, 0);
+  assert.equal(out.truncated.diag, true, '«Диагностика» пуста без пометки, а документ — за пределом');
+  assert.equal(out.truncated.consult, true);
+});
+
+// PASTE_SOURCES_V1 (полировка, п. 14; ревью R-L3) — второй проход долей: остаток бюджета получают
+// пропущенные документы, новые первыми; документ, который влезает в ответ, не выпадает только
+// потому, что он больше доли своей группы.
+test('полировка п. 14: fitGroups — остаток доли отдаётся пропущенным, новые первыми по всем группам', async () => {
+  const { fitGroups } = await import('./patient-doc-sources.js');
+  assert.deepEqual(fitGroups({ a: [10, 10], b: [1e6, 1e6], c: [1e6] }, 1.5e6), { a: [true, true], b: [true, false], c: [false] }, 'М2f: прежде ни одного большого');
+  assert.deepEqual(fitGroups({ a: [10, 10], b: [1e6, 1e6], c: [1e6] }, 1.5e6, { a: ['2026-01-01', '2025-01-01'], b: ['2026-02-01', '2026-01-15'], c: ['2026-03-01'] }),
+    { a: [true, true], b: [false, false], c: [true] }, 'новейший документ — первым');
+  assert.deepEqual(fitGroups({ a: [5, 5], b: [100, 100, 100] }, 120), { a: [true, true], b: [true, false, false] }, 'прежние доли — как были');
+});
+
+// PASTE_SOURCES_V1 (полировка, п. 15; ревью N2) — черновик, где значение поля — слово «signed», не
+// делает визит «с документом»: «Заключение визита» остаётся видно.
+test('полировка п. 15: черновик со словом «signed» не прячет заключение визита; подписанная запись — прячет', () => {
+  const db = seed();
+  db.prepare("UPDATE visits SET conclusion = 'ЗАКЛЮЧЕНИЕ-ВИЗИТА', conclusion_type = 'consultation' WHERE id = 50").run();
+  line(db, 61, 50, 901, { notes: JSON.stringify({ __service_workspace_v1: 1, current: { chief_complaint: 'signed' },
+    history: [{ kind: 'draft', savedAt: '2026-10-01T06:00:00.000Z', fields: { chief_complaint: 'signed' } }] }) });
+  let out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  assert.ok(out.groups.consult.some((d) => d.source === 'visit' && JSON.stringify(d).includes('ЗАКЛЮЧЕНИЕ-ВИЗИТА')), 'черновик спрятал заключение визита');
+  db.prepare('UPDATE visit_services SET notes = ? WHERE id = 61').run(signedNotes({ conclusion_text: 'ЗАКЛЮЧЕНИЕ-ВИЗИТА' }));
+  out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  assert.ok(!out.groups.consult.some((d) => d.source === 'visit'), 'подписанная запись — заключение визита второй раз не показывается');
+});
