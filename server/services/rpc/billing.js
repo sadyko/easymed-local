@@ -2082,11 +2082,15 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
   // DUP_STOP_V1 — новая услуга (у консультации — и новый врач) уже назначена в этом
   // визите — отказ, и в предпросмотре тоже. У возврата с новой услугой прежняя строка
   // уходит со счёта с возвратом — она не мешает (excludeIds через assertChangedOrder).
+  // DUP_STOP_V1 (ревью, остаток 3) — у возврата строка НОВАЯ, и rebillPaidLine после зовёт
+  // onVisitLinesAdded: свободная строка CRM той же услуги ей уступит — не повтор (как у
+  // cashier_line_add; окно кассы visit_dup_check door 'cashier' показывает её свободной).
+  const rebillSpare = rebill ? (l) => { const a = autoTwinFor(db, l); return a ? [a.id] : []; } : null;
   const orders = assertChangedOrder(db, rebill ? { ...vs, service_id: null, consultation_type_id: null } : vs,
     serviceChanges
       ? { ...vs, service_id: newServiceId, consultation_type_id: null, doctor_id: targetDoctor }
       : { ...vs, doctor_id: targetDoctor },
-    { user, reason: repeatReasonArg(args), excludeIds: [vsId] });
+    { user, reason: repeatReasonArg(args), excludeIds: [vsId], spare: rebillSpare });
 
   // 1. Строка и позиция счёта.
   const visitRow = db.prepare('SELECT patient_id, visit_date FROM visits WHERE id = ?').get(vs.visit_id);

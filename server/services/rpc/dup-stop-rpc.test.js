@@ -124,6 +124,28 @@ test('DUP_STOP_V1: возврат с новой услугой — новая у
   assert.equal(count(db, vid, 50), 2, 'прежняя строка в визите (отпущена с возвратом) и новая');
 });
 
+test('DUP_STOP_V1 (ревью, остаток 3): возврат с новой услугой — свободная строка CRM той же услуги уступит новой — не повтор (предпросмотр и операция)', () => {
+  const { db, pid, vid } = clinic();
+  const usg = line(db, vid, { service_id: 50, doctor_id: DOC });
+  const invoice = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [usg] }, registrar).invoice;
+  recordPayment(db, { invoice_id: invoice.id, amount: invoice.total_amount, method: 'cash' }, cashier);
+  db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(usg);
+  // строка, которую CRM завела под желание «Анализ крови» (visit_service_auto)
+  const auto = line(db, vid, { service_id: 40 });
+  const req = Number(db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id) VALUES ('Лид', '+998 90 000 00 01', 'in_process', ?)").run(pid).lastInsertRowid);
+  const wish = Number(db.prepare("INSERT INTO crm_request_services (request_id, service_id, status, visit_id, visit_service_id, visit_service_auto) VALUES (?, 40, 'pending', ?, ?, 1)").run(req, vid, auto).lastInsertRowid);
+  // окно кассы показывает услугу свободной — дверь обязана согласиться
+  const pick = call('visit_dup_check', db, { visit_id: vid, door: 'cashier', lines: [{ service_id: 40 }] }, registrar);
+  assert.deepEqual([pick.ordered.map((o) => o.key), pick.duplicates.length], [['s:50'], 0], 'окно: строка CRM уступит — анализ свободен');
+  const q = call('cashier_line_rebill_quote', db, { visit_service_id: usg, new_service_id: 40 }, cashier);
+  assert.equal(q.preview, true);
+  const r = call('cashier_line_rebill_paid', db, { visit_service_id: usg, new_service_id: 40 }, cashier);
+  assert.equal(r.rebill, true);
+  assert.equal(count(db, vid, 40), 1, 'строка CRM уступила новой строке кассы — анализ в визите один');
+  const after = db.prepare('SELECT visit_service_id, visit_service_auto FROM crm_request_services WHERE id = ?').get(wish);
+  assert.deepEqual(after, { visit_service_id: r.line.id, visit_service_auto: 0 }, 'желание указывает на новую строку');
+});
+
 test('DUP_STOP_V1: возвращённую строку снова выставляют (rebill_refunded) — если та же услуга уже назначена заново, 409', () => {
   const { db, vid } = clinic();
   const old = line(db, vid, { service_id: 40, status: 'collected' });

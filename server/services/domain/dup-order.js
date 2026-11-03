@@ -237,14 +237,17 @@ export function repeatReasonArg(args) {
  * «та же услуга» меняется (новая услуга; у консультации — и новый врач). Сама строка
  * не мешает (excludeIds). Строки, задвоенные до 3.21.0, правке без смены ключа не мешают.
  */
-export function assertChangedOrder(db, before, after, { user = null, reason = null, excludeIds = [] } = {}) {
+// DUP_STOP_V1 (ревью, остаток 3) — spare: поблажка двери (строки, которые она уберёт под новой,
+// как у assertOrders): возврат с новой услугой ставит НОВУЮ строку, и строка CRM той же
+// услуги ей уступит (onVisitLinesAdded после операции).
+export function assertChangedOrder(db, before, after, { user = null, reason = null, excludeIds = [], spare = null } = {}) {
   const typeOf = serviceTypeStmt(db);
   const svcOf = (row) => (row && row.service_id != null ? typeOf.get(row.service_id) || {} : {});
   const keyOf = (row) => { const s = svcOf(row); return keyOfRow(row, s.type || null, s.requires_doctor ?? null); };   // DUP_STOP_V1 (ревью m4)
   const was = keyOf(before);
   const now = keyOf(after);
   if (!now || now === was) return {};
-  return assertOrders(db, [after], { user, reason, excludeIds: [before.id, ...excludeIds].filter((x) => x != null) });
+  return assertOrders(db, [after], { user, reason, spare, excludeIds: [before.id, ...excludeIds].filter((x) => x != null) });
 }
 
 // DUP_STOP_V1 (ревью m2) — колонки строки, от которых зависит «та же услуга в том же визите».
