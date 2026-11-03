@@ -145,3 +145,25 @@ function localDay(value) {
     const dt = toDateValue(value);
     return dt ? new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()) : null;
 }
+
+/**
+ * PASTE_SOURCES_V1 — ПОСЛЕДНЯЯ ПОДПИСАННАЯ ЗАПИСЬ КАБИНЕТА из visit_services.notes.
+ *
+ * Одно правило на двоих: карта пациента («Документы», WS_DERIVED_DOCS_V1) и
+ * «Вставить результаты» кабинета (rpc patient_doc_sources). notes — JSON
+ * кабинета: history[…] с kind 'signed'; документ строки — последняя подписанная
+ * версия (черновик — не документ). Не JSON, не объект, history не массив,
+ * подписанных нет — null: заметка медсестры текстом документом не считается.
+ *
+ * @param {string} raw visit_services.notes как лежит в базе
+ * @returns {{entry: object, payload: object}|null}
+ */
+export function lastSignedEntry(raw) {
+    if (typeof raw !== 'string' || !raw) return null;
+    let p = null;
+    try { p = JSON.parse(raw); } catch { return null; }
+    if (!p || typeof p !== 'object' || Array.isArray(p) || !Array.isArray(p.history)) return null;
+    const signed = p.history.filter((e) => e && typeof e === 'object' && e.kind === 'signed');
+    const entry = signed[signed.length - 1];
+    return entry ? { entry, payload: p } : null;
+}

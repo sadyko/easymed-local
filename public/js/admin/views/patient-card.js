@@ -30,7 +30,7 @@ import { openVisitBillModal } from './visit-bill.js?v=ownrep3';   // REFBILL_REV
 import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» с карты пациента
 import { caseFilePrintHtml } from './case-docs.js?v=cw1';   // PATIENT_HISTORY_TAB_V1 — печать подшитой истории тем же бланком
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // PATIENT_HISTORY_TAB_V1
-import { notesDocData, docDayText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — лист приёма из подписанной записи · PRINT_VISIT_DATE_V1 (ревью m6) — день документа
+import { notesDocData, docDayText, lastSignedEntry } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — лист приёма из подписанной записи · PRINT_VISIT_DATE_V1 (ревью m6) — день документа · PASTE_SOURCES_V1 — подписанная запись строки одним правилом
 import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW_V1 — сумма долга у имени
 import { todayIso } from '../../shared/month-grid.js?v=mg1';   // DATE_LIMITS_V1 — местный день, а не UTC
 import { outcomeTitle } from './discharge.js';   // PATIENT_HISTORY_TAB_V1 — исход словами
@@ -1779,10 +1779,10 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     const visitDayOf = new Map((payloadServices || []).map(s => [String(s.id), s.visit_date || null]));
                     for (const r of (vsNotes || [])) {
                         if (archived.has(r.id)) continue;
-                        let p = null; try { p = JSON.parse(r.notes); } catch (e2) { continue; }
-                        const signed = ((p && p.history) || []).filter(e2 => e2.kind === 'signed');
-                        const last = signed[signed.length - 1];
-                        if (!last) continue;
+                        // PASTE_SOURCES_V1 — то же правило, что у «Вставить результаты» (shared/cabinet-doc.js)
+                        const got = lastSignedEntry(r.notes);
+                        if (!got) continue;
+                        const { entry: last, payload: p } = got;
                         wsRows.push({
                             _ws: true, id: 'ws:' + r.id, doc_type: 'protocol',
                             title: 'Заключение приёма',
