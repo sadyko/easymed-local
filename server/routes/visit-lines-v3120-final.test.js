@@ -210,7 +210,9 @@ test('G3: запись колл-центра к Иванову в 10:00 не п�
 
     const other = await t.rpc('calendar_book', 'reg', { patient_id: 77, doctor_id: 11, service_id: 30, start: at(D, 14), duration_minutes: 30 });
     assert.equal(other.status, 409, JSON.stringify(other.json));
-    assert.equal(other.json.error.code, 'day_visit_busy');
+    // REPEAT_VISIT_V1 (ревью, minor-2) — работы по записи нет (строка в смете), есть
+    // запись к другому врачу: свой код и слова «уже есть запись к …», не «уже идёт работа».
+    assert.equal(other.json.error.code, 'day_visit_other_doctor');
     const v = t.db.prepare('SELECT doctor_id, visit_date FROM visits WHERE id = ?').get(vid);
     assert.equal(v.doctor_id, 10, 'врач записи переписан');
     assert.equal(Date.parse(v.visit_date), Date.parse(at(D, 10)), 'время записи переписано');

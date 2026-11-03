@@ -147,17 +147,20 @@ export function dayVisitMovableFor(db, visitId, doctorId) {
  *
  * Такую запись правило выше больше не переносит, и прежний отказ day_visit_busy
  * («…и по нему уже идёт работа…») был бы неправдой: работы нет, есть чужая запись.
- * true — запись до прихода, без работы и без живых строк, у неё назван врач, и это
- * не `doctorId` (или новая запись без врача). Тогда двери отказывают своим кодом
- * day_visit_other_doctor: «уже есть запись к <врач> в <время>». Запись со строками
- * чужого врача (G3) и запись с работой — прежний day_visit_busy.
+ * true — запись до прихода, без работы, у неё назван врач, и это не `doctorId` (или
+ * новая запись без врача). Тогда двери отказывают своим кодом day_visit_other_doctor:
+ * «уже есть запись к <врач> в <время>». Запись с работой — прежний day_visit_busy.
+ *
+ * REPEAT_VISIT_V1 (ревью, minor-2) — свободные строки в смете ('added', без счёта и
+ * работы — их отсекает visitHasWork) слов не меняют. Здесь требовалось ноль живых
+ * строк, и запись колл-центра к врачу А — она держит строку его консультации в смете
+ * — получала «…и по нему уже идёт работа…», которой нет.
  */
 export function dayVisitOtherDoctor(db, visitId, doctorId) {
   const v = db.prepare('SELECT status, doctor_id FROM visits WHERE id = ?').get(visitId);
   if (!v || !PRE_ARRIVAL.includes(v.status) || v.doctor_id == null) return false;
   if (Number(v.doctor_id) === (Number(doctorId) || null)) return false;
-  if (visitHasWork(db, visitId)) return false;
-  return !db.prepare("SELECT 1 FROM visit_services WHERE visit_id = ? AND status <> 'cancelled' LIMIT 1").get(visitId);
+  return !visitHasWork(db, visitId);
 }
 
 /**

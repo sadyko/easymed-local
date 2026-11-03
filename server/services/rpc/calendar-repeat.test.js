@@ -115,6 +115,36 @@ test('REPEAT_VISIT_V1 (поправка 2): пустая запись к дру�
   } finally { db.close(); }
 });
 
+// REPEAT_VISIT_V1 (ревью, minor-2) — ЗАПИСЬ КОЛЛ-ЦЕНТРА К ДРУГОМУ ВРАЧУ — ТОЖЕ «ЗАПИСЬ».
+// Запись колл-центра до прихода держит строку своей консультации в смете ('added',
+// без счёта и работы). Правило выше требовало ноль живых строк, и такая запись
+// получала day_visit_busy «…и по нему уже идёт работа…» — работы нет. Свободные
+// строки в смете слов не меняют: решают статус до прихода, отсутствие работы и врач
+// визита ≠ врач новой записи. «Добавить в этот визит» — как прежде, у обоих кодов.
+test('REPEAT_VISIT_V1 (ревью, minor-2): запись колл-центра к другому врачу со строкой в смете — day_visit_other_doctor, а не «уже идёт работа»', async () => {
+  const db = freshDb();
+  try {
+    const a = await calendarBook(db, { patient_id: 77, doctor_id: 11, start: at(7, 9), duration_minutes: 30 }, REG);
+    db.prepare("INSERT INTO visit_services (visit_id, consultation_type_id, doctor_id, status) VALUES (?, 6, 11, 'added')").run(a.visit.id);
+    db.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (?, 31, 'added')").run(a.visit.id);   // и услуга «на дату» без врача
+    await assert.rejects(
+      () => calendarBook(db, { patient_id: 77, doctor_id: 10, start: at(7, 14), duration_minutes: 30 }, REG),
+      (e) => {
+        assert.deepEqual([e.status, e.code], [409, 'day_visit_other_doctor']);
+        assert.equal(e.message, 'У пациента в этот день уже есть запись к Петров Пётр в 09:00. Перенесите её или выберите другой день.');
+        return true;
+      });
+    const v = db.prepare('SELECT doctor_id, visit_date FROM visits WHERE id = ?').get(a.visit.id);
+    assert.deepEqual([v.doctor_id, Date.parse(v.visit_date)], [11, Date.parse(at(7, 9))], 'отказ тронул ту запись');
+    const add = await calendarBook(db, { patient_id: 77, doctor_id: 10, start: at(7, 14), duration_minutes: 30, add_to_day_visit: true }, REG);
+    assert.deepEqual([add.added_to_day_visit, add.visit.id], [true, a.visit.id], '«Добавить в этот визит» перестало работать');
+    // Строка отпущена кассой — это уже работа: прежний day_visit_busy.
+    db.prepare("UPDATE visit_services SET status = 'queued' WHERE visit_id = ? AND service_id = 31").run(a.visit.id);
+    await assert.rejects(() => calendarBook(db, { patient_id: 77, doctor_id: 10, start: at(7, 14), duration_minutes: 30 }, REG),
+      (e) => e.code === 'day_visit_busy');
+  } finally { db.close(); }
+});
+
 const snapshot = (db) => ({
   visits: db.prepare('SELECT id, patient_id, doctor_id, visit_date, visit_kind, status FROM visits ORDER BY id').all(),
   lines: db.prepare('SELECT id, visit_id FROM visit_services ORDER BY id').all(),
