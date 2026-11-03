@@ -311,10 +311,21 @@ export async function markRefundedRows(rows) {
 // ---------------------------------------------------------------------------
 // Data
 // ---------------------------------------------------------------------------
+// DIAG_ROUTE_V1 (D7) — ОТКРЫТАЯ РАБОТА ВРАЧА НЕ ОБРЕЗАЕТСЯ. Здесь стоял один запрос
+// .limit(300) новыми сверху по created_at — со ВСЕМИ статусами, и завершённые тоже
+// тратили эти 300: строку, записанную заранее (две недели назад на сегодня), у занятого
+// врача вытесняли 300 более новых — в «Моих приёмах» её не было ни в одном фильтре, а у
+// администратора (вся клиника) — тем более. Теперь, как у очереди лаборатории
+// (LAB_QUEUE_NO_TRUNCATION_V1): открытые строки — запросом с большим пределом, история
+// завершённых — своим окном в 300.
+const CABINET_OPEN_STATUSES = ['added', 'queued', 'in_progress'];
+const CABINET_OPEN_LIMIT = 5000;
+const CABINET_DONE_WINDOW = 300;
 async function loadServices() {
-    let query = supabase
-        .from('visit_services')
-        .select(`
+    const build = () => {
+        let query = supabase
+            .from('visit_services')
+            .select(`
             id, status, quantity, unit_price, total, created_at, invoice_item_id,
             visit_id, service_id, doctor_id, consultation_type_id, price_tier,
             services(name, type, duration_minutes, service_types(name), departments(kind)),
@@ -323,25 +334,29 @@ async function loadServices() {
             visits(visit_date, patient_id, status,
                    patients(full_name, last_name, first_name, mrn, phone))
         `)
-        .in('status', ['added', 'queued', 'in_progress', 'completed'])
-        // BRANCH_ORIGIN_V1 — решение владельца 2026-09-02: «очередь и кабинет врача —
-        // своего здания». sync_origin IS NULL = строка заведена здесь; работа, приехавшая
-        // от соседнего филиала, остаётся в его кабинете и видна тут только через карту
-        // пациента. Фильтр серверный: .limit(300) ниже иначе тратился бы на чужие строки.
-        .is('sync_origin', null);
-    // M1 — scope to this clinic; super-admin/platform-staff JWT bypasses company RLS, so the
-    // client filter is the only tenant boundary here (mirrors procedures.js loadServices).
-    const cid = (window.CLINIC && window.CLINIC.id) || null;
-    if (cid) query = query.eq('company_id', cid);
-    // SERVICE_SCOPE_V1 — provider login (doctor OR nurse) → only their own services; admins see all.
-    const docId = (typeof scopedProviderId === 'function') ? scopedProviderId() : null;
-    // SERVICE_SCOPE_V3 — the cabinet shows ONLY services assigned to a specific performer;
-    // unassigned services (doctor_id null) don't belong to any doctor's cabinet.
-    query = query.not('doctor_id', 'is', null);
-    if (docId) query = query.eq('doctor_id', docId);
-    const { data, error } = await query
-        .order('created_at', { ascending: false })
-        .limit(300);
+            // BRANCH_ORIGIN_V1 — решение владельца 2026-09-02: «очередь и кабинет врача —
+            // своего здания». sync_origin IS NULL = строка заведена здесь; работа, приехавшая
+            // от соседнего филиала, остаётся в его кабинете и видна тут только через карту
+            // пациента. Фильтр серверный: пределы ниже иначе тратились бы на чужие строки.
+            .is('sync_origin', null);
+        // M1 — scope to this clinic; super-admin/platform-staff JWT bypasses company RLS, so the
+        // client filter is the only tenant boundary here (mirrors procedures.js loadServices).
+        const cid = (window.CLINIC && window.CLINIC.id) || null;
+        if (cid) query = query.eq('company_id', cid);
+        // SERVICE_SCOPE_V1 — provider login (doctor OR nurse) → only their own services; admins see all.
+        const docId = (typeof scopedProviderId === 'function') ? scopedProviderId() : null;
+        // SERVICE_SCOPE_V3 — the cabinet shows ONLY services assigned to a specific performer;
+        // unassigned services (doctor_id null) don't belong to any doctor's cabinet.
+        query = query.not('doctor_id', 'is', null);
+        if (docId) query = query.eq('doctor_id', docId);
+        return query;
+    };
+    const [openRes, doneRes] = await Promise.all([
+        build().in('status', CABINET_OPEN_STATUSES).order('created_at', { ascending: false }).limit(CABINET_OPEN_LIMIT),
+        build().eq('status', 'completed').order('created_at', { ascending: false }).limit(CABINET_DONE_WINDOW),
+    ]);
+    const error = openRes.error || doneRes.error;
+    const data = [...(openRes.data || []), ...(doneRes.data || [])];
     if (error) {
         console.error('[my-services] load failed:', error);
         toast('Could not load services: ' + error.message, 'fail');

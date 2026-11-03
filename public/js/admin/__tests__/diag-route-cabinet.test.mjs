@@ -156,6 +156,30 @@ test('«Мой день»: визит, который ведёт другой в
   } finally { s.close(); }
 });
 
+// DIAG_ROUTE_V1 (D7) — один запрос .limit(300) новыми сверху со ВСЕМИ статусами: строку,
+// записанную две недели назад на сегодня, вытесняли 300 более новых завершённых — в
+// «Моих приёмах» её не было ни в одном фильтре (L01). Теперь открытые строки — своим
+// запросом без этого предела, завершённые — окном в 300.
+test('«Мои приёмы»: строка, записанная заранее, видна и после 300 более новых завершённых (L01)', async () => {
+  const s = await stand((db, add) => {
+    const old = new Date(Date.now() - 15 * 86400000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    add('L01', {}, { status: 'added', created: old });
+    const sid = db.prepare("SELECT id FROM services WHERE name = 'Svc-L01'").get().id;
+    db.prepare("INSERT INTO patients (id, full_name, last_name, first_name) VALUES (6002, 'История', 'История', '')").run();
+    const V = db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (6002, ?, ?, 'arrived')");
+    const S = db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, status, created_at) VALUES (?, ?, ?, 'completed', ?)");
+    for (let i = 0; i < 300; i++) {
+      const when = new Date(Date.now() - (14 - i * 14 / 300) * 86400000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      S.run(Number(V.run(DOC, when).lastInsertRowid), sid, DOC, when);
+    }
+  });
+  try {
+    const got = await myServices(s.codes);
+    assert.deepEqual(got.active, ['L01'], '«Активные»');
+    assert.deepEqual(got.all, ['L01'], '«Все статусы»');
+  } finally { s.close(); }
+});
+
 test('«Мои приёмы»: группа «Диагностика» видна врачу при любом типе каталога и отделении (A01–A13); «Процедуры» — нет (A14)', async () => {
   const s = await stand((db, add) => {
     const typ = (name) => Number(db.prepare('INSERT INTO service_types (name) VALUES (?)').run(name).lastInsertRowid);

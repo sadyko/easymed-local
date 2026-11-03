@@ -133,7 +133,9 @@ globalThis.fetch = async (url, opts) => {
     // Чтение ОЧЕРЕДИ кабинета — то, у которого есть присоединение consultation_types(…).
     const isQueue = body.table === 'visit_services' && /consultation_types\(/.test(String(body.columns || ''));
     if (isQueue) {
-      QUEUE_READS++;
+      // DIAG_ROUTE_V1 (D7) — очередь читается двумя запросами (открытые строки и окно
+      // завершённых); одно перечитывание — один запрос открытых.
+      if ((body.filters || []).some((f) => f.col === 'status' && f.op === 'in')) QUEUE_READS++;
       if (FAIL_QUEUE) return { ok: false, status: 500, json: async () => ({ error: { message: 'сбой сервера' } }) };
     }
     let rows = TABLES()[body.table] || [];
