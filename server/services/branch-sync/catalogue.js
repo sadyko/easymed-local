@@ -167,7 +167,15 @@ export const TABLES = [
     // панелей при каждом сохранении пересоздаёт строки с новыми id, и без
     // этого каждое пересохранение панели в главном здании добавляло филиалу
     // ещё одну копию каждого показателя.
+    // Ревью H1: прежде чем удалять, строка с только мёртвыми соответствиями
+    // освобождается для усыновления — новая строка главного здания забирает её
+    // (тот же id, своя настройка анализатора филиала цела), удаляется лишь то,
+    // что никто не забрал.
     pruneMissing: true,
+    // Несколько свободных строк с тем же ключом в одной панели (один показатель
+    // в нескольких «Разделах бланка» — мазок U/V/C): усыновить строку того же
+    // раздела, а не никакую.
+    narrow: ['group_label', 'name'],
   },
 
   // ---------------------------------------------------------------------------
@@ -875,6 +883,31 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
       }
     }
 
+    // --- LAB_PANEL_DEDUP_V1 (ревью H1): мёртвые соответствия — ОСВОБОДИТЬ ---
+    //
+    // Редактор панелей пересоздаёт показатели с новыми id. Своя строка филиала
+    // оставалась закреплённой за мёртвым id главного здания, новая строка не
+    // могла её усыновить, вставлялась без настройки анализатора филиала
+    // (device_code, device_code_confirmed… — колонки ЗДАНИЯ, они не едут), а
+    // удаление исчезнувших ниже уносило прежнюю строку вместе с этой настройкой:
+    // результаты анализатора филиала молча уходили в лоток. Теперь строка, ВСЕ
+    // соответствия которой ведут к строкам, которых в выгрузке нет, до
+    // усыновления снова свободна: новая строка главного здания забирает её по
+    // (код, название) в той же панели — id и настройка анализатора остаются,
+    // а удаляется лишь то, что никто не забрал. Пустая выгрузка ничего не
+    // освобождает (как и не удаляет).
+    if (spec.pruneMissing && rows.length) {
+      const live = new Set(rows.filter((r) => r && r.id !== undefined && r.id !== null).map((r) => String(r.id)));
+      const prefix = spec.name + ':';
+      const liveLocal = new Set();
+      const deadLocal = new Set();
+      for (const [key, localId] of mapped) {
+        if (!key.startsWith(prefix)) continue;
+        (live.has(key.slice(prefix.length)) ? liveLocal : deadLocal).add(localId);
+      }
+      for (const localId of deadLocal) if (!liveLocal.has(localId)) claimSet(spec.name).delete(localId);
+    }
+
     // Кандидаты на усыновление — все свои строки таблицы, по одному чтению.
     const localRows = db.prepare(`SELECT * FROM "${spec.name}"`).all();
     // DOCTOR_PROFILE_V1 (ревью шага 5, №5) — у этой базы есть «работает с»
@@ -932,7 +965,13 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
           const sameKey = localRows.filter((r) =>
             norm(r[key]) === norm(remote[key])
             && (!spec.scopeRef || r[spec.scopeRef] === scopeVal));
-          const candidates = sameKey.filter((r) => !claimSet(spec.name).has(r.id));
+          let candidates = sameKey.filter((r) => !claimSet(spec.name).has(r.id));
+          // LAB_PANEL_DEDUP_V1 (ревью H1) — несколько свободных с тем же ключом:
+          // уточнить по spec.narrow (у показателя — раздел бланка и название).
+          if (candidates.length > 1 && spec.narrow) {
+            const narrowed = candidates.filter((r) => spec.narrow.every((c) => norm(r[c]) === norm(remote[c])));
+            if (narrowed.length === 1) candidates = narrowed;
+          }
           if (candidates.length === 1) {
             localId = candidates[0].id;
             localRow = candidates[0];
@@ -1089,6 +1128,10 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
     // каждого показателя в филиале (лист ввода показывал их все, бланк терял
     // анализы). Теперь строка, ВСЕ соответствия которой ведут к строкам,
     // которых в выгрузке нет, удаляется, а мёртвые соответствия — следом.
+    // Ревью H1: такую строку перед усыновлением освободили (выше), и обычно её
+    // уже забрала новая строка главного здания — с id и настройкой анализатора
+    // филиала. Сюда доходит лишь то, что никто не забрал: показатель, удалённый
+    // в главном, и копии, накопленные прежним приёмом.
     //
     // Только в панелях главного здания, которые у него ЕСТЬ (панель
     // сопоставлена со строкой этой же выгрузки): показатель, заведённый здесь
