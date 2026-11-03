@@ -51,11 +51,12 @@
 //
 // ТОЛЬКО ЧТЕНИЕ: ничего не пишет (READ_ONLY_RPCS в control/gate.js).
 import { RpcError } from './crm-config.js';
-import { patientCardAccess, DENIED_TEMPLATE, TAB_LABELS } from './patient-card.js';
+import { patientCardAccess, fileOnThisMachine, DENIED_TEMPLATE, TAB_LABELS } from './patient-card.js';
 import { canRead } from '../../db/schema-registry.js';
 import { hasColumn } from '../domain/buildings.js';
 import { richForSheet, notesDocData, lastSignedEntry } from '../../../public/js/shared/cabinet-doc.js';
 import { hasMarkup, htmlToText, textIsBlank } from '../../../public/js/shared/rich-text.js';
+import { loadCaseDocTitles, reviewSections } from './inpatient-reviews.js';   // PASTE_SOURCES_V1 — имена своих родов и свои разделы записи
 
 /** Группы ответа — те же вкладки, что у окна (views/paste-sources.js PASTE_TABS). */
 export const PASTE_GROUPS = Object.freeze(['consult', 'diag', 'labs', 'inpatient', 'files']);
@@ -223,6 +224,8 @@ export function patientDocSources(db, args, user) {
   if (open.consult) collectTextDocs(db, pid, loadLines(db, pid, { ownOnly: true }), exclude, canRead('visit_documents', roles), found);
   // Анализы и «Измерения» исследований — всех зданий, с буквой филиала (как в карте пациента).
   if (open.labs) collectLabs(db, loadLines(db, pid, { ownOnly: false }), exclude, found);
+  if (open.inpatient) collectInpatient(db, pid, found);
+  if (open.files) collectFiles(db, pid, found);
 
   const groups = {};
   const truncated = {};
@@ -469,5 +472,78 @@ function collectLabs(db, lines, exclude, found) {
     doc.panels.sort((a, b) => a.visit_service_id - b.visit_service_id);
     const letters = new Set(doc.panels.map((p) => p.origin));
     doc.origin = letters.size === 1 ? doc.panels[0].origin : null;
+  }
+}
+
+const REVIEW_KEYS = Object.freeze(['complaints', 'objective', 'diagnosis', 'plan', 'body']);
+// Подписи разделов — те же, что у листа истории болезни (views/case-doc-a4.js LABEL / BODY_LABEL).
+const REVIEW_LABEL = Object.freeze({
+  complaints: 'Жалобы', objective: 'Объективно', diagnosis: 'Диагноз', plan: 'План обследования и лечения', body: 'Дополнительно',
+});
+const REVIEW_BODY_LABEL = Object.freeze({ operation: 'Протокол операции', consent: 'Текст документа', other: 'Текст документа', rationale: 'Обоснование' });
+
+/**
+ * Документы истории болезни пациента: ОПУБЛИКОВАННЫЕ и не исправленные
+ * (superseded_by IS NULL — исправление закрывает прежнюю запись). Черновик —
+ * не документ. Имя рода: у своего рода клиники — её название
+ * (case_doc_types.title), у встроенного — пусто, его называет окно словарём
+ * истории болезни (views/case-docs.js CASE_DOC_TITLE) на языке экрана.
+ * Диагноз записи хранится простым текстом, остальные разделы — разметкой.
+ */
+function collectInpatient(db, pid, found) {
+  const titles = loadCaseDocTitles(db);
+  const rows = db.prepare(`
+    SELECT r.id, r.kind, r.type_kind, r.complaints, r.objective, r.diagnosis, r.plan, r.body, r.sections_json,
+           r.published_at, r.entry_date, u.full_name AS author_name, a.admission_no
+      FROM admission_reviews r
+      JOIN admissions a ON a.id = r.admission_id
+      LEFT JOIN users u ON u.id = r.author_id
+     WHERE a.patient_id = ? AND r.published_at IS NOT NULL AND r.superseded_by IS NULL
+     ORDER BY COALESCE(r.entry_date, r.published_at) DESC, r.id DESC
+     LIMIT ?`).all(pid, LINE_LIMIT);
+  for (const r of rows) {
+    const kind = r.type_kind || r.kind;
+    const secs = reviewSections(r);
+    const own = secs.titles && typeof secs.titles === 'object' ? secs.titles : {};
+    const out = [];
+    for (const key of REVIEW_KEYS) {
+      const label = String(own[key] || (key === 'body' && REVIEW_BODY_LABEL[kind]) || REVIEW_LABEL[key]);
+      pushSection(out, key, label, key === 'diagnosis' ? textHtml(r.diagnosis) : sectionHtml(r[key], true));
+    }
+    (Array.isArray(secs.extra) ? secs.extra : []).forEach((x, i) => {
+      if (!x || typeof x !== 'object') return;
+      pushSection(out, 'extra' + i, String(x.title || '').trim() || 'Раздел', sectionHtml(x.html, true));
+    });
+    if (!out.length) continue;
+    found.inpatient.push({
+      id: 'review:' + r.id, kind: 'inpatient', source: 'review', visit_service_id: null,
+      doc_kind: kind, title: String(titles.get(kind) || ''), doctor: r.author_name || '',
+      admission_no: r.admission_no || null, at: r.entry_date || r.published_at, sections: out,
+    });
+  }
+}
+
+/** Файлов в ответе — не больше (их содержимое не читается никогда). */
+const FILE_LIMIT = 100;
+
+/**
+ * Загруженные файлы пациента: только название, путь и «лежит ли на этом
+ * компьютере» (тем же правилом, что карта пациента, — fileOnThisMachine).
+ * Отозванный документ не показывается. Вставлять нечего — окно его открывает.
+ */
+function collectFiles(db, pid, found) {
+  const rows = db.prepare(`
+    SELECT d.id, d.title, d.file_name, d.file_path, d.created_at, u.full_name AS created_by_name
+      FROM visit_documents d
+      LEFT JOIN users u ON u.id = d.created_by
+     WHERE d.patient_id = ? AND d.voided_at IS NULL AND COALESCE(d.file_path, '') <> ''
+     ORDER BY d.created_at DESC, d.id DESC
+     LIMIT ?`).all(pid, FILE_LIMIT);
+  for (const r of rows) {
+    found.files.push({
+      id: 'file:' + r.id, kind: 'files', source: 'file', document_id: r.id, visit_service_id: null,
+      title: r.title || r.file_name || '', file_name: r.file_name || '', file_path: r.file_path,
+      file_available: fileOnThisMachine(r.file_path), doctor: r.created_by_name || '', at: r.created_at,
+    });
   }
 }

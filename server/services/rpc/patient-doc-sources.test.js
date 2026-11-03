@@ -19,6 +19,10 @@ import { migrate } from '../../db/migrate.js';
 import { patientDocSources, SECTION_MAX, lineKind } from './patient-doc-sources.js';
 import { getRpc } from './index.js';
 import { isReadOnlyRpc } from '../control/gate.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { setDataDir } from '../control/config.js';
 
 const DOCTOR = { id: 3, role: 'doctor' };
 
@@ -244,6 +248,59 @@ test('измерения исследования (показатели у УЗ�
   const d69 = out.groups.diag.find((d) => d.visit_service_id === 69);
   assert.deepEqual(d69.sections.map((s) => s.key), ['measurements']);
   assert.match(d69.sections[0].html, /<b>6\.1 см<\/b>/, 'отклонение от нормы не выделено');
+});
+
+test('стационар: опубликованные и не исправленные записи — разделами (свои подписи, свои разделы); черновик и исправленная — нет; «История» закрыта — null', () => {
+  const db = seed();
+  db.prepare("INSERT INTO admissions (id, patient_id, status, admission_no, admitted_at) VALUES (10, 1, 'active', 'A-26-0001', '2026-10-05T06:00:00Z')").run();
+  db.prepare("INSERT INTO case_doc_types (kind, title, due_rule, sort_order) VALUES ('own_cardio', 'Осмотр кардиолога', 'none', 200)").run();
+  const rev = (kind, c = {}) => db.prepare(`INSERT INTO admission_reviews
+      (admission_id, kind, type_kind, complaints, objective, diagnosis, plan, body, author_id, published_at, superseded_by, sections_json)
+      VALUES (10, ?, ?, ?, ?, ?, ?, ?, 3, ?, ?, ?)`).run(kind, c.typeKind || null, c.complaints || '', c.objective || '', c.diagnosis || '',
+    c.plan || '', c.body || '', c.published === undefined ? '2026-10-06T08:00:00Z' : c.published, c.superseded || null, c.sections || null).lastInsertRowid;
+  const primary = rev('primary', {
+    complaints: '<p>Боль в животе</p>', objective: 'Живот напряжён', diagnosis: 'K35.8 Острый аппендицит', plan: '<ul><li>Операция</li></ul>',
+    sections: JSON.stringify({ titles: { objective: 'Статус' }, extra: [{ title: 'Осмотр хирурга', html: '<p>Симптом Щёткина +</p>' }] }),
+  });
+  rev('primary', { complaints: 'ИСПРАВЛЕННАЯ', superseded: primary });
+  rev('round', { complaints: 'ЧЕРНОВИК-СТАЦИОНАРА', published: null });
+  rev('other', { typeKind: 'own_cardio', objective: 'Ритм синусовый' });
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  const byKind = Object.fromEntries(out.groups.inpatient.map((d) => [d.doc_kind, d]));
+  assert.deepEqual(Object.keys(byKind).sort(), ['own_cardio', 'primary']);
+  const p = byKind.primary;
+  assert.equal(p.title, '', 'у встроенного рода имя — на экране (CASE_DOC_TITLE), не с сервера');
+  assert.equal(p.admission_no, 'A-26-0001');
+  assert.equal(p.doctor, 'Врач Тестов');
+  assert.deepEqual(p.sections.map((s) => s.label), ['Жалобы', 'Статус', 'Диагноз', 'План обследования и лечения', 'Осмотр хирурга']);
+  assert.equal(p.sections[3].html, '<ul><li>Операция</li></ul>');
+  assert.equal(byKind.own_cardio.title, 'Осмотр кардиолога', 'свой род клиники — своим именем');
+  const s = JSON.stringify(out);
+  assert.ok(!s.includes('ИСПРАВЛЕННАЯ') && !s.includes('ЧЕРНОВИК-СТАЦИОНАРА'), 'исправленная запись или черновик в списке');
+  setTabs(db, 'doctor', { history: 'none' });
+  assert.equal(patientDocSources(db, { patient_id: 1 }, DOCTOR).groups.inpatient, null);
+});
+
+test('файлы: название и путь без содержимого; отозванный — нет; «лежит ли на этом компьютере» — как в карте пациента', () => {
+  const db = seed();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-paste-'));
+  setDataDir(dir);
+  try {
+    const docs = path.join(dir, 'storage', 'clinic-docs', 'patients', '1', 'docs');
+    fs.mkdirSync(docs, { recursive: true });
+    fs.writeFileSync(path.join(docs, 'k1-scan.pdf'), 'x');
+    const file = (title, name, voided = null) => db.prepare(`INSERT INTO visit_documents (patient_id, title, file_name, file_path, doc_type, created_by, voided_at)
+        VALUES (1, ?, ?, ?, 'upload', 3, ?)`).run(title, name, 'patients/1/docs/' + name, voided);
+    file('Направление', 'k1-scan.pdf');
+    file('Снимок', 'k2-missing.jpg');
+    file('ОТОЗВАН', 'k3.pdf', '2026-10-02T00:00:00Z');
+    const files = patientDocSources(db, { patient_id: 1 }, DOCTOR).groups.files;
+    assert.deepEqual(files.map((f) => [f.title, f.file_available]).sort(), [['Направление', true], ['Снимок', false]]);
+    assert.ok(files.every((f) => !f.sections && f.file_path.startsWith('patients/1/docs/')), 'у файла есть содержимое или чужой путь');
+  } finally {
+    setDataDir(null);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // PASTE_SOURCES_V1 — здание как у карты пациента (BRANCH_ORIGIN_V1): владелец

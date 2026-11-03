@@ -144,7 +144,7 @@ const storageRoot = () => path.join(getDataDir(), 'storage', 'clinic-docs');
  * врача — оно в body, не в файле) считается «вопрос не про файл» и не
  * помечается недоступным.
  */
-function fileOnThisMachine(filePath) {
+export function fileOnThisMachine(filePath) {   // PASTE_SOURCES_V1 — и для вкладки «Файлы» окна вставки
   if (!filePath) return true;
   const rel = String(filePath);
   if (rel.includes('..') || rel.includes('\\') || rel.includes('\0')) return false;
