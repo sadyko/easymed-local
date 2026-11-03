@@ -83,6 +83,19 @@ export function serviceRoute(svc, lookups = {}) {
 /** Строка уходит в кабинет врача? */
 export const goesToCabinet = (svc, lookups) => serviceRoute(svc, lookups) === 'cabinet';
 
+/**
+ * DIAG_ROUTE_V1 (D1, решение владельца 2026-11-03) — НУЖЕН ЛИ СТРОКЕ ИСПОЛНИТЕЛЬ.
+ * Строка кабинета без исполнителя не видна никому (SERVICE_SCOPE_V3: кабинет
+ * показывает только назначенное), поэтому регистратура выбирает исполнителя
+ * у КАЖДОЙ услуги, кроме групп «Лаборатория» и «Процедуры». Галочка «Услугу
+ * оказывает специалист» (requires_doctor) требует исполнителя всегда.
+ */
+export function needsPerformer(svc) {
+    if (!svc) return false;
+    if (isOne(svc.requires_doctor)) return true;
+    return serviceRoute(svc) === 'cabinet';
+}
+
 // ─── то же правило для SQL сервера ──────────────────────────────────────────
 const GROUPS_SQL = "('" + SERVICE_GROUPS.join("','") + "')";
 /** Строка без группы (SQL): колонка пуста или значение неизвестно. */

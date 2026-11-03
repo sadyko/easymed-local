@@ -184,7 +184,7 @@ const EXTRA_DOCTORS = [
   [75, 'jurayev', 'Жураев Бекзод', 'офтальмолог'],
 ];
 
-function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false, lines = false, docref = false } = {}) {
+function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false, lines = false, docref = false, diag = 0 } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
@@ -242,8 +242,18 @@ function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, 
   // CRM_CALENDAR_MIRROR_V1 — у записи несколько услуг (строки visit_services):
   // запись из CRM и запись колл-центра несут их все, а не одну головную.
   if (lines) {
-    db.prepare("INSERT INTO services (id, name, price) VALUES (22,'Анализ крови',40000)").run();
+    // DIAG_ROUTE_V1 (D1) — анализ — группой «Лаборатория»: без группы услуга легла бы в
+    // «Консультации» (умолчание колонки), а услуге кабинета исполнитель нужен всегда.
+    db.prepare("INSERT INTO services (id, name, price, type) VALUES (22,'Анализ крови',40000,'lab')").run();
     db.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (55, 21, 'added'), (55, 22, 'added')").run();
+  }
+  // DIAG_ROUTE_V1 (D1) — УЗИ группы «Диагностика», «без врача»; отмечено diag сонологам (9, 12).
+  if (diag) {
+    db.prepare("INSERT INTO services (id, name, price, type, requires_doctor) VALUES (24,'УЗИ брюшной полости',150000,'imaging',0)").run();
+    const rates = JSON.stringify([{ service_id: 24, percentage: 0 }]);
+    const U = db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours, service_rates) VALUES (?,?,'x',?,?,1,'УЗИ',?,?)");
+    U.run(9, 'uzi1', 'Сонолог Первый', 'doctor', JSON.stringify(wh), rates);
+    if (diag > 1) U.run(12, 'uzi2', 'Сонолог Второй', 'head_doctor', JSON.stringify(wh), rates);
   }
   // Разбор ревью (M4): строки, которые уже не «в смете», — выставленная,
   // начатая и выданный товар.
@@ -336,8 +346,8 @@ const WORKING_SET_KEY = 'rcal.workingset.v1';
 function putWorkingSet(ws) { LS.set(WORKING_SET_KEY, JSON.stringify(ws)); }
 
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false, lines = false, docref = false } = {}) {
-  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm, lines, docref });
+async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false, lines = false, docref = false, diag = 0 } = {}) {
+  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm, lines, docref, diag });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
@@ -1135,6 +1145,56 @@ test('ОКНО ПРИЁМА: колл-центр снимает и добавл�
     assert.equal(DB.prepare("SELECT visit_service_id FROM crm_request_services WHERE request_id = 77 AND service_id = 22").get().visit_service_id,
       DB.prepare('SELECT id FROM visit_services WHERE visit_id = 55 AND service_id = 22').get().id, 'строка карточки не указывает на строку визита');
   } finally {
+    USER.role = prevRole;
+    delete window.easymed;
+  }
+});
+
+// DIAG_ROUTE_V1 (D1, решение владельца 2026-11-03) — «Добавить» в окне записи: у услуги
+// кабинета врача (всё, кроме «Лаборатории» и «Процедур») — исполнитель из отмеченных ей в
+// «Услугах и ставках»; один — ставится сам, двое — выбирает регистратура, без выбора строка
+// не ложится. Прежде УЗИ «без врача» ложилось сюда без исполнителя ВСЕГДА, и в кабинете его
+// не видел никто.
+test('ОКНО ПРИЁМА: «Добавить» УЗИ — исполнитель из отмеченных услуге; один — сам, двое — выбор, без выбора не ложится (DIAG_ROUTE_V1)', async () => {
+  window.easymed = { state: { user: { id: 1, role: 'registrar', extra_roles: [] } } };
+  const prevRole = USER.role;
+  USER.role = 'registrar';
+  const TOASTS = [];
+  const toastEl = mk('div');
+  Object.defineProperty(toastEl, 'textContent', { get() { return ''; }, set(v) { TOASTS.push(String(v)); }, configurable: true });
+  const prevGet = document.getElementById;
+  document.getElementById = (id) => (id === 'toast' ? toastEl : null);
+  const lineDoc = () => { const r = DB.prepare('SELECT doctor_id FROM visit_services WHERE visit_id = 55 AND service_id = 24').get(); return r ? r.doctor_id : undefined; };
+  try {
+    for (const [diag, want] of [[1, [9]], [2, [9, 12]]]) {
+      document.body.children.length = 0;
+      TOASTS.length = 0;
+      const { box } = await render({ lines: true, diag });
+      const modal = await openAppt(box);
+      const sel = walk(modal).find((n) => n.attrs && 'data-booking-add' in n.attrs);
+      const perf = walk(modal).find((n) => n.attrs && 'data-booking-performer' in n.attrs);
+      assert.ok(sel && perf, 'в окне нет выбора услуги / исполнителя');
+      sel.value = 's:24';
+      sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+      const ids = perf.children.filter((o) => o.tagName === 'OPTION').map((o) => o.attrs.value).filter(Boolean).map(Number).sort((a, b) => a - b);
+      assert.deepEqual(ids, want, 'кандидаты — отмеченные услуге');
+      const add = walk(sel.parentNode || modal).find((n) => n.tagName === 'BUTTON' && /Добавить/.test(textOf(n)));
+      if (want.length === 1) {
+        assert.equal(perf.value, '9', 'единственный исполнитель не выбран сам');
+      } else {
+        assert.equal(perf.value, '', 'при двух исполнителях выбран сам');
+        add.click();
+        await flush(20);
+        assert.equal(lineDoc(), undefined, 'строка легла без исполнителя');
+        assert.ok(TOASTS.some((t) => /Укажите врача для услуги «УЗИ брюшной полости»/.test(t)), 'отказ не сказан: ' + JSON.stringify(TOASTS));
+        perf.value = '12';
+      }
+      add.click();
+      await flush(20);
+      assert.equal(lineDoc(), want[want.length - 1], 'исполнитель строки — не выбранный (врач записи — 7)');
+    }
+  } finally {
+    document.getElementById = prevGet;
     USER.role = prevRole;
     delete window.easymed;
   }

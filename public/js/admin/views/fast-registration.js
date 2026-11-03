@@ -74,7 +74,7 @@ import { registerWalkIn, walkInRoleRefusal, walkInLinesRefusal } from './walk-in
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»
 import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
 import { surgeryBedRefusal, isSurgeryPick, SURGERY_NEEDS_BED_TEXT } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1   // WALK_IN_BOOKING_V1
-import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        // DOCTOR_POOL_V1
+import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    // REFERRAL_SOURCE_CODE_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';                    // WIZ_INVOICE_PRINT_V1 — тот же бланк «Счёт»
@@ -481,7 +481,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
      */
     function doctorCell(row) {
         const pool = doctorPoolFor(state.doctors, row.service);
-        if (!pool.length && !row.service.requires_doctor && row.doctorId == null) {
+        // DIAG_ROUTE_V1 (D1) — «—» только у анализа и процедуры: услуге кабинета исполнитель нужен всегда.
+        if (!pool.length && !needsPerformer(row.service) && row.doctorId == null) {
             return h('td', { class: 'muted' }, '—');
         }
         const sel = h('select', { style: { width: '100%' } },
@@ -649,6 +650,11 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 ? trf('Уже из записи — по цене записи, без пакета: {names}', { names: service.name || '' })
                 : trf('«{name}» уже из записи — вторая строка не нужна.', { name: service.name || '' }), 'info');
             return bookedTwin;
+        }
+        // DIAG_ROUTE_V1 (D1) — исполнитель сам, только когда кандидат один (как в мастере записи).
+        if (!doctor && needsPerformer(service)) {
+            const one = soleCandidate(doctorPoolFor(state.doctors, service));
+            if (one) doctor = { id: one.id, full_name: one.full_name };
         }
         const row = pushRow(service, doctor, pkg);
         paintTable();
@@ -962,9 +968,12 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     // Сохранение
     // =======================================================================
     /** Врач у услуги, которая его требует, — проверка ДО первой записи в базу. */
+    // DIAG_ROUTE_V1 (D1, решение владельца 2026-11-03) — и у КАЖДОЙ услуги кабинета врача
+    // (всё, кроме групп «Лаборатория» и «Процедуры»): без исполнителя строку не увидит ни один врач.
     function checkDoctors() {
         for (const row of state.rows) {
-            if (row.service.requires_doctor && !row.doctorId) {
+            // строка «из записи» уже в визите и врача здесь не меняет — её проверяет только «нужен врач»
+            if (!row.doctorId && (row.service.requires_doctor || (!row.booked && needsPerformer(row.service)))) {
                 toast(trf('Укажите врача для услуги «{name}»', { name: row.service.name || '' }), 'fail');
                 try { if (row.sel && row.sel.focus) row.sel.focus(); } catch (e) { /* нет фокуса — не беда */ }
                 return false;
@@ -1282,11 +1291,13 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 supabase.from('services').select('id, name, price, tax_rate, requires_doctor, type, active').eq('active', true).order('name').limit(1000),
                 // EASYMED_DOCTOR_DETECTION — список врачей проверяет is_doctor, а
                 // не role: у администратора-врача роли 'doctor' нет вовсе.
-                supabase.from('users').select('id, full_name, service_rates').eq('is_doctor', true).eq('active', true).order('full_name'),
+                // DIAG_ROUTE_V1 (D1) — и все, кому услуга отмечена в «Услугах и ставках» (медсестра на УЗИ):
+                // performerCandidates; фолбэк «все врачи» — по is_doctor (doctorPoolFor).
+                supabase.from('users').select('id, full_name, is_doctor, service_rates').eq('active', true).order('full_name'),
                 supabase.from('referral_sources').select('id, name, code, category_id, doctor_id, active').eq('active', true).order('code'),
             ]);
             state.catalog = (svcRes && svcRes.data) || [];
-            state.doctors = (docRes && docRes.data) || [];
+            state.doctors = performerCandidates((docRes && docRes.data) || []);   // DIAG_ROUTE_V1 (D1)
             state.sources = (srcRes && srcRes.data) || [];
             for (const s of state.sources) {
                 referralSel.appendChild(h('option', { value: String(s.id) }, referralSourceLabel(s)));

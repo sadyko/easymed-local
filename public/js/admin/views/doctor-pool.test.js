@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ratesOf, assignedTo, doctorPoolFor } from './doctor-pool.js';
+import { ratesOf, assignedTo, doctorPoolFor, needsPerformer, performerCandidates, soleCandidate } from './doctor-pool.js';
 
 const DOCS = [
   { id: 1, full_name: 'Азиза',  service_rates: [{ service_id: 10 }, { service_id: 11 }] },
@@ -31,6 +31,40 @@ test('услуга требует врача, а исполнителей нет
   assert.equal(pool.length, DOCS.length, 'иначе мастер визита встаёт в тупик');
 });
 
-test('услуге без врача пустой список — правильный ответ, а не тупик', () => {
-  assert.deepEqual(doctorPoolFor(DOCS, { id: 999, requires_doctor: 0 }), []);
+// DIAG_ROUTE_V1 (D1, решение владельца 2026-11-03) — пустой список только у групп
+// «Лаборатория» и «Процедуры»: строке кабинета без исполнителя не видна ни одному врачу.
+test('анализу и процедуре без исполнителей — пустой список; услуге кабинета «без врача» — все врачи', () => {
+  assert.deepEqual(doctorPoolFor(DOCS, { id: 999, requires_doctor: 0, type: 'lab' }), []);
+  assert.deepEqual(doctorPoolFor(DOCS, { id: 999, requires_doctor: 0, type: 'procedure' }), []);
+  assert.deepEqual(doctorPoolFor(DOCS, { id: 999, requires_doctor: 0, type: 'imaging', is_lab: 1 }), [], 'is_lab — группа «Лаборатория»');
+  for (const type of ['imaging', 'consultation', 'other', 'radiology']) {
+    assert.equal(doctorPoolFor(DOCS, { id: 999, requires_doctor: 0, type }).length, DOCS.length, type);
+  }
+});
+
+test('needsPerformer: всем, кроме «Лаборатории» и «Процедур»; галочка «нужен врач» — всегда', () => {
+  assert.equal(needsPerformer({ type: 'imaging', requires_doctor: 0 }), true);
+  assert.equal(needsPerformer({ type: 'other', requires_doctor: 0 }), true);
+  assert.equal(needsPerformer({ type: 'lab', requires_doctor: 0 }), false);
+  assert.equal(needsPerformer({ type: 'procedure', requires_doctor: 0 }), false);
+  assert.equal(needsPerformer({ type: 'procedure', requires_doctor: 1 }), true);
+  assert.equal(needsPerformer({ type: 'imaging', requires_doctor: 0, is_lab: 1 }), false);
+  assert.equal(needsPerformer(null), false);
+});
+
+test('фолбэк «все врачи» — по is_doctor, не по роли; отмеченный исполнитель — при любой роли', () => {
+  const staff = [
+    { id: 1, full_name: 'Врач', role: 'doctor', is_doctor: 1, service_rates: [] },
+    { id: 2, full_name: 'Админ-врач', role: 'admin', is_doctor: 1, service_rates: null },
+    { id: 3, full_name: 'Медсестра УЗИ', role: 'nurse', is_doctor: 0, service_rates: [{ service_id: 31 }] },
+    { id: 4, full_name: 'Регистратор', role: 'registrar', is_doctor: 0, service_rates: [] },
+    { id: 5, full_name: 'Главврач', role: 'head_doctor', is_doctor: true, service_rates: [{ service_id: 31 }] },
+  ];
+  const cands = performerCandidates(staff);
+  assert.deepEqual(cands.map((u) => u.id), [1, 2, 3, 5], 'регистратор без услуг — не исполнитель');
+  assert.deepEqual(doctorPoolFor(cands, { id: 31, type: 'imaging' }).map((u) => u.id), [3, 5], 'отмеченные — медсестра и главврач');
+  assert.deepEqual(doctorPoolFor(cands, { id: 32, type: 'imaging' }).map((u) => u.id), [1, 2, 5], 'никого не отмечено — все is_doctor');
+  assert.equal(soleCandidate([cands[0]]), cands[0]);
+  assert.equal(soleCandidate(cands), null, 'двое и больше — выбирает регистратура');
+  assert.equal(soleCandidate([]), null);
 });

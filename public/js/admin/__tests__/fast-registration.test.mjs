@@ -580,6 +580,11 @@ test('услуга требует врача, врач не выбран — с�
 
   fillMinimum(dlg);
   const row = dlg.state.addLine(SERVICES[0], null);   // requires_doctor, врача нет
+  // DIAG_ROUTE_V1 (D1) — единственный отмеченный врач (Петров) ставится сам, как в мастере
+  // записи; регистратор снимает его — «— выберите врача —».
+  assert.strictEqual(row.doctorId, 7, 'единственный кандидат не выбран сам');
+  row.sel.value = '';
+  row.sel.dispatchEvent({ type: 'change', target: row.sel, currentTarget: row.sel });
 
   calls.length = 0; toasts.length = 0;
   btnByText(dlg.card, 'Сохранить').click();

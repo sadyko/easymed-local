@@ -31,7 +31,7 @@ import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDa
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageSplit, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';   // PACKAGES_V1 — «скидка 20 % · до 30.09.2026»
-import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
+import { doctorPoolFor, needsPerformer, performerCandidates } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';   // OWN_PRICE_REPEAT_V1 — одно правило с сервером
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
@@ -629,7 +629,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     try {
         const [svcRes, docRes, srcRes, refCatRes, payerRes] = await Promise.all([
             supabase.from('services').select('id, name, price, duration_minutes, requires_doctor, is_lab, type').eq('active', true).order('name').limit(1000),
-            supabase.from('users').select('id, full_name, username, role, is_active, service_rates').eq('role', 'doctor').eq('is_active', true).order('full_name'),   // SVC_DOCTORS_V1 — назначения услуг
+            // SVC_DOCTORS_V1 — назначения услуг. DIAG_ROUTE_V1 (D1) — исполнители — врачи по
+            // is_doctor (не по роли: администратор-врач, главный врач) и все, кому отмечена
+            // услуга (медсестра на УЗИ) — performerCandidates; прежде только role = 'doctor'.
+            supabase.from('users').select('id, full_name, username, role, is_active, is_doctor, specialty, service_rates').eq('is_active', true).order('full_name'),
             supabase.from('referral_sources').select('id, name, code, category_id, doctor_id').eq('active', true).order('name'),   // REPORTS_V2 — doctor_id: направивший врач из кабинета
             // REFERRAL_CAT_FROM_BOOK_V1 — список категорий берётся из СПРАВОЧНИКА,
             // а не собирается из загруженных источников. Собранный из источников
@@ -668,7 +671,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // сбой не мешает мастеру — просто нечего предложить.
         { const w = await loadPatientWallet(patient && patient.id); wiz.balance = w.balance; wiz.walletDebt = w.debt; }
         wiz.services = svcRes.data || [];
-        wiz.doctors  = docRes.data || [];
+        wiz.doctors  = performerCandidates(docRes.data || []);   // DIAG_ROUTE_V1 (D1)
         wiz.sources  = srcRes.data || [];
         wiz.refCats  = refCatRes.data || [];
         // REFERRAL_LINE_V1 (ревью полировки L-1) — в мастере направления врач «Кто направил»
@@ -724,7 +727,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // решается, показывать ли слоты вообще (живая очередь их не выбирает).
     try {
         const ext = await supabase.from('users').select('id, scheduling_mode')
-            .eq('role', 'doctor').eq('is_active', true);
+            .eq('is_active', true);   // DIAG_ROUTE_V1 (D1) — тот же круг, что список исполнителей
         if (!ext.error && ext.data) {
             const m = new Map(ext.data.map(u => [u.id, u]));
             for (const d of wiz.doctors) Object.assign(d, m.get(d.id) || {});
@@ -1187,7 +1190,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const headRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px' } },
                     h('div', { style: { minWidth: 0, flex: 1 } },
                         h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: inCart ? 'var(--primary-700)' : 'var(--ink-900)' } },
-                            s.name, inCart ? (inCart.svc.requires_doctor && !inCart.doctorId ? ' — выберите врача' : ' — добавлено') : '',
+                            s.name, inCart ? (needsPerformer(inCart.svc) && !inCart.doctorId ? ' — выберите врача' : ' — добавлено') : '',   // DIAG_ROUTE_V1 (D1)
                             // CRM_CONVERT_V1 — услуга пришла из заявки колл-центра
                             inCart && inCart.fromCrm
                                 ? h('span', { style: { marginLeft: '8px', padding: '2px 8px', borderRadius: '999px', fontSize: '12.5px', fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', background: 'var(--teal-50, #e0f2f1)', color: 'var(--teal-700, #00796b)', verticalAlign: 'middle' } }, 'из заявки')
@@ -1197,7 +1200,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                                 ? h('span', { dataset: { orderedTag: '' }, style: { marginLeft: '8px', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-500)' } }, ' — ', orderedLabel(onVisit))
                                 : null),
                         h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
-                            [categoryOf(s), trf('{n} мин', { n: s.duration_minutes || 30 }), s.requires_doctor ? tr('нужен врач') : tr('врач не требуется')].join(' · ')),
+                            [categoryOf(s), trf('{n} мин', { n: s.duration_minutes || 30 }), s.requires_doctor ? tr('нужен врач') : needsPerformer(s) ? tr('нужен исполнитель') : tr('врач не требуется')].join(' · ')),   // DIAG_ROUTE_V1 (D1)
                     ),
                     h('span', { class: 'num', style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', whiteSpace: 'nowrap' } },
                         fmtPrice(s.price), ' сум'),
@@ -1280,11 +1283,38 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     line.when = dateInp.value + 'T00:00';
                     repaintRail();
                 });
+                // DIAG_ROUTE_V1 (D1, решение владельца 2026-11-03) — услуге кабинета врача
+                // (всё, кроме групп «Лаборатория» и «Процедуры») исполнитель нужен и
+                // без времени: строка без исполнителя не видна ни одному врачу
+                // (SERVICE_SCOPE_V3). Список — отмеченные услуге в «Услугах и ставках»,
+                // иначе все врачи; один кандидат выбирается сам (addToCart).
+                const perf = needsPerformer(line.svc) ? performerSelect(line) : null;
                 return h('div', {
                     style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed var(--ink-150, var(--ink-200))' },
                 }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Дата'),
                     dateInp,
-                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'время не требуется — услуга без врача'));
+                    perf ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Исполнитель') : null,
+                    perf,
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, perf ? 'время не требуется — запись на день' : 'время не требуется — услуга без врача'),
+                    perf && !line.doctorId ? h('span', { style: { fontSize: '12.5px', color: 'var(--crit-600, #dc2626)' } }, 'выберите исполнителя') : null);
+            }
+
+            // DIAG_ROUTE_V1 (D1) — выбор исполнителя строки «на дату» (без слота).
+            function performerSelect(line) {
+                const pool = doctorsForService(line.svc.id);
+                const sel = h('select', {
+                    'data-performer-for': String(line.svc.id),
+                    style: { padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '9px', fontFamily: 'inherit', fontSize: '12.5px', background: 'var(--white, #fff)', maxWidth: '220px' },
+                },
+                    h('option', { value: '' }, pool.length ? '— выберите врача —' : 'нет врачей для этой услуги'),
+                    ...pool.map(d => h('option', { value: String(d.id) }, (d.full_name || d.username || '') + (d.specialty ? ' · ' + d.specialty : ''))));
+                sel.value = line.doctorId ? String(line.doctorId) : '';
+                sel.addEventListener('change', () => {
+                    line.doctorId = sel.value ? Number(sel.value) : null;
+                    refreshTiers();
+                    repaintRail(); repaintCatalog();
+                });
+                return sel;
             }
 
             // SCHED_V1_COMPACT — компактный планировщик: три дропдауна в одну строку
@@ -1795,7 +1825,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const pool = doctorsForService(svc.id);
         if (pool.length === 1) {
             line.doctorId = pool[0].id;
-            if (isLiveQueueDoc(line.doctorId)) { line.when = null; repaintRail(); }
+            // DIAG_ROUTE_V1 (D1) — у строки «на дату» день остаётся и у врача живой очереди.
+            if (isLiveQueueDoc(line.doctorId)) { if (!line.dateOnly) line.when = null; repaintRail(); }
             // PICK_DAY_V1 — услуге без врача время врача не нужно: она «на дату»
             // (сегодня). Подбор слота единственного исполнителя ставил ей ДЕНЬ
             // этого слота — и анализ уезжал на завтра вторым визитом.
@@ -2635,11 +2666,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // а выбрать врача можно было только найдя её в каталоге на 513
             // позиций. Для подставленной из заявки колл-центра это тупик —
             // регистратура не знает, что именно искать.
-            if (pendingDoc > 0) {
-                const wait = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px', padding: '9px 10px', background: 'var(--warn-50, #fffbeb)', border: '1px solid var(--warn-200, #fde68a)', borderRadius: '10px' } },
+            // DIAG_ROUTE_V1 (D1) — сюда же строки «на дату» услуг кабинета без исполнителя:
+            // без него пациента не увидит ни один врач (needsPerformer).
+            const waitDoc = wiz.cart.filter(x => !x.doctorId && !x.booked && (x.svc.requires_doctor || needsPerformer(x.svc)));   // CRM_LINK_ALL_V1 — врач записи не меняется
+            if (pendingDoc > 0 || waitDoc.length > 0) {
+                const wait = h('div', { 'data-wait-doctor': '', style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px', padding: '9px 10px', background: 'var(--warn-50, #fffbeb)', border: '1px solid var(--warn-200, #fde68a)', borderRadius: '10px' } },
                     h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--warn-700, #a16207)' } },
-                        trf('Выберите врача — {n} услуг(и) ждут', { n: pendingDoc })));
-                for (const c of wiz.cart.filter(x => x.svc.requires_doctor && !x.doctorId && !x.booked)) {   // CRM_LINK_ALL_V1 — врач записи не меняется
+                        trf('Выберите врача — {n} услуг(и) ждут', { n: Math.max(pendingDoc, waitDoc.length) })));
+                for (const c of waitDoc) {
                     const pool = doctorsForService(c.svc.id);
                     const sel = h('select', {
                         style: { width: '100%', padding: '6px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', background: 'var(--white,#fff)' },
@@ -2651,7 +2685,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         c.doctorId = Number(sel.value);
                         // Тот же путь, что и при выборе врача в каталоге: без
                         // слота врачебная услуга не уедет дальше шага 1.
-                        if (!c.when && !isLiveQueueDoc(c.doctorId)) autoPickSlot(c).then(() => { repaintRail(); if (wiz.step === 1) paint(); }).catch(() => {});
+                        if (!c.dateOnly && !c.when && !isLiveQueueDoc(c.doctorId)) autoPickSlot(c).then(() => { repaintRail(); if (wiz.step === 1) paint(); }).catch(() => {});   // DIAG_ROUTE_V1 — строке «на дату» слот не нужен
                         repaintRail();
                         if (wiz.step === 1) paint();
                     });
@@ -3055,6 +3089,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             if (wiz.cart.some(needsDay)) return 'сегодня у врача нет свободного времени — выберите день или уберите услугу';
             // SCHED_V1 — врачебной услуге нужны врач и слот прямо в карточке услуги
             if (wiz.cart.some(c => c.svc.requires_doctor && !(c.doctorId && (c.when || isLiveQueueDoc(c.doctorId))))) return 'выберите врача и время для услуг, где нужен врач';
+            // DIAG_ROUTE_V1 (D1, решение владельца 2026-11-03) — услуга кабинета врача без
+            // исполнителя не уходит: строку без исполнителя не увидит ни один врач.
+            if (wiz.cart.some(c => !c.booked && !c.doctorId && needsPerformer(c.svc))) return 'выберите исполнителя услуги — без него пациента не увидит ни один врач';
         }
         if (wiz.step === 2) {
             if (!wiz.when && !wiz.cart.some(c => c.when)) return 'укажите дату и время визита';

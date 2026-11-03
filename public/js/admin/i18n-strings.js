@@ -3,6 +3,11 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // DIAG_ROUTE_V1 — исполнитель у каждой услуги кабинета врача (visit-wizard.js, fast-registration.js, room-calendar.js)
+  "время не требуется — запись на день": {"en":"no time needed — booked for the day","ru":"время не требуется — запись на день","uz":"vaqt kerak emas — kunga yoziladi"},   // DIAG_ROUTE_V1
+  "выберите исполнителя": {"en":"choose who performs it","ru":"выберите исполнителя","uz":"ijrochini tanlang"},   // DIAG_ROUTE_V1
+  "выберите исполнителя услуги — без него пациента не увидит ни один врач": {"en":"choose who performs the service — without one no doctor will see the patient","ru":"выберите исполнителя услуги — без него пациента не увидит ни один врач","uz":"xizmat ijrochisini tanlang — usiz bemorni hech bir shifokor ko‘rmaydi"},   // DIAG_ROUTE_V1
+  "нужен исполнитель": {"en":"performer needed","ru":"нужен исполнитель","uz":"ijrochi kerak"},   // DIAG_ROUTE_V1
   // LAB_PANEL_DEDUP_V1 — панель лаборатории одним вызовом (views/lab-panels.js, rpc/lab-panels.js)
   "Панель ещё сохраняется — подождите.": {"en":"The panel is still being saved — please wait.","ru":"Панель ещё сохраняется — подождите.","uz":"Panel hali saqlanmoqda — kuting."},   // LAB_PANEL_DEDUP_V1
   "Панель не найдена — обновите страницу.": {"en":"Panel not found — reload the page.","ru":"Панель не найдена — обновите страницу.","uz":"Panel topilmadi — sahifani yangilang."},   // LAB_PANEL_DEDUP_V1

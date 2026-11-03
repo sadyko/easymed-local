@@ -78,6 +78,7 @@ import { hasActorRole } from '../permissions.js';
 import { pastelFor } from '../pastel.js?v=pastel1';
 import { openServicePickerModal, forgetSlots } from './service-picker-modal.js?v=ownrep4';   // RESCAL_WIRE_V1 — same URL as other importers (one instance) · REPEAT_VISIT_V1 (ревью) — forgetSlots
 import { registrarHeader } from './registrar-header.js?v=aurora5';   // NO_GREETING_V1 — same URL as patients.js (one instance)
+import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D1) — исполнитель строки «Добавить»
 // RCAL_REFERENCE_LAYOUT_V1 — счётная часть новой раскладки (мини-месяц, сколько
 // дней помещается, загрузка колонки, рабочий набор оператора). Отдельным
 // файлом: этот в node не загружается, а те правила надо проверять числами.
@@ -268,8 +269,8 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             supabase.from('branches').select('id, name').eq('active', true),
             supabase.from('floors').select('id, name, level').eq('active', true),
             supabase.from('rooms').select('id, name, code, room_type, floor_id').eq('active', true).order('code', { ascending: true }),
-            supabase.from('users').select('id, full_name, specialty, role, branch_id, is_doctor, scheduling_mode').eq('active', true).order('full_name', { ascending: true }),
-            supabase.from('services').select('id, name, duration_minutes, requires_doctor').eq('active', true).order('name', { ascending: true }),
+            supabase.from('users').select('id, full_name, specialty, role, branch_id, is_doctor, scheduling_mode, service_rates').eq('active', true).order('full_name', { ascending: true }),   // service_rates: DIAG_ROUTE_V1 (D1)
+            supabase.from('services').select('id, name, duration_minutes, requires_doctor, type, is_lab').eq('active', true).order('name', { ascending: true }),   // type, is_lab: DIAG_ROUTE_V1 (D1) — нужен ли строке исполнитель
         ]);
         const branchName = {}, floorName = {};
         for (const b of take(brs, tr('филиалы'))) branchName[b.id] = b.name || '';
@@ -288,7 +289,13 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         }));
         // ADMIN_DOCTOR_LIST_V1 — администратор клиники может быть и врачом; у
         // такой учётки role='admin', поэтому проверять надо is_doctor.
-        state.doctors = take(docs, tr('сотрудники'))
+        // DIAG_ROUTE_V1 (D1) — кандидаты в исполнители строки записи: врачи (is_doctor) и все,
+        // кому услуга отмечена в «Услугах и ставках», — но только врачи: строку записи сервер
+        // принимает лишь с врачом (booking_lines_add, ревью M2: is_doctor или роль «Врач»).
+        const staff = take(docs, tr('сотрудники'));
+        state.performers = performerCandidates(staff)
+            .filter(u => u.is_doctor === true || u.is_doctor === 1 || (u.role || '').toLowerCase() === 'doctor');
+        state.doctors = staff
             .filter(u => u.is_doctor === true || u.is_doctor === 1 || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').trim())
             .map(u => ({
                 id: u.id, name: u.full_name || '—',
@@ -302,7 +309,8 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 branchId: u.branch_id || null,
                 liveQueue: (u.scheduling_mode || '') === 'live_queue',
             }));
-        state.servicesList = take(svcs, tr('услуги')).map(s => ({ id: s.id, name: s.name || '—', dur: s.duration_minutes, needsDoctor: !!Number(s.requires_doctor) }));
+        state.servicesList = take(svcs, tr('услуги')).map(s => ({ id: s.id, name: s.name || '—', dur: s.duration_minutes, needsDoctor: !!Number(s.requires_doctor),
+            requires_doctor: s.requires_doctor, type: s.type, is_lab: s.is_lab }));   // DIAG_ROUTE_V1 (D1) — needsPerformer
     }
 
     async function loadAppts() {
@@ -1006,6 +1014,28 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         consultNames().then(() => {
             for (const c of (state.consultList || [])) addSel.appendChild(h('option', { value: 'c:' + c.id }, c.name));
         });
+        // DIAG_ROUTE_V1 (D1, решение владельца 2026-11-03) — ИСПОЛНИТЕЛЬ СТРОКИ «ДОБАВИТЬ».
+        // Прежде услуга «без врача» ложилась сюда без исполнителя ВСЕГДА — даже в запись
+        // самого сонолога — и в кабинете её не видел никто (SERVICE_SCOPE_V3). Теперь у
+        // каждой услуги, кроме групп «Лаборатория» и «Процедуры», исполнитель выбирается
+        // здесь: отмеченные ей в «Услугах и ставках», иначе все врачи; один — сам.
+        const perfSel = h('select', { class: 'rcal-edit', 'data-booking-performer': '', style: Object.assign({}, _ecss, { display: 'none' }) });
+        const addSvcOf = () => {
+            const v = String(addSel.value || '');
+            return v.startsWith('s:') ? (state.servicesList || []).find((x) => String(x.id) === v.slice(2)) || null : null;
+        };
+        const paintPerf = () => {
+            clear(perfSel);
+            const svc = addSvcOf();
+            if (!svc || !needsPerformer(svc)) { perfSel.style.display = 'none'; perfSel.value = ''; return; }
+            const pool = doctorPoolFor(state.performers || [], svc);
+            perfSel.appendChild(h('option', { value: '' }, pool.length ? tr('— выберите врача —') : tr('нет врачей для этой услуги')));
+            for (const d of pool) perfSel.appendChild(h('option', { value: String(d.id) }, (d.full_name || '—') + (d.specialty ? ' · ' + d.specialty : '')));
+            const one = soleCandidate(pool);
+            perfSel.value = one ? String(one.id) : '';
+            perfSel.style.display = '';
+        };
+        addSel.addEventListener('change', paintPerf);
         const addBtn = h('button', {
             type: 'button', class: 'btn btn-sm btn-outline',
             onclick: async (ev) => {
@@ -1014,19 +1044,27 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 const btn = ev.currentTarget;
                 const v = String(addSel.value || '');
                 if (!v) return;
-                btn.disabled = true;
                 const id = Number(v.slice(2));
                 // Разбор ревью (M3) — врач записи ставится только той строке,
                 // которой без врача не бывает (консультация, услуга с
                 // requires_doctor). Анализ крови «к терапевту» не пишем.
+                // DIAG_ROUTE_V1 (D1) — у услуги исполнитель — выбранный в perfSel, не врач записи.
                 const svc = (state.servicesList || []).find((x) => String(x.id) === String(id));
-                const needsDoctor = v.startsWith('c:') || !!(svc && svc.needsDoctor);
-                const doctorId = needsDoctor ? (docSel.value ? Number(docSel.value) : (a.doctorId || null)) : null;
-                const line = v.startsWith('c:') ? { consultation_type_id: id, doctor_id: doctorId } : { service_id: id, doctor_id: doctorId };
+                const consult = v.startsWith('c:');
+                const perfNeeded = !consult && needsPerformer(svc || { id });
+                if (perfNeeded && !perfSel.value) {
+                    toast(trf('Укажите врача для услуги «{name}»', { name: (svc && svc.name) || '' }), 'fail');
+                    return;
+                }
+                btn.disabled = true;
+                const doctorId = consult ? (docSel.value ? Number(docSel.value) : (a.doctorId || null))
+                    : (perfNeeded ? Number(perfSel.value) : null);
+                const line = consult ? { consultation_type_id: id, doctor_id: doctorId } : { service_id: id, doctor_id: doctorId };
                 const { error } = await supabase.rpc('booking_lines_add', { visit_id: a.id, patient_id: a.patientId || undefined, lines: [line] });
                 btn.disabled = false;
                 if (error) { toast(error.message || String(error), 'fail'); return; }
                 addSel.value = '';
+                paintPerf();
                 toast(tr('Услуга добавлена к записи.'), 'ok');
                 await refreshLines();
             },
@@ -1034,7 +1072,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const linesSection = h('div', { style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)' } },
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '4px' } }, tr('Услуги записи')),
             linesBox,
-            canEditLines ? h('div', { class: 'row', style: { gap: '8px', marginTop: '6px', alignItems: 'center' } }, addSel, addBtn) : null);
+            canEditLines ? h('div', { class: 'row', style: { gap: '8px', marginTop: '6px', alignItems: 'center' } }, addSel, perfSel, addBtn) : null);
 
         const pillsBox = h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } });
         function paintPills() {
