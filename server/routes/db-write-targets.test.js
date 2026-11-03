@@ -93,6 +93,43 @@ test('DUP_STOP_V1 (остаток A2): медсестра без чтения с
   } finally { t.close(); }
 });
 
+// DUP_STOP_V1 (ревью полировки L1, проба PA1) — отказ «ещё не оплачен» называл услугу строки:
+// медсестра со складом, которой строки визита не читаются, узнавала по номеру строки название
+// анализа или приёма любого неоплаченного визита («Анализ «ВИЧ (ИФА)» ещё не оплачен…»). Такой
+// роли — те же слова без названия (как безымянный отказ повтора, остаток A5); стойке — с названием.
+test('DUP_STOP_V1 (ревью полировки L1): медсестре без чтения строк визита отказ «ещё не оплачен» — без названия услуги; стойке — с названием', async () => {
+  const t = await start();
+  try {
+    t.db.prepare("INSERT INTO services (id, name, price, type, is_lab) VALUES (41,'ВИЧ (ИФА)',90000,'lab',1)").run();
+    t.db.prepare("INSERT INTO services (id, name, price, type) VALUES (31,'Консультация венеролога',150000,'consultation')").run();
+    t.db.prepare("INSERT INTO visit_services (id, visit_id, service_id, quantity, unit_price, total, status) VALUES (900,500,41,1,90000,90000,'added')").run();
+    t.db.prepare("INSERT INTO visit_services (id, visit_id, service_id, quantity, unit_price, total, status) VALUES (901,500,31,1,150000,150000,'added')").run();
+    const peek = await t.dbq('nurse', { table: 'visit_services', op: 'select', columns: 'id,service_id', filters: [{ col: 'id', op: 'eq', val: 900 }] });
+    assert.equal(peek.status, 403, 'стенд: медсестре строки визита не отдаются');
+    const cases = [
+      [900, 'collected', 'Анализ ещё не оплачен — пробу берут и результат вносят после кассы.', 'Анализ «ВИЧ (ИФА)» ещё не оплачен — пробу берут и результат вносят после кассы.'],
+      [901, 'completed', 'Консультация ещё не оплачена — подписать её можно после кассы.', 'Консультация «Консультация венеролога» ещё не оплачена — подписать её можно после кассы.'],
+      [901, 'in_progress', 'Услуга ещё не оплачена — начать работу по ней можно после кассы.', 'Услуга «Консультация венеролога» ещё не оплачена — начать работу по ней можно после кассы.'],
+    ];
+    for (const [id, status, nameless, named] of cases) {
+      const n = await t.dbq('nurse', { table: 'visit_services', op: 'update', values: { status }, filters: [{ col: 'id', op: 'eq', val: id }, { col: 'status', op: 'eq', val: 'added' }] });
+      assert.equal(n.status, 409, JSON.stringify(n.json));
+      assert.equal(n.json.error.message, nameless, 'медсестра ' + id + ' → ' + status);
+      const r = await upd(t, 'reg', 'visit_services', { status }, id);
+      assert.equal(r.status, 409, JSON.stringify(r.json));
+      assert.equal(r.json.error.message, named, 'стойка ' + id + ' → ' + status);
+    }
+    assert.deepEqual(t.db.prepare('SELECT status FROM visit_services WHERE id IN (900, 901) ORDER BY id').all().map((r) => r.status), ['added', 'added']);
+    // слова без названия — на трёх языках экрана
+    const { STRINGS } = await import('../../public/js/admin/i18n-strings.js');
+    for (const [, , nameless] of cases) {
+      const e = STRINGS[nameless];
+      assert.ok(e && e.ru === nameless && e.uz && e.en, 'нет статьи словаря: ' + nameless);
+      assert.doesNotMatch(e.uz + e.en, /[А-Яа-яЁё]/, nameless);
+    }
+  } finally { t.close(); }
+});
+
 test('DUP_STOP_V1 (остаток A3): врач без разделов данных пациента не переписывает свой документ на возвращённой строке — 409 refunded_line', async () => {
   const t = await start({ cutDoctor: true });
   try {

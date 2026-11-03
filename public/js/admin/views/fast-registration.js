@@ -887,7 +887,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                         : null));
         }
         for (const r of recs) {
-            const bonus = bonusText(r.bonus_to, r.bonus_if_other);   // ревью U10 LOW-7 — рекомендатель — условием
+            const bonus = bonusText(r.bonus_to, r.bonus_if_other, r.bonus_if_self);   // ревью U10 LOW-7 — рекомендатель — условием; ревью полировки L2 — и направивший визита
             doctorOrdersEl.appendChild(h('div', { 'data-doctor-rec': String(r.recommendation_id), style: rowCss },
                 h('div', { style: { flex: '1 1 auto', minWidth: 0 } },
                     h('div', { class: 'cell-strong', style: { fontSize: '13.5px' } }, r.name || '—'),

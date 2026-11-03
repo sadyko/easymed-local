@@ -64,3 +64,27 @@ test('кому бонус у рекомендации: врач-рекоменд
   assert.deepEqual(bonusText(['Клиника Х'], '  '), { template: 'Бонус: {names}', params: { names: 'Клиника Х' } });
   assert.equal(bonusText([], null), null);
 });
+
+// Ревью полировки L2 (проба PB3) — у визита направивший-врач Петров, рекомендовал Сидоров (вариант
+// «б»): выполнит другой врач — бонус Сидорову; выполнит сам Сидоров — бонус Петрову (за визит).
+// Подпись называет обоих, каждого со своим условием; имена, без сумм.
+test('кому бонус у рекомендации: направивший визита — условием «если выполняет сам рекомендатель»', async () => {
+  const SELF = 'Бонус: {doctor} — если услугу выполняет другой врач; {self} — если выполняет сам {doctor}';
+  const BOTH = 'Бонус: {names}; {doctor} — если услугу выполняет другой врач; {self} — если выполняет сам {doctor}';
+  assert.deepEqual(bonusText([], 'Сидоров', 'Петров'), { template: SELF, params: { doctor: 'Сидоров', self: 'Петров' } });
+  assert.deepEqual(bonusText(['Клиника Х'], 'Сидоров', 'Петров'),
+    { template: BOTH, params: { names: 'Клиника Х', doctor: 'Сидоров', self: 'Петров' } });
+  assert.deepEqual(bonusText([], 'Сидоров', null),
+    { template: 'Бонус: {doctor} — если услугу выполняет другой врач', params: { doctor: 'Сидоров' } });
+  assert.deepEqual(bonusText([], 'Сидоров', ' '),
+    { template: 'Бонус: {doctor} — если услугу выполняет другой врач', params: { doctor: 'Сидоров' } });
+  const { STRINGS } = await import('../i18n-strings.js');
+  for (const key of [SELF, BOTH]) {
+    const e = STRINGS[key];
+    assert.ok(e && e.ru === key && e.uz && e.en, 'нет статьи словаря: ' + key);
+    for (const lang of ['uz', 'en']) {
+      assert.doesNotMatch(e[lang], /[А-Яа-яЁё]/, lang + ': ' + e[lang]);
+      for (const ph of ['{doctor}', '{self}']) assert.ok(e[lang].includes(ph), lang + ' без ' + ph);
+    }
+  }
+});

@@ -6,9 +6,16 @@
 //   п. 9  рекомендация, уже привязанная к строке, ко второй не привязывается (проба R1d);
 //   п. 10 «от врача» — рекомендовавший, а не вставивший строку коллега (проба R3a);
 //   п. 11 «Представители» не считают партнёра строки на визите другого партнёра (проба R2).
+//   ревью полировки M1 — окно визита больше не делает рекомендовавшего врача направившим всего
+//         визита: бонус — только за услугу рекомендации, в любом окне стойки (проба PB1);
+//   ревью полировки L2 — «Бонус» рекомендации называет и направившего визита, которому платят,
+//         если рекомендатель выполняет услугу сам (проба PB3).
 // Настоящая база (все миграции), настоящее приложение и вход под ролями; данные — выдуманные.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { startCrmApp, localDay, at } from '../test-helpers/crm-unify-app.js';
@@ -60,6 +67,31 @@ async function payVisit(t, visitId, ids) {
 const detailRows = (db, from = TODAY, to = TODAY) => objects(runReport(db, { kind: 'referrals_detail', from, to }, admin))
   .map((o) => [o['Источник'], o['Услуга'], o['Вознаграждение']]);
 
+// Ревью полировки M1 — вызовы, которые окно визита (visit-modal.js attachRecommendation) делает
+// после вставки строки из рекомендации, берутся из самого окна: тест идёт тем же путём, что экран.
+const VIEWS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'public', 'js', 'admin', 'views');
+function modalRecommendationRpcs() {
+  const src = fs.readFileSync(path.join(VIEWS, 'visit-modal.js'), 'utf8');
+  const i = src.indexOf('async function attachRecommendation(');
+  assert.ok(i >= 0, 'attachRecommendation не найдена');
+  const body = src.slice(i, src.indexOf('\nasync function ', i + 10));
+  return [...body.matchAll(/supabase\.rpc\(\s*'([a-z_]+)'/g)].map((m) => m[1]);
+}
+async function replayRecommendationRpcs(t, who, names, { recId, lineId, recommender, sourceVisit, visitId = 500 }) {
+  for (const name of names) {
+    let r;
+    if (name === 'visit_set_doctor_referrer') {
+      r = await t.rpc(name, who, { visit_id: visitId, doctor_id: recommender, source_visit_id: sourceVisit });
+      continue;   // окно терпит отказ (console.warn)
+    } else if (name === 'referral_recommendation_attach') {
+      r = await t.rpc(name, who, { recommendation_id: recId, visit_service_id: lineId });
+    } else {
+      assert.fail('окно визита зовёт новый вызов ' + name + ' — допишите его в тест');
+    }
+    assert.equal(r.status, 200, name + ': ' + r.text);
+  }
+}
+
 test('полировка п. 7 (проба R1e): врач не делает себя направившим визита стойки задним числом — 403; стойке без своей строки — 409; бонуса нет', async () => {
   const t = await startCrmApp(seed);
   try {
@@ -88,18 +120,19 @@ test('полировка п. 8 (проба R3b): два врача на визи
     const r1 = lastId(t.db, 'recommended_services');
     assert.equal((await C.dbq({ table: 'recommended_services', op: 'insert', values: { patient_id: 77, service_id: 62, service_name: 'ЭКГ', source_visit_id: 499, status: 'pending' } })).status, 200);
     const r2 = lastId(t.db, 'recommended_services');
-    // окно визита регистратуры: строка → visit_set_doctor_referrer → привязка (исполнитель — Иванов)
+    // стенд: «Кто направил» визита стойка выбрала сама — Петров (ревью полировки M1: окно визита
+    // направившего визита по рекомендации больше не ставит)
+    const srcOf = (d) => t.db.prepare('SELECT id FROM referral_sources WHERE doctor_id = ?').get(d).id;
+    t.db.prepare('UPDATE visits SET referral_source_id = ? WHERE id = 500').run(srcOf(12));
+    // окно визита регистратуры: строка → вызовы окна (привязка); исполнитель — Иванов
+    const names = modalRecommendationRpcs();
     const ids = [];
     for (const [rec, svc, price, doc] of [[r1, 50, 80000, 12], [r2, 62, 50000, 13]]) {
       const ins = await t.dbq('reg', { table: 'visit_services', op: 'insert', values: { visit_id: 500, service_id: svc, doctor_id: 10, quantity: 1, unit_price: price, total: price } });
       assert.equal(ins.status, 200, ins.text);
       const X = lastId(t.db, 'visit_services'); ids.push(X);
-      const s = await t.rpc('visit_set_doctor_referrer', 'reg', { visit_id: 500, doctor_id: doc, source_visit_id: 499 });
-      assert.equal(s.status, 200, s.text);
-      const a = await t.rpc('referral_recommendation_attach', 'reg', { recommendation_id: rec, visit_service_id: X });
-      assert.equal(a.status, 200, a.text);
+      await replayRecommendationRpcs(t, 'reg', names, { recId: rec, lineId: X, recommender: doc, sourceVisit: 499 });
     }
-    const srcOf = (d) => t.db.prepare('SELECT id FROM referral_sources WHERE doctor_id = ?').get(d).id;
     assert.equal(t.db.prepare('SELECT referral_source_id r FROM visits WHERE id = 500').get().r, srcOf(12), 'стенд: Петров — источник визита');
     // окно регистрации («Бонус: …») — то же правило
     const orders = await t.rpc('patient_referral_orders', 'reg', { patient_id: 77 });
@@ -157,6 +190,83 @@ test('полировка п. 10 (проба R3a): рекомендацию Пе�
     const links = await t.rpc('referral_visit_links', 'reg', { visit_ids: [500] });
     assert.deepEqual(links.json.data, [{ visit_id: 500, doctor_name: 'Петров' }]);
   } finally { t.close(); }
+});
+
+// Ревью полировки M1 (проба PB1) — правило владельца: врач получает бонус за услугу, которую
+// направил. Окно визита регистратуры после вставки строки звало visit_set_doctor_referrer: Петров,
+// чью рекомендацию добавили, становился направившим ВСЕГО визита и получал 10 % и с консультации
+// Иванова, и со своей же услуги (18 000 вместо 8 000), а в мастере и быстрой регистрации (только
+// привязка) — 8 000. Теперь окно — то же, что мастер: строка → привязка; источник визита прежний.
+// Вызовы окна взяты из visit-modal.js (modalRecommendationRpcs) — тест идёт путём экрана.
+test('ревью полировки M1 (проба PB1): рекомендация врача в окне визита — бонус только за её услугу, как в мастере; источник визита не меняется', async () => {
+  const modal = modalRecommendationRpcs();
+  assert.ok(modal.includes('referral_recommendation_attach'), JSON.stringify(modal));
+  const wizard = ['referral_recommendation_attach'];   // мастер визита и быстрая регистрация (walk-in-booking.js)
+  for (const f of ['visit-wizard.js', 'walk-in-booking.js']) {
+    const src = fs.readFileSync(path.join(VIEWS, f), 'utf8');
+    assert.match(src, /supabase\.rpc\(\s*'referral_recommendation_attach'/, f);
+    assert.doesNotMatch(src, /rpc\(\s*'visit_set_doctor_referrer'/, f);
+  }
+  const cases = [
+    // окно, кто добавляет, исполнитель УЗИ, строки «Рефералов»
+    ['окно визита, регистратура, УЗИ делает Сидоров', modal, 'reg', 13, [['Петров', 'УЗИ', 8000]]],
+    ['окно визита, регистратура, УЗИ делает сам Петров', modal, 'reg', 12, []],
+    ['окно визита, врач Иванов, УЗИ делает Сидоров', modal, 'doc', 13, [['Петров', 'УЗИ', 8000]]],
+    ['мастер / быстрая регистрация, УЗИ делает Сидоров', wizard, 'reg', 13, [['Петров', 'УЗИ', 8000]]],
+    ['мастер / быстрая регистрация, УЗИ делает сам Петров', wizard, 'reg', 12, []],
+  ];
+  for (const [label, names, who, performer, want] of cases) {
+    const t = await startCrmApp(seed);
+    try {
+      const P = await login(t, 'doc2');   // Петров (12) рекомендовал УЗИ вчера
+      assert.equal((await P.dbq({ table: 'recommended_services', op: 'insert', values: { patient_id: 77, service_id: 50, service_name: 'УЗИ', source_visit_id: 499, status: 'pending' } })).status, 200);
+      const rec = lastId(t.db, 'recommended_services');
+      // визит без записи: консультация Иванова (10) 100 000; у визита и карточки направившего нет
+      const c = await t.dbq('reg', { table: 'visit_services', op: 'insert', values: { visit_id: 500, service_id: 30, doctor_id: 10, quantity: 1, unit_price: 100000, total: 100000 } });
+      assert.equal(c.status, 200, c.text);
+      const consult = lastId(t.db, 'visit_services');
+      const ins = await t.dbq(who, { table: 'visit_services', op: 'insert', values: { visit_id: 500, service_id: 50, doctor_id: performer, quantity: 1, unit_price: 80000, total: 80000 } });
+      assert.equal(ins.status, 200, ins.text);
+      const uzi = lastId(t.db, 'visit_services');
+      await replayRecommendationRpcs(t, who, names, { recId: rec, lineId: uzi, recommender: 12, sourceVisit: 499 });
+      assert.equal(t.db.prepare('SELECT referral_source_id r FROM visits WHERE id = 500').get().r, null, label + ': рекомендовавший стал направившим всего визита');
+      await payVisit(t, 500, [consult, uzi]);
+      assert.deepEqual(detailRows(t.db), want, label);
+      const petrov = want.reduce((s, r) => s + r[2], 0);
+      assert.equal(doctorReferralReward(t.db, { doctor_id: 12, from: TODAY, to: TODAY }, admin).reward, petrov, label + ': кабинет');
+      assert.equal(doctorPaySummary(t.db, { doctor_id: 12, from: TODAY, to: TODAY }, admin).referral.reward, petrov, label + ': «Зарплаты врачей»');
+    } finally { t.close(); }
+  }
+});
+
+// Ревью полировки L2 (проба PB3) — у сегодняшнего визита направивший-врач Петров («Кто направил»),
+// открытая рекомендация Сидорова на ЭКГ. Вариант «б»: выполнит другой врач — бонус Сидорову; выполнит
+// сам Сидоров — его строки бонус не даёт, платится направивший визита Петров. Подпись «Бонус» называла
+// только Сидорова; теперь — обоих, каждого со своим условием (имена, без сумм).
+test('ревью полировки L2 (проба PB3): «Бонус» рекомендации называет и направившего визита — «если выполняет сам рекомендатель»; платят ровно названным', async () => {
+  for (const [performer, want] of [[13, [['Петров', 'ЭКГ', 5000]]], [10, [['Сидоров', 'ЭКГ', 5000]]]]) {
+    const t = await startCrmApp((db) => {
+      seed(db);
+      db.prepare('UPDATE visits SET referral_source_id = (SELECT id FROM referral_sources WHERE doctor_id = 12) WHERE id = 500').run();
+      db.prepare("INSERT INTO recommended_services (patient_id, service_id, service_name, recommended_by, status, created_at) VALUES (77, 62, 'ЭКГ', 13, 'pending', '2026-01-01T09:00:00Z')").run();
+    });
+    try {
+      const o = await t.rpc('patient_referral_orders', 'reg', { patient_id: 77 });
+      assert.equal(o.status, 200, o.text);
+      const rec = o.json.data.recommendations[0];
+      assert.deepEqual({ bonus_to: rec.bonus_to, bonus_if_other: rec.bonus_if_other, bonus_if_self: rec.bonus_if_self },
+        { bonus_to: [], bonus_if_other: 'Сидоров', bonus_if_self: 'Петров' });
+      const ins = await t.dbq('reg', { table: 'visit_services', op: 'insert', values: { visit_id: 500, service_id: 62, doctor_id: performer, quantity: 1, unit_price: 50000, total: 50000 } });
+      assert.equal(ins.status, 200, ins.text);
+      const X = lastId(t.db, 'visit_services');
+      assert.equal((await t.rpc('referral_recommendation_attach', 'reg', { recommendation_id: rec.recommendation_id, visit_service_id: X })).status, 200);
+      await payVisit(t, 500, [X]);
+      const rows = detailRows(t.db);
+      assert.deepEqual(rows, want, 'исполнитель ' + performer);
+      const named = [...rec.bonus_to, rec.bonus_if_other, rec.bonus_if_self];
+      for (const [who] of rows) assert.ok(named.includes(who), who + ' получил бонус, а подпись его не называла');
+    } finally { t.close(); }
+  }
 });
 
 // п. 8 и п. 11 — матрица на деньгах (строки 80 000, 10 %), одно правило на все экраны.

@@ -55,7 +55,21 @@ test('окно визита: рекомендацию закрывает сер�
   // DUP_STOP_V1 — строка уходит с причиной обхода (withRepeatReason), если её назвал администратор.
   assert.match(body, /from\('visit_services'\)\.insert\(withRepeatReason\(\{[\s\S]*?\}, pre\.reason\)\)\.select\(\)\.single\(\)/);
   assert.match(body, /referral_recommendation_attach/);
-  assert.match(body, /visit_set_doctor_referrer[\s\S]*referral_recommendation_attach/, 'направивший визита — до закрытия рекомендации (он требует открытую)');
+  // REFERRAL_LINE_V1 (ревью полировки M1) — направившим ВСЕГО визита окно рекомендовавшего не
+  // делает: бонус ему — только за строку его рекомендации (привязка), как в мастере и быстрой
+  // регистрации.
+  assert.doesNotMatch(body, /rpc\(\s*'visit_set_doctor_referrer'/, 'окно визита делает рекомендовавшего направившим всего визита');
+});
+
+// REFERRAL_LINE_V1 (ревью полировки M1, проба PB1) — правило владельца: врач получает бонус за
+// услугу, которую направил. Окно визита регистратуры звало visit_set_doctor_referrer, и врач, чью
+// рекомендацию добавили, получал 10 % со ВСЕХ строк визита (18 000 вместо 8 000), а в мастере и
+// быстрой регистрации — 8 000. Ни одно окно стойки этого вызова больше не делает.
+test('ни одно окно стойки не делает рекомендовавшего врача направившим всего визита', () => {
+  for (const f of ['visit-modal.js', 'visit-wizard.js', 'fast-registration.js', 'walk-in-booking.js']) {
+    const src = fs.readFileSync(path.join(HERE, f), 'utf8');
+    assert.doesNotMatch(src, /rpc\(\s*'visit_set_doctor_referrer'/, f);
+  }
 });
 
 // DUP_STOP_V1 — «Add to visit» из рекомендации — та же проверка повтора, что у каталога окна:
@@ -82,8 +96,10 @@ test('окно визита: отказ привязки — предупреж�
 
 // Ревью U10 LOW-7 — у рекомендации врач-рекомендатель получает бонус только если выполняет
 // другой врач: оба окна стойки отдают подписи условие сервера (bonus_if_other).
-test('«Бонус» рекомендации в обоих окнах стойки — с условием сервера bonus_if_other', () => {
-  assert.match(wiz, /bonusText\(r\.bonus_to, r\.bonus_if_other\)/);
+// Ревью полировки L2 — и направивший визита, которому платят, только если рекомендатель выполняет
+// услугу сам (bonus_if_self): подпись называет всех, кому могут заплатить.
+test('«Бонус» рекомендации в обоих окнах стойки — с условиями сервера bonus_if_other и bonus_if_self', () => {
+  assert.match(wiz, /bonusText\(r\.bonus_to, r\.bonus_if_other, r\.bonus_if_self\)/);
   const fast = fs.readFileSync(path.join(HERE, 'fast-registration.js'), 'utf8');
-  assert.match(fast, /bonusText\(r\.bonus_to, r\.bonus_if_other\)/);
+  assert.match(fast, /bonusText\(r\.bonus_to, r\.bonus_if_other, r\.bonus_if_self\)/);
 });

@@ -81,7 +81,18 @@ function refundedLabIds(db, rows) {
     .map((r) => r.id));
 }
 
-export function unpaidWorkRefusal(db, ids, nextStatus) {
+// DUP_STOP_V1 (ревью полировки L1) — те же отказы без названия услуги. Роль, которой правка строк
+// визита разрешена, а чтение — нет (медсестра со складом: patientDataRefusal), по номеру строки
+// узнавала из отказа название анализа или приёма чужого неоплаченного визита. Ей — эти слова
+// (как безымянный отказ повтора DUP_TEMPLATE_NAMELESS); ключи словаря i18n-strings.js.
+export const UNPAID_LAB_NAMELESS = 'Анализ ещё не оплачен — пробу берут и результат вносят после кассы.';
+export const UNPAID_CONSULT_NAMELESS = 'Консультация ещё не оплачена — подписать её можно после кассы.';
+export const UNPAID_WORK_NAMELESS = 'Услуга ещё не оплачена — начать работу по ней можно после кассы.';
+
+/**
+ * @param {{ nameless?: boolean }} [opts] — nameless: отказ без названия услуги (см. выше).
+ */
+export function unpaidWorkRefusal(db, ids, nextStatus, { nameless = false } = {}) {
   if (nextStatus === undefined || nextStatus === null || FREE_MOVES.includes(String(nextStatus))) return null;
   const list = (ids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
   if (!list.length) return null;
@@ -117,12 +128,12 @@ export function unpaidWorkRefusal(db, ids, nextStatus) {
     if (r.inv_status === 'paid' || r.inv_status === 'debt' || r.inv_status === 'partial') continue;   // долг / частично — касса отпустила
     const name = r.svc_name || (r.consultation_type_id != null ? 'Консультация' : 'услуга');
     if (Number(r.is_lab) === 1 || r.svc_type === 'lab') {
-      return `Анализ «${name}» ещё не оплачен — пробу берут и результат вносят после кассы.`;
+      return nameless ? UNPAID_LAB_NAMELESS : `Анализ «${name}» ещё не оплачен — пробу берут и результат вносят после кассы.`;
     }
     if (nextStatus === 'completed' && (r.svc_type === 'consultation' || r.service_id == null)) {
-      return `Консультация «${name}» ещё не оплачена — подписать её можно после кассы.`;
+      return nameless ? UNPAID_CONSULT_NAMELESS : `Консультация «${name}» ещё не оплачена — подписать её можно после кассы.`;
     }
-    return `Услуга «${name}» ещё не оплачена — начать работу по ней можно после кассы.`;
+    return nameless ? UNPAID_WORK_NAMELESS : `Услуга «${name}» ещё не оплачена — начать работу по ней можно после кассы.`;
   }
   return null;
 }

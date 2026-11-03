@@ -26,6 +26,7 @@ import {
 import { calendarBook } from '../rpc/calendar.js';
 // V3120_FIX — работа над неоплаченной услугой и право «CRM: изменение».
 import { unpaidWorkRefusal, FREE_MOVES } from '../visit-status-guard.js';
+import { patientDataRefusal } from '../../db/patient-data-gate.js';   // DUP_STOP_V1 (ревью полировки L1) — отказ без названия услуги
 import { moveTasksWithLead } from './tasks-follow.js';   // CRM_UNIFY_V1 — задачи идут за карточкой
 // CRM_UNIFY_V1 — canEditCrm перенесён в crm/visibility.js (круг импорта с
 // tasks-follow.js); отсюда он по-прежнему экспортируется для старых вызовов.
@@ -156,7 +157,10 @@ export function mirrorBefore(db, meta, body, user) {
       // V3120_FIX — неоплаченную услугу в работу не берут (visit-status-guard.js).
       const next = meta.op === 'update' && body && body.values && !Array.isArray(body.values) ? body.values.status : undefined;
       if (next !== undefined && ctx.ids.length) {
-        const refusal = unpaidWorkRefusal(db, ctx.ids, next);
+        // DUP_STOP_V1 (ревью полировки L1) — строки выбраны без правил чтения (остаток A2); роли,
+        // которой строки визита не читаются, отказ не называет услугу правимой строки.
+        const nameless = patientDataRefusal('visit_services', user, db) != null;
+        const refusal = unpaidWorkRefusal(db, ctx.ids, next, { nameless });
         if (refusal) { ctx.refusal = refusal; return ctx; }
       }
       if (ctx.ids.length) {

@@ -57,10 +57,19 @@ export function orderStateText(line, todayIso) {
  * Кому бонус за строку — имена (сумм окно не знает); без получателей — null.
  * Ревью U10 LOW-7 — ifOther (bonus_if_other рекомендации): врач-рекомендатель получит бонус,
  * только если услугу выполнит другой врач (исполнитель ещё не выбран) — названо условием.
+ * Ревью полировки L2 — ifSelf (bonus_if_self): направивший визита, которому платят, только если
+ * рекомендатель выполнит услугу сам (вариант «б»: иначе строку получает рекомендатель). Бывает лишь
+ * вместе с ifOther — у рекомендателя есть свой источник; подпись называет всех, кому могут заплатить.
  */
-export function bonusText(names, ifOther = null) {
+export function bonusText(names, ifOther = null, ifSelf = null) {
     const list = (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n.trim());
     const doctor = typeof ifOther === 'string' && ifOther.trim() ? ifOther.trim() : null;
+    const self = doctor && typeof ifSelf === 'string' && ifSelf.trim() ? ifSelf.trim() : null;
+    if (self && list.length) {
+        return { template: 'Бонус: {names}; {doctor} — если услугу выполняет другой врач; {self} — если выполняет сам {doctor}',
+            params: { names: list.join(', '), doctor, self } };
+    }
+    if (self) return { template: 'Бонус: {doctor} — если услугу выполняет другой врач; {self} — если выполняет сам {doctor}', params: { doctor, self } };
     if (doctor && list.length) {
         return { template: 'Бонус: {names}; {doctor} — если услугу выполняет другой врач', params: { names: list.join(', '), doctor } };
     }

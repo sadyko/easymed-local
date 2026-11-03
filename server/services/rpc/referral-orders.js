@@ -165,6 +165,10 @@ export function patientReferralOrders(db, args, user) {
   // правило, что у ensure_visit), иначе карточки пациента. Исполнитель ещё не выбран: источник
   // рекомендателя назван отдельно (bonus_if_other) — он получит бонус, только если услугу выполнит
   // другой врач (своя строка — без бонуса); получатель «через визит» — без условия.
+  // Ревью полировки L2 (проба PB3) — направивший визита, которого вариант «б» на строке заменяет
+  // рекомендателем, получает бонус, если рекомендатель выполнит услугу сам (своя строка — платится
+  // визит): он назван своим условием (bonus_if_self). Так подпись называет всех, кому могут
+  // заплатить; имена, без сумм.
   const dv = dayVisitOf(db, patientId, day);
   const base = db.prepare(`SELECT id, name, doctor_id FROM referral_sources
                             WHERE id = COALESCE(?, (SELECT referral_source_id FROM patients WHERE id = ?))`)
@@ -182,15 +186,20 @@ export function patientReferralOrders(db, args, user) {
      WHERE r.patient_id = ? AND r.closed_at IS NULL AND COALESCE(r.status, '') NOT IN ('done', 'cancelled')
      ORDER BY r.created_at DESC, r.id DESC`).all(patientId)
     .map((r) => {
-      const bens = lineBeneficiaries(base ? { id: base.id, doctor_id: base.doctor_id } : null,
-        r.rec_source_id != null ? { id: r.rec_source_id, doctor_id: r.rec_source_doctor_id } : null, null);
+      const baseSrc = base ? { id: base.id, doctor_id: base.doctor_id } : null;
+      const recSrc = r.rec_source_id != null ? { id: r.rec_source_id, doctor_id: r.rec_source_doctor_id } : null;
+      const bens = lineBeneficiaries(baseSrc, recSrc, null);   // выполнит другой врач
+      const selfBens = recSrc && recSrc.doctor_id != null ? lineBeneficiaries(baseSrc, recSrc, recSrc.doctor_id) : bens;   // ревью полировки L2 — сам рекомендатель
+      const viaVisit = (list) => list.some((b) => b.via === 'visit');
       const ifOther = bens.some((b) => b.via === 'line') ? (r.rec_source_name || r.referrer_name || null) : null;
+      const ifSelf = !viaVisit(bens) && viaVisit(selfBens) ? (base ? base.name : null) : null;
       return {
         recommendation_id: r.recommendation_id, service_id: r.service_id ?? null, name: r.name || '',
         referrer_id: r.referrer_id ?? null, referrer_name: r.referrer_name || '', created_at: r.created_at,
         notes: r.notes || '', source_visit_id: r.source_visit_id ?? null,
         bonus_to: namesOf(bens.filter((b) => b.via === 'visit'), base ? base.name : null, null),
         bonus_if_other: ifOther,
+        bonus_if_self: ifSelf || null,
       };
     });
   return { patient_id: patientId, today: day, lines, recommendations };

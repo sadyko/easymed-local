@@ -84,12 +84,16 @@ test('после пометки «Рефералы» засчитывают ст
   assert.equal(r.rows[0][r.columns.indexOf('Источник')], 'Врачев В.В.');
 });
 
-test('добавление рекомендации в визит зовёт это правило; «Направить» из кабинета визит не трогает', () => {
+// REFERRAL_LINE_V1 (ревью полировки M1) — окно визита это правило больше НЕ зовёт: врач по своей
+// рекомендации получает бонус только за её услугу (привязка ставит направившего строке), а не 10 %
+// со всех строк визита. Вызов остаётся зарегистрированным (стойка, другие клиенты) — экраны его не зовут.
+test('добавление рекомендации в визит этого правила не зовёт; «Направить» из кабинета визит не трогает', () => {
   const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
   const vm = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin', 'views', 'visit-modal.js'), 'utf8');
   const i = vm.indexOf('async function attachRecommendation(');
   const body = vm.slice(i, vm.indexOf('\nasync function ', i + 10));
-  assert.match(body, /supabase\.rpc\('visit_set_doctor_referrer', \{\s*visit_id: state\.visit\.id, doctor_id: rec\.recommended_by, source_visit_id: rec\.source_visit_id \?\? null \}\)/);
+  assert.match(body, /supabase\.rpc\('referral_recommendation_attach'/);
+  assert.doesNotMatch(body, /rpc\(\s*'visit_set_doctor_referrer'/, 'окно визита делает рекомендовавшего направившим всего визита');
   const sw = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin', 'views', 'service-workspace.js'), 'utf8');
   const j = sw.indexOf('async function sendReferral(');
   const send = sw.slice(j, sw.indexOf('\nasync function ', j + 10));

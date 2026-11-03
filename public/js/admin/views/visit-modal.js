@@ -1000,15 +1000,11 @@ async function attachRecommendation(state, rec, chosenDoctorId, onReload) {
         total:      price,
     }, pre.reason)).select().single();
     if (insErr) { toast(trf('Не удалось добавить: {msg}', { msg: insErr.message }), 'fail'); return; }
-    // REPORTS_V2, ревью I3/I5 — рекомендация врача пришла в визит: его
-    // внутренний источник становится направившим, если направившего нет ни у
-    // визита, ни у пациента (внешний партнёр сохраняет своё). Правило — на
-    // сервере (visit_set_doctor_referrer); отказ не мешает добавлению услуги.
-    if (rec.recommended_by) {
-        const { error: refErr } = await supabase.rpc('visit_set_doctor_referrer', {
-            visit_id: state.visit.id, doctor_id: rec.recommended_by, source_visit_id: rec.source_visit_id ?? null });
-        if (refErr) console.warn('[recommendation referrer]', refErr.message);
-    }
+    // REFERRAL_LINE_V1 (ревью полировки M1) — направившим ВСЕГО визита рекомендовавший врач здесь
+    // больше не становится (прежде — REPORTS_V2 I3/I5: вызов «свой источник врача визиту»): так он
+    // получал процент со всех строк визита, в том числе с чужой консультации и со своей услуги, а в
+    // мастере и быстрой регистрации — только за услугу рекомендации. Правило владельца — врач
+    // получает бонус за услугу, которую направил: направившего строке ставит привязка ниже.
     await activateVisitIfPending(state);
 
     // DOCTOR_REFERRAL_DESK_V1 — рекомендацию закрывает СЕРВЕР: связывает её со строкой
