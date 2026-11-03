@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { surgeryWithoutBedRefusal } from '../services/domain/surgery-bed.js';   // CASHIER_HEAD_V1 (ревью I4)
-import { setLiveColumns, setForeignKeyColumns, compile, CompileError } from '../db/query-compiler.js';
+import { setLiveColumns, setForeignKeyColumns, compile, compileUpdateTargets, CompileError } from '../db/query-compiler.js';   // compileUpdateTargets: DUP_STOP_V1 (ревью, остаток 2)
 import { readableColumns, MAIN_CLINIC_TABLES, rowScope } from '../db/schema-registry.js';
 import { zeroRowRefusal } from '../db/schema-registry.js';   // CABINET_FIX_V1_R1 — 0 строк у шаблонов — отказ, а не 200
 import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто назначает заявку CRM другому
@@ -35,6 +35,7 @@ import { PROXY_MODELS } from '../../public/js/shared/lisproxy-models.js';   // L
 import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
 import { retireBookedTwin, bookedTwinFor } from '../services/crm/booked-twin.js';   // CRM_LINK_ALL_V1 (R7b) · DUP_STOP_V1 (bookedTwinFor)
 import { autoTwinFor } from '../services/crm/one-way.js';   // DUP_STOP_V1 — строка CRM, которая уступит новой
+import { patientDataRefusal } from '../db/patient-data-gate.js';   // DUP_STOP_V1 (ревью, остаток 2) — отказ без «кем, когда» тем, кому строки не читаются
 import { checkOrders, checkUpdatedOrders, updateTouchesOrders, logRepeatOrders, takeRepeatReason, DUP_CODE } from '../services/domain/dup-order.js';   // DUP_STOP_V1 · ревью m2 (правка)
 import { taskAssigneeRefusal, canOwnLead, ownerRefusal, rehomeOrphanTasks } from '../services/crm/tasks-follow.js';   // CRM_UNIFY_V1
 import { geoCodeRefusal } from '../services/geo-codes-guard.js';   // REFERENCE_LISTS_V1 (полировка) — коды географии не меняются
@@ -240,18 +241,24 @@ function refuseVisitLineWrite(db, meta, body, user) {
 // которой меняют вид приёма (ключ «та же услуга»), — снова назначение
 // (domain/dup-order.js checkUpdatedOrders). Строки берутся тем же compile(), что и сама
 // правка (те же права и отбор); правка без статуса и ключа не проверяется.
+// DUP_STOP_V1 (ревью, остаток 2) — строки правки читаются так же, как их найдёт сам UPDATE
+// (compileUpdateTargets), без правил чтения: роль, которой правка строк визита разрешена, а
+// чтение — нет (медсестра со складом), прежде получала 403 на выборке — и проверка
+// пропускалась (повтор возвращался из отмены). Не прочитались — отказ 409, а не «пропустил».
+// Такой роли отказ называет повтор без «кем, когда, счёт № …» (plain, как visit_dup_check).
 // { error } — отказ 409; { repeats } — обход с причиной, журнал — после записи.
 function visitOrderCheck(db, meta, body, user, reason) {
   if (!meta || meta.table !== 'visit_services') return {};
+  const plain = patientDataRefusal('visit_services', user, db) != null;   // DUP_STOP_V1 (ревью, остаток 2)
   if (meta.op === 'update') {   // DUP_STOP_V1 (ревью m2)
     const values = body && body.values && !Array.isArray(body.values) ? body.values : null;
     if (!updateTouchesOrders(values)) return {};
     let rows = [];
     try {
-      const sel = compile({ table: body.table, op: 'select', columns: 'id,visit_id,service_id,consultation_type_id,doctor_id,status,clinic_item_id', filters: body.filters }, user, { db });
+      const sel = compileUpdateTargets(body, user, { db }, ['id', 'visit_id', 'service_id', 'consultation_type_id', 'doctor_id', 'status', 'clinic_item_id']);
       rows = db.prepare(sel.sql).all(...sel.params);
-    } catch { return {}; }   // тот же отбор, что у правки, — её compile() уже прошёл
-    return checkUpdatedOrders(db, rows, values, { user, reason });
+    } catch { return { unread: 'Строки визита не выбраны — правка не выполнена.' }; }   // DUP_STOP_V1 (ревью, остаток 2) — не прочитали — не пропускаем
+    return checkUpdatedOrders(db, rows, values, { user, reason, plain });
   }
   if (meta.op !== 'insert' && meta.op !== 'upsert') return {};
   const rows = Array.isArray(body && body.values) ? body.values : (body && body.values ? [body.values] : []);
@@ -265,7 +272,7 @@ function visitOrderCheck(db, meta, body, user, reason) {
     } catch { /* нет поблажки — решает правило */ }
     return out;
   };
-  return checkOrders(db, rows, { user, reason, spare, excludeIds: [] });   // DUP_STOP_V1 (ревью m1)
+  return checkOrders(db, rows, { user, reason, spare, excludeIds: [], plain });   // DUP_STOP_V1 (ревью m1) · plain — ревью, остаток 2
 }
 
 // CABINET_FIX_V1_R4 (ревью 4, п. 2) · CABINET_FIX_V1_R5 (ревью 5, A) — ЗАПИСИ КАБИНЕТА   // CABINET_FIX_V1_R5
@@ -710,6 +717,7 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     }
     // DUP_STOP_V1 — та же услуга уже назначена в этом визите: см. visitOrderCheck.
     const orders = visitOrderCheck(db, compiled.meta, req.body, req.user, repeatReason);
+    if (orders.unread) return res.status(409).json({ error: { code: 'conflict', message: orders.unread } });   // DUP_STOP_V1 (ревью, остаток 2)
     if (orders.error) return res.status(409).json({ error: errorBody(DUP_CODE, orders.error) });
     const notesOut = {};   // CABINET_FIX_V1_R6
     const notesRefusal = refuseNotesWrite(db, compiled.meta, req.body, req.user, notesBase, notesOut);   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6

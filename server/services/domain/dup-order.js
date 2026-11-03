@@ -179,11 +179,12 @@ export function canRepeatOrder(user) {
  * Решение двери: { error } — отказ (DuplicateOrderError), { repeats } — обход с
  * причиной (журнал пишет logRepeatOrders ПОСЛЕ записи), {} — повторов нет.
  */
-export function checkOrders(db, lines, { user = null, reason = null, excludeIds = [], spare = null } = {}) {
+// DUP_STOP_V1 (ревью, остаток 2) — plain: отказ без «кем, когда, счёт № …» (см. refusalOf).
+export function checkOrders(db, lines, { user = null, reason = null, excludeIds = [], spare = null, plain = false } = {}) {
   const hits = duplicateHits(db, lines, { excludeIds, spare });
   if (!hits.length) return {};
   if (canRepeatOrder(user) && repeatReasonOk(reason)) return { repeats: hits, reason: String(reason).trim().slice(0, REPEAT_REASON_MAX) };
-  return { error: refusalOf(db, hits[0]), hits };
+  return { error: refusalOf(db, hits[0], { plain }), hits };
 }
 
 /** RPC: бросить отказ или вернуть обходы для журнала. */
@@ -269,7 +270,7 @@ export function updateTouchesOrders(values) {
  * @param {object} values — значения правки
  * @returns то же, что checkOrders
  */
-export function checkUpdatedOrders(db, rows, values, { user = null, reason = null } = {}) {
+export function checkUpdatedOrders(db, rows, values, { user = null, reason = null, plain = false } = {}) {   // plain — DUP_STOP_V1 (ревью, остаток 2)
   if (!updateTouchesOrders(values)) return {};
   const v = values;
   const has = (k) => Object.prototype.hasOwnProperty.call(v, k);
@@ -289,5 +290,5 @@ export function checkUpdatedOrders(db, rows, values, { user = null, reason = nul
     if (reopened || keyOf(after) !== keyOf(r) || String(after.visit_id) !== String(r.visit_id)) moved.push(after);
   }
   if (!moved.length) return {};
-  return checkOrders(db, moved, { user, reason, excludeIds: moved.map((r) => r.id) });
+  return checkOrders(db, moved, { user, reason, excludeIds: moved.map((r) => r.id), plain });
 }

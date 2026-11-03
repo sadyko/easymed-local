@@ -933,6 +933,49 @@ function compileUpsert(desc, table) {
   };
 }
 
+// Какие строки найдёт правка: отбор экрана, ограничение по владельцу для записи и «своя
+// строка» реестра. DUP_STOP_V1 (ревью, остаток 2) — вынесено из compileUpdate, чтобы
+// compileUpdateTargets выбирал ровно те же строки.
+function updateTargetWhere(desc, table, user, db) {
+  const { clause, params } = compileFilters(desc.filters, table);
+  requireRowTarget(desc, table, 'update');   // после разбора: неверное условие называется своим именем
+  if (!clause) throw new CompileError(NO_TARGET_MSG, 400);
+  const scope = scopeFor(table, user, db, table, 'update');   // CABINET_FIX_V1_TPL — readAlso не правится
+  let where = scope ? `(${clause}) AND ${scope.clause}` : clause;
+  if (scope) params.push(...scope.params);
+  // V3120_FIX (F2) — `write.update.own`: правится только СВОЯ строка (колонка
+  // автора = я) и только та, что подходит под постоянное условие реестра
+  // (документ визита — черновик, не подписанный и не отозванный).
+  const own = ownRowsRule(table, 'update');
+  if (own) {
+    const me = user && Number.isInteger(Number(user.id)) ? Number(user.id) : 0;
+    where = `(${where}) AND "${own.column}" = ?` + (own.where ? ` AND (${own.where})` : '');
+    params.push(me);
+  }
+  return { where, params };
+}
+
+/**
+ * DUP_STOP_V1 (ревью, остаток 2) — СТРОКИ, КОТОРЫЕ ЗАДЕНЕТ ПРАВКА, для проверок сервера.
+ * Тот же WHERE, что у UPDATE (updateTargetWhere), но без правил ЧТЕНИЯ (разделы данных
+ * пациента, скрытые колонки): роль, которой правка разрешена, а чтение таблицы — нет
+ * (медсестра со складом), иначе получала 403 на выборке, и проверка двери пропускалась.
+ * Только для сервера: выбранное наружу не отдаётся. Колонки — из кода сервера, не из
+ * запроса. Зовут после compile() самой правки — права на неё уже проверены.
+ */
+export function compileUpdateTargets(desc, user, ctx = {}, columns = ['id']) {
+  const db = (ctx && ctx.db) || null;
+  const table = validateTable(desc.table);
+  if (!Array.isArray(desc.filters) || desc.filters.length === 0) throw new CompileError(NO_TARGET_MSG, 400);
+  const cols = (Array.isArray(columns) ? columns : []).map((c) => {
+    if (typeof c !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(c)) throw new CompileError('bad column', 400);
+    return `"${table}"."${c}"`;
+  });
+  if (!cols.length) throw new CompileError('bad column', 400);
+  const { where, params } = updateTargetWhere(desc, table, user, db);
+  return { sql: `SELECT ${cols.join(', ')} FROM "${table}" WHERE ${where}`, params };
+}
+
 function compileUpdate(desc, table, user, db) {
   const stamped = stampValues(table, 'update', desc.values || {}, user);
   const values = stamped.values;
@@ -949,23 +992,9 @@ function compileUpdate(desc, table, user, db) {
     setParts.push(`"updated_at" = strftime('%Y-%m-%dT%H:%M:%SZ','now')`);
   }
 
-  const { clause, params: filterParams } = compileFilters(desc.filters, table);
-  requireRowTarget(desc, table, 'update');   // после разбора: неверное условие называется своим именем
-  if (!clause) throw new CompileError(NO_TARGET_MSG, 400);
-  const scope = scopeFor(table, user, db, table, 'update');   // CABINET_FIX_V1_TPL — readAlso не правится
-  let where = scope ? `(${clause}) AND ${scope.clause}` : clause;
-  params.push(...filterParams);
-  if (scope) params.push(...scope.params);
-  // V3120_FIX (F2) — `write.update.own`: правится только СВОЯ строка (колонка
-  // автора = я) и только та, что подходит под постоянное условие реестра
-  // (документ визита — черновик, не подписанный и не отозванный).
-  const own = ownRowsRule(table, 'update');
-  if (own) {
-    const me = user && Number.isInteger(Number(user.id)) ? Number(user.id) : 0;
-    where = `(${where}) AND "${own.column}" = ?` + (own.where ? ` AND (${own.where})` : '');
-    params.push(me);
-  }
-  const sql = `UPDATE "${table}" SET ${setParts.join(', ')} WHERE ${where}`;
+  const target = updateTargetWhere(desc, table, user, db);   // DUP_STOP_V1 (ревью, остаток 2) — вынесено без изменений
+  params.push(...target.params);
+  const sql = `UPDATE "${table}" SET ${setParts.join(', ')} WHERE ${target.where}`;
 
   return {
     sql,

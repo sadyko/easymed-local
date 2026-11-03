@@ -33,6 +33,8 @@ async function start() {
   user.run(11, 'doc2', hashPassword('password1'), 'Петров', 'doctor', 1);
   user.run(12, 'head', hashPassword('password1'), 'Главврач', 'doctor', 1);   // DUP_STOP_V1 (ревью, проба D) — главный врач — дополнительной ролью
   db.prepare('UPDATE users SET extra_roles = ? WHERE id = 12').run(JSON.stringify(['head_doctor']));
+  user.run(13, 'nurse', hashPassword('password1'), 'Медсестра', 'nurse', 0);   // DUP_STOP_V1 (ревью, остаток 2) — правит строки, не читая их
+  db.prepare('INSERT OR REPLACE INTO role_permissions (role, permissions) VALUES (?, ?)').run('nurse', JSON.stringify({ sections: ['inventory'], levels: {}, grants: {} }));
   db.prepare("INSERT INTO services (id, name, price, type, is_lab) VALUES (40,'Анализ крови',40000,'lab',1)").run();
   db.prepare("INSERT INTO services (id, name, price, type) VALUES (50,'УЗИ брюшной полости',80000,'imaging')").run();
   db.prepare("INSERT INTO services (id, name, price, type) VALUES (60,'Капельница',30000,'procedure')").run();
@@ -44,7 +46,7 @@ async function start() {
   const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
   const base = `http://127.0.0.1:${server.address().port}`;
   const cookies = {};
-  for (const who of ['boss', 'reg', 'cc', 'doc', 'head']) {
+  for (const who of ['boss', 'reg', 'cc', 'doc', 'head', 'nurse']) {
     const res = await fetch(base + '/api/auth/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: who, password: 'password1' }),
@@ -183,6 +185,31 @@ test('DUP_STOP_V1 (ревью m2): правка /api/db — вернуть от�
     assert.equal(live(t, v, 40), 2);
     const log = t.db.prepare("SELECT reason, visit_id FROM invoice_audit_log WHERE action = 'line_repeat_order'").all();
     assert.deepEqual(log, [{ reason: 'повторный забор', visit_id: v }]);
+  } finally { t.close(); }
+});
+
+test('DUP_STOP_V1 (ревью, остаток 2): правка /api/db ролью, которой строки визита не читаются (медсестра со складом), — повтор всё равно 409', async () => {
+  const t = await start();
+  try {
+    const v = arrivedVisit(t);
+    const upd = (who, values, id) => t.dbq(who, { table: 'visit_services', op: 'update', values, filters: [{ col: 'id', op: 'eq', val: id }] });
+    const peek = await t.dbq('nurse', { table: 'visit_services', op: 'select', columns: 'id', filters: [{ col: 'visit_id', op: 'eq', val: v }] });
+    assert.equal(peek.status, 403, 'стенд: медсестре этого стенда строки визита не отдаются');
+    assert.equal((await ins(t, 'reg', row(v, 40))).status, 200);
+    const a = t.db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND service_id = 40').get(v).id;
+    assert.equal((await upd('reg', { status: 'cancelled' }, a)).status, 200);
+    assert.equal((await upd('nurse', { status: 'added' }, a)).status, 200, 'вернуть единственную строку — можно и ей');
+    assert.equal((await upd('reg', { status: 'cancelled' }, a)).status, 200);
+    assert.equal((await ins(t, 'reg', row(v, 40))).status, 200, 'новая строка после отмены');
+    const back = await upd('nurse', { status: 'added' }, a);
+    assert.equal(back.status, 409, JSON.stringify(back.json));
+    assert.equal(back.json.error.code, 'duplicate_order');
+    assert.equal(live(t, v, 40), 1, 'отменённая строка не вернулась второй живой');
+    assert.equal(back.json.error.message, 'Эта услуга уже назначена в этом визите: «Анализ крови».', 'кем и когда назначена — данные, которых ей не читают');
+    // регистратуре — с подробностями, как прежде
+    const reg = await upd('reg', { status: 'added' }, a);
+    assert.equal(reg.status, 409);
+    assert.match(reg.json.error.message, /«Анализ крови» — Регистратура/);
   } finally { t.close(); }
 });
 
