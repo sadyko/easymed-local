@@ -114,3 +114,48 @@ test('одна этикетка — прежний вызов, то же окн�
     assert.equal(printBarcodeLabels([]), false);
     assert.equal(opened, 1);
 });
+
+// Ревью U11, L2 (проба p3, Chrome с настоящими шрифтами Onest): с новой строкой
+// «что в пробирке» имя + ID + анализы + штрих-код занимали 36,94 мм из 37 мм
+// этикетки 40 мм (запас 0,06 мм): штрих-код набора C с тихой зоной упирался в
+// max-height 17 мм. Иной драйвер или округление — и номер под штрих-кодом
+// обрезается. Теперь штрих-код не выше 15 мм (до U11 было 14,8 мм). Бюджет — по
+// правилам самого окна печати: строки текста × высоту строки Onest (1,28 —
+// с запасом к измеренным 1,27) + штрих-код + отступы.
+test('ревью U11, L2: этикетка 40 мм — штрих-код не выше 15 мм, у текста и номера запас не меньше 1,5 мм', () => {
+    printed.length = 0;
+    printBarcodeLabels([{ code: '00000028', patientName: 'Абдурахмонова Мухлиса', mrn: '00012345', dateStr: '02.11.2026, 19:06', tests: 'ОАК, Ретикулоциты, СОЭ' }]);
+    const html = printed[0];
+    const rule = (sel) => {
+        const m = new RegExp('\\' + sel + ' \\{([^}]*)\\}').exec(html);
+        assert.ok(m, 'нет правила ' + sel);
+        return m[1];
+    };
+    const num = (decl, prop) => {
+        const m = new RegExp(prop + ':\\s*(-?[\\d.]+)(pt|mm)').exec(decl);
+        assert.ok(m, prop + ' нет в «' + decl + '»');
+        return m[2] === 'pt' ? Number(m[1]) * 25.4 / 72 : Number(m[1]);
+    };
+    const svgMax = num(rule('.bc svg'), 'max-height');
+    assert.ok(svgMax <= 15, 'штрих-код выше 15 мм: ' + svgMax);
+    const LINE = 1.28;   // высота строки Onest (normal), с запасом
+    // Строка номера и времени — по номеру (крупнее), затем имя, ID, анализы, цифры под штрих-кодом.
+    const text = ['.acc', '.name', '.mrn', '.tests', '.bcnum'].map((sel) => num(rule(sel), 'font-size') * LINE).reduce((a, b) => a + b, 0);
+    const margins = num(rule('.mrn'), 'margin-top') + num(rule('.bcnum'), 'margin-top');
+    const inner = 40 - 2 * num(rule('.lbl'), 'padding');
+    const used = text + margins + svgMax;
+    assert.ok(inner - used >= 1.5, 'запас этикетки ' + (inner - used).toFixed(2) + ' мм из ' + inner + ' (занято ' + used.toFixed(2) + ')');
+});
+
+// Ревью U11, NIT — этикетки партий склада (procurement.js, тот же barcodeSVG):
+// своё экранирование не трогало кавычку, и имя товара с «"» рвало title="…".
+test('ревью U11, NIT: этикетки партий экранируют и кавычку — имя товара в title="…" не рвёт атрибут', async () => {
+    const fs = await import('node:fs');
+    const src = fs.readFileSync(new URL('../views/procurement.js', import.meta.url), 'utf8');
+    const at = src.indexOf('function printBatchLabels');
+    assert.ok(at > 0, 'printBatchLabels пропала');
+    const m = /const esc = (\(s\) => [^\n]+);/.exec(src.slice(at));
+    assert.ok(m, 'esc печати партий не найден');
+    const esc = (0, eval)(m[1]);
+    assert.equal(esc('Бинт "Стерильный" <5×7> & Co'), 'Бинт &quot;Стерильный&quot; &lt;5×7&gt; &amp; Co');
+});

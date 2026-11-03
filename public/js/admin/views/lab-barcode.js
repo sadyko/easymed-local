@@ -67,6 +67,13 @@ export function barcodeSVG(text, opts) {
 
 const _esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+// LAB_TUBE_LABEL_V1 (ревью U11, L2) — доля высоты этикетки под штрих-код: 0,38 (15 мм
+// на этикетке 40 мм; до U11 штрих-код был 14,8 мм). Было 0,42 (17 мм): со строкой
+// «что в пробирке» имя + ID + анализы + штрих-код набора C с тихой зоной занимали
+// 36,94 мм из 37 (Chrome, шрифты Onest), запас 0,06 мм — другой драйвер обрезал бы
+// номер под штрих-кодом. Полоски от высоты не сужаются: ширина — вся этикетка.
+const SVG_SHARE = 0.38;
+
 // One label's markup. LAB_TUBE_LABEL_V1 — строка «tests»: что в пробирке (короткие названия).
 function labelHtml(o, heightMm) {
     const { code = "", patientName = "", mrn = "", dateStr = "", tests = "" } = o || {};
@@ -106,7 +113,7 @@ ${PRINT_FONT_FACE_CSS}
       .mrn { font-size:8pt; margin-top:-1mm; }
       .tests { font-size:7.5pt; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .bc { text-align:center; line-height:0; }
-      .bc svg { width:100%; height:auto; max-height:${Math.round(heightMm * 0.42)}mm; }
+      .bc svg { width:100%; height:auto; max-height:${Math.round(heightMm * SVG_SHARE)}mm; }
       .bcnum { text-align:center; font-size:8pt; letter-spacing:2px; margin-top:0.3mm; }
     </style></head><body>${pages}
     <script>window.onload=function(){(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(function(){try{window.focus();window.print();}catch(e){}setTimeout(function(){window.close();},400);});};<\/script>

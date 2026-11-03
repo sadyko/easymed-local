@@ -3742,7 +3742,8 @@ function openReceiveModal() {
     function printBatchLabels() {
         const withCode = lines.filter(l => (l.batch || '').trim());
         if (!withCode.length) { toast(prL('rcNoLabels'), 'info'); return; }
-        const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+        // LAB_TUBE_LABEL_V1 (ревью U11, NIT) — и кавычка: имя товара стоит в title="…".
+        const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
         const fmtD = (iso) => { if (!iso) return ''; const p = String(iso).split('-'); return p.length === 3 ? p[2] + '.' + p[1] + '.' + p[0] : iso; };
         const cards = withCode.map(l => {
             const code = l.batch.trim();
