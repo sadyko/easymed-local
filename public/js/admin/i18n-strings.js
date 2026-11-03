@@ -5945,6 +5945,7 @@ export const STRINGS = {
   "Печать бланка: все анализы образца": {"en":"Print the sheet: all the sample's tests","ru":"Печать бланка: все анализы образца","uz":"Blankani chop etish: namunaning barcha tahlillari"},
   "Печать штрих-кода образца": {"en":"Print the sample barcode","ru":"Печать штрих-кода образца","uz":"Namuna shtrix-kodini chop etish"},
   "Печать этикетки": {"en":"Print the label","ru":"Печать этикетки","uz":"Etiketkani chop etish"},
+  "Этикетки на пробирки — по одной на пробирку": {"en":"Tube labels — one per tube","ru":"Этикетки на пробирки — по одной на пробирку","uz":"Probirkalar uchun etiketkalar — har bir probirkaga bittadan"},   // LAB_TUBE_LABEL_V1
   "Подтвердить и выдать": {"en":"Confirm and release","ru":"Подтвердить и выдать","uz":"Tasdiqlash va berish"},
   "Подтвердить и выдать результаты": {"en":"Confirm and release the results","ru":"Подтвердить и выдать результаты","uz":"Natijalarni tasdiqlash va berish"},
   "Подтверждаем…": {"en":"Confirming…","ru":"Подтверждаем…","uz":"Tasdiqlanmoqda…"},

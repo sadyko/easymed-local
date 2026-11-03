@@ -34,7 +34,8 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, fmtDate, fmtDateTime, field, avColor, initials } from '../ui.js';
 import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { printBarcodeLabel } from './lab-barcode.js';
+import { printBarcodeLabel, printBarcodeLabels } from './lab-barcode.js';   // LAB_TUBE_LABEL_V1 — этикетки визита одним окном печати
+import { tubeGroups, tubeDeviceMap, tubeLabelStamp } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 — этикетка на пробирку (чистые правила)
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels, hasActorRole } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=panelsv14';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now · LIS_REAL_ANALYZERS_V1 — штамп
@@ -145,6 +146,7 @@ const state = {
     resultsByVs: {},   // visit_service_id -> lab_results rows (all analytes)
     refundedIds: new Set(),   // REFUND_ANY_V1 (ревью B4) — номера строк «услуга возвращена» (метка lqItem)
     panelByService: {},// service_id -> lab_panels row
+    deviceByService: {},   // LAB_TUBE_LABEL_V1 — service_id -> прибор панели услуги (lab_panels.device_id), как у приёма
     deptKindById: {},  // department_id -> kind   (LAB_SERVICE_ROUTING_V1)
     typeNameById: {},  // service_type_id -> name (LAB_SERVICE_ROUTING_V1)
     filter: 'open',
@@ -708,7 +710,7 @@ async function fetchAndPaint() {
                 .limit(LAB_DONE_WINDOW),
             // lab_panels has no service_id filter in the registry — the list is
             // small, so load active panels whole and match client-side.
-            supabase.from('lab_panels').select('id, name, code, service_id, has_narrative').eq('active', true).limit(500),
+            supabase.from('lab_panels').select('id, name, code, service_id, has_narrative, device_id').eq('active', true).limit(500),   // device_id: LAB_TUBE_LABEL_V1 — пробирка по прибору
             // Two small lookups; the compiler does one embed hop, so the server's
             // services(departments(kind), service_types(name)) becomes these instead.
             supabase.from('departments').select('id, name, kind').limit(200),
@@ -722,6 +724,7 @@ async function fetchAndPaint() {
         for (const p of (panels || [])) {
             if (p.service_id != null) state.panelByService[p.service_id] = p;
         }
+        state.deviceByService = tubeDeviceMap(panels);   // LAB_TUBE_LABEL_V1
         state.deptKindById = deptKindMap(deptsRes && deptsRes.data);
         state.typeNameById = typeNameMap(typesRes && typesRes.data);
 
@@ -872,8 +875,16 @@ function paintRows() {
     if (!visible.length) { refs.emptyEl.style.display = ''; return; }
     refs.emptyEl.style.display = 'none';
 
+    // LAB_TUBE_LABEL_V1 — пробирки визита считаются по ВСЕМ его строкам в очереди,
+    // а не по оставленным фильтром: номер этикетки не зависит от вкладки.
+    const byVisit = new Map();
+    for (const r of state.rows) {
+        if (r.visit_id == null) continue;
+        if (!byVisit.has(r.visit_id)) byVisit.set(r.visit_id, []);
+        byVisit.get(r.visit_id).push(r);
+    }
     const groups = groupLabRows(visible, state.patientMap, accession);
-    for (const g of groups) refs.list.appendChild(labGroupCard(g));
+    for (const g of groups) refs.list.appendChild(labGroupCard(g, byVisit));
 }
 
 // -----------------------------------------------------------------------------
@@ -1026,7 +1037,7 @@ function lqItem(r, patient) {
 }
 
 // Одна карточка на пациента-визит.
-function labGroupCard(g) {
+function labGroupCard(g, byVisit = new Map()) {
     const rows = g.rows;
     const total = rows.length;
     const hasRes = (r) => (state.resultsByVs[r.id] || []).length > 0;
@@ -1043,6 +1054,9 @@ function labGroupCard(g) {
     const stage = total ? Math.min(...rows.map(r => (STAGE_OF[r.status] != null ? STAGE_OF[r.status] : 0))) : 0;
     const info = state.patientMap[g.visitId] || {};
     const patient = info.patient || {};
+    // LAB_TUBE_LABEL_V1 — пробирки визита (lab-tube.js): этикетка на каждую,
+    // номер — самая старая открытая строка пробирки.
+    const tubes = visitTubes(g, byVisit, info);
 
     const sexTxt = g.patientSex === 'male' ? 'М' : g.patientSex === 'female' ? 'Ж' : '';
     const age = ageYears(g.patientDob);
@@ -1062,8 +1076,9 @@ function labGroupCard(g) {
         // LAB_BLANK_ALL_PANELS_V1 — печатаем ВЕСЬ образец, а не одну строку.
         anyResulted ? ['report', 'Бланк', 'Print',
             'Печать бланка: все анализы образца', () => printGroupReport(rows, patient)] : null,
-        anyActive ? ['barcode', 'Штрих-код', 'Scan',
-            'Печать штрих-кода образца', () => printLabel(rows[0], patient)] : null,
+        // LAB_TUBE_LABEL_V1 — этикетка на каждую пробирку (было: одна, rows[0] — самая новая строка).
+        tubes.length ? ['barcode', 'Штрих-код', 'Scan',
+            'Этикетки на пробирки — по одной на пробирку', () => printTubeLabels(tubes, patient)] : null,
     ].filter(Boolean);
     // Главная — первой слева: порядок ряда и есть подсказка «начни отсюда».
     // ADMIN_ACT_AS_V1 (R3) — «Подтвердить» (проверить и выдать всё) от чужого имени неактивна.
@@ -1121,7 +1136,7 @@ function labGroupCard(g) {
                         Icon('Warning', { size: 12 }), trf('{n} критич.', { n: critCount })) : null,
                 ),
             ),
-            accessionButton(g.accession),
+            accessionButton(tubes.length ? labAccession(tubes[0].labelId) : g.accession),   // LAB_TUBE_LABEL_V1 — номер первой пробирки, тот же, что на её этикетке
         ),
         // 3. В КАКОМ СОСТОЯНИИ — и 4. ЧТО ДЕЛАТЬ ДАЛЬШЕ.
         h('div', { class: 'lq-status' },
@@ -1189,6 +1204,29 @@ async function advance(r, values, okMsg) {
     if (okMsg) toast(okMsg, 'ok');
     await fetchAndPaint();
     return true;
+}
+
+// LAB_TUBE_LABEL_V1 — пробирки визита карточки: все его лабораторные строки в
+// очереди (byVisit); возвращённые без результата — не пробирка (refundedIds).
+function visitTubes(g, byVisit, info) {
+    const rows = g.visitId != null ? (byVisit.get(g.visitId) || g.rows) : g.rows;
+    return tubeGroups(rows, {
+        deviceByService: state.deviceByService,
+        skipIds: state.refundedIds,
+        visitDate: (info && info.visit_date) || null,
+    });
+}
+
+// LAB_TUBE_LABEL_V1 — этикетки всех пробирок визита ОДНИМ окном: второе окно
+// подряд браузер блокирует как всплывающее. Время — местное.
+function printTubeLabels(tubes, patient) {
+    printBarcodeLabels(tubes.map((t) => ({
+        code: t.code,
+        patientName: patient.full_name || '',
+        mrn: patient.mrn || '',
+        dateStr: tubeLabelStamp(t.collectedAt),
+        tests: t.tests.join(', '),
+    })));
 }
 
 function printLabel(r, patient) {
