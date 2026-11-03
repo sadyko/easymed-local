@@ -43,6 +43,7 @@ import { unusedText } from './match.js';   // LIS_PROXY_V1 — справка г
 import { LAB_RESULT_STATUSES } from '../services/visit-status-guard.js';   // LIS_REAL_ANALYZERS_V1 — ревью R7, п. 1: ворота лаборатории, общие с ручным вводом
 import { today, localDate } from '../services/domain/day.js';
 import { refundedWithoutResult } from '../services/domain/pay-releases.js';   // REFUND_ANY_V1 — «по заказу возврат»
+import { specimenKey } from '../../public/js/shared/specimen-key.js';   // LAB_TUBE_LABEL_V1 — одно правило материала для приёма и этикетки
 
 /**
  * LIS_REAL_ANALYZERS_V1_SAMPLE — номер пробы БЕЗ «LAB-» (голые цифры)
@@ -787,15 +788,11 @@ function staleTextOf(side, plan) {
  * обе называет serum (lisproxy-form.js biomaterialOf): HbA1c из цельной крови
  * не идёт в рабочий список пробирки сыворотки.
  */
-export function specimenKey(specimen) {
-  const s = String(specimen == null ? '' : specimen).trim().toLowerCase().replace(/\s+/g, ' ');
-  if (!s) return '';
-  if (/моч|urine/.test(s)) return 'urine';
-  if (/плазм|plasma/.test(s)) return 'plasma';
-  if (/сыворот|serum/.test(s)) return 'serum';
-  if (/кров|blood/.test(s)) return 'blood';
-  return s;
-}
+// LAB_TUBE_LABEL_V1 — само правило живёт в public/js/shared/specimen-key.js:
+// им же очередь лаборатории делит строки визита на пробирки (этикетка на
+// пробирку, номер — самая старая строка), и делить они обязаны одинаково.
+// Экспорт отсюда оставлен — его берут specimen-share.test.js и прочие.
+export { specimenKey };
 
 /**
  * LIS_VENDOR_EXACT_V1 (D3; решение владельца 2026-10-06, п. 2 — «Заполнить
