@@ -62,7 +62,11 @@ export function orderedMatch(svc, ordered, doctorId = null) {
     const rows = ordered.filter((o) => o.service_id != null && Number(o.service_id) === Number(svc.id));
     if (!rows.length) return null;
     if (!rows.some(perDoctor)) return { blocked: true, row: rows[0] };   // DUP_STOP_V1 (ревью m4) — врач в ключе решает сервер
-    const mine = isPosInt(doctorId) ? rows.find((o) => Number(o.doctor_id) === Number(doctorId)) : null;
+    // DUP_STOP_V1 (ревью, остаток 4) — строка без врача против назначенной без врача ('s:80|d:') —
+    // тот же ключ: сервер отказывает, экран гасит.
+    const mine = isPosInt(doctorId)
+        ? rows.find((o) => Number(o.doctor_id) === Number(doctorId))
+        : rows.find((o) => perDoctor(o) && o.doctor_id == null);
     return mine ? { blocked: true, row: mine } : { blocked: false, row: rows[0] };
 }
 
@@ -79,8 +83,10 @@ export function blockedPickIds(ordered) {
     for (const o of ordered || []) {
         if (o.service_id != null) {
             if (!perDoctor(o) && o.service_type !== 'procedure') out.push(Number(o.service_id));   // DUP_STOP_V1 (ревью m4)
-        } else if (o.consultation_type_id != null && o.doctor_id != null) {
-            out.push(`c|${o.doctor_id}|${o.consultation_type_id}`);
+        } else if (o.consultation_type_id != null) {
+            // DUP_STOP_V1 (ревью, остаток 4) — вид приёма без врача ('c:5|d:') — id 'c||5' (так его
+            // строит быстрая регистрация); у врача — 'c|<врач>|<вид>', как в каталоге.
+            out.push(`c|${o.doctor_id ?? ''}|${o.consultation_type_id}`);
         }
     }
     return [...new Set(out)];

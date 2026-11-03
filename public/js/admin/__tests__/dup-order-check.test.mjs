@@ -113,6 +113,30 @@ test('DUP_STOP_V1 (ревью m4): услуга без типа и без «ну
   assert.ok(!blockedPickIds(got.ordered).includes(30), 'консультация с врачом гасится только для своего врача');
 });
 
+test('DUP_STOP_V1 (ревью, остаток 4): консультация, назначенная БЕЗ врача (c:5|d: · s:30|d:), гасится для новой строки без врача — как отказывает сервер', async () => {
+  const { v, day } = seed();
+  const ln = DB.prepare("INSERT INTO visit_services (visit_id, service_id, consultation_type_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, ?, ?, NULL, 1, 0, 0, 'added', 10)");
+  ln.run(v, 30, null);
+  ln.run(v, null, 5);
+  const got = await loadVisitOrders({ patientId: 77, day });
+  assert.ok(got.ordered.some((o) => o.key === 's:30|d:') && got.ordered.some((o) => o.key === 'c:5|d:'), JSON.stringify(got.ordered.map((o) => o.key)));
+  // сервер: новая строка без врача — повтор
+  for (const line of [{ service_id: 30 }, { consultation_type_id: 5 }]) {
+    const r = await precheckOrders({ patientId: 77, day, lines: [line] });
+    assert.equal(r.ok, false, 'сервер отказывает: ' + JSON.stringify(line));
+  }
+  // экран — то же
+  const svc = orderedMatch({ id: 30, type: 'consultation', requires_doctor: 1 }, got.ordered);
+  assert.equal(svc.blocked, true, 'услуга-консультация без врача уже назначена без врача');
+  assert.equal(svc.row.doctor_id, null);
+  const cons = orderedMatch({ id: 'c||5', __consult: true, consultation_type_id: 5, __consultDoctorId: null }, got.ordered);
+  assert.equal(cons && cons.blocked, true);
+  assert.ok(blockedPickIds(got.ordered).includes('c||5'), 'вид приёма без врача — id строки быстрой регистрации');
+  // у врача, которому её не назначали, — по-прежнему подсказка, не запрет (сервер пускает)
+  assert.equal(orderedMatch({ id: 30, type: 'consultation', requires_doctor: 1 }, got.ordered, 11).blocked, false);
+  assert.ok(!blockedPickIds(got.ordered).includes('c|10|5'));
+});
+
 test('DUP_STOP_V1: precheckOrders — повтор: отказ словами сервера, писать нельзя; новое — можно; сервер молчит — решит дверь', async () => {
   const { day } = seed();
   CALLS.length = 0;
