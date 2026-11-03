@@ -35,7 +35,7 @@ import { h, Icon, clear, toast, Tag, fmtDate, fmtDateTime, field, avColor, initi
 import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printBarcodeLabel, printBarcodeLabels } from './lab-barcode.js';   // LAB_TUBE_LABEL_V1 — этикетки визита одним окном печати
-import { tubeGroups, tubeDeviceMap, tubeLabelStamp } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 — этикетка на пробирку (чистые правила)
+import { tubeGroups, tubeDeviceMap, tubeLabelStamp, shortTestName } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 — этикетка на пробирку (чистые правила)
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels, hasActorRole } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=panelsv14';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now · LIS_REAL_ANALYZERS_V1 — штамп
@@ -1234,7 +1234,10 @@ function printLabel(r, patient) {
         code: labBarcodeValue(r.id),   // LAB_BARCODE_DIGITS_V1 — только цифры номера заказа
         patientName: patient.full_name || '',
         mrn: patient.mrn || '',
-        dateStr: (r.sample_collected_at || nowIso()).slice(0, 16).replace('T', ' '),
+        // LAB_TUBE_LABEL_V1 — время местное («02.11.2026, 19:06»): раньше печатался
+        // UTC из ISO-строки — 14:06 вместо 19:06.
+        dateStr: tubeLabelStamp(r.sample_collected_at),
+        tests: shortTestName((r.services || {}).name),   // LAB_TUBE_LABEL_V1 — что в пробирке
     });
 }
 
@@ -1343,12 +1346,8 @@ function collectDialog(r, patient) {
         if (!ok) { okBtn.disabled = false; return; }
         m.close();
         if (printCb.checked) {
-            printBarcodeLabel({
-                code: labBarcodeValue(r.id),   // LAB_BARCODE_DIGITS_V1 — только цифры номера заказа
-                patientName: patient.full_name || '',
-                mrn: patient.mrn || '',
-                dateStr: stamp.slice(0, 16).replace('T', ' '),
-            });
+            // LAB_TUBE_LABEL_V1 — та же этикетка строки, что «Печать этикетки»: местное время и название анализа.
+            printLabel({ ...r, sample_collected_at: stamp }, patient);
         }
     });
 }

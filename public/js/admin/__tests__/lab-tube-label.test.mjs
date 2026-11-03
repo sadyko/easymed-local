@@ -233,3 +233,34 @@ test('К4: строка «услуга возвращена» в пробирк�
     LAB_RESULTS = [];
   }
 });
+
+// ═══ Строка: «Печать этикетки» и «Забор пробы» ═════════════════════════════
+
+test('«Печать этикетки» строки — её номер, местное время и название анализа', async () => {
+  const c = await mount(PHOTO());
+  const item = byClass(c, 'lq-item').find((n) => buttons(n).some((b) => b.getAttribute('title') === 'Печать этикетки'));
+  assert.ok(item, 'у взятой пробы нет «Печать этикетки»');
+  buttons(item).find((b) => b.getAttribute('title') === 'Печать этикетки').click();
+  await tick();
+  assert.strictEqual(opened, 1);
+  assert.deepStrictEqual(labelsOf(printed[0]), [{ code: '00000028', date: '02.11.2026, 19:06', tests: 'Анализ крови' }]);
+});
+
+test('«Забор пробы» с галочкой печатает этикетку строки: её номер, название, время — местное, числом', async () => {
+  const c = await mount(PHOTO());
+  const item = byClass(c, 'lq-item').find((n) => buttons(n).some((b) => clean(b) === 'Забор пробы') && textOf(n).includes('Анализ крови'));
+  assert.ok(item, 'нет строки крови с «Забор пробы»');
+  buttons(item).find((b) => clean(b) === 'Забор пробы').click();
+  await tick();
+  const ok = buttons(fakeBody).find((b) => clean(b) === 'Проба взята');
+  assert.ok(ok, 'окно «Забор пробы» не открылось');
+  // В браузере setAttribute('checked') включает галочку; у поддельного DOM свойства нет — ставим, как браузер.
+  for (const n of walk(fakeBody)) if (n.tagName === 'INPUT' && n.attrs.type === 'checkbox') n.checked = n.hasAttribute('checked');
+  ok.click();
+  await tick(80);
+  assert.strictEqual(opened, 1, 'этикетка не напечатана');
+  const [l] = labelsOf(printed[0]);
+  assert.strictEqual(l.code, '00000031');
+  assert.strictEqual(l.tests, 'Анализ крови');
+  assert.match(l.date, /^\d\d\.\d\d\.\d{4}, \d\d:\d\d$/, 'время — местное, числом, а не ISO в UTC: ' + l.date);
+});
