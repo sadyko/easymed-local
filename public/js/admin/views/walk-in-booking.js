@@ -43,7 +43,10 @@
  * Вызывающий обязан сказать об этом видимо, а не проглотить ответ молча.
  *
  * lines: [{ service: {id, price, requires_doctor, name}, doctorId: number|null,
- *           bookedVsId?: number, bookedUnitPrice?: number }]
+ *           bookedVsId?: number, bookedUnitPrice?: number, recommendationId?: number }]
+ *   DOCTOR_REFERRAL_DESK_V1 — recommendationId: строка по рекомендации врача — после вставки
+ *   сервер закрывает рекомендацию и ставит строке направившего (referral_recommendation_attach);
+ *   сбой — out.attachError (строка уже в визите, счёт выставляется как обычно).
  *   CRM_LINK_ALL_V1 (R7a) — bookedVsId: строка «из записи» — она УЖЕ в визите дня
  *   (views/booked-rows.js): её не вставляют второй раз, в счёт идёт она сама.
  * dropVsIds: [visit_service_id] — строки записи, которые регистратор убрал: они
@@ -305,6 +308,7 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
     //    на услуги, которых в визите нет.
     const saved = [];
     const vsIds = [];
+    const recJobs = [];   // DOCTOR_REFERRAL_DESK_V1 — строки по рекомендации врача: { recommendation_id, visit_service_id }
     /** Отказ ПОСЛЕ визита: к сообщению прикладывается уже записанное (см. шапку). */
     const failAfterVisit = (msg) => {
         const err = new Error(msg);
@@ -344,11 +348,26 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
         // PACKAGES_V1 — строка из пакета: скидку пакета и его срок считает сервер.
         if (!consult && isPosInt(line.packageId)) row.package_id = Number(line.packageId);
         if (isPosInt(createdBy)) row.created_by = Number(createdBy);
+        // REFERRAL_LINE_V1 — «Код отправителя» стойки — и направивший СТРОКИ (сервер примет его
+        // от стойки и проверит, что источник включён): визит дня мог быть заведён раньше без
+        // него, и тогда направление терялось. Строке по рекомендации врача направившего ставит
+        // сервер по самой рекомендации (ниже).
+        if (isPosInt(referralSourceId) && !isPosInt(line.recommendationId)) row.referred_by_source_id = Number(referralSourceId);
         withRepeatReason(row, pre.reason);   // DUP_STOP_V1 — обход с причиной (сервер снимет поле)
         const res = await supabase.from('visit_services').insert(row).select().single();
         if (res.error) throw failAfterVisit(trf('Услуга «{name}»: {msg}', { name: svc.name || '', msg: msgOf(res.error) }));
         vsIds.push(res.data.id);
         saved.push({ visitServiceId: res.data.id, serviceId: ident.service_id, consultationTypeId: ident.consultation_type_id, doctorId, unitPrice, tier: consult ? null : tier });
+        if (isPosInt(line.recommendationId)) recJobs.push({ recommendation_id: Number(line.recommendationId), visit_service_id: Number(res.data.id) });   // DOCTOR_REFERRAL_DESK_V1
+    }
+
+    // DOCTOR_REFERRAL_DESK_V1 — рекомендации врача, оформленные этой регистрацией: сервер
+    // закрывает рекомендацию и ставит строке направившего (доказательство — открытая
+    // рекомендация). Сбой — предупреждение: строка уже в визите, счёт выставляется как обычно.
+    let attachError = null;
+    for (const job of recJobs) {
+        const { error } = await supabase.rpc('referral_recommendation_attach', job);
+        if (error) attachError = attachError ? attachError + '; ' + msgOf(error) : msgOf(error);
     }
 
     // 5. Счёт пациенту. discount_amount = 0 — см. шапку: процент категории
@@ -399,6 +418,7 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
         out.appendedDiscount = appendedPartDiscount(inv);
     }
     if (quoteError) out.quoteError = quoteError;
+    if (attachError) out.attachError = attachError;   // DOCTOR_REFERRAL_DESK_V1
     if (queueError) out.queueError = queueError;
     if (answer.moved) out.movedNote = answer.text;
     return out;
