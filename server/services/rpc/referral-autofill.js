@@ -19,20 +19,26 @@
 // рекомендации, получает направившего сама (visit_services.referred_by_source_id —
 // rpc/referral-orders.js referral_recommendation_attach), и «Рефералы» платят ему за неё
 // (reports.js referralLines). Здесь по-прежнему — только источник визита.
-import { hasAnyRole, effectiveRoles } from '../roles.js';
+import { hasAnyRole } from '../roles.js';
+import { DESK_ROLES } from '../domain/line-referral.js';   // REFERRAL_LINE_V1 (полировка, п. 7) — стойка: администратор и регистратура
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
 }
 
-// V3120_FIX (M3) — кто вправе: те, кто добавляет рекомендацию в визит (окно
-// визита — регистратура, врач, медсестра, администратор). Касса и колл-центр
-// рекомендаций в визит не переносят и направившего не ставят.
-const ROLES = ['admin', 'registrar', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
-// Кто вправе назвать направившим ДРУГОГО врача: стойка и администратор. Врач —
-// только себя (иначе засчитывал бы коллеге или себе чужую рекомендацию).
-const DESK_ROLES = ['admin', 'registrar', 'nurse', 'senior_nurse'];
+// REFERRAL_LINE_V1 (полировка 3.21.0, п. 7; ревью U10 — MEDIUM, «врач делает себя направившим
+// визита») — НАПРАВИВШЕГО ВИЗИТА ПО РЕКОМЕНДАЦИИ СТАВИТ ТОЛЬКО СТОЙКА (администратор,
+// регистратура — и дополнительной ролью). Источник визита платит за КАЖДУЮ строку визита, и
+// прежде врач писал рекомендацию на любую услугу задним числом и называл себя направившим всего
+// визита стойки (проба R1e: 8 000 за чужое УЗИ); медсёстры ставили его по рекомендации, хотя
+// привязку рекомендаций (attach) им закрыли. Врач, добавивший свою рекомендацию в визит, получает
+// бонус за строку — привязкой (referral_recommendation_attach), а не за весь визит.
+// Доказательство — то же, что у привязки: живая строка услуги рекомендации В ЭТОМ визите,
+// которую завёл сам вызывающий и не раньше, чем написана рекомендация (окно визита вставляет её
+// прямо перед вызовом). Отказ окно визита не показывает (console.warn).
 const isPosInt = (v) => Number.isInteger(v) && v > 0;
+const NOT_DESK = 'Направившего визита по рекомендации врача ставит регистратура или администратор.';
+const NO_LINE = 'Направившего ставят по услуге рекомендации, которую вы сами добавили в этот визит после рекомендации, — такой строки нет.';
 
 /**
  * visit_set_doctor_referrer({ visit_id, doctor_id | recommendation_id, source_visit_id? })
@@ -46,9 +52,12 @@ const isPosInt = (v) => Number.isInteger(v) && v > 0;
  * обработчик ДО того, как пометит её выполненной. Можно прислать и сам номер
  * рекомендации (recommendation_id): тогда врач и визит-источник берутся из неё.
  * Визит, по которому уже платили, не трогается: его деньги уже поделены.
+ * REFERRAL_LINE_V1 (полировка, п. 7) — только стойка (403 остальным) и только по живой строке
+ * услуги рекомендации в этом визите, заведённой самим вызывающим не раньше рекомендации (см.
+ * шапку). По doctor_id берётся самая новая открытая рекомендация врача, у которой такая строка есть.
  */
 export function visitSetDoctorReferrer(db, args, user) {
-  if (!hasAnyRole(user, ROLES)) throw new RpcError('Ваша роль не может выполнить это действие.', 403);
+  if (!hasAnyRole(user, DESK_ROLES)) throw new RpcError(NOT_DESK, 403);   // REFERRAL_LINE_V1 (полировка, п. 7)
   const visitId = Number(args && args.visit_id);
   const recId = args && args.recommendation_id != null ? Number(args.recommendation_id) : null;
   let doctorId = Number(args && args.doctor_id);
@@ -59,21 +68,30 @@ export function visitSetDoctorReferrer(db, args, user) {
   const run = db.transaction(() => {
     const visit = db.prepare('SELECT id, patient_id, referral_source_id FROM visits WHERE id = ?').get(visitId);
     if (!visit) throw new RpcError('Визит не найден.', 404);
-    const openRec = recId !== null
-      ? db.prepare(`SELECT id, recommended_by, source_visit_id FROM recommended_services
-                     WHERE id = ? AND patient_id = ? AND closed_at IS NULL AND status NOT IN ('done','cancelled')`).get(recId, visit.patient_id)
-      : db.prepare(`SELECT id, recommended_by, source_visit_id FROM recommended_services
+    const open = recId !== null
+      ? db.prepare(`SELECT id, recommended_by, source_visit_id, service_id, created_at FROM recommended_services
+                     WHERE id = ? AND patient_id = ? AND closed_at IS NULL AND status NOT IN ('done','cancelled')`).all(recId, visit.patient_id)
+      : db.prepare(`SELECT id, recommended_by, source_visit_id, service_id, created_at FROM recommended_services
                      WHERE patient_id = ? AND recommended_by = ? AND closed_at IS NULL AND status NOT IN ('done','cancelled')
-                     ORDER BY id DESC LIMIT 1`).get(visit.patient_id, doctorId);
-    if (!openRec || !isPosInt(Number(openRec.recommended_by))) {
+                     ORDER BY id DESC`).all(visit.patient_id, doctorId);
+    const recs = open.filter((r) => isPosInt(Number(r.recommended_by)));
+    if (!recs.length) {
       throw new RpcError('Направившим врач становится только по своей рекомендации этому пациенту — открытой рекомендации нет.', 409);
     }
+    // REFERRAL_LINE_V1 (полировка, п. 7) — доказательство строкой (то же, что у привязки:
+    // не отменена и не снята, не возвращена, своё здание, завёл вызывающий, рекомендация не моложе строки).
+    const lineOf = db.prepare(`SELECT 1 FROM visit_services vs
+        WHERE vs.visit_id = ? AND vs.service_id = ? AND vs.created_by = ?
+          AND vs.status NOT IN ('cancelled', 'removed') AND vs.sync_origin IS NULL
+          AND NOT (vs.invoice_item_id IS NULL
+                   AND EXISTS (SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = 'out' AND prr.line_id = vs.id))
+          AND COALESCE(julianday(?) > julianday(vs.created_at), 0) = 0
+        LIMIT 1`);
+    const me = Number(user && user.id);
+    const openRec = recs.find((r) => r.service_id != null && isPosInt(me) && lineOf.get(visitId, r.service_id, me, r.created_at));
+    if (!openRec) throw new RpcError(NO_LINE, 409);
     doctorId = Number(openRec.recommended_by);
     if (recId !== null) sourceVisitId = openRec.source_visit_id ?? null;
-    const mine = effectiveRoles(user);
-    if (!mine.some((r) => DESK_ROLES.includes(r)) && Number(user && user.id) !== doctorId) {
-      throw new RpcError('Врач может назвать направившим только себя.', 403);
-    }
     const paid = db.prepare(`SELECT 1 FROM invoices WHERE visit_id = ?
         AND (COALESCE(paid_amount, 0) > 0 OR status IN ('paid','partial')) LIMIT 1`).get(visitId);
     if (paid) throw new RpcError('По визиту уже есть оплата — направившего в нём не меняют.', 409);

@@ -76,6 +76,14 @@ const DOCTOR_ORDER_SQL = `((lrs.id IS NOT NULL AND lrs.doctor_id IS NOT NULL)
 // отпущена со счёта с возвратом и не выставлена заново (pay_refund_releases 'out', то же
 // правило, что у кассы, журнала и выплаты врачу). Регистратуре её не показывают — иначе она
 // выставилась бы снова.
+// REFERRAL_LINE_V1 (полировка, п. 10; ревью U10 LOW-D) — КТО «ОТ ВРАЧА» в метке стойки и календаря:
+// врач источника строки; иначе — рекомендовавший рекомендацию, которую строка закрыла (врач сам
+// исполняет — источника у строки нет, а направил всё равно он, а не вставивший коллега); иначе —
+// кто завёл строку. Алиасы: vs — строка, lrs — её источник.
+const REFERRER_ID_SQL = `COALESCE(lrs.doctor_id,
+         (SELECT rr.recommended_by FROM recommended_services rr
+           WHERE rr.visit_service_id = vs.id AND rr.recommended_by IS NOT NULL ORDER BY rr.id LIMIT 1),
+         vs.created_by)`;
 const NOT_REFUNDED_SQL = `NOT (vs.invoice_item_id IS NULL
          AND EXISTS (SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = 'out' AND prr.line_id = vs.id))`;
 
@@ -105,7 +113,7 @@ export function patientReferralOrders(db, args, user) {
            COALESCE(NULLIF(pu.full_name, ''), pu.username) AS doctor_name,
            vs.status, vs.referral_note, vs.referred_by_source_id,
            lrs.name AS line_source_name, lrs.doctor_id AS line_source_doctor_id,
-           COALESCE(lrs.doctor_id, vs.created_by) AS referrer_id,
+           ${REFERRER_ID_SQL} AS referrer_id,
            COALESCE(NULLIF(ru.full_name, ''), ru.username, lrs.name, '') AS referrer_name,
            bs.id AS base_source_id, bs.name AS base_source_name, bs.doctor_id AS base_source_doctor_id,
            i.id AS invoice_id, i.invoice_number, i.status AS invoice_status
@@ -117,7 +125,7 @@ export function patientReferralOrders(db, args, user) {
       LEFT JOIN users pu ON pu.id = vs.doctor_id
       LEFT JOIN users cu ON cu.id = vs.created_by
       LEFT JOIN referral_sources lrs ON lrs.id = vs.referred_by_source_id
-      LEFT JOIN users ru ON ru.id = COALESCE(lrs.doctor_id, vs.created_by)
+      LEFT JOIN users ru ON ru.id = ${REFERRER_ID_SQL}
       LEFT JOIN referral_sources bs ON bs.id = COALESCE(v.referral_source_id, pt.referral_source_id)
       LEFT JOIN invoice_items ii ON ii.id = vs.invoice_item_id
       LEFT JOIN invoices i ON i.id = ii.invoice_id
@@ -197,6 +205,12 @@ export function referralRecommendationAttach(db, args, user) {
     if (!rec) throw new RpcError('Рекомендация не найдена.', 404);
     if (rec.closed_at != null || rec.status === 'done' || rec.status === 'cancelled') {
       throw new RpcError('Рекомендация уже закрыта — её добавили в визит или убрали.', 409);
+    }
+    // REFERRAL_LINE_V1 (полировка, п. 9; ревью U10 LOW-C) — рекомендация, уже привязанная к строке,
+    // ко второй не привязывается, даже если её «открыли» заново правкой статуса через /api/db:
+    // одна рекомендация — одно направление («Внутренние врачи» считали её дважды).
+    if (rec.visit_service_id != null && Number(rec.visit_service_id) !== vsId) {
+      throw new RpcError('Рекомендация уже привязана к другой строке услуги.', 409);
     }
     const line = db.prepare(`SELECT vs.*, v.patient_id AS visit_patient_id, v.sync_origin AS visit_origin,
                                     v.status AS visit_status, ${localMonth('v.visit_date')} AS visit_month
@@ -287,7 +301,7 @@ export function referralVisitLinks(db, args, user) {
       FROM visit_services vs
       LEFT JOIN users cu ON cu.id = vs.created_by
       LEFT JOIN referral_sources lrs ON lrs.id = vs.referred_by_source_id
-      LEFT JOIN users ru ON ru.id = COALESCE(lrs.doctor_id, vs.created_by)
+      LEFT JOIN users ru ON ru.id = ${REFERRER_ID_SQL}
      WHERE vs.visit_id IN (${ids.map(() => '?').join(',')})
        AND vs.clinic_item_id IS NULL
        AND vs.status NOT IN ('cancelled', 'removed')

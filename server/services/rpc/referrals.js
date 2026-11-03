@@ -25,6 +25,7 @@ import { canSeeReportKey } from '../report-access.js';   // деньги — п�
 import { referralReportLines, resolveRange } from './reports.js';
 import { buildingContext } from '../domain/buildings.js';   // FIX_318_V1 (L5) — строкам отчёта — контекст зданий, как у run_report
 import { today, localDate, localRangeWhere } from '../domain/day.js';
+import { EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE } from '../domain/line-referral.js';   // REFERRAL_LINE_V1 (полировка, п. 11) — счёт визитов как деньги
 import { activityCounters, normalizeWindow } from '../../../public/js/shared/referral-activity.js';
 
 export class RpcError extends Error {
@@ -77,15 +78,25 @@ const LINE_NOT_REFUNDED = (vs) => `NOT (${vs}.invoice_item_id IS NULL
 // стойки, направление врача; не отменённой и не возвращённой). Пара (визит, источник) — один
 // раз. rangeSql — условие на v.visit_date (его параметры передаются ДВАЖДЫ: оно стоит в обеих
 // ветках).
+// REFERRAL_LINE_V1 (полировка, п. 11; ревью U10 LOW-E) — внешний источник строки на визите с
+// внешним источником (визита, иначе карточки) — не направление этого партнёра: вариант «б»
+// (EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE = false, domain/line-referral.js) платит за такую строку
+// только партнёру визита, и «Представители» считают визиты так же, как деньги.
 function sourceVisitsSql(rangeSql = '1=1') {
+  const twoPartners = EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE ? ''
+    : `AND NOT (lrs.id IS NOT NULL AND lrs.doctor_id IS NULL AND brs.id IS NOT NULL AND brs.doctor_id IS NULL)`;
   return `SELECT v.id AS visit_id, ${SOURCE_OF_VISIT} AS source_id
             FROM visits v JOIN patients pt ON pt.id = v.patient_id
            WHERE ${SOURCE_OF_VISIT} IS NOT NULL AND (${rangeSql})
           UNION
           SELECT v.id AS visit_id, vs.referred_by_source_id AS source_id
             FROM visit_services vs JOIN visits v ON v.id = vs.visit_id
+            LEFT JOIN patients pt ON pt.id = v.patient_id
+            LEFT JOIN referral_sources lrs ON lrs.id = vs.referred_by_source_id
+            LEFT JOIN referral_sources brs ON brs.id = ${SOURCE_OF_VISIT}
            WHERE vs.referred_by_source_id IS NOT NULL AND vs.status NOT IN ('cancelled', 'removed')
-             AND ${LINE_NOT_REFUNDED('vs')} AND (${rangeSql})`;
+             AND ${LINE_NOT_REFUNDED('vs')} AND (${rangeSql})
+             ${twoPartners}`;
 }
 
 // REFERRAL_LINE_V1 — направления врача строками визита: строка с его внутренним источником,

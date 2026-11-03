@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { lineReferralStamp, lineBeneficiaries, isDeskActor, isDoctorActor, LineReferralError,
-  recommendationAuthorStamp, EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE } from './line-referral.js';
+  recommendationAuthorStamp, EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE, DOCTOR_LINE_REPLACES_DOCTOR_BASE } from './line-referral.js';   // DOCTOR_LINE_REPLACES_DOCTOR_BASE — полировка, п. 8
 
 function fresh() {
   const db = openDb(':memory:');
@@ -90,6 +90,22 @@ test('кому вознаграждение: внешний партнёр ст�
   assert.deepEqual(via(lineBeneficiaries(null, Q, 12)), ['line:901'], 'без партнёра визита — партнёр строки');
   assert.deepEqual(via(lineBeneficiaries(S1, Q, 12)), ['visit:5', 'line:901'], 'врач визита + партнёр строки — правило «обоим» не тронуто');
   assert.deepEqual(via(lineBeneficiaries(P, S1, 12)), ['visit:900', 'line:5'], 'партнёр + врач строки — оба');
+});
+
+// REFERRAL_LINE_V1 (полировка 3.21.0, п. 8) — два РАЗНЫХ врача на одной строке: вариант «б» — врач
+// строки заменяет врача визита (проба R3b: Петров визит, Сидоров ЭКГ → ЭКГ только Сидорову).
+test('кому вознаграждение: врач строки вместо другого врача визита (вариант «б»); тот же врач и своя строка — как прежде', () => {
+  const D = { id: 5, doctor_id: 10 };
+  const E = { id: 7, doctor_id: 11 };
+  const Dcopy = { id: 6, doctor_id: 10 };
+  const P = { id: 900, doctor_id: null };
+  const via = (list) => list.map((b) => b.via + ':' + b.source.id);
+  assert.equal(DOCTOR_LINE_REPLACES_DOCTOR_BASE, true, 'переключатель варианта — «б»');
+  assert.deepEqual(via(lineBeneficiaries(D, E, 12)), ['line:7'], 'два врача — врач строки');
+  assert.deepEqual(via(lineBeneficiaries(D, E, 11)), ['visit:5'], 'врач строки исполняет сам — врач визита');
+  assert.deepEqual(via(lineBeneficiaries(D, Dcopy, 12)), ['visit:5'], 'тот же врач — один раз');
+  assert.deepEqual(via(lineBeneficiaries(D, P, 12)), ['visit:5', 'line:900'], 'врач визита + партнёр строки — оба');
+  assert.deepEqual(via(lineBeneficiaries(P, E, 12)), ['visit:900', 'line:7'], 'партнёр визита + врач строки — оба');
 });
 
 // Ревью U10 HIGH-1 — кто рекомендовал (recommended_services.recommended_by) ставит сервер: врачу —

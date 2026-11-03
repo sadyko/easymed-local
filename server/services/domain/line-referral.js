@@ -25,7 +25,8 @@
 // визита/пациента — как прежде; источник строки — ЕЩЁ И ЕМУ, если он другой (не тот же
 // источник и не тот же сотрудник) и строка не своя для врача источника строки. Ревью U10
 // MEDIUM-4: внешний партнёр строки к внешнему партнёру визита не добавляется (вариант «б»,
-// EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE).
+// EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE). Полировка 3.21.0, п. 8: врач строки ЗАМЕНЯЕТ на этой
+// строке другого врача визита (вариант «б», DOCTOR_LINE_REPLACES_DOCTOR_BASE).
 import { hasAnyRole } from '../roles.js';
 
 export class LineReferralError extends Error {
@@ -113,6 +114,22 @@ export function recommendationAuthorStamp(_db, user, _row) {
 // Тем же правилом считает и подпись «Бонус: …» окна регистрации (referral-orders.js).
 export const EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE = false;
 
+// REFERRAL_LINE_V1 (полировка 3.21.0, п. 8; ревью U10 — вопрос владельцу «два врача на одной
+// строке») — у визита источник-ВРАЧ (Петров: «Кто направил» или visit_set_doctor_referrer по его
+// рекомендации), а строку направил ДРУГОЙ врач (Сидоров рекомендовал ЭКГ). Правило владельца —
+// партнёр платится за пациента (визит), врач — за услугу, которую направил. Файла с ответом
+// владельца (b3210/owner-r3b.txt) нет — по умолчанию вариант «б»:
+//   true  — вариант «б» (сейчас): врач-направивший строки ЗАМЕНЯЕТ на этой строке другого
+//           врача-источника визита. Проба R3b, 10 %: Петров — УЗИ 8 000, Сидоров — ЭКГ 5 000,
+//           Петров за ЭКГ — ничего (итого 13 000);
+//   false — вариант «а»: платить обоим врачам (Петров 13 000, Сидоров 5 000, итого 18 000).
+// Не меняется ни в каком варианте: тот же врач на визите и строке — один раз; своя строка врача
+// строки (он и исполняет) — платится только источник визита; внешний партнёр визита + врач
+// строки (и врач визита + партнёр строки) — оба; два партнёра — EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE.
+// Тем же правилом считают «Рефералы», кабинет врача, «Зарплаты врачей» (reports.js referralLines)
+// и подпись «Бонус: …» окна регистрации (referral-orders.js).
+export const DOCTOR_LINE_REPLACES_DOCTOR_BASE = true;
+
 /**
  * Получатели вознаграждения за строку: [{ source, via: 'visit' | 'line' }].
  * @param {{id:number|null, doctor_id:number|null}|null} base — источник визита/пациента
@@ -128,6 +145,9 @@ export function lineBeneficiaries(base, line, performer) {
   const sameSource = base && base.id != null && Number(base.id) === Number(line.id);
   const sameEmployee = base && base.doctor_id != null && line.doctor_id != null && Number(base.doctor_id) === Number(line.doctor_id);
   const ownLine = line.doctor_id != null && performer != null && Number(line.doctor_id) === Number(performer);
-  if (!sameSource && !sameEmployee && !ownLine) out.push({ source: line, via: 'line' });
+  if (sameSource || sameEmployee || ownLine) return out;
+  // Полировка, п. 8 — два РАЗНЫХ врача: вариант «б» — врач строки вместо врача визита (см. выше).
+  if (DOCTOR_LINE_REPLACES_DOCTOR_BASE && base && base.doctor_id != null && line.doctor_id != null) return [{ source: line, via: 'line' }];
+  out.push({ source: line, via: 'line' });
   return out;
 }
