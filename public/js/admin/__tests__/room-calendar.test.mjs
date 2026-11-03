@@ -182,7 +182,7 @@ const EXTRA_DOCTORS = [
   [75, 'jurayev', 'Жураев Бекзод', 'офтальмолог'],
 ];
 
-function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false, lines = false } = {}) {
+function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false, lines = false, docref = false } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
@@ -227,6 +227,14 @@ function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, 
     db.prepare("INSERT INTO crm_requests (id, full_name, phone, source, note, status, patient_id) VALUES (77,'Иванов Иван','+998901112233','call','','scheduled',3)").run();
     db.prepare("INSERT INTO crm_request_services (id, request_id, service_id, scheduled_date, status, visit_id) VALUES (301, 77, 21, ?, 'pending', 55)")
       .run(isoOf(day));
+  }
+
+  // DOCTOR_REFERRAL_DESK_V1 — НАПРАВЛЕНИЕ ВРАЧА: строку визита завёл врач Сидоров (у него
+  // свой внутренний источник — триггер мигр. 122) к другому исполнителю.
+  if (docref) {
+    db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (8,'sid','x','Сидоров Сидор','doctor',1)").run();
+    const src = db.prepare('SELECT id FROM referral_sources WHERE doctor_id = 8').get().id;
+    db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, status, created_by, referred_by_source_id) VALUES (55, 21, 7, 'added', 8, ?)").run(src);
   }
 
   // CRM_CALENDAR_MIRROR_V1 — у записи несколько услуг (строки visit_services):
@@ -326,8 +334,8 @@ const WORKING_SET_KEY = 'rcal.workingset.v1';
 function putWorkingSet(ws) { LS.set(WORKING_SET_KEY, JSON.stringify(ws)); }
 
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false, lines = false } = {}) {
-  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm, lines });
+async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false, lines = false, docref = false } = {}) {
+  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm, lines, docref });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
@@ -1171,4 +1179,26 @@ test('REPEAT_VISIT_V1 (ревью): смена статуса записи в к
   await flush(20);
   assert.equal(DB.prepare('SELECT status FROM visits WHERE id = 55').get().status, 'cancelled', 'статус не сменился');
   assert.equal(slotDayCached(7, dayIso, 30), null, 'после записи календаря каталог показывает прежнее свободное время');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DOCTOR_REFERRAL_DESK_V1 (2026-11-02) — «ОТ ВРАЧА»: В ЗАПИСИ УСЛУГА ПО НАПРАВЛЕНИЮ ВРАЧА
+// ═══════════════════════════════════════════════════════════════════════════
+test('НАПРАВЛЕНИЕ ВРАЧА: запись с услугой, на которую направил врач, помечена «от врача» с его именем', async () => {
+  document.body.children.length = 0;
+  const { box } = await render({ docref: true });
+  const card = byClass(box, 'rcal-appt').find((c) => /10:00–10:30/.test(textOf(c)));
+  assert.ok(card, 'запись пропала из сетки');
+  const badge = byClass(card, 'rcal-appt-ref')[0];
+  assert.ok(badge, 'на блоке нет метки «от врача»: ' + textOf(card));
+  assert.ok(/от врача/.test(textOf(badge)));
+  assert.match(String(badge.attrs.title || ''), /Сидоров Сидор/);
+});
+
+test('обычная запись метки «от врача» не несёт', async () => {
+  document.body.children.length = 0;
+  const { box } = await render();
+  const card = byClass(box, 'rcal-appt').find((c) => /10:00–10:30/.test(textOf(c)));
+  assert.ok(card, 'запись пропала из сетки');
+  assert.equal(byClass(card, 'rcal-appt-ref').length, 0, 'метка «от врача» на записи без направления');
 });

@@ -232,6 +232,9 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         // CRM_REAL_BOOKING_V1 — из какой заявки колл-центра эта запись:
         // id визита -> номер заявки. Одним ответом на всё видимое окно.
         crmByVisit: {},
+        // DOCTOR_REFERRAL_DESK_V1 — в каких записях услуга по направлению врача: id визита -> имя
+        // направившего. Одним ответом на всё видимое окно (referral_visit_links).
+        refByVisit: {},
     };
 
     clear(container);
@@ -346,6 +349,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             };
         });
         await loadCrmLinks(visits.map((v) => v.id));
+        await loadReferralLinks(visits.map((v) => v.id));   // DOCTOR_REFERRAL_DESK_V1
     }
 
     // CRM_CALENDAR_MIRROR_V1 (2026-09-27) — УСЛУГИ ЗАПИСИ.
@@ -444,6 +448,29 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 }
             }
         }
+    }
+
+    // DOCTOR_REFERRAL_DESK_V1 — «ОТ ВРАЧА»: в визите есть услуга, на которую направил врач
+    // (строка со своим направившим или заведённая врачом к другому исполнителю). Тем же
+    // порядком, что метка колл-центра: одним RPC на окно, пачками; отказ — не «направлений
+    // нет», а строка «Не загрузилось».
+    async function loadReferralLinks(visitIds) {
+        state.refByVisit = {};
+        const ids = [...new Set((visitIds || []).filter(Boolean))];
+        if (!ids.length) return;
+        for (let i = 0; i < ids.length; i += CRM_LINK_CHUNK) {
+            const { data, error } = await supabase.rpc('referral_visit_links', { visit_ids: ids.slice(i, i + CRM_LINK_CHUNK) });
+            if (error) { state.failed = [...new Set([...state.failed, tr('направления врача')])]; return; }
+            for (const l of (data || [])) {
+                if (l.visit_id != null && state.refByVisit[l.visit_id] == null) state.refByVisit[l.visit_id] = l.doctor_name || '';
+            }
+        }
+    }
+
+    /** Имя врача, направившего на услугу этой записи, или null. */
+    function referralOf(a) {
+        const n = a && a.id != null ? state.refByVisit[a.id] : undefined;
+        return n === undefined ? null : n;
     }
 
     /** Номер заявки колл-центра, из которой эта запись (или null). */
@@ -1530,6 +1557,13 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                             class: 'rcal-appt-crm', title: trf('Заявка №{n}', { n: crmRequestOf(a) }),
                             style: { marginLeft: '5px', padding: '0 4px', borderRadius: '4px', fontWeight: 700, fontSize: '12.5px', background: 'var(--teal-50, #e0f2f1)', color: 'var(--teal-700, #00796b)' },
                         }, 'колл-центр')
+                        : null,
+                    // DOCTOR_REFERRAL_DESK_V1 — в записи услуга по направлению врача; кто — в подсказке.
+                    referralOf(a) != null
+                        ? h('span', {
+                            class: 'rcal-appt-ref', title: trf('Направил: {name}', { name: referralOf(a) || '—' }),
+                            style: { marginLeft: '5px', padding: '0 4px', borderRadius: '4px', fontWeight: 700, fontSize: '12.5px', background: 'var(--info-50, #eef4ff)', color: 'var(--info-700, #1d4ed8)' },
+                        }, 'от врача')
                         : null,
                     a.doctorId ? h('span', { class: 'rcal-appt-d', title: doctorName(a.doctorId) }, doctorName(a.doctorId)) : null),
                 h('div', { class: 'rcal-appt-p' }, a.patient),

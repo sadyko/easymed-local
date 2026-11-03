@@ -13475,4 +13475,9 @@ export const STRINGS = {
   "Услуги направления нет в каталоге — оформите её в окне визита.": {"en":"The referred service is not in the catalogue — register it in the visit window.","ru":"Услуги направления нет в каталоге — оформите её в окне визита.","uz":"Yo‘llanmadagi xizmat katalogda yo‘q — uni tashrif oynasida rasmiylashtiring."},   // DOCTOR_REFERRAL_DESK_V1
   "Рекомендация для регистратуры": {"en":"Note for the front desk","ru":"Рекомендация для регистратуры","uz":"Registratura uchun tavsiya"},   // DOCTOR_REFERRAL_DESK_V1
   "Например: натощак, к 9:00": {"en":"For example: on an empty stomach, by 9:00","ru":"Например: натощак, к 9:00","uz":"Masalan: och qoringa, soat 9:00 gacha"},   // DOCTOR_REFERRAL_DESK_V1
+  // DOCTOR_REFERRAL_DESK_V1 — календарь записи (views/room-calendar.js)
+  "от врача": {"en":"from doctor","ru":"от врача","uz":"shifokordan"},   // DOCTOR_REFERRAL_DESK_V1
+  "Направил: {name}": {"en":"Referred by: {name}","ru":"Направил: {name}","uz":"Yo‘llagan: {name}"},   // DOCTOR_REFERRAL_DESK_V1
+  "направления врача": {"en":"doctor referrals","ru":"направления врача","uz":"shifokor yo‘llanmalari"},   // DOCTOR_REFERRAL_DESK_V1
+  // /DOCTOR_REFERRAL_DESK_V1
 };
