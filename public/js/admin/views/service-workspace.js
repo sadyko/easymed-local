@@ -1376,6 +1376,23 @@ async function resolveWsDoctorId(ctx) {
     return id;
 }
 
+// REPEAT_VISIT_V1 (ревью) — сотрудник окна «Повторный визит»: врач ли он и какие
+// услуги оказывает (users.service_rates — [{ service_id, … }], та же привязка
+// исполнителя, что у каталога записи). null — строки не нашлось или запрос упал.
+async function rvStaffRow(id) {
+    if (id == null) return null;
+    try {
+        const { data } = await supabase.from('users').select('id, role, is_doctor, service_rates').eq('id', id).maybeSingle();
+        return data || null;
+    } catch (_) { return null; }
+}
+function rvPerformedIds(staff) {
+    let rates = staff && staff.service_rates;
+    if (typeof rates === 'string') { try { rates = JSON.parse(rates); } catch (_) { rates = null; } }
+    return [...new Set((Array.isArray(rates) ? rates : [])
+        .map((r) => Number(r && r.service_id)).filter((n) => Number.isInteger(n) && n > 0))];
+}
+
 // AURORA_HOSP_REQUEST_V1 — «Заявка на госпитализацию»: create a 'requested' admission the
 // inpatient / registrator desk picks up. Uses the request_admission SECURITY DEFINER RPC because
 // a plain doctor cannot insert into admissions directly (RLS is admin-only).
@@ -1470,12 +1487,23 @@ async function openRevisitModal(ctx) {
     // REPEAT_VISIT_V1 — у врача нет видов консультаций: строкой визита идёт
     // услуга каталога типа «Консультация» (значение 's:<id>'); цену по дню
     // визита считает сервер. Нет и таких — визит записывается без строки.
+    // REPEAT_VISIT_V1 (ревью, M1) — ТОЛЬКО УСЛУГИ ЭТОГО ВРАЧА. Здесь стояли
+    // 50 консультаций всей клиники по алфавиту, и первая была выбрана сама:
+    // каждый повторный визит уходил со строкой с ценой того, что первым по
+    // алфавиту (а 'consultation' — тип по умолчанию у любой услуги без типа).
+    // Теперь — услуги, которые врач оказывает (users.service_rates, как
+    // doctorPerforms каталога записи), и только действующие. Ровно одна — она и
+    // выбрана; несколько или ни одной — выбрано «— без услуги —», и визит
+    // записывается без строки, как до 3.21.
     let rvServices = [];
     if (!consultTypes.length) {
-        const { data: sData } = await supabase.from('services')
-            .select('id, name, duration_minutes').eq('type', 'consultation').eq('active', true)
-            .order('name', { ascending: true }).limit(50);
-        rvServices = sData || [];
+        const ids = rvPerformedIds(await rvStaffRow(doctorId));
+        if (ids.length) {
+            const { data: sData } = await supabase.from('services')
+                .select('id, name, duration_minutes').in('id', ids).eq('type', 'consultation').eq('active', true)
+                .order('name', { ascending: true });
+            rvServices = sData || [];
+        }
     }
     const rvService = (v) => rvServices.find((s) => 's:' + s.id === String(v)) || null;
 
@@ -1486,12 +1514,15 @@ async function openRevisitModal(ctx) {
 
     // --- form fields ---
     const reasonSel = h('select', null, ...RV_REASONS.map(r => h('option', { value: r }, r)));
-    const svcSel = h('select', null,
+    // REPEAT_VISIT_V1 (ревью, M1) — «— без услуги —» (значение '') стоит первым и
+    // выбрано, кроме случая ровно одной своей услуги.
+    const svcSel = h('select', { 'data-rv-service': '' },
         ...(consultTypes.length
             ? consultTypes.map(ct => h('option', { value: ct.id }, consultLabel(ct)))
-            : rvServices.length   // REPEAT_VISIT_V1
-                ? rvServices.map(s => h('option', { value: 's:' + s.id }, s.name))
-                : [h('option', { value: '' }, 'Консультация')]));
+            : rvServices.length === 1   // REPEAT_VISIT_V1
+                ? [h('option', { value: 's:' + rvServices[0].id, selected: true }, rvServices[0].name)]
+                : [h('option', { value: '', selected: true }, tr('— без услуги —')),
+                    ...rvServices.map(s => h('option', { value: 's:' + s.id }, s.name))]));
     const commentInput = h('textarea', { rows: '2', placeholder: 'Например: с результатами анализов' });
     // DOCTOR_PROFILE_V1 (ревью шага 5, №1) — сколько длится визит выбранного вида.
     const rvMinutes = () => {

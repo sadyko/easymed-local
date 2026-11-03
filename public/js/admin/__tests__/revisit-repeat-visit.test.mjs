@@ -73,7 +73,7 @@ const modals = () => document.body.children.filter((c) => c.classList && c.class
 const WS = await import('../views/service-workspace.js');
 
 /** Кабинет пациента `pid` у врача (Петров) → «Повторный визит» → 10-е след. месяца, 10:00 → «Записать». */
-async function bookRevisit(pid, doc = { id: PETROV, name: 'Петров Пётр' }) {
+async function bookRevisit(pid, doc = { id: PETROV, name: 'Петров Пётр' }, { beforeBook = null } = {}) {
     document.body.children = [];
     const container = new El('div');
     const ctx = { container, visitServiceId: 900 + pid, visitId: 1900 + pid, patient: { id: pid, lastName: 'Пациент', firstName: 'Тест', mrn: 'P-' + pid, __service: { id: 900 + pid, name: 'Приём', doctorId: doc.id, doctorName: doc.name } } };
@@ -84,6 +84,7 @@ async function bookRevisit(pid, doc = { id: PETROV, name: 'Петров Пётр
     await btn._pending;
     const dlg = await until(() => modals().pop());
     assert.ok(dlg, 'окно повторного визита не открылось');
+    if (beforeBook) beforeBook(dlg);   // REPEAT_VISIT_V1 (ревью) — что окно предлагает до записи
     dlg.querySelectorAll('button').find((b) => b.textContent.includes('+1 мес')).dispatch('click');
     dlg.querySelectorAll('button').find((b) => b.classList.contains('rv-cell') && b.textContent === '10').dispatch('click');
     const slot = await until(() => dlg.querySelectorAll('button').find((b) => b.classList.contains('rv-slot') && !b.hasAttribute('disabled') && b.textContent === '10:00'));
@@ -92,6 +93,10 @@ async function bookRevisit(pid, doc = { id: PETROV, name: 'Петров Пётр
     const bookBtn = dlg.querySelectorAll('button').find((b) => /Записать/.test(b.textContent));
     bookBtn.dispatch('click');
     await bookBtn._pending;
+    // REPEAT_VISIT_V1 (ревью) — лист кабинета догружается своими запросами; тест не
+    // кончается раньше: иначе чтение после test.after (fetch уже настоящий) падает,
+    // и повтор загрузки (scheduleHydrateRetry) держит процесс живым.
+    await until(() => ctx.__hydrated && !ctx.__hydrating);
     return { ctx, container, dlg };
 }
 const tenthNextMonth = (hh) => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth() + 1, 10, hh, 0, 0, 0); };
@@ -126,13 +131,23 @@ test('REPEAT_VISIT_V1 (поправка 2): запись журнала дейс
 
 // REPEAT_VISIT_V1 — у врача нет видов консультаций (все сняты): строкой визита идёт
 // услуга каталога типа «Консультация» — прежнее окно писало визит без строки.
-test('REPEAT_VISIT_V1: врач без видов консультаций — строка визита — услуга каталога «Консультация», цена сервера', { timeout: 30000 }, async () => {
+// REPEAT_VISIT_V1 (ревью, M1) — только услуга, которую ЭТОТ врач оказывает
+// (users.service_rates — та же привязка исполнителя, что у каталога записи). Прежде
+// окно брало первую по алфавиту консультацию всей клиники: «Аа приём (чужой)» ниже
+// уходил бы строкой с ценой в каждый повторный визит. Ровно одна своя — она и выбрана.
+test('REPEAT_VISIT_V1: врач без видов консультаций — строка визита — его услуга каталога «Консультация», цена сервера', { timeout: 30000 }, async () => {
     TOASTS.length = 0; bookCalls.length = 0;
     DB.prepare("INSERT INTO patients (id, full_name) VALUES (79,'Пациент Каталог')").run();
+    DB.prepare("INSERT INTO services (id, name, price, type, duration_minutes, active) VALUES (40,'Аа приём (чужой)',90000,'consultation',15,1)").run();
     DB.prepare("INSERT INTO services (id, name, price, type, duration_minutes, active) VALUES (41,'Осмотр терапевта',70000,'consultation',40,1)").run();
+    DB.prepare('UPDATE users SET service_rates = ? WHERE id = 10').run(JSON.stringify([{ service_id: 41, percentage: 30 }]));
     DB.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available, is_free) VALUES (?, 6, 0, 0, 0)').run(10);
     try {
-        await bookRevisit(79, { id: 10, name: 'Иванов Иван' });   // у Петрова 10:00 уже занят первым тестом
+        let offered = null;
+        await bookRevisit(79, { id: 10, name: 'Иванов Иван' }, {   // у Петрова 10:00 уже занят первым тестом
+            beforeBook: (dlg) => { const sel = dlg.querySelector('select[data-rv-service]'); offered = sel && [sel.value, sel.querySelectorAll('option').map((o) => o.getAttribute('value'))]; },
+        });
+        assert.deepEqual(offered, ['s:41', ['s:41']], 'окно предлагает не только услугу этого врача');
         assert.equal(bookCalls.length, 1);
         assert.deepEqual([bookCalls[0].visit_kind, bookCalls[0].line, bookCalls[0].duration_minutes], ['repeat', { service_id: 41 }, 40],
             'окно не взяло услугу каталога и её длительность');
@@ -160,4 +175,52 @@ test('REPEAT_VISIT_V1: у пациента в этот день уже есть 
     assert.ok(!modals().some((m) => m.textContent.includes('Добавить в этот визит')), 'окно спросило «Добавить в этот визит»');
     assert.equal(DB.prepare('SELECT COUNT(*) n FROM visits WHERE patient_id = 78').get().n, visitsBefore, 'появился второй визит');
     assert.equal(DB.prepare('SELECT COUNT(*) n FROM visit_services vs JOIN visits v ON v.id = vs.visit_id WHERE v.patient_id = 78').get().n, 0);
+});
+
+// REPEAT_VISIT_V1 (ревью, M1) — СВОИХ УСЛУГ НЕСКОЛЬКО ИЛИ НИ ОДНОЙ: строку выбирает врач.
+// Выбрано «— без услуги —», и визит записывается без строки, как до 3.21: окно не
+// угадывает, какую из услуг поставить в счёт. Неактивная услуга врача и чужие
+// консультации клиники не предлагаются вовсе.
+const addDoctor = (id, login, name) => {
+    addUser.run(id, login, hashPassword('password1'), name, 'doctor', 1, WEEK);
+    DB.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available, is_free) VALUES (?, 6, 0, 0, 0)').run(id);   // видов консультаций нет
+};
+const serviceOptions = (dlg) => {
+    const sel = dlg.querySelector('select[data-rv-service]');
+    return sel && [sel.value, sel.querySelectorAll('option').map((o) => [o.getAttribute('value'), o.textContent])];
+};
+
+test('REPEAT_VISIT_V1 (ревью, M1): своих услуг две — выбрано «без услуги», чужих и неактивных нет; запись — без строки', { timeout: 30000 }, async () => {
+    TOASTS.length = 0; bookCalls.length = 0;
+    addDoctor(12, 'doc3', 'Сидоров Сидор');
+    DB.prepare("INSERT INTO patients (id, full_name) VALUES (80,'Пациент Две Услуги')").run();
+    DB.prepare("INSERT INTO services (id, name, price, type, duration_minutes, active) VALUES (51,'Приём кардиолога',120000,'consultation',30,1)").run();
+    DB.prepare("INSERT INTO services (id, name, price, type, duration_minutes, active) VALUES (52,'Эхо-разбор',80000,'consultation',20,1)").run();
+    DB.prepare("INSERT INTO services (id, name, price, type, duration_minutes, active) VALUES (53,'Старый приём',50000,'consultation',20,0)").run();
+    DB.prepare('UPDATE users SET service_rates = ? WHERE id = 12').run(JSON.stringify([{ service_id: 52 }, { service_id: 51 }, { service_id: 53 }]));
+    let offered = null;
+    await bookRevisit(80, { id: 12, name: 'Сидоров Сидор' }, { beforeBook: (dlg) => { offered = serviceOptions(dlg); } });
+    assert.deepEqual(offered, ['', [['', '— без услуги —'], ['s:51', 'Приём кардиолога'], ['s:52', 'Эхо-разбор']]],
+        'окно предлагает не свои услуги врача или выбрало услугу само');
+    assert.equal(bookCalls.length, 1);
+    assert.equal(bookCalls[0].line, undefined, 'строка ушла без выбора врача');
+    assert.equal(bookCalls[0].visit_kind, 'repeat');
+    const v = DB.prepare('SELECT id, visit_kind FROM visits WHERE patient_id = 80').all();
+    assert.deepEqual(v.map((r) => r.visit_kind), ['repeat']);
+    assert.equal(DB.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(v[0].id).n, 0, 'в визит попала строка с ценой');
+    assert.ok(TOASTS.some((t) => t.includes('Пациент записан на повторный визит')));
+});
+
+test('REPEAT_VISIT_V1 (ревью, M1): врач не оказывает ни одной услуги — только «без услуги», хотя консультаций в клинике много; запись — без строки', { timeout: 30000 }, async () => {
+    TOASTS.length = 0; bookCalls.length = 0;
+    addDoctor(13, 'doc4', 'Каримов Карим');
+    DB.prepare("INSERT INTO patients (id, full_name) VALUES (81,'Пациент Без Услуг')").run();
+    let offered = null;
+    await bookRevisit(81, { id: 13, name: 'Каримов Карим' }, { beforeBook: (dlg) => { offered = serviceOptions(dlg); } });
+    assert.deepEqual(offered, ['', [['', '— без услуги —']]], 'окно предлагает чужие консультации клиники');
+    assert.equal(bookCalls.length, 1);
+    assert.equal(bookCalls[0].line, undefined);
+    const v = DB.prepare('SELECT id FROM visits WHERE patient_id = 81').get();
+    assert.ok(v, 'визит не записан');
+    assert.equal(DB.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(v.id).n, 0);
 });
