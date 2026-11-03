@@ -153,7 +153,12 @@ test('CRM_LINK_ALL_V1 P-4: единственная запись карточк�
 test('CRM_LINK_ALL_V1 P-5 (ревью E1): пациент уже здесь и заплатил; мастер добавляет услугу — давняя карточка становится «Пришёл», а не «Записан»', async () => {
   const t = await startCrmApp();
   try {
-    const vid = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'scheduled', 2)").run(new Date(Date.now() - 2 * 3600e3).toISOString()).lastInsertRowid);
+    // CRM_LINK_ALL_V1 (ревью, остаток 11) — визит «два часа назад» с 00:00 до 02:00 по местному — вчерашний, и
+    // ensure_visit честно заводил новый визит дня: тест падал по ночам. Время — сегодняшнее
+    // местное: два часа назад, но не раньше 00:01 сегодня.
+    const today0001 = new Date(); today0001.setHours(0, 1, 0, 0);
+    const earlierToday = new Date(Math.max(today0001.getTime(), Date.now() - 2 * 3600e3)).toISOString();
+    const vid = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'scheduled', 2)").run(earlierToday).lastInsertRowid);
     const vs = Number(t.db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, 30, 10, 1, 100000, 100000, 'added', 2)").run(vid).lastInsertRowid);
     const inv = await t.rpc('create_invoice_for_visit', 'kassa', { visit_id: vid, visit_service_ids: [vs], discount_amount: 0, payer_id: null });
     assert.equal(inv.status, 200, inv.text);
