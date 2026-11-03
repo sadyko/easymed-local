@@ -13456,4 +13456,10 @@ export const STRINGS = {
   "Направления врача пациента": {"en":"Patient's doctor referrals","ru":"Направления врача пациента","uz":"Bemorning shifokor yo‘llanmalari"},   // DOCTOR_REFERRAL_DESK_V1
   "Рекомендация врача — в визит": {"en":"Doctor's recommendation added to the visit","ru":"Рекомендация врача — в визит","uz":"Shifokor tavsiyasi — tashrifga"},   // DOCTOR_REFERRAL_DESK_V1
   "Метки «от врача» в календаре": {"en":"“From doctor” marks in the calendar","ru":"Метки «от врача» в календаре","uz":"Kalendardagi «shifokordan» belgilari"},   // DOCTOR_REFERRAL_DESK_V1
+  // DOCTOR_REFERRAL_DESK_V1 — подписи «Направлений врача» (public/js/admin/doctor-orders.js)
+  "оплачено, счёт № {no}": {"en":"paid, invoice No. {no}","ru":"оплачено, счёт № {no}","uz":"to‘langan, hisob № {no}"},   // DOCTOR_REFERRAL_DESK_V1
+  "ждёт оплаты в кассе, счёт № {no}": {"en":"awaiting payment at the cash desk, invoice No. {no}","ru":"ждёт оплаты в кассе, счёт № {no}","uz":"kassada to‘lov kutilmoqda, hisob № {no}"},   // DOCTOR_REFERRAL_DESK_V1
+  "на {day}": {"en":"for {day}","ru":"на {day}","uz":"{day} kuniga"},   // DOCTOR_REFERRAL_DESK_V1
+  "сегодня — к оформлению": {"en":"today — ready to register","ru":"сегодня — к оформлению","uz":"bugun — rasmiylashtirishga tayyor"},   // DOCTOR_REFERRAL_DESK_V1
+  "Бонус: {names}": {"en":"Bonus: {names}","ru":"Бонус: {names}","uz":"Bonus: {names}"},   // DOCTOR_REFERRAL_DESK_V1
 };
