@@ -968,10 +968,11 @@ export function compileUpdateTargets(desc, user, ctx = {}, columns = ['id']) {
   const table = validateTable(desc.table);
   if (!Array.isArray(desc.filters) || desc.filters.length === 0) throw new CompileError(NO_TARGET_MSG, 400);
   const cols = (Array.isArray(columns) ? columns : []).map((c) => {
-    if (typeof c !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(c)) throw new CompileError('bad column', 400);
+    // Колонки задаёт код сервера, не запрос; и всё же — только колонки чтения реестра.
+    if (typeof c !== 'string' || !readableColumns(table).includes(c)) throw new CompileError('unknown column', 400);
     return `"${table}"."${c}"`;
   });
-  if (!cols.length) throw new CompileError('bad column', 400);
+  if (!cols.length) throw new CompileError('unknown column', 400);
   const { where, params } = updateTargetWhere(desc, table, user, db);
   return { sql: `SELECT ${cols.join(', ')} FROM "${table}" WHERE ${where}`, params };
 }
