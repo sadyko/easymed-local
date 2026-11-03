@@ -74,6 +74,7 @@ import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';   // 
 // существует дважды — здесь и выгрузкой в reports-export.js, — и две копии
 // правила «какая ставка применяется» означали бы две разные суммы к выплате.
 import { resolveReferralRate, rewardForLine, referralGroupOf } from '../../../public/js/shared/referral-reward.js';
+import { lineBeneficiaries } from '../domain/line-referral.js';   // REFERRAL_LINE_V1 — кому платить за строку (одно правило с окном регистрации)
 // REPORTS_V2 — группа услуги (одна из пяти) подписью раздела каталога: тот же
 // модуль, что раскладывает каталог в мастере записи.
 import { categoryOf, CAT_ORDER } from '../../../public/js/shared/service-categories.js';
@@ -2503,67 +2504,124 @@ function referralPayFactor(r) {
   return r.status === 'paid' ? 1 : 0;
 }
 
+// REFERRAL_LINE_V1 — у счёта есть строка визита со своим источником. Условие — на СЧЁТ i:
+// выборка счетов itemDoctorScope (WITH sc_inv) не знает алиаса строки счёта ii; какая
+// именно строка счёта — решает цикл ниже (lineSourcesOf).
+const LINE_SOURCE_EXISTS_SQL = (cond = null) => `EXISTS (SELECT 1 FROM invoice_items lxi
+     JOIN visit_services lx ON lx.invoice_item_id = lxi.id${cond ? `
+     JOIN referral_sources lrs ON lrs.id = lx.referred_by_source_id` : ''}
+    WHERE lxi.invoice_id = i.id AND lx.referred_by_source_id IS NOT NULL${cond ? ' AND ' + cond : ''})`;
+
+// REFERRAL_LINE_V1 — источник строки визита по строке счёта: Map invoice_item_id →
+// { source_id, performer }. Нет ни одной строки с источником — пустая карта без прохода.
+function lineSourcesOf(db, rows) {
+  const out = new Map();
+  if (!rows.length) return out;
+  if (!db.prepare('SELECT 1 FROM visit_services WHERE referred_by_source_id IS NOT NULL LIMIT 1').get()) return out;
+  const ids = [...new Set(rows.map((r) => Number(r.invoice_item_id)).filter(Number.isInteger))];
+  for (let k = 0; k < ids.length; k += 500) {
+    const part = ids.slice(k, k + 500);
+    for (const x of db.prepare(`SELECT invoice_item_id, MIN(referred_by_source_id) AS source_id, MIN(doctor_id) AS performer
+                                  FROM visit_services
+                                 WHERE referred_by_source_id IS NOT NULL AND invoice_item_id IN (${part.map(() => '?').join(',')})
+                                 GROUP BY invoice_item_id`).all(...part)) {
+      out.set(Number(x.invoice_item_id), { source_id: Number(x.source_id), performer: x.performer == null ? null : Number(x.performer) });
+    }
+  }
+  return out;
+}
+
 /**
  * Строки счетов, пришедшие по направлению, с посчитанным вознаграждением.
  * @param {{doctorId?: number}} [opts] — только направления этого сотрудника
  *   (его источник, referral_sources.doctor_id) — для кабинета врача.
+ *
+ * REFERRAL_LINE_V1 (решение владельца 2026-11-02 — «обоим») — у строки счёта получателей
+ * может быть ДВА: источник визита/пациента (как прежде) и источник САМОЙ строки визита
+ * (visit_services.referred_by_source_id: врач направил из кабинета, «Кто направил» стойки),
+ * если он другой и строка не своя для его врача. Кому — lineBeneficiaries
+ * (domain/line-referral.js), то же правило, что у окна регистрации. Каждый получатель —
+ * своей строкой со своей ставкой (referral_via: 'visit' | 'line'); ключ строки в записи
+ * закрытого месяца уже «строка счёта | получатель», поэтому закрытые месяцы не двигаются,
+ * а прошлые строки (до мигр. 270) источника строки не имеют. Возвращённая строка («Вернуть
+ * услугу» удаляет позицию счёта, «вернуть и выставить новую» уводит её к новой строке) — без
+ * позиции счёта и вознаграждения не даёт никому.
  */
 function referralLines(db, args, ctx, { doctorId = null } = {}) {
   const scope = referrerScope(args);
   const sources = new Map(db.prepare(
-    'SELECT id, name, category_id, reward_mode, own_percent, own_rates, doctor_id FROM referral_sources').all()
+    'SELECT id, name, code, category_id, reward_mode, own_percent, own_rates, doctor_id FROM referral_sources').all()
     .map((r) => [r.id, r]));
   const categories = new Map(db.prepare(
-    'SELECT id, name, standard_percent, rates FROM referral_source_categories').all()
+    'SELECT id, name, standard_percent, rates, is_internal FROM referral_source_categories').all()
     .map((r) => [r.id, r]));
   const out = [];
-  // Кабинет врача — только строки его источника, отбором в SQL.
-  const extra = doctorId != null ? { clause: ' AND rs.doctor_id = ?', params: [Number(doctorId)] } : { clause: '', params: [] };
-  // V3120_PERF — строки без источника направления и строки госпитализации
-  // цикл ниже пропускает первыми же двумя проверками; тот же отбор в SQL, чтобы
-  // деньги (доля врача, скидка, налог) не считались для строк, которые
-  // выбрасываются. `!r.referral` у текстового имени — NULL или пустая строка.
-  if (PUSH_DOWN) extra.clause += " AND COALESCE(rs.name, '') <> '' AND i.admission_id IS NULL";
-  for (const r of itemRowsQuery(db, args, ctx, extra)) {
-    if (!r.referral) continue;
+  // Кабинет врача — только строки его источника, отбором в SQL (REPORTS_V2, ревью I7):
+  // источник визита ИЛИ источник строки визита этого счёта (REFERRAL_LINE_V1).
+  const extra = doctorId != null
+    ? { clause: ` AND (rs.doctor_id = ? OR ${LINE_SOURCE_EXISTS_SQL('lrs.doctor_id = ?')})`, params: [Number(doctorId), Number(doctorId)] }
+    : { clause: '', params: [] };
+  // V3120_PERF — строки без источника направления (ни у визита/пациента, ни у строки
+  // визита — REFERRAL_LINE_V1) и строки госпитализации цикл ниже пропускает первыми же
+  // проверками; тот же отбор в SQL, чтобы деньги не считались для выбрасываемых строк.
+  if (PUSH_DOWN) extra.clause += ` AND (COALESCE(rs.name, '') <> '' OR ${LINE_SOURCE_EXISTS_SQL()}) AND i.admission_id IS NULL`;
+  const rows = itemRowsQuery(db, args, ctx, extra);
+  const lineSrc = lineSourcesOf(db, rows);
+  for (const r of rows) {
     // INPATIENT_BONUS_V1 — строка счёта ГОСПИТАЛИЗАЦИИ по обычным ставкам групп
     // больше не платится никому: у стационара своё вознаграждение
     // (inpatientReferralLines ниже) — только у партнёра с переключателем.
     if (r.admission_id != null) continue;
-    const internal = isInternalReferral(r);
-    if (scope === 'internal' && !internal) continue;
-    if (scope === 'external' && internal) continue;
-    if (doctorId != null && Number(r.referral_doctor_id) !== Number(doctorId)) continue;
-    const src = r.referral_source_id != null ? sources.get(r.referral_source_id) : null;
-    const cat = src && src.category_id != null ? categories.get(src.category_id) : null;
-    // GROUPS_FIVE_REFERRAL_V1 — ставка по ГРУППЕ услуги (services.type, одна
-    // из пяти), а не по строке справочника типов. Строка без услуги — без группы.
-    const serviceGroup = r.service_id != null ? referralGroupOf(r.service_group) : null;
-    const rate = resolveReferralRate({ source: src, category: cat, serviceGroup });
-    // V3120_FIX — частичный возврат уменьшает вознаграждение пропорционально.
-    const factor = referralPayFactor(r);
-    const paid = factor > 0;
-    // PAY_GOODS_NONE_V1 (владелец, 27.09) — «на товары процента нет»: строка
-    // счёта без услуги (медикамент, расходник) вознаграждения ВРАЧУ-направившему
-    // не даёт. Внешнему партнёру — по его ставкам, как прежде.
-    // FINAL_MONEY_FIX_V1 (C1) — консультация (строка без услуги с видом
-    // приёма) — не товар: её вознаграждение врачу-направившему возвращено.
-    const goodsToDoctor = r.referral_doctor_id != null && Number(r.is_goods) === 1;
-    out.push({
-      ...r,
-      internal,
-      category_name: (cat && cat.name) || r.referral_category || '',
-      mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
-      rate,
-      paid,
-      pay_factor: factor,
-      goods_to_doctor: goodsToDoctor,
-      after_discount: r.amount - r.discount,
-      // V3120_FINAL (C1) — фикс за услугу уменьшается скидкой после продажи (процент — сам).
-      reward: paid && !goodsToDoctor ? rewardForLine(rate, { amount: r.amount, discount: r.discount, qty: r.qty }) * factor * fixKeep(rate, r) : 0,
-      where: 'out',
-      beneficiary_doctor_id: r.referral_doctor_id ?? null,
-    });
+    const ls = lineSrc.get(Number(r.invoice_item_id)) || null;
+    const lsRow = ls ? (sources.get(ls.source_id) || null) : null;
+    const bens = lineBeneficiaries(
+      r.referral ? { id: r.referral_source_id, doctor_id: r.referral_doctor_id ?? null } : null,
+      lsRow ? { id: lsRow.id, doctor_id: lsRow.doctor_id ?? null } : null,
+      ls ? ls.performer : null);
+    for (const b of bens) {
+      const lcat = b.via === 'line' && lsRow.category_id != null ? (categories.get(lsRow.category_id) || null) : null;
+      const row = b.via === 'visit' ? r : {
+        ...r,
+        referral: lsRow.name, referral_source_id: lsRow.id, referral_code: lsRow.code || '',
+        referral_category: (lcat && lcat.name) || '', referral_internal: lcat ? lcat.is_internal : 0,
+        referral_doctor_id: lsRow.doctor_id ?? null,
+      };
+      const internal = isInternalReferral(row);
+      if (scope === 'internal' && !internal) continue;
+      if (scope === 'external' && internal) continue;
+      if (doctorId != null && Number(row.referral_doctor_id) !== Number(doctorId)) continue;
+      const src = row.referral_source_id != null ? sources.get(row.referral_source_id) : null;
+      const cat = src && src.category_id != null ? categories.get(src.category_id) : null;
+      // GROUPS_FIVE_REFERRAL_V1 — ставка по ГРУППЕ услуги (services.type, одна
+      // из пяти), а не по строке справочника типов. Строка без услуги — без группы.
+      const serviceGroup = row.service_id != null ? referralGroupOf(row.service_group) : null;
+      const rate = resolveReferralRate({ source: src, category: cat, serviceGroup });
+      // V3120_FIX — частичный возврат уменьшает вознаграждение пропорционально.
+      const factor = referralPayFactor(row);
+      const paid = factor > 0;
+      // PAY_GOODS_NONE_V1 (владелец, 27.09) — «на товары процента нет»: строка
+      // счёта без услуги (медикамент, расходник) вознаграждения ВРАЧУ-направившему
+      // не даёт. Внешнему партнёру — по его ставкам, как прежде.
+      // FINAL_MONEY_FIX_V1 (C1) — консультация (строка без услуги с видом
+      // приёма) — не товар: её вознаграждение врачу-направившему возвращено.
+      const goodsToDoctor = row.referral_doctor_id != null && Number(row.is_goods) === 1;
+      out.push({
+        ...row,
+        internal,
+        category_name: (cat && cat.name) || row.referral_category || '',
+        mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
+        rate,
+        paid,
+        pay_factor: factor,
+        goods_to_doctor: goodsToDoctor,
+        after_discount: row.amount - row.discount,
+        // V3120_FINAL (C1) — фикс за услугу уменьшается скидкой после продажи (процент — сам).
+        reward: paid && !goodsToDoctor ? rewardForLine(rate, { amount: row.amount, discount: row.discount, qty: row.qty }) * factor * fixKeep(rate, row) : 0,
+        where: 'out',
+        beneficiary_doctor_id: row.referral_doctor_id ?? null,
+        referral_via: b.via,   // REFERRAL_LINE_V1 — 'visit' (источник визита/пациента) | 'line' (источник строки)
+      });
+    }
   }
   return out;
 }
@@ -2849,8 +2907,11 @@ export function referralReportLines(db, args, ctx) {   // REFERRALS_CRM_V1 — �
 // INPATIENT_BONUS_V1 — правило стационара словами, под обоими отчётами.
 const REFERRAL_INPATIENT_NOTE = 'Стационар (строки «Где: Стационар») — отдельное вознаграждение: партнёру — только при включённом «Вознаграждении за стационар» в его карточке, сотруднику — по вкладке «Стационар» его карточки, если он выбран в «Кто направил» (источник сотрудника) или записан направившим врачом заявки (лечащий врач за свою госпитализацию не получает, если его не записали направившим); один сотрудник — один раз. Процент — от оплаченных строк счёта госпитализации после скидки: услуги и койко-дни, без медикаментов и расходников; фиксированная сумма — один раз за госпитализацию, с первого оплаченного счёта. После частичного возврата по оплаченному счёту и процент, и фикс уменьшаются в той же доле, в какой вернули деньги; счёт, деньги по которому вернули целиком, не приносит ничего, и фикс переходит к следующему оплаченному счёту госпитализации (и может попасть в другой месяц). Обычные ставки групп к строкам стационара не применяются. Кто направил — из заявки на госпитализацию, иначе из карточки пациента.';
 
+// REFERRAL_LINE_V1 — правило «обоим» словами (только когда такие строки есть в отчёте).
+const REFERRAL_LINE_NOTE = 'Если врач направил на услугу из кабинета, а у визита или пациента уже есть свой направивший, вознаграждение за эту строку получают оба — каждый по своей ставке; один и тот же источник за строку получает один раз; за свою услугу врач вознаграждения не получает.';
 function referralNotes(db, lines) {
   const notes = [REFERRAL_BASE_NOTE];
+  if (lines.some((r) => r.referral_via === 'line')) notes.push(REFERRAL_LINE_NOTE);   // REFERRAL_LINE_V1
   if (lines.some((r) => r.where !== 'in') && !anyReferralRate(db)) notes.push(REFERRAL_ZERO_NOTE);
   if (lines.some((r) => r.where === 'in')) notes.push(REFERRAL_INPATIENT_NOTE);
   return notes;

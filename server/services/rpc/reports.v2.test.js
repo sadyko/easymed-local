@@ -502,7 +502,9 @@ test('I7: кабинет отбирает строки своего источн
   db.prepare = prepare;
   const q = seen.find((x) => x.includes('FROM invoice_items ii') && x.includes('referral_sources rs'));
   assert.ok(q, 'запрос строк не найден');
-  assert.match(q, /AND rs\.doctor_id = \?/);
+  // REFERRAL_LINE_V1 — источник визита ИЛИ источник строки визита этого счёта, оба в SQL.
+  assert.match(q, /AND \(rs\.doctor_id = \? OR EXISTS/);
+  assert.match(q, /lrs\.doctor_id = \?/);
 });
 
 // PAY_BASIS_PERFORMED_V1 — было «доли врача — нет» (27 000 без INV-3). Теперь
