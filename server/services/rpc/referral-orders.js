@@ -109,6 +109,9 @@ export function patientReferralOrders(db, args, user) {
        AND ${localDate('v.visit_date')} >= ?
        AND vs.clinic_item_id IS NULL
        AND vs.status NOT IN ('completed', 'cancelled', 'removed')
+       -- Без счёта — только 'added', как строки «из записи» (booked-rows.js): строку без счёта,
+       -- по которой уже идёт работа, выставляет касса («Ждут счёта»), а не регистратура.
+       AND (vs.invoice_item_id IS NOT NULL OR vs.status = 'added')
        AND (i.id IS NULL OR i.status NOT IN ('void', 'refunded'))
        AND ${NOT_REFUNDED_SQL}
        AND ${DOCTOR_ORDER_SQL}

@@ -94,6 +94,19 @@ test('К5: возвращённая строка не показывается; 
   } finally { t.close(); }
 });
 
+// Строка без счёта, по которой уже идёт работа («в очереди», «взят материал»), — не «к
+// оформлению»: так же, как строки «из записи» (booked-rows.js — только 'added'). Её выставляет
+// касса из «Ждут счёта»; регистратура второй раз её не берёт.
+test('строка без счёта, по которой уже идёт работа, в «Направлениях врача» не показывается', async () => {
+  const { t, A, B, C } = await fixture();
+  try {
+    t.db.prepare("UPDATE visit_services SET status = 'queued' WHERE id = ?").run(A);
+    t.db.prepare("UPDATE visit_services SET status = 'in_progress' WHERE id = ?").run(B);
+    const d = (await t.rpc('patient_referral_orders', 'reg', { patient_id: 77 })).json.data;
+    assert.deepEqual(d.lines.map((l) => l.visit_service_id), [B, C], 'строка без счёта «в очереди» осталась «к оформлению»');
+  } finally { t.close(); }
+});
+
 // Администратор-врач у стойки (is_doctor = 1, роль «admin») записывает пациента к другому
 // врачу — это работа стойки, а не направление врача: «от врача» здесь было бы неправдой.
 test('строка администратора-врача у стойки — не «направление врача»', async () => {
