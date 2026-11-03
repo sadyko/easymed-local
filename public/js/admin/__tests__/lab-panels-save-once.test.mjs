@@ -17,7 +17,7 @@
 //   • «Удалить» панель с показателями работает и тоже гасит кнопки.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ui, body, toasts, startApp, slow, holdRpc, settle, tick, walk, textOf, byTag, buttonByText } from './lab-real-app-harness.mjs';
+import { ui, body, toasts, confirms, answerConfirm, startApp, slow, holdRpc, settle, tick, walk, textOf, byTag, buttonByText } from './lab-real-app-harness.mjs';
 
 const { setFullAccess } = await import('../permissions.js');
 const { mountLabPanels } = await import('../views/lab-panels.js');
@@ -159,6 +159,28 @@ test('«Удалить» панель с показателями: панель 
   assert.equal(app.db.prepare('SELECT COUNT(*) n FROM lab_panels').get().n, 0);
   assert.equal(app.db.prepare('SELECT COUNT(*) n FROM lab_panel_analytes').get().n, 0);
   assert.ok(!toasts.some((m) => /Не удалось удалить/.test(m)), JSON.stringify(toasts));
+});
+
+// Ревью L6 — «Удалить» оставлял открытые заказы услуги без строк показателей (лист ввода —
+// одна строка с названием услуги, прибор не находит панель), а вопрос об этом молчал.
+test('L6: вопрос «Удалить» называет, сколько открытых заказов ждут эту услугу; «Отмена» — ничего не удалено', async (t) => {
+  const app = await mount((db) => {
+    seedPanel(db);
+    db.prepare("INSERT INTO patients (id, full_name) VALUES (77, 'Тест')").run();
+    db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (10, 77, date('now'), 'arrived')").run();
+    const vs = db.prepare('INSERT INTO visit_services (visit_id, service_id, status) VALUES (10, 50, ?)');
+    for (const s of ['queued', 'collected', 'completed']) vs.run(s);   // выданный — не открытый
+  });
+  t.after(() => { answerConfirm(true); app.close(); });
+  answerConfirm(false);
+  confirms.length = 0;
+  buttonByText(app.root, 'Удалить').click();
+  assert.ok(await until(() => confirms.length === 1), 'вопрос задан');
+  assert.ok(confirms[0].startsWith('Удалить панель «Анализ гинекологического мазка» и её показатели?'), confirms[0]);
+  assert.ok(confirms[0].includes('Эту услугу ждут открытые заказы: 2.'), confirms[0]);
+  await settle(4);
+  assert.equal(app.db.prepare('SELECT COUNT(*) n FROM lab_panels').get().n, 1, '«Отмена» — панель на месте');
+  assert.ok(!saveBtn(app.root).disabled, 'кнопки снова активны');
 });
 
 // Ревью M1 (мигр. 272) — панель, списанная «Удалить» главного здания с филиалами, на экране не видна.

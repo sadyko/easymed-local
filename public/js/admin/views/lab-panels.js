@@ -1285,9 +1285,26 @@ export async function mountLabPanels(container) {
     // lab_panels, внешний ключ показателей отказывал всегда («Связанная запись…»),
     // и сломанную панель нельзя было ни убрать, ни заменить новой на ту же услугу.
     // Результаты анализов на панель не ссылаются и остаются как были.
+    // Ревью L6 — открытые заказы услуги после удаления теряют строки показателей
+    // (лист ввода покажет одну строку с названием услуги, прибор не найдёт
+    // панель) — вопрос называет, сколько их. Только число; не прочиталось — 0.
+    async function openOrdersOf(p) {
+        if (p.service_id == null) return 0;
+        try {
+            const { count, error } = await supabase.from('visit_services').select('id', { count: 'exact', head: true })
+                .eq('service_id', p.service_id).in('status', ['added', 'queued', 'collected', 'in_progress', 'resulted']);
+            return !error && Number.isFinite(Number(count)) ? Number(count) : 0;
+        } catch (_) { return 0; }
+    }
+
     async function removePanel(p) {
-        if (!p.id || !window.confirm(trf('Удалить панель «{name}» и её показатели?', { name: p.name }))) return;
+        if (!p.id) return;
+        // Кнопки гаснут сразу (panelWrite) — и на время вопроса о заказах.
         await panelWrite(async () => {
+            const open = await openOrdersOf(p);
+            const ask = trf('Удалить панель «{name}» и её показатели?', { name: p.name })
+                + (open > 0 ? '\n\n' + trf('Эту услугу ждут открытые заказы: {n}. В листе «Внести результаты» у них останется одна строка с названием услуги, пока на услугу не заведут новую панель.', { n: open }) : '');
+            if (!window.confirm(ask)) return;
             try {
                 const { error } = await supabase.rpc('lab_panel_delete', { id: p.id });
                 if (error) throw error;
