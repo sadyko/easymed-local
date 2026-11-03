@@ -1014,19 +1014,19 @@ async function attachRecommendation(state, rec, chosenDoctorId, onReload) {
     // DOCTOR_REFERRAL_DESK_V1 — рекомендацию закрывает СЕРВЕР: связывает её со строкой
     // (recommended_services.visit_service_id) и ставит строке направившего — включённый
     // внутренний источник рекомендовавшего врача (REFERRAL_LINE_V1), если строка не его.
-    // Отказ — прежняя правка статуса, чтобы рекомендация не осталась «ожидающей» и её не
-    // добавили второй раз.
+    // Ревью U10 MEDIUM-2 — отказ сервера больше НЕ закрывает рекомендацию правкой статуса: так
+    // она пропадала из «Внутренних врачей» без строки, а у строки оставался направивший того,
+    // кто её вставил. Рекомендация остаётся открытой (повтор той же услуги в визите сервер не
+    // пропустит — DUP_STOP_V1; ненужную убирают корзиной у рекомендации), регистратор видит
+    // предупреждение со словами сервера — как в мастере визита и быстрой регистрации.
     const { error: attErr } = await supabase.rpc('referral_recommendation_attach',
         { recommendation_id: rec.id, visit_service_id: insRow && insRow.id });
     if (attErr) {
         console.warn('[recommendation attach]', attErr.message || attErr);
-        const { error: upErr } = await supabase.from('recommended_services')
-            .update({ status: 'done', closed_at: new Date().toISOString() })
-            .eq('id', rec.id);
-        if (upErr) console.warn('[recommendation status]', upErr.message);
+        toast(trf('Услуга добавлена в визит, но рекомендация врача не закрыта: {msg}', { msg: attErr.message || String(attErr) }), 'warn');
+    } else {
+        toast('Added to visit.');
     }
-
-    toast('Added to visit.');
     onReload();
 }
 

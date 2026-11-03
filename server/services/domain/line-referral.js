@@ -23,7 +23,9 @@
 // КОМУ ВОЗНАГРАЖДЕНИЕ — lineBeneficiaries, одно правило на отчёты (rpc/reports.js
 // referralLines) и окно регистрации (rpc/referral-orders.js «кому бонус»): источник
 // визита/пациента — как прежде; источник строки — ЕЩЁ И ЕМУ, если он другой (не тот же
-// источник и не тот же сотрудник) и строка не своя для врача источника строки.
+// источник и не тот же сотрудник) и строка не своя для врача источника строки. Ревью U10
+// MEDIUM-4: внешний партнёр строки к внешнему партнёру визита не добавляется (вариант «б»,
+// EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE).
 import { hasAnyRole } from '../roles.js';
 
 export class LineReferralError extends Error {
@@ -80,6 +82,38 @@ export function lineReferralStamp(db, user, row) {
 }
 
 /**
+ * REFERRAL_LINE_V1 · ревью U10 (HIGH-1) — КТО РЕКОМЕНДОВАЛ (recommended_services.recommended_by)
+ * ставит СЕРВЕР: штамп реестра `resolve: 'recommendation_author'` (db/schema-registry.js).
+ *
+ * Рекомендация — доказательство направления: по ней referral_recommendation_attach ставит строке
+ * направившего, visit_set_doctor_referrer — визиту, «Внутренние врачи» считают направления. А
+ * recommended_by писал браузер: медсестра или стойка записывали рекомендацию «от врача №12», и
+ * бонус уходил врачу, который никого не направлял. Теперь:
+ *   • врач (is_doctor или роль врача / главного врача; администратор-врач — тоже: рекомендацию
+ *     пишут в кабинете, это работа врача, а не стойки) — он сам, присланное не читается;
+ *   • остальные — никто (NULL): своей рекомендацией они не называют врача. Имя для показа
+ *     (recommended_by_name) остаётся как есть — денег по нему не считают.
+ * Единственная дверь вставки на экранах — кабинет врача (service-workspace.js sendReferral), где
+ * recommended_by — врач открытой строки: у врача («Мои услуги» сужены до своих строк) это он сам.
+ * @returns {number|null}
+ */
+export function recommendationAuthorStamp(_db, user, _row) {
+  if (!user || !isDoctorActor(user)) return null;
+  return posInt(user.id);
+}
+
+// REFERRAL_LINE_V1 · ревью U10 MEDIUM-4 — ДВА ВНЕШНИХ ПАРТНЁРА НА ОДНОЙ СТРОКЕ.
+// «Кто направил» стойки ложится и в новую строку (U10a); если у визита (пациента) уже есть свой
+// внешний партнёр А, а стойка выбрала Б, строку оплачивали ОБОИМ. Решение владельца «обоим» — про
+// партнёра и врача; ответа владельца о двух партнёрах в записи нет — по умолчанию вариант «б»:
+// внешний источник строки к внешнему источнику визита НЕ добавляется, строка остаётся за А
+// (так было до 3.21). Врач строки по-прежнему получает своё сверху.
+//   false — вариант «б» (сейчас);  true — вариант «а» (платить обоим партнёрам).
+// Вариант «в» (Б вместо А) — не переключатель, а замена получателя в lineBeneficiaries ниже.
+// Тем же правилом считает и подпись «Бонус: …» окна регистрации (referral-orders.js).
+export const EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE = false;
+
+/**
  * Получатели вознаграждения за строку: [{ source, via: 'visit' | 'line' }].
  * @param {{id:number|null, doctor_id:number|null}|null} base — источник визита/пациента
  * @param {{id:number, doctor_id:number|null}|null} line — источник самой строки
@@ -89,6 +123,8 @@ export function lineBeneficiaries(base, line, performer) {
   const out = [];
   if (base) out.push({ source: base, via: 'visit' });
   if (!line) return out;
+  // MEDIUM-4, вариант «б» — см. EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE выше.
+  if (!EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE && base && base.doctor_id == null && line.doctor_id == null) return out;
   const sameSource = base && base.id != null && Number(base.id) === Number(line.id);
   const sameEmployee = base && base.doctor_id != null && line.doctor_id != null && Number(base.doctor_id) === Number(line.doctor_id);
   const ownLine = line.doctor_id != null && performer != null && Number(line.doctor_id) === Number(performer);

@@ -514,3 +514,12 @@ test('REFERRAL_LINE_V1: направивший строки читается, н
   assert.ok(!writableColumns('recommended_services', 'insert').includes('visit_service_id'));
   assert.ok(!writableColumns('recommended_services', 'update').includes('visit_service_id'));
 });
+
+// Ревью U10 HIGH-1 — кто рекомендовал, ставит сервер (врачу — он сам, остальным — никто):
+// присланный браузером recommended_by не пишется ни вставкой, ни правкой.
+test('REFERRAL_LINE_V1 (ревью HIGH-1): recommended_by рекомендации — штамп сервера, не колонка записи', () => {
+  assert.ok(readableColumns('recommended_services').includes('recommended_by'));
+  assert.ok(!writableColumns('recommended_services', 'insert').includes('recommended_by'), 'вставка recommended_by');
+  assert.ok(!writableColumns('recommended_services', 'update').includes('recommended_by'), 'правка recommended_by');
+  assert.deepEqual(REGISTRY.recommended_services.stamps.recommended_by, { on: 'insert', resolve: 'recommendation_author' });
+});

@@ -60,7 +60,9 @@ test('чтение: сегодня и вперёд, своё здание, со�
     assert.deepEqual([c.day, c.bill.state, c.doctor_name], [TOMORROW, 'none', 'Петров']);
     assert.deepEqual(a.bonus_to, ['Клиника Партнёр', 'Иванов']);
     assert.deepEqual(d.recommendations.map((x) => [x.recommendation_id, x.name, x.referrer_name, x.notes]), [[rec, 'ЭКГ', 'Иванов', 'к 9:00']]);
-    assert.deepEqual(d.recommendations[0].bonus_to, ['Клиника Партнёр', 'Иванов']);
+    // Ревью U10 LOW-7 — исполнитель рекомендации ещё не выбран: врач-рекомендатель получит бонус,
+    // только если услугу выполнит другой врач (своя строка — без бонуса), — это условие, а не факт.
+    assert.deepEqual([d.recommendations[0].bonus_to, d.recommendations[0].bonus_if_other], [['Клиника Партнёр'], 'Иванов']);
     assert.ok(!/reward|percent|own_rates|"rate"/.test(r.text), 'регистратору ушли суммы или ставки бонуса: ' + r.text);
     const bad = await t.rpc('patient_referral_orders', 'reg', { patient_id: 'x' });
     assert.equal(bad.status, 400);
@@ -144,9 +146,42 @@ test('«Добавить» рекомендацию: строка стойки �
     const twin = recInsert(t.db);
     assert.equal((await t.rpc('referral_recommendation_attach', 'reg', { recommendation_id: twin, visit_service_id: X })).status, 409);
     assert.equal(t.db.prepare('SELECT status FROM recommended_services WHERE id = ?').get(twin).status, 'pending');
-    // Врач привязывает только свою рекомендацию.
+    // Ревью U10 MEDIUM-2 — врач привязывает к СВОЕЙ строке и рекомендацию коллеги (написанную
+    // раньше строки): направивший строки — рекомендовавший; он же исполнитель — никто.
     const foreign = recInsert(t.db, { service: 50, by: 12, notes: '' });
-    assert.equal((await t.rpc('referral_recommendation_attach', 'doc', { recommendation_id: foreign, visit_service_id: C })).status, 403);
+    t.db.prepare("UPDATE recommended_services SET created_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(foreign);
+    assert.equal(t.db.prepare('SELECT referred_by_source_id s FROM visit_services WHERE id = ?').get(C).s, srcOf(t.db, 10), 'стенд: строку C завёл врач №10');
+    const own = await t.rpc('referral_recommendation_attach', 'doc', { recommendation_id: foreign, visit_service_id: C });
+    assert.equal(own.status, 200, own.text);
+    assert.equal(t.db.prepare('SELECT referred_by_source_id s FROM visit_services WHERE id = ?').get(C).s, null, 'исполнитель C — сам рекомендовавший');
+    // К строке, которую завёл другой сотрудник (стойка), врач рекомендацию не привязывает.
+    const deskLine = await t.dbq('reg', { table: 'visit_services', op: 'insert', values: { visit_id: 501, service_id: 61, quantity: 1, unit_price: 1, total: 1, status: 'added' } });
+    assert.equal(deskLine.status, 200, deskLine.text);
+    const holter = recInsert(t.db, { service: 61, by: 10, notes: '' });
+    t.db.prepare("UPDATE recommended_services SET created_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(holter);
+    assert.equal((await t.rpc('referral_recommendation_attach', 'doc', { recommendation_id: holter, visit_service_id: lastVs(t.db) })).status, 403);
+  } finally { t.close(); }
+});
+
+// Ревью U10 LOW-7 — «Бонус: …» у рекомендации — то, что заплатит расчёт: база — источник
+// сегодняшнего визита пациента (иначе карточки); врач-рекомендатель — условием «если выполняет
+// другой врач»; рекомендатель — сам источник визита — без условия (за визит ему платят всегда);
+// без своего включённого источника — его нет вовсе.
+test('LOW-7: «Бонус» рекомендации — источник сегодняшнего визита, рекомендатель — условием', async () => {
+  const { t } = await fixture();
+  try {
+    const bonusOf = async () => {
+      const d = (await t.rpc('patient_referral_orders', 'reg', { patient_id: 77 })).json.data;
+      return d.recommendations.map((r) => [r.bonus_to, r.bonus_if_other]);
+    };
+    t.db.prepare("INSERT INTO referral_sources (id, name) VALUES (902, 'Партнёр дня')").run();
+    t.db.prepare('UPDATE visits SET referral_source_id = 902 WHERE id = 500').run();
+    assert.deepEqual(await bonusOf(), [[['Партнёр дня'], 'Иванов']], 'база — карточка пациента, а не визит дня');
+    t.db.prepare('UPDATE visits SET referral_source_id = ? WHERE id = 500').run(srcOf(t.db, 10));
+    assert.deepEqual(await bonusOf(), [[['Иванов'], null]], 'рекомендатель — источник визита: бонус без условия');
+    t.db.prepare('UPDATE visits SET referral_source_id = NULL WHERE id = 500').run();
+    t.db.prepare('UPDATE referral_sources SET active = 0 WHERE doctor_id = 10').run();
+    assert.deepEqual(await bonusOf(), [[['Клиника Партнёр'], null]], 'выключенный источник рекомендателя назван');
   } finally { t.close(); }
 });
 

@@ -52,3 +52,15 @@ test('кому бонус — имена через запятую; без по�
   assert.equal(orderVsIds(null).size, 0);
   assert.equal(dmyOf('2026-11-03'), '03.11.2026');
 });
+
+// Ревью U10 LOW-7 — у рекомендации исполнитель ещё не выбран: врач-рекомендатель получит бонус,
+// только если услугу выполнит другой врач, — подпись говорит это условием.
+test('кому бонус у рекомендации: врач-рекомендатель — условием «если услугу выполняет другой врач»', () => {
+  assert.deepEqual(bonusText(['Клиника Х'], 'Иванов'),
+    { template: 'Бонус: {names}; {doctor} — если услугу выполняет другой врач', params: { names: 'Клиника Х', doctor: 'Иванов' } });
+  assert.deepEqual(bonusText([], 'Иванов'),
+    { template: 'Бонус: {doctor} — если услугу выполняет другой врач', params: { doctor: 'Иванов' } });
+  assert.deepEqual(bonusText(['Клиника Х'], null), { template: 'Бонус: {names}', params: { names: 'Клиника Х' } });
+  assert.deepEqual(bonusText(['Клиника Х'], '  '), { template: 'Бонус: {names}', params: { names: 'Клиника Х' } });
+  assert.equal(bonusText([], null), null);
+});

@@ -10,7 +10,7 @@ import { textColumns } from './schema-registry.js';   // CABINET_FIX_V1_TPL — 
 import { patientDataRefusal } from './patient-data-gate.js';   // V3120_FIX (M4)
 import { liftAllows } from './pay-visibility.js';
 import { withTemplate } from '../services/server-message.js';   // V3120_I18N
-import { lineReferralStamp } from '../services/domain/line-referral.js';   // REFERRAL_LINE_V1 — штамп «направивший строки»
+import { lineReferralStamp, recommendationAuthorStamp } from '../services/domain/line-referral.js';   // REFERRAL_LINE_V1 — штамп «направивший строки» · ревью U10 HIGH-1 — «кто рекомендовал»
 
 export class CompileError extends Error {
   constructor(message, status = 400) {
@@ -801,7 +801,8 @@ function sessionField(user, key) {
 // строке (а не номер сотрудника): { on: 'insert', resolve: '<имя>' }. null — колонка в
 // INSERT не попадает (SQL такой же, как без штампа). Отказ резолвера (e.status) — отказ
 // компилятора его словами (400).
-const STAMP_RESOLVERS = Object.freeze({ line_referral: lineReferralStamp });
+// Ревью U10 HIGH-1 — recommendation_author: кто рекомендовал (врачу — он сам, остальным — NULL).
+const STAMP_RESOLVERS = Object.freeze({ line_referral: lineReferralStamp, recommendation_author: recommendationAuthorStamp });
 function resolveStamp(name, db, user, row) {
   const fn = STAMP_RESOLVERS[name];
   if (typeof fn !== 'function') throw new Error('stamp resolver missing: ' + name);   // ошибка реестра, не запроса — 500

@@ -53,9 +53,18 @@ export function orderStateText(line, todayIso) {
     return { template: 'сегодня — к оформлению', params: {} };
 }
 
-/** Кому бонус за строку — имена (сумм окно не знает); без получателей — null. */
-export function bonusText(names) {
+/**
+ * Кому бонус за строку — имена (сумм окно не знает); без получателей — null.
+ * Ревью U10 LOW-7 — ifOther (bonus_if_other рекомендации): врач-рекомендатель получит бонус,
+ * только если услугу выполнит другой врач (исполнитель ещё не выбран) — названо условием.
+ */
+export function bonusText(names, ifOther = null) {
     const list = (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n.trim());
+    const doctor = typeof ifOther === 'string' && ifOther.trim() ? ifOther.trim() : null;
+    if (doctor && list.length) {
+        return { template: 'Бонус: {names}; {doctor} — если услугу выполняет другой врач', params: { names: list.join(', '), doctor } };
+    }
+    if (doctor) return { template: 'Бонус: {doctor} — если услугу выполняет другой врач', params: { doctor } };
     return list.length ? { template: 'Бонус: {names}', params: { names: list.join(', ') } } : null;
 }
 

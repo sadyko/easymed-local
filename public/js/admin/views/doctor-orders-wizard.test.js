@@ -69,3 +69,21 @@ test('окно визита: повтор рекомендации — прав�
   assert.match(att, /const pre = await precheckOrders\(\{ visitId: state\.visit\.id, lines: \[/);
   assert.ok(!/state\.services \|\| \[\]\)\.some\(s => s\.service_id === rec\.service_id\)/.test(att), 'вставка гасит по любой строке той же услуги');
 });
+
+// Ревью U10 MEDIUM-2 — отказ привязки: окно визита не закрывает рекомендацию правкой статуса
+// (молча, без строки и с направившим того, кто вставил), а предупреждает; рекомендация открыта.
+test('окно визита: отказ привязки — предупреждение, рекомендация не закрывается правкой статуса', () => {
+  const att = slice(modal, 'async function attachRecommendation(', 4500);
+  const tail = att.slice(att.indexOf("supabase.rpc('referral_recommendation_attach'"));
+  assert.ok(!/from\('recommended_services'\)[\s\S]*?\.update\(\{ status: 'done'/.test(tail.slice(0, 1500)), 'рекомендация закрывается молча правкой статуса');
+  assert.match(tail, /trf\('Услуга добавлена в визит, но рекомендация врача не закрыта: \{msg\}'/);
+  assert.match(tail, /'warn'\)/);
+});
+
+// Ревью U10 LOW-7 — у рекомендации врач-рекомендатель получает бонус только если выполняет
+// другой врач: оба окна стойки отдают подписи условие сервера (bonus_if_other).
+test('«Бонус» рекомендации в обоих окнах стойки — с условием сервера bonus_if_other', () => {
+  assert.match(wiz, /bonusText\(r\.bonus_to, r\.bonus_if_other\)/);
+  const fast = fs.readFileSync(path.join(HERE, 'fast-registration.js'), 'utf8');
+  assert.match(fast, /bonusText\(r\.bonus_to, r\.bonus_if_other\)/);
+});

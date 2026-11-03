@@ -24,13 +24,24 @@
 //     Строку, по которой платили, не трогают: её деньги уже поделены. Строк визита этот вызов
 //     НЕ заводит (строку вставляет дверь /api/db со своей проверкой повтора DUP_STOP_V1) — одна
 //     строка закрывает одну рекомендацию.
+//     Ревью U10 (HIGH-1, MEDIUM-2, LOW-8) — доказательство, которое нельзя подделать задним
+//     числом: строку завёл сам вызывающий (все три двери — мастер, быстрая регистрация, окно
+//     визита — вставляют её прямо перед привязкой), рекомендация написана НЕ ПОЗЖЕ строки, строка
+//     и визит живые, месяц оплаты врачей открыт; «кто рекомендовал» ставит сервер (реестр,
+//     recommendationAuthorStamp). Направивший строки — источник РЕКОМЕНДОВАВШЕГО, а не того, кто
+//     вставил (дверь /api/db ставит вставившему врачу его источник): сам рекомендатель
+//     исполняет — никто.
 //   referral_visit_links({ visit_ids }) — ЧТЕНИЕ: метка «от врача» календаря — номер визита
 //     и имя направившего, без услуг и денег.
 //
 // «Кому бонус» — lineBeneficiaries (domain/line-referral.js), то же правило, что у отчётов.
+// Ревью U10 MEDIUM-3 — оба чтения проходят те же ворота данных пациента, что /api/db
+// (patientDataRefusal: разделы роли и вкладки карты), как visit_dup_check (DUP_STOP_V1, M2).
 import { hasAnyRole, effectiveRoles } from '../roles.js';
-import { today, localDate } from '../domain/day.js';
+import { today, localDate, localMonth } from '../domain/day.js';
 import { lineBeneficiaries, DESK_ROLES, DOCTOR_ROLES } from '../domain/line-referral.js';
+import { patientDataRefusal, PATIENT_DATA_DENIED } from '../../db/patient-data-gate.js';   // ревью U10 MEDIUM-3
+import { dayVisitOf } from './visits.js';   // ревью U10 LOW-7 — визит дня пациента (то же правило, что у ensure_visit)
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -38,10 +49,11 @@ export class RpcError extends Error {
 
 // Окна регистрации открывают стойка и врач; касса и медсёстры видят то же (только чтение).
 const ORDER_ROLES = ['admin', 'registrar', 'doctor', 'head_doctor', 'cashier', 'nurse', 'senior_nurse'];
-// Привязку делают те, кто добавляет услуги из рекомендации в визит (как visit_set_doctor_referrer).
-const ATTACH_ROLES = ['admin', 'registrar', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
-// Чужую рекомендацию привязывают только стойка и медсёстры; врач — свою.
-const ATTACH_DESK_ROLES = ['admin', 'registrar', 'nurse', 'senior_nurse'];
+// Привязку делают те, кто добавляет услуги из рекомендации в визит: регистратура, врач,
+// администратор. Ревью U10 HIGH-1 — медсестра строк визита через /api/db не вставляет (реестр:
+// 403), значит и законно привязывать ей нечего; прежде она ставила любой строке стойки источник
+// любого врача.
+const ATTACH_ROLES = ['admin', 'registrar', 'doctor', 'head_doctor'];
 const LINKS_MAX = 500;
 const NOTE_MAX = 500;
 const isPosInt = (v) => Number.isInteger(v) && v > 0;
@@ -77,6 +89,12 @@ const namesOf = (bens, baseName, lineName) => bens.map((b) => (b.via === 'visit'
 /** patient_referral_orders({ patient_id }) → { patient_id, today, lines, recommendations } */
 export function patientReferralOrders(db, args, user) {
   if (!hasAnyRole(user, ORDER_ROLES)) throw new RpcError('Направления врача вашей роли недоступны.', 403);
+  // Ревью U10 MEDIUM-3 — строки визита и рекомендации врача — данные пациента: роль, которой
+  // клиника закрыла клинические разделы (склад, своя роль), их через /api/db не читает — и здесь
+  // тоже (услуги, исполнители, направившие, рекомендация врача, номера счетов и цены).
+  if (patientDataRefusal('visit_services', user, db) || patientDataRefusal('recommended_services', user, db)) {
+    throw new RpcError(PATIENT_DATA_DENIED, 403);
+  }
   const patientId = Number(args && args.patient_id);
   if (!isPosInt(patientId)) throw new RpcError('Пациент указан неверно.', 400);
   const day = today(db);
@@ -129,37 +147,46 @@ export function patientReferralOrders(db, args, user) {
         r.referred_by_source_id != null ? { id: r.referred_by_source_id, doctor_id: r.line_source_doctor_id } : null,
         r.doctor_id), r.base_source_name, r.line_source_name),
     }));
+  // Ревью U10 LOW-7 — «Бонус: …» у рекомендации — то, что заплатит расчёт: база — источник
+  // СЕГОДНЯШНЕГО визита пациента (строку по рекомендации стойка ставит в него, dayVisitOf — то же
+  // правило, что у ensure_visit), иначе карточки пациента. Исполнитель ещё не выбран: источник
+  // рекомендателя назван отдельно (bonus_if_other) — он получит бонус, только если услугу выполнит
+  // другой врач (своя строка — без бонуса); получатель «через визит» — без условия.
+  const dv = dayVisitOf(db, patientId, day);
+  const base = db.prepare(`SELECT id, name, doctor_id FROM referral_sources
+                            WHERE id = COALESCE(?, (SELECT referral_source_id FROM patients WHERE id = ?))`)
+    .get(dv ? dv.referral_source_id ?? null : null, patientId) || null;
   const recommendations = db.prepare(`
     SELECT r.id AS recommendation_id, r.service_id, COALESCE(s.name, r.service_name, '') AS name,
            r.recommended_by AS referrer_id,
            COALESCE(NULLIF(u.full_name, ''), NULLIF(r.recommended_by_name, ''), u.username, '') AS referrer_name,
            r.created_at, r.notes, r.source_visit_id,
-           rs.id AS rec_source_id, rs.name AS rec_source_name, rs.doctor_id AS rec_source_doctor_id,
-           ps.id AS base_source_id, ps.name AS base_source_name, ps.doctor_id AS base_source_doctor_id
+           rs.id AS rec_source_id, rs.name AS rec_source_name, rs.doctor_id AS rec_source_doctor_id
       FROM recommended_services r
-      JOIN patients pt ON pt.id = r.patient_id
       LEFT JOIN services s ON s.id = r.service_id
       LEFT JOIN users u ON u.id = r.recommended_by
-      LEFT JOIN referral_sources rs ON rs.doctor_id = r.recommended_by AND rs.active = 1
-      LEFT JOIN referral_sources ps ON ps.id = pt.referral_source_id
+      LEFT JOIN referral_sources rs ON rs.id = (SELECT x.id FROM referral_sources x WHERE x.doctor_id = r.recommended_by AND x.active = 1 ORDER BY x.id LIMIT 1)
      WHERE r.patient_id = ? AND r.closed_at IS NULL AND COALESCE(r.status, '') NOT IN ('done', 'cancelled')
      ORDER BY r.created_at DESC, r.id DESC`).all(patientId)
-    .map((r) => ({
-      recommendation_id: r.recommendation_id, service_id: r.service_id ?? null, name: r.name || '',
-      referrer_id: r.referrer_id ?? null, referrer_name: r.referrer_name || '', created_at: r.created_at,
-      notes: r.notes || '', source_visit_id: r.source_visit_id ?? null,
-      bonus_to: namesOf(lineBeneficiaries(
-        r.base_source_id != null ? { id: r.base_source_id, doctor_id: r.base_source_doctor_id } : null,
-        r.rec_source_id != null ? { id: r.rec_source_id, doctor_id: r.rec_source_doctor_id } : null,
-        null), r.base_source_name, r.rec_source_name),
-    }));
+    .map((r) => {
+      const bens = lineBeneficiaries(base ? { id: base.id, doctor_id: base.doctor_id } : null,
+        r.rec_source_id != null ? { id: r.rec_source_id, doctor_id: r.rec_source_doctor_id } : null, null);
+      const ifOther = bens.some((b) => b.via === 'line') ? (r.rec_source_name || r.referrer_name || null) : null;
+      return {
+        recommendation_id: r.recommendation_id, service_id: r.service_id ?? null, name: r.name || '',
+        referrer_id: r.referrer_id ?? null, referrer_name: r.referrer_name || '', created_at: r.created_at,
+        notes: r.notes || '', source_visit_id: r.source_visit_id ?? null,
+        bonus_to: namesOf(bens.filter((b) => b.via === 'visit'), base ? base.name : null, null),
+        bonus_if_other: ifOther,
+      };
+    });
   return { patient_id: patientId, today: day, lines, recommendations };
 }
 
 /** referral_recommendation_attach({ recommendation_id, visit_service_id }) → { attached, …, referred_by_source_id } */
 export function referralRecommendationAttach(db, args, user) {
   if (!hasAnyRole(user, ATTACH_ROLES)) {
-    throw new RpcError('Добавлять рекомендации врача в визит может регистратура, врач, медсестра или администратор.', 403);
+    throw new RpcError('Добавлять рекомендации врача в визит может регистратура, врач или администратор.', 403);
   }
   const recId = Number(args && args.recommendation_id);
   const vsId = Number(args && args.visit_service_id);
@@ -171,10 +198,8 @@ export function referralRecommendationAttach(db, args, user) {
     if (rec.closed_at != null || rec.status === 'done' || rec.status === 'cancelled') {
       throw new RpcError('Рекомендация уже закрыта — её добавили в визит или убрали.', 409);
     }
-    if (!hasAnyRole(user, ATTACH_DESK_ROLES) && Number(rec.recommended_by) !== Number(user && user.id)) {
-      throw new RpcError('Врач может добавить в визит только свою рекомендацию.', 403);
-    }
-    const line = db.prepare(`SELECT vs.*, v.patient_id AS visit_patient_id, v.sync_origin AS visit_origin
+    const line = db.prepare(`SELECT vs.*, v.patient_id AS visit_patient_id, v.sync_origin AS visit_origin,
+                                    v.status AS visit_status, ${localMonth('v.visit_date')} AS visit_month
                                FROM visit_services vs JOIN visits v ON v.id = vs.visit_id WHERE vs.id = ?`).get(vsId);
     if (!line) throw new RpcError('Строка услуги не найдена.', 404);
     if (Number(line.visit_patient_id) !== Number(rec.patient_id)) throw new RpcError('Строка услуги — у другого пациента.', 400);
@@ -184,22 +209,57 @@ export function referralRecommendationAttach(db, args, user) {
     if (line.visit_origin != null || line.sync_origin != null) {
       throw new RpcError('Строка услуги заведена в другом здании — привязать рекомендацию можно только там.', 400);
     }
+    // Ревью U10 HIGH-1 — привязывают к строке, которую вызывающий сам только что завёл (created_by
+    // ставит сервер из сессии — реестр, stamps): все три двери вставляют её прямо перед привязкой.
+    // Иначе любой врач писал рекомендацию задним числом и ставил свой источник на строку стойки,
+    // ждущую оплаты, — клиника платила за одну строку дважды. Прежнее «врач — только свою
+    // рекомендацию» снято: рекомендацию коллеги, написанную раньше строки, привязать можно —
+    // направившим станет коллега (ниже), а не вставивший.
+    if (line.created_by == null || Number(line.created_by) !== Number(user && user.id)) {
+      throw new RpcError('Рекомендацию привязывают к строке, которую вы только что добавили в визит, — эту строку завёл другой сотрудник.', 403);
+    }
+    // Ревью U10 LOW-8 — строка и визит, которые бонуса не дают, рекомендацию не закрывают.
+    if (line.status === 'cancelled' || line.status === 'removed') {
+      throw new RpcError('Строка услуги отменена или снята — рекомендацию к ней не привязывают.', 409);
+    }
+    if (line.invoice_item_id == null
+        && db.prepare("SELECT 1 FROM pay_refund_releases WHERE kind = 'out' AND line_id = ? LIMIT 1").get(vsId)) {
+      throw new RpcError('Услуга этой строки возвращена — рекомендацию к ней не привязывают.', 409);
+    }
+    if (line.visit_status === 'cancelled' || line.visit_status === 'no_show') {
+      throw new RpcError('Визит отменён или пациент не пришёл — рекомендацию к нему не привязывают.', 409);
+    }
     // Одна строка — одна рекомендация: «Внутренние врачи» считают строку той рекомендацией,
     // которую она закрыла (rpc/referrals.js lineReferrals), — две закрытые одной строкой были
     // бы двумя направлениями за одну услугу.
     if (db.prepare('SELECT 1 FROM recommended_services WHERE visit_service_id = ? AND id <> ? LIMIT 1').get(vsId, recId)) {
       throw new RpcError('Эта строка услуги уже закрывает другую рекомендацию.', 409);
     }
+    // Ревью U10 HIGH-1 — рекомендация — причина строки, значит она не моложе строки (секунда в
+    // секунду — можно: обе пишутся в один миг).
+    if (db.prepare('SELECT julianday(?) > julianday(?) AS newer').get(rec.created_at, line.created_at).newer === 1) {
+      throw new RpcError('Рекомендация написана позже, чем заведена строка услуги, — к этой строке её не привязывают.', 409);
+    }
     const paid = line.invoice_item_id != null && db.prepare(`SELECT 1 FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
         WHERE ii.id = ? AND (COALESCE(i.paid_amount, 0) > 0 OR i.status IN ('paid', 'partial'))`).get(line.invoice_item_id);
     if (paid) throw new RpcError('По этой строке уже есть оплата — направившего у неё не меняют.', 409);
-    let stamped = line.referred_by_source_id ?? null;
-    if (stamped == null && rec.recommended_by != null) {
+    // Ревью U10 LOW-8 — закрытый месяц оплаты врачей заморожен (то же правило и те же слова, что
+    // у замены и возврата строки — billing.js assertLineMonthOpen: местный месяц дня визита).
+    if (line.visit_month && db.prepare('SELECT 1 FROM pay_periods WHERE month = ?').get(line.visit_month)) {
+      throw new RpcError('Начисления врачам за этот месяц закрыты — услуги визита этого месяца уже не меняют.', 409);
+    }
+    // Ревью U10 MEDIUM-2 — направивший строки — включённый источник РЕКОМЕНДОВАВШЕГО (recommended_by
+    // ставит сервер — реестр, recommendationAuthorStamp), а не того, кто вставил строку: дверь
+    // /api/db ставит вставившему врачу его собственный источник, и врач, добавивший рекомендацию
+    // коллеги, получал за неё бонус. Рекомендатель сам исполняет (своя строка), у него нет
+    // включённого источника или рекомендацию писал не врач — направившего у строки нет.
+    let stamped = null;
+    if (rec.recommended_by != null) {
       const src = db.prepare('SELECT id, doctor_id FROM referral_sources WHERE doctor_id = ? AND active = 1 ORDER BY id LIMIT 1').get(rec.recommended_by);
-      if (src && !(line.doctor_id != null && Number(line.doctor_id) === Number(src.doctor_id))) {
-        db.prepare('UPDATE visit_services SET referred_by_source_id = ? WHERE id = ? AND referred_by_source_id IS NULL').run(src.id, vsId);
-        stamped = src.id;
-      }
+      if (src && !(line.doctor_id != null && Number(line.doctor_id) === Number(src.doctor_id))) stamped = Number(src.id);
+    }
+    if ((line.referred_by_source_id ?? null) !== stamped) {
+      db.prepare('UPDATE visit_services SET referred_by_source_id = ? WHERE id = ?').run(stamped, vsId);
     }
     const note = typeof rec.notes === 'string' ? rec.notes.trim().slice(0, NOTE_MAX) : '';
     if (note && (line.referral_note == null || line.referral_note === '')) {
@@ -215,6 +275,10 @@ export function referralRecommendationAttach(db, args, user) {
 /** referral_visit_links({ visit_ids }) → [{ visit_id, doctor_name }] */
 export function referralVisitLinks(db, args, user) {
   if (!user || !effectiveRoles(user).length) throw new RpcError('Метки направлений врача вашей роли недоступны.', 403);
+  // Ревью U10 MEDIUM-3 — кто направил на визит — данные строк визита: роль, которой /api/db их не
+  // отдаёт (колл-центр, лаборатория, склад), меток не получает — иначе перебирала бы по 500 номеров
+  // визитов за вызов. Пустой ответ, а не отказ: календарь рисуется и без меток.
+  if (patientDataRefusal('visit_services', user, db)) return [];
   const raw = Array.isArray(args && args.visit_ids) ? args.visit_ids : [];
   const ids = [...new Set(raw.map(Number).filter(isPosInt))].slice(0, LINKS_MAX);
   if (!ids.length) return [];

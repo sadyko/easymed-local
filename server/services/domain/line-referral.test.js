@@ -3,7 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { lineReferralStamp, lineBeneficiaries, isDeskActor, isDoctorActor, LineReferralError } from './line-referral.js';
+import { lineReferralStamp, lineBeneficiaries, isDeskActor, isDoctorActor, LineReferralError,
+  recommendationAuthorStamp, EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE } from './line-referral.js';
 
 function fresh() {
   const db = openDb(':memory:');
@@ -75,4 +76,31 @@ test('кому вознаграждение: источник визита/па�
   assert.deepEqual(via(lineBeneficiaries(S1, S1copy, 12)), ['visit:5']);
   assert.deepEqual(via(lineBeneficiaries(P, S1, 10)), ['visit:900'], 'своя строка врача — без бонуса источнику строки');
   assert.deepEqual(via(lineBeneficiaries(null, null, null)), []);
+});
+
+// REFERRAL_LINE_V1 · ревью U10 MEDIUM-4 (вариант «б»): два ВНЕШНИХ партнёра за одну строку не
+// платятся — строка остаётся за партнёром визита/пациента; врач строки по-прежнему — сверху.
+test('кому вознаграждение: внешний партнёр строки к внешнему партнёру визита не добавляется (вариант «б»)', () => {
+  const P = { id: 900, doctor_id: null };
+  const Q = { id: 901, doctor_id: null };
+  const S1 = { id: 5, doctor_id: 10 };
+  const via = (list) => list.map((b) => b.via + ':' + b.source.id);
+  assert.equal(EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE, false, 'переключатель варианта — «б»');
+  assert.deepEqual(via(lineBeneficiaries(P, Q, 12)), ['visit:900'], 'два партнёра за одну строку');
+  assert.deepEqual(via(lineBeneficiaries(null, Q, 12)), ['line:901'], 'без партнёра визита — партнёр строки');
+  assert.deepEqual(via(lineBeneficiaries(S1, Q, 12)), ['visit:5', 'line:901'], 'врач визита + партнёр строки — правило «обоим» не тронуто');
+  assert.deepEqual(via(lineBeneficiaries(P, S1, 12)), ['visit:900', 'line:5'], 'партнёр + врач строки — оба');
+});
+
+// Ревью U10 HIGH-1 — кто рекомендовал (recommended_services.recommended_by) ставит сервер: врачу —
+// он сам (что прислал браузер, не читается), остальным — никто: медсестра или стойка не выдают
+// свою рекомендацию за рекомендацию врача.
+test('автор рекомендации: врач (и администратор-врач) — он сам; стойка, медсестра, без сессии — никто', () => {
+  const { db } = fresh();
+  assert.equal(recommendationAuthorStamp(db, doctor, { recommended_by: 12 }), 10);
+  assert.equal(recommendationAuthorStamp(db, doctor, {}), 10);
+  assert.equal(recommendationAuthorStamp(db, adminDoctor, { recommended_by: 12 }), 1);
+  assert.equal(recommendationAuthorStamp(db, registrar, { recommended_by: 12 }), null);
+  assert.equal(recommendationAuthorStamp(db, nurse, { recommended_by: 12 }), null);
+  assert.equal(recommendationAuthorStamp(db, null, { recommended_by: 12 }), null);
 });

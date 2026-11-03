@@ -108,12 +108,14 @@ migrate(DB);
 
 let USER = { id: ADMIN_DOC, role: 'admin', extra_roles: [] };   // кто спрашивает сервер
 const DBCALLS = [];
+const FAIL_RPC = new Set();   // ревью U10 MEDIUM-2 — RPC, которым стенд отвечает отказом (окно визита при отказе привязки)
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = JSON.parse((opts && opts.body) || '{}');
   const ok = (data) => ({ ok: true, status: 200, json: async () => ({ data }), text: async () => JSON.stringify({ data }) });
   const fail = (status, message) => ({ ok: false, status, json: async () => ({ error: { message } }), text: async () => message });
   if (u.startsWith('/api/rpc/')) {
+    if (FAIL_RPC.has(decodeURIComponent(u.slice('/api/rpc/'.length)))) return fail(409, 'Отказ стенда');
     const handler = getRpc(decodeURIComponent(u.slice('/api/rpc/'.length)));
     if (!handler) return fail(501, 'RPC not implemented');
     try { return ok(await handler(DB, body, USER)); } catch (e) { return fail(e.status || 500, e.message); }
@@ -269,4 +271,43 @@ test('окно визита → рекомендация: отменённая �
   const line = DB.prepare("SELECT id FROM visit_services WHERE visit_id = 40 AND service_id = 22 AND status <> 'cancelled'").get();
   assert.ok(line, 'услуга рекомендации не легла в визит');
   assert.deepEqual(DB.prepare('SELECT status, visit_service_id FROM recommended_services WHERE id = ?').get(rec), { status: 'done', visit_service_id: line.id });
+});
+
+// Ревью U10 MEDIUM-2 — сервер не привязал рекомендацию: окно визита больше не закрывает её молча
+// правкой статуса (рекомендация пропадала бы из «Внутренних врачей» без строки, а направивший
+// строки оставался бы тем, кто вставил). Рекомендация остаётся открытой, вместо «Added to visit.» —
+// предупреждение.
+test('окно визита → рекомендация: отказ привязки — рекомендация остаётся открытой, предупреждение вместо «добавлено»', async () => {
+  signInAs('admdoc', ADMIN_DOC, 'admin');
+  DB.prepare("INSERT INTO services (id, name, price) VALUES (23, 'ЭКГ', 50000)").run();
+  const rec = Number(DB.prepare("INSERT INTO recommended_services (patient_id, service_id, service_name, recommended_by, status, created_at) VALUES (3, 23, 'ЭКГ', ?, 'pending', '2020-01-01T00:00:00Z')")
+    .run(ADMIN_DOC).lastInsertRowid);
+  const toasts = [];
+  const kinds = [];
+  const toastEl = mk('div');
+  Object.defineProperty(toastEl, 'textContent', { get() { return ''; }, set(v) { toasts.push(String(v)); }, configurable: true });
+  toastEl.dataset = { set kind(v) { kinds.push(String(v)); }, get kind() { return kinds[kinds.length - 1]; } };
+  const prevGet = document.getElementById;
+  document.getElementById = (id) => (id === 'toast' ? toastEl : null);
+  FAIL_RPC.add('referral_recommendation_attach');
+  try {
+    document.body.children.length = 0;
+    VM.openVisitModal({ visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3, full_name: 'Иванов Иван' } });
+    await flush();
+    const addLabel = tr('Add to visit');
+    walk(document.body).find((n) => n.tagName === 'BUTTON' && textOf(n).includes(addLabel)).click();
+    await flush();
+    const dialog = document.body.children[document.body.children.length - 1];
+    walk(dialog).find((n) => n.tagName === 'BUTTON' && textOf(n).includes(addLabel)).click();
+    await flush(80);
+    assert.ok(DB.prepare('SELECT id FROM visit_services WHERE visit_id = 40 AND service_id = 23').get(), 'услуга рекомендации не легла в визит');
+    assert.equal(DB.prepare('SELECT status FROM recommended_services WHERE id = ?').get(rec).status, 'pending', 'рекомендация закрыта молча');
+    const i = toasts.findIndex((t) => t.includes('Отказ стенда'));
+    assert.ok(i >= 0 && /не закрыта/.test(toasts[i]), 'нет предупреждения: ' + JSON.stringify(toasts));
+    assert.equal(kinds[i], 'warn');
+    assert.ok(!toasts.includes(tr('Added to visit.')), 'окно сказало «добавлено» как ни в чём не бывало');
+  } finally {
+    FAIL_RPC.clear();
+    document.getElementById = prevGet;
+  }
 });
