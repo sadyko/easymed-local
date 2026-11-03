@@ -1071,7 +1071,7 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
  * @returns то же, что applyCatalogue (логинов в нём нет)
  */
 export function commitCatalogue(db, payload) {
-  if (db.inTransaction) throw new Error('commitCatalogue: вызов внутри открытой транзакции — блокировки входа снялись бы до COMMIT');   // STAFF_EDIT_V1 (остаток A6)
+  if (db.inTransaction) throw new Error('commitCatalogue: called inside an open transaction — login locks would be cleared before COMMIT');   // STAFF_EDIT_V1 (остаток A6) — ошибка программы, не фраза для экрана
   const passwordSetFor = [];
   const summary = db.transaction(() => applyCatalogue(db, payload, { passwordSetFor }))();
   for (const name of passwordSetFor) {

@@ -727,7 +727,7 @@ test('commitCatalogue внутри открытой транзакции бро�
   main.prepare("UPDATE users SET password_hash = ? WHERE username = 'ivanov'").run(hashPassword('novyi-parol9'));
   const cat = exportCatalogue(main);
   const hashBefore = branch.prepare("SELECT password_hash FROM users WHERE username = 'ivanov'").get().password_hash;
-  assert.throws(() => branch.transaction(() => { commitCatalogue(branch, cat); throw new Error('внешний откат'); })(), /внутри открытой транзакции/);
+  assert.throws(() => branch.transaction(() => { commitCatalogue(branch, cat); throw new Error('внешний откат'); })(), /inside an open transaction/);
   assert.equal(branch.prepare("SELECT password_hash FROM users WHERE username = 'ivanov'").get().password_hash, hashBefore, 'приём прошёл');
   assert.equal(login(branch, 'ivanov', 'sekret12345', ip).error, 'locked', 'блокировку сняли до COMMIT, а внешняя транзакция откатилась');
   assert.ok(commitCatalogue(branch, cat).updated.users >= 1, 'вне транзакции — как прежде');
