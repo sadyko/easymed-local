@@ -456,4 +456,87 @@ test('ревью-2: смета на один день — как прежде (V
   assert.deepEqual(invoiceMoney(), [[90000, 9000, 81000]]);
 });
 
+// INVOICE_APPEND_V1 (ревью, остаток 5) — СЧЁТ ДНЯ НЕ ВЫСТАВИЛСЯ. Его строки касса выставит
+// потом из визита (скидка 0 — сервер даст им их пол группы). Мастер переносил дальше весь
+// процент дня (без группы пол 0 — скидка дня пропадала) или не трогал перенос (пол группы
+// этих строк ложился сверху сметы). Теперь не выставленный день «применил» свой пол группы:
+// пациент в сумме платит ровно смету. Отказ — n-й счёт пациента (подмена ответа fetch).
+let FAIL_PATIENT_INVOICE = 0;
+let patientInvoiceNo = 0;
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (String(url) === '/api/rpc/create_invoice_for_visit') {
+      const body = JSON.parse((opts && opts.body) || '{}');
+      if (body.payer_id == null && FAIL_PATIENT_INVOICE && ++patientInvoiceNo === FAIL_PATIENT_INVOICE) {
+        RPC.push({ name: 'create_invoice_for_visit', body, failed: true });
+        return { ok: false, status: 500, json: async () => ({ error: { code: 'internal', message: 'сбой счёта (тест)' } }) };
+      }
+    }
+    return realFetch(url, opts);
+  };
+}
+/** Касса выставляет то, что мастер не выставил: из визита, скидка 0 — пол группы ставит сервер. */
+function billLeftovers() {
+  const left = DB.prepare("SELECT id, visit_id FROM visit_services WHERE invoice_item_id IS NULL AND status <> 'cancelled'").all();
+  const byVisit = new Map();
+  for (const r of left) byVisit.set(r.visit_id, [...(byVisit.get(r.visit_id) || []), r.id]);
+  for (const [visitId, ids] of byVisit) getRpc('create_invoice_for_visit')(DB, { visit_id: visitId, visit_service_ids: ids, discount_amount: 0, payer_id: null, append: false }, USER);
+  return left.length;
+}
+const patientPays = () => DB.prepare('SELECT COALESCE(SUM(total_amount), 0) s FROM invoices WHERE payer_id IS NULL').get().s;
+/** Смета на три дня: анализ сегодня, консультация (21, врач 7) завтра, кардиолог (24, врач 8 не работает сегодня и завтра) — послезавтра. */
+async function threeDayCart() {
+  DB.prepare('UPDATE users SET service_rates = ? WHERE id = 7').run(JSON.stringify([{ service_id: 23, pct: 10 }, { service_id: 21 }]));
+  const t = new Date().getDay();
+  const wh = {};
+  for (let i = 0; i < 7; i++) wh[WD[i]] = { enabled: !(i === t || i === (t + 1) % 7), from: '10:00', to: '16:00' };
+  DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours, service_rates) VALUES (8,'doc8','x','Сидоров Сидор','doctor',1,'кардиолог',?,?)")
+    .run(JSON.stringify(wh), JSON.stringify([{ service_id: 24 }]));
+  DB.prepare("INSERT INTO services (id, name, price, duration_minutes, requires_doctor) VALUES (24,'Консультация кардиолога',80000,30,1)").run();
+  await openWizard([21, 22, 24]);
+  for (const id of [21, 24]) { byAttr(overlay(), 'data-pick-nearest', id).click(); await flush(20); }
+  assert.ok(byAttr(overlay(), 'data-many-days', 3), 'смета не на три дня');
+}
+async function pctDiscount(p) {
+  const inp = walk(overlay()).find((n) => n.tagName === 'INPUT' && n.max === '100');
+  assert.ok(inp, 'нет поля скидки');
+  inp.value = String(p);
+  inp.dispatchEvent({ type: 'input', target: inp, currentTarget: inp });
+  await flush(5);
+}
+const estimateTotal = () => {
+  const el = walk(overlay()).find((n) => n.style && n.style.fontSize === '20px' && /сум/.test(n._t || ''));
+  assert.ok(el, 'нет итога сметы');
+  return Number(String(el._t).replace(/[^\d]/g, ''));
+};
+async function failedDay({ cart, act, fail, estimate }) {
+  seed();
+  FAIL_PATIENT_INVOICE = fail; patientInvoiceNo = 0;
+  try {
+    await act(cart);
+    assert.equal(estimateTotal(), estimate, 'смета');
+    await pressUntilCreate();
+    assert.ok(RPC.some((c) => c.name === 'create_invoice_for_visit' && c.failed), 'счёт дня не отказал');
+    assert.equal(billLeftovers() > 0, true, 'касса выставила невыставленное');
+    assert.equal(patientPays(), estimate, 'пациент платит не смету: ' + JSON.stringify(invoiceMoney()) + ' отправлено ' + JSON.stringify(sentDiscounts()));
+  } finally { FAIL_PATIENT_INVOICE = 0; }
+}
+
+test('ревью, остаток 5: без группы, скидка 10 %, счёт первого дня не выставился — касса выставит его строки, пациент платит смету 126 000', async () => {
+  await failedDay({ fail: 1, estimate: 126000, act: async () => { await twoDayCart(); await pctDiscount(10); } });
+});
+
+test('ревью, остаток 5: VIP 10 % и скидка суммой 14 000, счёт первого дня не выставился — 126 000, как в смете', async () => {
+  await failedDay({ fail: 1, estimate: 126000, act: async () => { vipPatient(10); await twoDayCart(); await amountDiscount(14000); } });
+});
+
+test('ревью, остаток 5: три дня, VIP 10 % и 30 000 суммой, счёт второго дня не выставился — 190 000, как в смете', async () => {
+  await failedDay({ fail: 2, estimate: 190000, act: async () => { vipPatient(10); await threeDayCart(); await amountDiscount(30000); } });
+});
+
+test('ревью, остаток 5: три дня, VIP 10 % и 22 000 суммой (= полы групп), счёт второго дня не выставился — 198 000, как в смете', async () => {
+  await failedDay({ fail: 2, estimate: 198000, act: async () => { vipPatient(10); await threeDayCart(); await amountDiscount(22000); } });
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });
