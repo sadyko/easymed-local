@@ -151,6 +151,11 @@ export const TABLES = [
     // (UNIQUE, мигр. 048), и приём справочника откатывался бы целиком при
     // каждой синхронизации.
     unlinkMissing: { clear: 'service_id', flag: 'active' },
+    // LAB_PANEL_DEDUP_V1 (ревью H2) — услугу панели главного здания уже держит
+    // ДРУГАЯ панель этого здания (своя панель филиала на той же услуге): панель
+    // принимается без услуги и называется на экране синхронизации, а не роняет
+    // UNIQUE (мигр. 048) и вместе с ним весь приём — цены, сотрудников, права.
+    yieldUnique: 'service_id',
   },
   {
     name: 'lab_panel_analytes',
@@ -861,6 +866,7 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
     // освободить место «одна услуга — одна панель» нужно сейчас — следом в
     // этой же выгрузке может ехать новая панель на ту же услугу.
     // Пустая выгрузка (старая главная, филиал) не отвязывает ничего.
+    const freed = new Set();   // ревью H2 — отвязанные здесь (в dryRun база не тронута, а услуга уже свободна)
     if (spec.unlinkMissing && rows.length) {
       const { clear: clearCol, flag: flagCol } = spec.unlinkMissing;
       const live = new Set(rows.filter((r) => r && r.id !== undefined && r.id !== null).map((r) => String(r.id)));
@@ -879,6 +885,7 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
         summary.deactivated = summary.deactivated || {};
         summary.deactivated[spec.name] = (summary.deactivated[spec.name] || 0) + 1;
         summary.changed += 1;
+        freed.add(localId);
         if (!dryRun) db.prepare(`UPDATE "${spec.name}" SET "${clearCol}" = NULL, "${flagCol}" = 0 WHERE id = ?`).run(localId);
       }
     }
@@ -1034,6 +1041,31 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
           && (!localRow || !sameValue(values.experience_years, localRow.experience_years))) {
         present.push('practice_since');
         values.practice_since = practiceSinceFromYears(values.experience_years);
+      }
+
+      // --- LAB_PANEL_DEDUP_V1 (ревью H2): занятая уникальная ссылка ---------
+      //
+      // Услугу приехавшей панели уже держит ДРУГАЯ панель этого здания — своя
+      // панель филиала на той же услуге (филиал удалил панель главного и завёл
+      // свою) или панель главного, у которой услуга сменится позже в этой же
+      // выгрузке. Прежде INSERT/UPDATE падал на UNIQUE (мигр. 048), и приём
+      // справочника откатывался ЦЕЛИКОМ при каждом запуске: цены, сотрудники,
+      // права ролей, пароли и отключение уволенных до филиала не доходили.
+      // Теперь панель принимается без услуги, это считается (unlinked) и
+      // называется на экране синхронизации; освободится услуга — следующая
+      // синхронизация привяжет. «Изменением» это становится, только если строка
+      // и правда меняется: иначе каждый часовой прогон снимал бы копию базы.
+      if (spec.yieldUnique && values[spec.yieldUnique] != null) {
+        const col = spec.yieldUnique;
+        const holders = db.prepare(`SELECT id FROM "${spec.name}" WHERE "${col}" = ? AND id IS NOT ?`)
+          .all(values[col], localId ?? null)
+          .filter((r) => !freed.has(r.id));
+        if (holders.length) {
+          values[col] = null;
+          summary.unlinked = summary.unlinked || {};
+          summary.unlinked[spec.name] = (summary.unlinked[spec.name] || 0) + 1;
+          if (!dryRun) console.warn(`[branch-sync] ${spec.name} ${remote.id}: ${col} is held here by id ${holders[0].id} — accepted without it`);
+        }
       }
 
       // --- вставка ---------------------------------------------------------

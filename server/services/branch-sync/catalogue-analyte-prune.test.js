@@ -216,3 +216,91 @@ test('панель удалена в главном и заведена нова
   assert.deepEqual(perName(branch), ONE_EACH, 'её показатели целы');
   assert.equal(sync().changed, 0, 'дальше — без изменений');
 });
+
+// ═══ Ревью H2 (проба r4) — «Удалить» в филиале панели главного здания и своя панель на той же
+// услуге: следующая синхронизация заводила панель главного заново на прежнюю услугу, UNIQUE
+// (мигр. 048) ронял ВЕСЬ приём справочника — цены, сотрудники, права, пароли — при каждом запуске.
+const LAB = { id: 2, role: 'lab' };
+const MAIN_ONLY = 'Эта панель приходит из главного здания: удалить её или сменить у неё услугу можно только там.';
+const asBranch = (db) => db.prepare("UPDATE branch_identity SET role = 'secondary', letter = 'B'").run();
+
+test('H2 (а): в филиале панель главного здания не удаляется и не переносится на другую услугу — 409; коды анализатора правятся', () => {
+  const { main, branch, save, sync } = pair();
+  save();
+  labPanelSave(main, { panel: { name: 'Другая панель главного', modality: 'lab', service_id: null, active: true }, analytes: [{ name: 'А' }] }, LAB);   // выгрузка не пустеет
+  sync();
+  asBranch(branch);
+  const bp = branchPanel(branch);
+  assert.throws(() => labPanelDelete(branch, { id: bp.id }, LAB), (e) => e.status === 409 && e.message === MAIN_ONLY);
+  branch.prepare("INSERT INTO services (id, name, price, type, is_lab, active) VALUES (900, 'Своя услуга филиала', 1, 'lab', 1, 1)").run();
+  const args = (service_id) => ({ panel: { id: bp.id, name: PANEL, modality: 'lab', service_id, active: true },
+    analytes: NAMES.map((name) => ({ name, value_type: 'numeric', device_code: 'X' + name.length, device_code_confirmed: 1 })) });
+  assert.throws(() => labPanelSave(branch, args(900), LAB), (e) => e.status === 409 && e.message === MAIN_ONLY, 'перенос на свою услугу');
+  assert.throws(() => labPanelSave(branch, args(null), LAB), (e) => e.status === 409, 'отвязка от услуги');
+  assert.equal(branchPanel(branch).service_id, bp.service_id, 'панель на месте');
+  assert.equal(labPanelSave(branch, args(bp.service_id), LAB).analytes, NAMES.length, 'своя настройка анализатора на той же услуге — можно');
+  // Главная установка (не филиал) удаляет как прежде.
+  const mp = main.prepare('SELECT id FROM lab_panels WHERE name = ?').get(PANEL);
+  assert.equal(labPanelDelete(main, { id: mp.id }, LAB).deleted, true);
+  // Панель, которую главное здание удалило (приём выключил и отвязал её), — уже своя: удаляется.
+  sync();
+  assert.deepEqual(branch.prepare('SELECT service_id, active FROM lab_panels WHERE id = ?').get(bp.id), { service_id: null, active: 0 });
+  assert.equal(labPanelDelete(branch, { id: bp.id }, LAB).deleted, true);
+  // Своя панель филиала — как прежде.
+  const own = labPanelSave(branch, { panel: { name: 'Своя', modality: 'lab', service_id: 900, active: true }, analytes: [{ name: 'А' }] }, LAB).id;
+  assert.equal(labPanelDelete(branch, { id: own }, LAB).deleted, true);
+});
+
+test('H2 (б): услугу панели главного держит своя панель филиала — приём справочника проходит, панель — без услуги, экран это называет', () => {
+  const { main, branch, save, sync } = pair();
+  const id = save();
+  sync();
+  const bp = branchPanel(branch);
+  // Состояние, до которого филиал доходил «Удалить» (3.21 до этой правки, или вкладка старой
+  // версии): панель главного удалена здесь, своя панель — на той же услуге.
+  labPanelDelete(branch, { id: bp.id }, LAB);
+  const own = labPanelSave(branch, { panel: { name: 'Мазок (свой)', modality: 'lab', service_id: bp.service_id, active: true }, analytes: [{ name: 'Лейкоциты' }] }, LAB).id;
+  main.prepare('UPDATE services SET price = 130 WHERE id = 50').run();   // посторонняя правка главного едет тем же приёмом
+  for (let k = 1; k <= 2; k++) {
+    const payload = exportCatalogue(main);
+    const preview = applyCatalogue(branch, payload, { dryRun: true });
+    assert.ok(k === 1 ? preview.changed > 0 : preview.changed === 0, 'холостой прогон ' + k + ': ' + preview.changed);
+    const s = commitCatalogue(branch, payload);
+    if (k === 1) {
+      assert.equal(s.unlinked.lab_panels, 1);
+      assert.ok(changesLabel({ ok: true, ...s }).includes('приехало без услуги: лабораторные панели — 1 — услуга уже занята своей панелью этого здания'), changesLabel({ ok: true, ...s }));
+    }
+  }
+  assert.equal(branch.prepare("SELECT price FROM services WHERE name = 'Анализ гинекологического мазка'").get().price, 130, 'цена главного доехала');
+  const back = branch.prepare('SELECT * FROM lab_panels WHERE name = ?').get(PANEL);
+  assert.ok(back && back.id !== own, 'панель главного заведена снова');
+  assert.equal(back.service_id, null, '— без услуги: её держит своя панель филиала');
+  assert.deepEqual(perName(branch), ONE_EACH, 'с показателями');
+  assert.equal(branch.prepare('SELECT service_id FROM lab_panels WHERE id = ?').get(own).service_id, bp.service_id, 'своя панель филиала не тронута');
+  // Своя панель отпустила услугу — следующая синхронизация привязывает панель главного.
+  branch.prepare('UPDATE lab_panels SET service_id = NULL WHERE id = ?').run(own);
+  const s = sync();
+  assert.equal(s.unlinked, undefined);
+  assert.equal(branch.prepare('SELECT service_id FROM lab_panels WHERE id = ?').get(back.id).service_id, bp.service_id);
+  assert.equal(sync().changed, 0);
+  void id;
+});
+
+test('H2 (б): главное здание переносит услугу с одной своей панели на другую — приём проходит, со второй синхронизацией всё на месте', () => {
+  const { main, branch, save, sync } = pair();
+  main.prepare("INSERT INTO services (id, name, price, type, is_lab, active) VALUES (60, 'Мазок (запасная)', 1, 'lab', 1, 1)").run();
+  const first = labPanelSave(main, { panel: { name: 'Первая', modality: 'lab', service_id: null, active: true }, analytes: [{ name: 'Лейкоциты' }] }, LAB).id;
+  const second = save();   // id больше: на услуге 50
+  sync();
+  // В главном: услуга 50 — первой панели (меньший id, едет раньше), вторая — на услугу 60.
+  main.prepare('UPDATE lab_panels SET service_id = NULL WHERE id = ?').run(second);
+  main.prepare('UPDATE lab_panels SET service_id = 50 WHERE id = ?').run(first);
+  main.prepare('UPDATE lab_panels SET service_id = 60 WHERE id = ?').run(second);
+  const s1 = sync();
+  assert.equal(s1.unlinked.lab_panels, 1, 'первая пока без услуги');
+  sync();
+  const svc = (name) => branch.prepare('SELECT s.name FROM lab_panels p LEFT JOIN services s ON s.id = p.service_id WHERE p.name = ?').get(name).name;
+  assert.equal(svc('Первая'), 'Анализ гинекологического мазка');
+  assert.equal(svc(PANEL), 'Мазок (запасная)');
+  assert.equal(sync().changed, 0);
+});

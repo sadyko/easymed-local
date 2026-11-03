@@ -159,6 +159,9 @@ export function changesLabel(record, translate = ID) {
   // LAB_PANEL_DEDUP_V1 — показатели панелей, которых у главной клиники больше
   // нет (копии от прежних пересохранений панели), филиал удаляет — и говорит.
   group(record.removed, 'удалено');
+  // LAB_PANEL_DEDUP_V1 (ревью H2) — панель главного здания, чью услугу здесь
+  // держит своя панель здания, принята без услуги (а не уронила весь приём).
+  group(record.unlinked, 'приехало без услуги', 'услуга уже занята своей панелью этого здания');
   if (record.settings) parts.push(translate('обновлены сведения о клинике'));
   if (!parts.length) return translate('Изменений не было — справочник уже совпадает.');
   return parts.join('; ') + '.';

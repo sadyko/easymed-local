@@ -41,11 +41,41 @@
 // того, кому таблицы закрыты. Это записи: в READ_ONLY_RPCS (control/gate.js)
 // их нет, клиника с просроченной лицензией панели не правит — как и через
 // /api/db.
+//
+// Ревью H2 — ПАНЕЛЬ ГЛАВНОГО ЗДАНИЯ В ФИЛИАЛЕ. Панель, приехавшая справочником
+// (сопоставлена в branch_sync_map), в филиале не удаляется и не переносится на
+// другую услугу: ближайшая синхронизация завела бы её заново на прежнюю
+// услугу, а своя панель филиала на этой услуге роняла бы (UNIQUE, мигр. 048)
+// весь приём справочника — цены, сотрудников, права, пароли — при каждом
+// запуске. Отказ — 409, как у MAIN_CLINIC_TABLES (routes/db.js): запрос
+// правильный, не даёт устройство клиники. Показатели и коды анализатора своего
+// здания филиал по-прежнему правит. Панель, которую главное здание удалило
+// (приём её выключил и отвязал), — уже своя: её удалить можно.
 import { tableWriteAllowed } from '../../db/write-grant.js';
 import { rpcT } from '../server-message.js';
+import { readIdentity } from '../branch-sync/identity.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
+}
+
+/** Эта установка — филиал (branch_identity.role = 'secondary')? Сомнение — «нет», как в routes/db.js. */
+function isSecondary(db) {
+  try { return readIdentity(db).role === 'secondary'; } catch { return false; }
+}
+
+/**
+ * Ревью H2 — панель главного здания здесь, в филиале: сопоставлена со строкой
+ * главного и ещё живая (включена или привязана к услуге).
+ */
+export function mainBuildingPanel(db, panelId) {
+  if (!isSecondary(db)) return false;
+  try {
+    const mapped = db.prepare("SELECT 1 FROM branch_sync_map WHERE table_name = 'lab_panels' AND local_id = ? LIMIT 1").get(panelId);
+    if (!mapped) return false;
+    const row = db.prepare('SELECT active, service_id FROM lab_panels WHERE id = ?').get(panelId);
+    return !!row && (!!row.active || row.service_id != null);
+  } catch { return false; }
 }
 
 const MODALITIES = new Set(['lab', 'diagnostic']);
@@ -172,6 +202,13 @@ export function labPanelSave(db, args, user) {
   return db.transaction(() => {
     let panelId = id;
     if (panelId) {
+      // Ревью H2 — панель главного здания в филиале на другую услугу не переносится.
+      if (mainBuildingPanel(db, panelId)) {
+        const cur = db.prepare('SELECT service_id FROM lab_panels WHERE id = ?').get(panelId);
+        if (cur && (cur.service_id ?? null) !== panel.service_id) {
+          throw new RpcError('Эта панель приходит из главного здания: удалить её или сменить у неё услугу можно только там.', 409);
+        }
+      }
       const res = db.prepare(`UPDATE lab_panels SET name = @name, modality = @modality, has_narrative = @has_narrative,
           service_id = @service_id, active = @active, device_id = @device_id WHERE id = @id`).run({ ...panel, id: panelId });
       if (!res.changes) throw new RpcError('Панель не найдена — обновите страницу.', 404);
@@ -210,6 +247,10 @@ export function labPanelDelete(db, args, user) {
   return db.transaction(() => {
     if (!db.prepare('SELECT 1 FROM lab_panels WHERE id = ?').get(id)) {
       throw new RpcError('Панель не найдена — обновите страницу.', 404);
+    }
+    // Ревью H2 — панель главного здания в филиале не удаляется: её завела бы заново ближайшая синхронизация.
+    if (mainBuildingPanel(db, id)) {
+      throw new RpcError('Эта панель приходит из главного здания: удалить её или сменить у неё услугу можно только там.', 409);
     }
     const gone = db.prepare('DELETE FROM lab_panel_analytes WHERE panel_id = ?').run(id).changes;
     db.prepare('DELETE FROM lab_panels WHERE id = ?').run(id);
