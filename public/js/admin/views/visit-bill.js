@@ -20,6 +20,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
 import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 import { linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — исполнитель строки
+import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D4) — исполнитель строки «Добавить» — по услуге
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 // BRANCH_BILL_GUARD_V1 — тот же предикат, на котором стоят рабочие списки
 // (visits.js:91, procedures.js:50 — там он же, но в SQL: .is('sync_origin', null)).
@@ -226,13 +227,25 @@ export function openVisitBillModal(visit, onChanged) {
         h('option', { value: '' }, '— Выберите услугу —'));
     const addQty = h('input', { type: 'number', min: '1', step: '1', value: '1' });
     const addBtn = h('button', { class: 'btn btn-sm', type: 'button' }, Icon('Plus', { size: 13 }), ' Добавить');
+    // DIAG_ROUTE_V1 (D4, решение владельца 2026-11-03) — ИСПОЛНИТЕЛЬ СТРОКИ «ДОБАВИТЬ».
+    // Прежде исполнителем становился врач ВИЗИТА («нужен врач») или никто («без
+    // врача»): УЗИ, добавленное в визит терапевта, уходило в кабинет терапевта или в
+    // никуда. Теперь — отмеченные услуге в «Услугах и ставках», иначе все врачи
+    // (doctorPoolFor); один — сам; услуге кабинета без исполнителя строка не ложится.
+    const perfSelect = h('select', { 'data-bill-performer': '' });
+    const perfBox = h('div', { style: { width: '220px', display: 'none' } }, field('Исполнитель', perfSelect));
+    let performers = [];
 
     const serviceById = new Map();   // LIVE_AUDIT_FIX_V1 — requires_doctor для строки
     async function loadServiceOptions() {
         try {
-            const { data, error } = await supabase.from('services')
-                .select('id,name,price,requires_doctor,type,is_lab').eq('active', 1).order('name');
+            const [{ data, error }, staff] = await Promise.all([
+                supabase.from('services')
+                    .select('id,name,price,requires_doctor,type,is_lab').eq('active', 1).order('name'),
+                supabase.from('users').select('id, full_name, specialty, role, is_doctor, service_rates').eq('active', true).order('full_name'),   // DIAG_ROUTE_V1 (D4)
+            ]);
             if (error) throw error;
+            performers = performerCandidates((staff && !staff.error && staff.data) || []);
             serviceById.clear();
             for (const s of (data || [])) {
                 serviceById.set(String(s.id), s);
@@ -243,6 +256,19 @@ export function openVisitBillModal(visit, onChanged) {
             console.warn('[visit-bill] services load failed', e && e.message || e);
         }
     }
+    // DIAG_ROUTE_V1 (D4) — выбор исполнителя под выбранную услугу.
+    function paintPerformers() {
+        clear(perfSelect);
+        const svc = serviceById.get(String(addSelect.value)) || null;
+        if (!svc || !needsPerformer(svc)) { perfBox.style.display = 'none'; perfSelect.value = ''; return; }
+        const pool = doctorPoolFor(performers, svc);
+        perfSelect.appendChild(h('option', { value: '' }, pool.length ? '— выберите врача —' : 'нет врачей для этой услуги'));
+        for (const d of pool) perfSelect.appendChild(h('option', { value: String(d.id) }, (d.full_name || '—') + (d.specialty ? ' · ' + d.specialty : '')));
+        const one = soleCandidate(pool);
+        perfSelect.value = one ? String(one.id) : '';
+        perfBox.style.display = '';
+    }
+    addSelect.addEventListener('change', paintPerformers);
 
     addBtn.addEventListener('click', async () => {
         if (!addSelect.value) { toast('Сначала выберите услугу.', 'fail'); return; }
@@ -250,16 +276,24 @@ export function openVisitBillModal(visit, onChanged) {
         const qty = Number(addQty.value) || 1;
         const svc = serviceById.get(String(addSelect.value))
             || { id: Number(addSelect.value), price: Number(opt && opt.dataset.price) || 0, requires_doctor: 0 };
+        // DIAG_ROUTE_V1 (D4) — услуге кабинета врача без исполнителя строка не ложится.
+        const perfNeeded = needsPerformer(svc);
+        if (perfNeeded && !perfSelect.value) {
+            toast(trf('Укажите врача для услуги «{name}»', { name: svc.name || '' }), 'fail');
+            return;
+        }
 
         addBtn.disabled = true;
         try {
             // LIVE_AUDIT_FIX_V1 (B8) — цена/уровень по котировке, врач — по правилу.
-            const row = await billLineFor(visit, svc, qty);
+            // DIAG_ROUTE_V1 (D4) — исполнитель — выбранный, а не врач визита.
+            const row = await billLineFor(visit, svc, qty, perfNeeded ? Number(perfSelect.value) : null);
             const { error } = await supabase.from('visit_services').insert(row).select().single();
             if (error) throw error;
             toast('Услуга добавлена', 'ok');
             addSelect.value = '';
             addQty.value = '1';
+            paintPerformers();
             await reloadAll();
             if (typeof onChanged === 'function') await onChanged();
         } catch (e) {
@@ -499,6 +533,7 @@ export function openVisitBillModal(visit, onChanged) {
                 hasActorRole(BILL_ADD_ROLES) ? h('div', { class: 'row', style: { alignItems: 'flex-end', marginTop: '10px' } },
                     h('div', { class: 'grow' }, field('Услуга', addSelect)),
                     h('div', { style: { width: '90px' } }, field('Кол-во', addQty)),
+                    perfBox,   // DIAG_ROUTE_V1 (D4)
                     addBtn) : null,
                 hasActorRole(BILL_DISPENSE_ROLES) ? h('div', { class: 'row', style: { alignItems: 'flex-end', marginTop: '8px' } },
                     h('div', { class: 'grow' }, field('Товар', dispenseSelect)),
@@ -553,14 +588,17 @@ export const BILL_INVOICE_ROLES = ['admin', 'registrar', 'cashier'];
  * котировке сервера (service_price_quote: второй/повторный визит), врач строки
  * — врач визита только у врачебной услуги (requires_doctor); процедура, анализ
  * и услуга без врача исполнителя от визита не получают.
+ * DIAG_ROUTE_V1 (D4) — performerId: исполнитель, выбранный в окне (число или
+ * null — «без исполнителя»); окно передаёт его всегда. Без аргумента — прежнее
+ * правило (врач визита у врачебной услуги).
  */
-export async function billLineFor(visit, service, qty) {
+export async function billLineFor(visit, service, qty, performerId) {
     let price = Number(service.price) || 0;
     let tier = null;
     // OWN_PRICE_REPEAT_V1 — врач строки едет в котировку: у врача со своей ценой
     // строка ложится с той же ценой, что выставит счёт (OWN_PRICE_TIER_RATIO_V1 —
     // своя цена со скидкой яруса; прежде — цена яруса без врача).
-    const performer = linePerformer(service, null, visit.doctor_id);
+    const performer = performerId !== undefined ? (Number(performerId) || null) : linePerformer(service, null, visit.doctor_id);
     try {
         if (visit.patient_id) {
             const q = await supabase.rpc('service_price_quote', { patient_id: visit.patient_id, service_ids: [service.id], visit_id: visit.id, ...(performer ? { doctor_id: performer } : {}) });
