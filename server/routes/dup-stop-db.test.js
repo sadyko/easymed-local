@@ -205,11 +205,23 @@ test('DUP_STOP_V1 (ревью, остаток 2): правка /api/db роль�
     assert.equal(back.status, 409, JSON.stringify(back.json));
     assert.equal(back.json.error.code, 'duplicate_order');
     assert.equal(live(t, v, 40), 1, 'отменённая строка не вернулась второй живой');
-    assert.equal(back.json.error.message, 'Эта услуга уже назначена в этом визите: «Анализ крови».', 'кем и когда назначена — данные, которых ей не читают');
+    // DUP_STOP_V1 (остаток A5) — и без названия: услугу правимой строки она не выбирала и не читает
+    assert.equal(back.json.error.message, 'Эта услуга уже назначена в этом визите — второй раз её не назначают.', 'кем, когда и какая услуга — данные, которых ей не читают');
+    assert.ok(!/Анализ крови/.test(JSON.stringify(back.json)), 'название услуги строки в отказе');
     // регистратуре — с подробностями, как прежде
     const reg = await upd('reg', { status: 'added' }, a);
     assert.equal(reg.status, 409);
     assert.match(reg.json.error.message, /«Анализ крови» — Регистратура/);
+    // DUP_STOP_V1 (остаток A5) — две отменённые строки одной услуги одной правкой: «выбрана дважды», тоже без названия
+    const b = t.db.prepare("SELECT id FROM visit_services WHERE visit_id = ? AND service_id = 40 AND status <> 'cancelled'").get(v).id;
+    assert.equal((await upd('reg', { status: 'cancelled' }, b)).status, 200);
+    const twice = await t.dbq('nurse', { table: 'visit_services', op: 'update', values: { status: 'added' }, filters: [{ col: 'id', op: 'in', val: [a, b] }] });
+    assert.equal(twice.status, 409, JSON.stringify(twice.json));
+    assert.equal(twice.json.error.message, 'Одна и та же услуга выбрана дважды — в визит её назначают один раз.');
+    assert.ok(!/Анализ крови/.test(JSON.stringify(twice.json)), 'название услуги строки в отказе');
+    assert.equal(live(t, v, 40), 0);
+    const regTwice = await t.dbq('reg', { table: 'visit_services', op: 'update', values: { status: 'added' }, filters: [{ col: 'id', op: 'in', val: [a, b] }] });
+    assert.match(regTwice.json.error.message, /«Анализ крови» выбрана дважды/, 'регистратуре — с названием, как прежде');
   } finally { t.close(); }
 });
 

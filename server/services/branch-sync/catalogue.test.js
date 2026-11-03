@@ -714,6 +714,27 @@ test('приём, откатившийся до COMMIT, блокировку в�
   main.close(); branch.close();
 });
 
+// STAFF_EDIT_V1 (остаток A6) — commitCatalogue внутри ЧУЖОЙ транзакции: своя стала бы точкой
+// сохранения, блокировки снимались бы до настоящего COMMIT, и внешний откат оставлял бы их
+// снятыми. Такой вызов бросает до приёма: база и блокировки — как были.
+test('commitCatalogue внутри открытой транзакции бросает: ничего не принято, блокировка входа на месте (STAFF_EDIT_V1, остаток A6)', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+  const ip = { ip: '10.3.3.9' };
+  for (let i = 0; i < 5; i += 1) login(branch, 'ivanov', 'nevernyi', ip);
+  assert.equal(login(branch, 'ivanov', 'sekret12345', ip).error, 'locked');
+  main.prepare("UPDATE users SET password_hash = ? WHERE username = 'ivanov'").run(hashPassword('novyi-parol9'));
+  const cat = exportCatalogue(main);
+  const hashBefore = branch.prepare("SELECT password_hash FROM users WHERE username = 'ivanov'").get().password_hash;
+  assert.throws(() => branch.transaction(() => { commitCatalogue(branch, cat); throw new Error('внешний откат'); })(), /внутри открытой транзакции/);
+  assert.equal(branch.prepare("SELECT password_hash FROM users WHERE username = 'ivanov'").get().password_hash, hashBefore, 'приём прошёл');
+  assert.equal(login(branch, 'ivanov', 'sekret12345', ip).error, 'locked', 'блокировку сняли до COMMIT, а внешняя транзакция откатилась');
+  assert.ok(commitCatalogue(branch, cat).updated.users >= 1, 'вне транзакции — как прежде');
+  assert.ok(login(branch, 'ivanov', 'novyi-parol9', ip).session);
+  main.close(); branch.close();
+});
+
 test('смена фамилии и роли в главной клинике доезжает до филиала', () => {
   const main = seedStaff(seedMain(fresh()));
   const branch = staffReceiver();

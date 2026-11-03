@@ -224,6 +224,8 @@ export function compile(desc, user, ctx = {}) {
   // PACKAGES_V1 — роль из списка, но не администратор, и у операции есть
   // `nonAdminColumns`: сверх них пишет только право плитки (write.grant).
   let roleCols = null;
+  // DUP_STOP_V1 (остаток A4) — то же решение «может ли роль эту запись вообще», что у
+  // writeOpAllowed ниже (им же проверяет себя compileUpdateTargets); здесь ещё и колонки роли.
   const mayWrite = (o) => {
     if (canWrite(table, o, role)) {
       if (writeGrantNarrows(table, user, db, o)) return false;
@@ -975,25 +977,62 @@ function updateTargetWhere(desc, table, user, db) {
   return { where, params };
 }
 
+// Какие строки найдёт удаление: отбор экрана (только по строкам — requireRowTarget) и
+// ограничение по владельцу для удаления. DUP_STOP_V1 (остаток A3) — вынесено из
+// compileDelete, чтобы compileDeleteTargets выбирал ровно те же строки.
+function deleteTargetWhere(desc, table, user, db) {
+  if (!Array.isArray(desc.filters) || desc.filters.length === 0) throw new CompileError(NO_TARGET_MSG, 400);
+  const { clause, params } = compileFilters(desc.filters, table);
+  requireRowTarget(desc, table, 'delete');
+  if (!clause) throw new CompileError(NO_TARGET_MSG, 400);
+  const scope = scopeFor(table, user, db, table, 'delete');   // CABINET_FIX_V1_TPL — readAlso не удаляется
+  const where = scope ? `(${clause}) AND ${scope.clause}` : clause;
+  if (scope) params.push(...scope.params);
+  return { where, params };
+}
+
+// DUP_STOP_V1 (остаток A4) — может ли пользователь эту операцию записи в таблице ВООБЩЕ:
+// роль из списка реестра (если право плитки её не сужает) или право плитки (write.grant).
+// То же решение, что mayWrite в compile(), без колонок — колонки решает сама запись.
+function writeOpAllowed(table, op, user, db) {
+  const role = effectiveRoles(user);
+  if (canWrite(table, op, role)) return !writeGrantNarrows(table, user, db, op);
+  return writeGrantAllows(table, op, user, db);
+}
+
 /**
  * DUP_STOP_V1 (ревью, остаток 2) — СТРОКИ, КОТОРЫЕ ЗАДЕНЕТ ПРАВКА, для проверок сервера.
  * Тот же WHERE, что у UPDATE (updateTargetWhere), но без правил ЧТЕНИЯ (разделы данных
  * пациента, скрытые колонки): роль, которой правка разрешена, а чтение таблицы — нет
  * (медсестра со складом), иначе получала 403 на выборке, и проверка двери пропускалась.
  * Только для сервера: выбранное наружу не отдаётся. Колонки — из кода сервера, не из
- * запроса. Зовут после compile() самой правки — права на неё уже проверены.
+ * запроса ('*' — все колонки чтения, что есть в базе).
+ * DUP_STOP_V1 (остаток A4) — право на саму правку проверяется ЗДЕСЬ ЖЕ (writeOpAllowed):
+ * выборка без правил чтения не должна стать дверью чтения для того, кто эту таблицу не
+ * правит, даже если позвать её до compile() правки или с чужим описанием. Нет права — 403.
  */
 export function compileUpdateTargets(desc, user, ctx = {}, columns = ['id']) {
+  return writeTargetsSql(desc, user, ctx, columns, 'update');
+}
+
+/** DUP_STOP_V1 (остаток A3) — то же для удаления: строки, которые найдёт DELETE. */
+export function compileDeleteTargets(desc, user, ctx = {}, columns = ['id']) {
+  return writeTargetsSql(desc, user, ctx, columns, 'delete');
+}
+
+function writeTargetsSql(desc, user, ctx, columns, op) {
   const db = (ctx && ctx.db) || null;
-  const table = validateTable(desc.table);
+  const table = validateTable(desc && desc.table);
+  if (!writeOpAllowed(table, op, user, db)) throw new CompileError('not allowed', 403);   // DUP_STOP_V1 (остаток A4)
   if (!Array.isArray(desc.filters) || desc.filters.length === 0) throw new CompileError(NO_TARGET_MSG, 400);
-  const cols = (Array.isArray(columns) ? columns : []).map((c) => {
+  const list = columns === '*' ? starColumns(table) : (Array.isArray(columns) ? columns : []);
+  const cols = list.map((c) => {
     // Колонки задаёт код сервера, не запрос; и всё же — только колонки чтения реестра.
     if (typeof c !== 'string' || !readableColumns(table).includes(c)) throw new CompileError('unknown column', 400);
     return `"${table}"."${c}"`;
   });
   if (!cols.length) throw new CompileError('unknown column', 400);
-  const { where, params } = updateTargetWhere(desc, table, user, db);
+  const { where, params } = op === 'delete' ? deleteTargetWhere(desc, table, user, db) : updateTargetWhere(desc, table, user, db);
   return { sql: `SELECT ${cols.join(', ')} FROM "${table}" WHERE ${where}`, params };
 }
 
@@ -1046,13 +1085,7 @@ function requireRowTarget(desc, table, op) {
 }
 
 function compileDelete(desc, table, user, db) {
-  if (!Array.isArray(desc.filters) || desc.filters.length === 0) throw new CompileError(NO_TARGET_MSG, 400);
-  const { clause, params } = compileFilters(desc.filters, table);
-  requireRowTarget(desc, table, 'delete');
-  if (!clause) throw new CompileError(NO_TARGET_MSG, 400);
-  const scope = scopeFor(table, user, db, table, 'delete');   // CABINET_FIX_V1_TPL — readAlso не удаляется
-  const where = scope ? `(${clause}) AND ${scope.clause}` : clause;
-  if (scope) params.push(...scope.params);
+  const { where, params } = deleteTargetWhere(desc, table, user, db);   // DUP_STOP_V1 (остаток A3) — вынесено без изменений
   const sql = `DELETE FROM "${table}" WHERE ${where}`;
   return { sql, params, meta: { op: 'delete', table } };
 }

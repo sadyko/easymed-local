@@ -32,6 +32,7 @@ import { fillTemplate } from '../server-message.js';
 import {
   orderKey, repeatableLine, repeatReasonOk, REPEAT_REASON_KEY, REPEAT_REASON_MAX, REPEAT_ROLES,
   DUP_TEMPLATE_BILLED, DUP_TEMPLATE_UNBILLED, DUP_TEMPLATE_TWICE, DUP_TEMPLATE_PLAIN,
+  DUP_TEMPLATE_NAMELESS, DUP_TEMPLATE_TWICE_NAMELESS,   // DUP_STOP_V1 (остаток A5)
 } from '../../../public/js/shared/dup-order.js';
 
 export const DUP_CODE = 'duplicate_order';
@@ -111,7 +112,12 @@ function nameOf(db, row) {
  * без «кем, когда, счёт № …» и без номера строки — тем, кому строки визита и счета не
  * отдаются (patientDataRefusal): это данные пациента.
  */
-export function refusalOf(db, hit, { plain = false } = {}) {
+// DUP_STOP_V1 (остаток A5) — nameless: и без названия услуги — правка (/api/db update) ролью,
+// которой строки визита не читаются: услуга правимой строки — тоже данные, которых ей не отдают.
+export function refusalOf(db, hit, { plain = false, nameless = false } = {}) {
+  if (nameless) {
+    return new DuplicateOrderError({ template: hit.twice ? DUP_TEMPLATE_TWICE_NAMELESS : DUP_TEMPLATE_NAMELESS, params: {}, index: hit.index });
+  }
   if (hit.twice) {
     return new DuplicateOrderError({ template: DUP_TEMPLATE_TWICE, params: { service: nameOf(db, hit.line) }, index: hit.index });
   }
@@ -180,11 +186,11 @@ export function canRepeatOrder(user) {
  * причиной (журнал пишет logRepeatOrders ПОСЛЕ записи), {} — повторов нет.
  */
 // DUP_STOP_V1 (ревью, остаток 2) — plain: отказ без «кем, когда, счёт № …» (см. refusalOf).
-export function checkOrders(db, lines, { user = null, reason = null, excludeIds = [], spare = null, plain = false } = {}) {
+export function checkOrders(db, lines, { user = null, reason = null, excludeIds = [], spare = null, plain = false, nameless = false } = {}) {   // nameless — остаток A5
   const hits = duplicateHits(db, lines, { excludeIds, spare });
   if (!hits.length) return {};
   if (canRepeatOrder(user) && repeatReasonOk(reason)) return { repeats: hits, reason: String(reason).trim().slice(0, REPEAT_REASON_MAX) };
-  return { error: refusalOf(db, hits[0], { plain }), hits };
+  return { error: refusalOf(db, hits[0], { plain, nameless }), hits };
 }
 
 /** RPC: бросить отказ или вернуть обходы для журнала. */
@@ -273,7 +279,7 @@ export function updateTouchesOrders(values) {
  * @param {object} values — значения правки
  * @returns то же, что checkOrders
  */
-export function checkUpdatedOrders(db, rows, values, { user = null, reason = null, plain = false } = {}) {   // plain — DUP_STOP_V1 (ревью, остаток 2)
+export function checkUpdatedOrders(db, rows, values, { user = null, reason = null, plain = false, nameless = false } = {}) {   // plain — DUP_STOP_V1 (ревью, остаток 2) · nameless — остаток A5
   if (!updateTouchesOrders(values)) return {};
   const v = values;
   const has = (k) => Object.prototype.hasOwnProperty.call(v, k);
@@ -293,5 +299,5 @@ export function checkUpdatedOrders(db, rows, values, { user = null, reason = nul
     if (reopened || keyOf(after) !== keyOf(r) || String(after.visit_id) !== String(r.visit_id)) moved.push(after);
   }
   if (!moved.length) return {};
-  return checkOrders(db, moved, { user, reason, excludeIds: moved.map((r) => r.id), plain });
+  return checkOrders(db, moved, { user, reason, excludeIds: moved.map((r) => r.id), plain, nameless });
 }

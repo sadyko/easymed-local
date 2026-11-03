@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { surgeryWithoutBedRefusal } from '../services/domain/surgery-bed.js';   // CASHIER_HEAD_V1 (ревью I4)
-import { setLiveColumns, setForeignKeyColumns, compile, compileUpdateTargets, CompileError } from '../db/query-compiler.js';   // compileUpdateTargets: DUP_STOP_V1 (ревью, остаток 2)
+import { setLiveColumns, setForeignKeyColumns, compile, compileUpdateTargets, compileDeleteTargets, CompileError } from '../db/query-compiler.js';   // compileUpdateTargets: DUP_STOP_V1 (ревью, остаток 2) · compileDeleteTargets: остаток A3
 import { readableColumns, MAIN_CLINIC_TABLES, rowScope } from '../db/schema-registry.js';
 import { zeroRowRefusal } from '../db/schema-registry.js';   // CABINET_FIX_V1_R1 — 0 строк у шаблонов — отказ, а не 200
 import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто назначает заявку CRM другому
@@ -113,6 +113,19 @@ function refuseSurgeryWithoutBed(db, meta, body) {
 // lis_device_add) это требует; здесь — та же стена у правки через /api/db: иначе
 // строке прокси ставилась любая модель или пустая. Задета хоть одна строка
 // прокси — отказ целиком (пачка не делится). Строки своего порта — как прежде.
+// DUP_STOP_V1 (остаток A1–A3) — СТРОКИ, КОТОРЫЕ ЗАДЕНЕТ ПРАВКА ИЛИ УДАЛЕНИЕ, для проверок
+// этой двери: тот же WHERE, что у самой записи (compileUpdateTargets / compileDeleteTargets),
+// без правил ЧТЕНИЯ. Прежде проверки выбирали строки чтением с правами роли, и роль, которой
+// правка разрешена, а чтение — нет (медсестра со складом: разделы данных пациента), получала
+// 403 на выборке — и проверка пропускалась (пакет снимался со строки в счёте). Бросает —
+// вызывающий отказывает, а не пропускает.
+function writeTargets(db, meta, body, user, columns) {
+  const sel = meta.op === 'delete'
+    ? compileDeleteTargets(body, user, { db }, columns)
+    : compileUpdateTargets(body, user, { db }, columns);
+  return db.prepare(sel.sql).all(...sel.params);
+}
+
 function refuseProxyModelWrite(db, meta, body, user) {
   if (!meta || meta.table !== 'lab_devices' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;
   const rows = Array.isArray(body && body.values) ? body.values : (body && body.values ? [body.values] : []);
@@ -120,9 +133,12 @@ function refuseProxyModelWrite(db, meta, body, user) {
   if (!offModel) return null;
   let proxy = false;
   try {
-    const sel = compile({ table: body.table, op: 'select', columns: 'id,via', filters: body.filters }, user, { db });
-    proxy = db.prepare(sel.sql).all(...sel.params).some((r) => r.via === 'lisproxy');
-  } catch { proxy = false; }
+    // DUP_STOP_V1 (остаток A3) — правка: строки правки (writeTargets); upsert — как прежде.
+    const found = meta.op === 'update'
+      ? writeTargets(db, meta, body, user, ['id', 'via'])
+      : (() => { const sel = compile({ table: body.table, op: 'select', columns: 'id,via', filters: body.filters }, user, { db }); return db.prepare(sel.sql).all(...sel.params); })();
+    proxy = found.some((r) => r.via === 'lisproxy');
+  } catch { proxy = true; }   // DUP_STOP_V1 (остаток A3) — не прочитали — модель не проверена: отказ, а не пропуск
   return proxy ? PROXY_MODEL_REQUIRED : null;
 }
 
@@ -130,6 +146,8 @@ function refuseProxyModelWrite(db, meta, body, user) {
 // проверяется по местному дню её визита (то же правило, что у счёта —
 // billing.js linePackage). Правка: package_id только снимается (реестр,
 // onlyValues), и только со строки вне счёта.
+// DUP_STOP_V1 (остаток A1) — строки правки — writeTargets (как их найдёт сам UPDATE); не
+// прочитались — отказ 409, а не «пропустил» (прежде пакет снимался со строки в счёте).
 function refusePackageWrite(db, meta, body, user) {
   if (!meta || meta.table !== 'visit_services') return null;
   const rows = Array.isArray(body && body.values) ? body.values
@@ -138,9 +156,8 @@ function refusePackageWrite(db, meta, body, user) {
   if (meta.op === 'update' && rows.some((r) => r && Object.prototype.hasOwnProperty.call(r, 'package_id'))) {
     let invoiced = false;
     try {
-      const sel = compile({ table: body.table, op: 'select', columns: 'id,invoice_item_id', filters: body.filters }, user, { db });
-      invoiced = db.prepare(sel.sql).all(...sel.params).some((r) => r.invoice_item_id != null);
-    } catch { invoiced = false; }
+      invoiced = writeTargets(db, meta, body, user, ['id', 'invoice_item_id']).some((r) => r.invoice_item_id != null);
+    } catch { return 'Строки визита не выбраны — правка не выполнена.'; }   // DUP_STOP_V1 (остаток A1)
     if (invoiced) {
       return 'Строка уже в счёте: скидку пакета в нём меняют через счёт — замените или уберите услугу в карточке пациента.';
     }
@@ -166,8 +183,7 @@ function refuseAdmissionLineWrite(db, meta, body, user) {
   if (meta.op !== 'update' && meta.op !== 'delete') return null;
   let rows = [];
   try {
-    const sel = compile({ table: body.table, op: 'select', columns: 'id,invoice_item_id,clinic_item_id,admission_id', filters: body.filters }, user, { db });
-    rows = db.prepare(sel.sql).all(...sel.params);
+    rows = writeTargets(db, meta, body, user, ['id', 'invoice_item_id', 'clinic_item_id', 'admission_id']);   // DUP_STOP_V1 (остаток A3) — строки самой записи, без правил чтения
   } catch { return 'Строки госпитализации не выбраны — правка не выполнена.'; }
   const status = db.prepare('SELECT status FROM admissions WHERE id = ?');
   for (const r of rows) {
@@ -214,8 +230,7 @@ function refuseVisitLineWrite(db, meta, body, user) {
   if (meta.op === 'update' && !Object.prototype.hasOwnProperty.call(values, 'consultation_type_id')) return null;
   let rows = [];
   try {
-    const sel = compile({ table: body.table, op: 'select', columns: 'id,invoice_item_id,clinic_item_id', filters: body.filters }, user, { db });
-    rows = db.prepare(sel.sql).all(...sel.params);
+    rows = writeTargets(db, meta, body, user, ['id', 'invoice_item_id', 'clinic_item_id']);   // DUP_STOP_V1 (остаток A3) — строки самой записи, без правил чтения
   } catch { return 'Строки визита не выбраны — правка не выполнена.'; }
   for (const r of rows) {
     if (meta.op === 'delete' && r.clinic_item_id != null && r.invoice_item_id == null) {
@@ -255,10 +270,11 @@ function visitOrderCheck(db, meta, body, user, reason) {
     if (!updateTouchesOrders(values)) return {};
     let rows = [];
     try {
-      const sel = compileUpdateTargets(body, user, { db }, ['id', 'visit_id', 'service_id', 'consultation_type_id', 'doctor_id', 'status', 'clinic_item_id']);
-      rows = db.prepare(sel.sql).all(...sel.params);
+      rows = writeTargets(db, meta, body, user, ['id', 'visit_id', 'service_id', 'consultation_type_id', 'doctor_id', 'status', 'clinic_item_id']);
     } catch { return { unread: 'Строки визита не выбраны — правка не выполнена.' }; }   // DUP_STOP_V1 (ревью, остаток 2) — не прочитали — не пропускаем
-    return checkUpdatedOrders(db, rows, values, { user, reason, plain });
+    // DUP_STOP_V1 (остаток A5) — правка ролью, которой строки визита не читаются (plain): отказ
+    // и без названия услуги — услугу правимой строки она не выбирала и прочитать не может.
+    return checkUpdatedOrders(db, rows, values, { user, reason, plain, nameless: plain });
   }
   if (meta.op !== 'insert' && meta.op !== 'upsert') return {};
   const rows = Array.isArray(body && body.values) ? body.values : (body && body.values ? [body.values] : []);
@@ -307,8 +323,7 @@ function notesTargetRows(db, meta, body, user, values) {   // CABINET_FIX_V1_R5 
   if (meta.op === 'upsert') return { rows: values.id != null ? byId.all(values.id) : [], picked: false };   // CABINET_FIX_V1_R5
   if (f.length === 1 && f[0] && f[0].col === 'id' && f[0].op === 'eq') return { rows: byId.all(f[0].val), picked: false };   // CABINET_FIX_V1_R5
   try {   // CABINET_FIX_V1_R5
-    const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user, { db });   // CABINET_FIX_V1_R5
-    return { rows: db.prepare(sel.sql).all(...sel.params).map((r) => byId.get(r.id)).filter(Boolean), picked: true };   // CABINET_FIX_V1_R5
+    return { rows: writeTargets(db, meta, body, user, ['id', 'notes']), picked: true };   // CABINET_FIX_V1_R5 · DUP_STOP_V1 (остаток A3) — строки самой правки, без правил чтения
   } catch { return null; }   // CABINET_FIX_V1_R5
 }
 export function refuseNotesWrite(db, meta, body, user, base, out = null) {   // CABINET_FIX_V1_R5 — экспорт для проверки · CABINET_FIX_V1_R6
@@ -362,10 +377,10 @@ export function signWhileActingRefusal(db, meta, body, user) {   // ADMIN_ACT_AS
     if (meta.op !== 'insert' && rows.some((r) => Object.prototype.hasOwnProperty.call(r, 'body'))) return true;
     if (meta.op === 'insert') return false;
     try {
-      const filters = meta.op === 'upsert'
-        ? [{ col: 'id', op: 'in', val: rows.map((r) => r.id).filter((x) => x != null) }]
-        : body.filters;
-      if (meta.op === 'upsert' && !filters[0].val.length) return false;
+      // DUP_STOP_V1 (остаток A3) — правка: строки самой правки (writeTargets), без правил чтения.
+      if (meta.op === 'update') return writeTargets(db, meta, body, user, ['id', 'doc_type']).some((r) => isDoctorDocType(r.doc_type));
+      const filters = [{ col: 'id', op: 'in', val: rows.map((r) => r.id).filter((x) => x != null) }];
+      if (!filters[0].val.length) return false;
       const sel = compile({ table: body.table, op: 'select', columns: 'id,doc_type', filters }, user, { db });
       return db.prepare(sel.sql).all(...sel.params).some((r) => isDoctorDocType(r.doc_type));
     } catch { return true; }
@@ -408,15 +423,16 @@ export function refundedSignRefusal(db, meta, body, user) {   // REFUND_ANY_V1 �
     // Ревью B4 — правка документа врача на возвращённой строке — тоже новая
     // подпись: текст (body) или вид (doc_type) документа врача, в том числе
     // заметки, которая им становится. Название — можно. Строки правки — по
-    // фильтру запроса (та же выборка, что у R3); не прочитались — не отказ
-    // здесь (решат права таблицы). Реестр разрешает только update.
+    // фильтру запроса (та же выборка, что у R3). Реестр разрешает только update.
+    // DUP_STOP_V1 (остаток A3) — строки правки — writeTargets (как их найдёт сам UPDATE, без
+    // правил чтения): врач без разделов данных пациента прежде получал 403 на выборке, и
+    // проверка пропускалась — документ возвращённой строки переписывался. Не прочитались — отказ.
     const touching = rows.filter((r) => ['body', 'doc_type'].some((k) => Object.prototype.hasOwnProperty.call(r, k)));
     if (!touching.length || meta.op !== 'update') return false;
     let targets;
     try {
-      const sel = compile({ table: body.table, op: 'select', columns: 'id,doc_type,visit_service_id', filters: body.filters }, user, { db });
-      targets = db.prepare(sel.sql).all(...sel.params);
-    } catch { return false; }
+      targets = writeTargets(db, meta, body, user, ['id', 'doc_type', 'visit_service_id']);
+    } catch { return true; }
     const next = touching[0];
     const hit = targets.filter((d) => d.visit_service_id != null
       && (isDoctorDocType(d.doc_type) || (Object.prototype.hasOwnProperty.call(next, 'doc_type') && isDoctorDocType(next.doc_type))))
@@ -475,9 +491,8 @@ function crmEvidenceTargets(db, meta, body, user) {
   if (!meta || meta.table !== 'visit_services' || meta.op !== 'update') return [];
   if (!hasEvidenceStatus(body)) return [];
   try {
-    const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user, { db });
-    return db.prepare(sel.sql).all(...sel.params).map((r) => r.id);
-  } catch { return []; }   // отбор не сложился — заявке это не повод падать
+    return writeTargets(db, meta, body, user, ['id']).map((r) => r.id);   // DUP_STOP_V1 (остаток A3) — строки самой правки: медсестра без чтения строк тоже доказывает приход
+  } catch { return []; }   // отбор не сложился — заявке это не повод падать (не правило, а отметка заявки)
 }
 
 /** Несёт ли запрос статус, который человек ставит, только работая с пациентом. */
@@ -1051,12 +1066,15 @@ function consultKindRefusal(db, meta, body) {
   return null;
 }
 
-// Строки, которые затронет правка, — тем же compile(), что и сама правка.
+// Строки, которые затронет правка, — тем же WHERE, что у самой правки.
+// DUP_STOP_V1 (остаток A3) — writeTargets (без правил чтения: скрытая доля врача приходила
+// пустой); не прочитались — null, и вызывающий отказывает (прежде — пустой список: правило
+// пакета и показа на сайте пропускалось).
+const TARGETS_UNREAD = 'Записи не выбраны — правка не выполнена.';
 function targetRows(db, body, user, columns) {
   try {
-    const sel = compile({ table: body.table, op: 'select', columns, filters: body.filters }, user, { db });
-    return db.prepare(sel.sql).all(...sel.params);
-  } catch { return []; }
+    return writeTargets(db, { op: 'update' }, body, user, columns);
+  } catch { return null; }
 }
 // Сумма цен действующих услуг пакета — для «суммы скидки» и «цены пакета».
 function packageFull(db, serviceIds) {
@@ -1078,7 +1096,9 @@ function packageFormatRefusal(db, meta, body, user) {
   }
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const money = ['discount_mode', 'discount_value', 'service_ids'].some((k) => Object.prototype.hasOwnProperty.call(v, k));
-  for (const cur of targetRows(db, body, user, '*')) {
+  const found = targetRows(db, body, user, '*');
+  if (!found) return { message: TARGETS_UNREAD, field: null };   // DUP_STOP_V1 (остаток A3)
+  for (const cur of found) {
     const merged = { ...cur, ...v };
     if (!isPackageRow(merged)) continue;
     const p = packageProblem(v, { merged, full: money ? packageFull(db, merged.service_ids) : null });
@@ -1095,7 +1115,9 @@ function serviceOnlineRefusal(db, meta, body, user) {
   }
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   if (!['online_booking', 'name', 'name_uz'].some((k) => Object.prototype.hasOwnProperty.call(v, k))) return null;
-  for (const cur of targetRows(db, body, user, 'id,name,name_uz,online_booking')) {
+  const found = targetRows(db, body, user, ['id', 'name', 'name_uz', 'online_booking']);
+  if (!found) return TARGETS_UNREAD;   // DUP_STOP_V1 (остаток A3)
+  for (const cur of found) {
     const p = onlineRuleProblem({ ...cur, ...v });
     if (p) return p;
   }

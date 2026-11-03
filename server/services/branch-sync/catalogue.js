@@ -1065,9 +1065,13 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
  * applyCatalogue). Блокировка живёт в памяти процесса и откату базы не подчиняется: снятая
  * внутри транзакции, она оставалась снятой и тогда, когда приём откатился. Транзакция
  * бросила — бросает и это, и ничего не снято.
+ * STAFF_EDIT_V1 (остаток A6) — только ВНЕ чужой транзакции: внутри внешней db.transaction
+ * своя стала бы точкой сохранения, и блокировки снимались бы до настоящего COMMIT — внешний
+ * откат оставил бы их снятыми. Такой вызов — ошибка программы, и он бросает до приёма.
  * @returns то же, что applyCatalogue (логинов в нём нет)
  */
 export function commitCatalogue(db, payload) {
+  if (db.inTransaction) throw new Error('commitCatalogue: вызов внутри открытой транзакции — блокировки входа снялись бы до COMMIT');   // STAFF_EDIT_V1 (остаток A6)
   const passwordSetFor = [];
   const summary = db.transaction(() => applyCatalogue(db, payload, { passwordSetFor }))();
   for (const name of passwordSetFor) {

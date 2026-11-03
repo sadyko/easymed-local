@@ -15,7 +15,7 @@
 // строки, какие записи; и отказ, если правка трогает то, что уже в счёте или
 // в работе), mirrorAfter() — ПОСЛЕ записи (сверка задетых записей). Второй шаг
 // молчит при любой ошибке: запись в базу уже состоялась.
-import { compile } from '../../db/query-compiler.js';
+import { compileUpdateTargets, compileDeleteTargets } from '../../db/query-compiler.js';   // DUP_STOP_V1 (остаток A2)
 import {
   visitsOfLines, isRefusalStage, cancellableBookingsOf, isEmptyBooking, syncLineFromVisit,
 } from './booking-mirror.js';
@@ -34,9 +34,28 @@ export { canEditCrm };
 
 const LINE_KEYS = ['status', 'scheduled_date', 'doctor_id', 'service_id', 'visit_id', 'consultation_type_id'];
 
-function targetIds(db, body, user) {
-  const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user, { db });
+// DUP_STOP_V1 (остаток A2) — строки, которые заденет правка или удаление: тот же WHERE, что у
+// самой записи (compileUpdateTargets / compileDeleteTargets), без правил ЧТЕНИЯ. Прежде —
+// чтение с правами роли: медсестре без разделов данных пациента выборка давала 403, ошибку
+// глотал общий catch ниже — и правило «неоплаченную услугу в работу не берут» пропускалось.
+function targetIds(db, body, user, op) {
+  const sel = op === 'delete'
+    ? compileDeleteTargets(body, user, { db }, ['id'])
+    : compileUpdateTargets(body, user, { db }, ['id']);
   return db.prepare(sel.sql).all(...sel.params).map((r) => r.id);
+}
+
+// DUP_STOP_V1 (остаток A2) — записи, у которых в mirrorBefore стоит правило-отказ: строки не
+// разобрались — отказ, а не «пропустил». Остальные (карточка заявки: задачи, отмена записей)
+// молчат, как прежде.
+const UNREAD_REFUSAL = {
+  visit_services: 'Строки визита не выбраны — правка не выполнена.',
+  crm_request_services: 'Записи не выбраны — правка не выполнена.',
+};
+function guardedEdit(meta) {
+  if (meta.table === 'visit_services') return meta.op === 'update' || meta.op === 'delete';
+  if (meta.table === 'crm_request_services') return ['insert', 'upsert', 'update'].includes(meta.op);
+  return false;
 }
 
 const holes = (a) => a.map(() => '?').join(',');
@@ -123,7 +142,7 @@ export function mirrorBefore(db, meta, body, user) {
     if (meta.table === 'crm_request_services' && ['insert', 'upsert', 'update'].includes(meta.op)) {
       const vals = Array.isArray(body && body.values) ? body.values : [(body && body.values) || {}];
       if (vals.some((r) => r && r.status === 'done')) {
-        const ids = meta.op === 'update' ? targetIds(db, body, user) : [];
+        const ids = meta.op === 'update' ? targetIds(db, body, user, meta.op) : [];
         const opens = meta.op !== 'update' || (ids.length > 0
           && !!db.prepare(`SELECT 1 FROM crm_request_services WHERE id IN (${holes(ids)}) AND status <> 'done' LIMIT 1`).get(...ids));
         if (opens) {
@@ -133,7 +152,7 @@ export function mirrorBefore(db, meta, body, user) {
       }
     }
     if (meta.table === 'visit_services' && (meta.op === 'update' || meta.op === 'delete')) {
-      ctx.ids = targetIds(db, body, user);
+      ctx.ids = targetIds(db, body, user, meta.op);
       // V3120_FIX — неоплаченную услугу в работу не берут (visit-status-guard.js).
       const next = meta.op === 'update' && body && body.values && !Array.isArray(body.values) ? body.values.status : undefined;
       if (next !== undefined && ctx.ids.length) {
@@ -146,7 +165,7 @@ export function mirrorBefore(db, meta, body, user) {
         }
       }
     } else if (meta.table === 'crm_request_services' && meta.op === 'update') {
-      ctx.ids = targetIds(db, body, user);
+      ctx.ids = targetIds(db, body, user, meta.op);
       const values = (body && body.values) || {};
       ctx.refusal = lockedLineRefusal(db, ctx.ids, values)
         // CRM_ONE_WAY_V1 (O6, O3) — день, врач, услуга и визит строки записи из карточки не меняются.
@@ -178,7 +197,7 @@ export function mirrorBefore(db, meta, body, user) {
       const status = values.status;
       const reassign = Object.prototype.hasOwnProperty.call(values, 'assigned_to');   // CRM_UNIFY_V1
       const refusal = isRefusalStage(db, status);
-      const ids = (refusal || reassign) ? targetIds(db, body, user) : [];
+      const ids = (refusal || reassign) ? targetIds(db, body, user, meta.op) : [];
       if (refusal && ids.length) {
         ctx.lost = db.prepare(`SELECT id FROM crm_requests WHERE id IN (${holes(ids)}) AND status <> ?`)
           .all(...ids, status).map((r) => r.id);
@@ -190,6 +209,7 @@ export function mirrorBefore(db, meta, body, user) {
     }
   } catch (e) {
     console.error('[crm-mirror] правка не разобрана:', e && e.message);
+    if (guardedEdit(meta)) ctx.refusal = UNREAD_REFUSAL[meta.table];   // DUP_STOP_V1 (остаток A2) — правило не проверено — отказ
   }
   return ctx;
 }
