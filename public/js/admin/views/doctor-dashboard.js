@@ -129,13 +129,17 @@ export function wardHeadState() { return { ...ward }; }
 // REPEAT_VISIT_V1 — свои записи на 30 дней вперёд (doctor_upcoming_visits).
 // Аргумента «чей» нет и у сервера: записи — того, кто вошёл.
 export const UPCOMING_DAYS = 30;
+// REPEAT_VISIT_V1 (ревью, minor-5) — state.upcoming = null: НЕ ЗАГРУЗИЛОСЬ. Пустой
+// список вместо сбоя рисовал «Записи вперёд · 0» и «Записей … нет» — врач решал,
+// что вперёд никого не записано.
 async function loadUpcoming() {
-    state.upcoming = [];
+    let rows = null;
     try {
         const { data, error } = await supabase.rpc('doctor_upcoming_visits', { days: UPCOMING_DAYS });
-        if (error) { console.warn('[doctor-dash] upcoming:', error.message); return; }
-        state.upcoming = Array.isArray(data && data.rows) ? data.rows : [];
+        if (error) console.warn('[doctor-dash] upcoming:', error.message);
+        else if (Array.isArray(data && data.rows)) rows = data.rows;
     } catch (e) { console.warn('[doctor-dash] upcoming threw:', e && e.message); }
+    state.upcoming = rows;
 }
 
 async function loadWardHead() {
@@ -611,8 +615,9 @@ export async function loadDoctorDashboard() {
     // ответит медленно.
     await loadWardHead();
 
-    // REPEAT_VISIT_V1 — «Записи вперёд» — тоже отдельным шагом и молча: сбой не
-    // делает день «неполным» (state.failed не трогается), группа просто пуста.
+    // REPEAT_VISIT_V1 — «Записи вперёд» — тоже отдельным шагом: сбой не делает
+    // день «неполным» (state.failed не трогается); группа говорит, что не
+    // загрузилась (ревью, minor-5), а не «записей нет».
     await loadUpcoming();
 
     state.services = svcRows.map((r) => ({
@@ -1081,7 +1086,7 @@ function dayCard(day, now) {
         // REPEAT_VISIT_V1 — «Записи вперёд» под лентой дня, своим блоком: лента
         // по-прежнему кончается группой «Завершённые», а будущие записи не
         // смешиваются с сегодняшними.
-        upcomingGroup(state.upcoming || []),
+        upcomingGroup(state.upcoming),   // null — не загрузилось (ревью, minor-5)
     );
 }
 function nowLine(now) {
@@ -1113,18 +1118,26 @@ function doneGroup(done) {
 // записал на повторный визит через неделю, нигде не был виден. Группа свёрнута
 // при открытии кабинета (как «Завершённые»), внутри — по дням, по времени.
 // Строки не кнопки: работы по будущей записи сегодня нет.
+// REPEAT_VISIT_V1 (ревью, minor-5) — rows === null: сервер не ответил. Числа нет
+// (его не знает никто), строка «Не удалось загрузить записи вперёд» видна и в
+// свёрнутой группе — «записей нет» здесь была бы неправдой.
 function upcomingGroup(rows) {
+    const failed = !Array.isArray(rows);
     const box = h('div', { class: 'dd-done-list' });
     const head = h('button', {
         type: 'button', class: 'dd-done-h', 'aria-expanded': 'false',
         onclick: () => { state.upcomingOpen = !state.upcomingOpen; draw(); },
     },
         h('span', { class: 'dd-done-ic' }, Icon('ChevronRight', { size: 14 })),
-        trf('Записи вперёд · {n}', { n: rows.length }));
+        failed ? tr('Записи вперёд') : trf('Записи вперёд · {n}', { n: rows.length }));
     function draw() {
         head.setAttribute('aria-expanded', state.upcomingOpen ? 'true' : 'false');
         head.className = 'dd-done-h' + (state.upcomingOpen ? ' on' : '');
         clear(box);
+        if (failed) {
+            box.appendChild(h('div', { class: 'dd-up-day dd-up-err', role: 'status' }, tr('Не удалось загрузить записи вперёд')));
+            return;
+        }
         if (!state.upcomingOpen) return;
         if (!rows.length) {
             box.appendChild(h('div', { class: 'dd-up-day' }, tr('Записей на ближайшие 30 дней нет')));

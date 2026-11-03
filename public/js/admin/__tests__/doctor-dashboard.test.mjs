@@ -271,6 +271,7 @@ const PAY_A = () => [
 let PAY_BY_DOCTOR = { 'u-doc-a': PAY_A(), 'u-doc-b': [payLineOf('svb', 0, 37600, null)] };
 // REPEAT_VISIT_V1 — ответ doctor_upcoming_visits («Записи вперёд»); null — пусто.
 let UPCOMING = null;
+let UPCOMING_FAIL = false;   // REPEAT_VISIT_V1 (ревью, minor-5) — сервер отказал
 let upcomingCalls = [];
 let payCalls = [];
 function matches(row, f) {
@@ -306,6 +307,7 @@ globalThis.fetch = async (url, opts) => {
   }
   if (u.startsWith('/api/rpc/doctor_upcoming_visits')) {
     upcomingCalls.push(body);
+    if (UPCOMING_FAIL) return { ok: false, status: 500, json: async () => ({ error: { code: 'internal', message: 'база занята' } }) };
     return { ok: true, json: async () => ({ data: UPCOMING || { from: '', to: '', rows: [] } }) };
   }
   if (u.startsWith('/api/rpc/doctor_pay_summary')) {
@@ -907,5 +909,35 @@ test('REPEAT_VISIT_V1: «Записи вперёд · N» — свои запи�
     assert.ok(!byClass(list, 'dd-up-row').length, 'будущие записи попали в ленту сегодняшнего дня');
   } finally {
     UPCOMING = null;
+  }
+});
+
+// REPEAT_VISIT_V1 (ревью, minor-5) — «ЗАПИСИ ВПЕРЁД» НЕ ЗАГРУЗИЛИСЬ — ТАК И СКАЗАНО.
+// Отказ сервера превращался в пустой список: «Записи вперёд · 0» и «Записей на
+// ближайшие 30 дней нет» — врач решал, что вперёд никого. Теперь — без числа и
+// строкой «Не удалось загрузить записи вперёд», видной и в свёрнутой группе.
+test('REPEAT_VISIT_V1 (ревью, minor-5): «Записи вперёд» не загрузились — без «· 0» и без «записей нет», строка об ошибке', async () => {
+  reset();
+  upcomingCalls = [];
+  UPCOMING_FAIL = true;
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    loginAs(DOCTOR_A);
+    const host = mk('div');
+    await dash.renderDoctorDashboard(host, {});
+    assert.strictEqual(upcomingCalls.length, 1, 'записи вперёд не спрошены');
+    const block = byClass(host, 'dd-upcoming')[0];
+    assert.ok(block, 'нет блока «Записи вперёд»');
+    const head = byClass(block, 'dd-done-h')[0];
+    assert.ok(textOf(head).includes('Записи вперёд'), 'подпись группы: ' + textOf(head));
+    assert.ok(!/·\s*\d/.test(textOf(head)), 'неизвестное число записей названо: ' + textOf(head));
+    assert.ok(textOf(block).includes('Не удалось загрузить записи вперёд'), 'ошибка не показана: ' + textOf(block));
+    head.click();
+    assert.ok(!textOf(block).includes('Записей на ближайшие 30 дней нет'), 'сбой показан как «записей нет»');
+    assert.ok(textOf(block).includes('Не удалось загрузить записи вперёд'), 'раскрытая группа потеряла ошибку');
+  } finally {
+    UPCOMING_FAIL = false;
+    console.warn = warn;
   }
 });
