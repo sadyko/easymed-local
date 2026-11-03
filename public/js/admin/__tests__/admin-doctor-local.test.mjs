@@ -230,8 +230,8 @@ test('кабинет → «Мой профиль» открывается у а�
   assert.ok(own, 'профиль не спросил строку администратора-врача: ' + JSON.stringify(DBCALLS.map((c) => c.table)));
 });
 
-test('окно визита → рекомендация: выбор врача показывает администратора-врача и сразу ставит его — он рекомендовал', async () => {
-  signInAs('admdoc', ADMIN_DOC, 'admin');
+/** Окно «Add to visit» первой рекомендации пациента 3: { dialog, select, confirm }. */
+async function openAttach() {
   document.body.children.length = 0;
   VM.openVisitModal({ visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3, full_name: 'Иванов Иван' } });
   await flush();
@@ -243,11 +243,76 @@ test('окно визита → рекомендация: выбор врача 
   const dialog = document.body.children[document.body.children.length - 1];
   const select = walk(dialog).find((n) => n.tagName === 'SELECT');
   assert.ok(select, 'в окне рекомендации нет выбора врача');
-  const opts = walk(select).filter((n) => n.tagName === 'OPTION');
-  const mine = opts.find((o) => o.attrs.value === String(ADMIN_DOC));
-  assert.ok(mine, 'администратора-врача нет в выборе врача: ' + JSON.stringify(opts.map((o) => o.attrs.value)));
-  assert.ok('selected' in mine.attrs, 'рекомендовавший врач не выбран по умолчанию');
-  assert.ok(!opts.some((o) => o.attrs.value === String(KASSA)), 'кассир в выборе врача');
+  const confirm = walk(dialog).find((n) => n.tagName === 'BUTTON' && textOf(n).includes(addLabel));
+  return { dialog, select, confirm };
+}
+
+// DIAG_ROUTE_V1 (D3, решение владельца 2026-11-03) — исполнитель по умолчанию — тот, кому
+// услуга отмечена в «Услугах и ставках», а не рекомендовавший: УЗИ, рекомендованное
+// терапевтом, ложилось в кабинет терапевта. Никто не отмечен — в выборе все врачи (по
+// is_doctor: администратор-врач с флагом-числом 1 — на месте), и сам никто не ставится.
+test('окно визита → рекомендация: в выборе администратор-врач (флаг 1); рекомендовавший сам не ставится; отмеченный услуге — ставится (DIAG_ROUTE_V1)', async () => {
+  signInAs('admdoc', ADMIN_DOC, 'admin');
+  {
+    const { select } = await openAttach();
+    const opts = walk(select).filter((n) => n.tagName === 'OPTION');
+    assert.ok(opts.some((o) => o.attrs.value === String(ADMIN_DOC)), 'администратора-врача нет в выборе врача: ' + JSON.stringify(opts.map((o) => o.attrs.value)));
+    assert.ok(opts.some((o) => o.attrs.value === String(DOC)), 'врача нет в выборе');
+    assert.ok(!opts.some((o) => o.attrs.value === String(KASSA)), 'кассир в выборе врача');
+    assert.equal(select.value, '', 'рекомендовавший врач поставлен исполнителем сам');
+  }
+  DB.prepare('UPDATE users SET service_rates = ? WHERE id = ?').run(JSON.stringify([{ service_id: 22, percentage: 0 }]), DOC);
+  try {
+    const { select } = await openAttach();
+    assert.equal(select.value, String(DOC), 'исполнитель, отмеченный услуге, не выбран сам');
+    assert.deepEqual(walk(select).filter((n) => n.tagName === 'OPTION').map((o) => o.attrs.value).filter(Boolean), [String(DOC)],
+      'в выборе — только отмеченные услуге');
+  } finally {
+    DB.prepare("UPDATE users SET service_rates = '[]' WHERE id = ?").run(DOC);
+  }
+});
+
+// DIAG_ROUTE_V1 (D3) — «— No doctor —» у услуги кабинета: отказ, строка не ложится (и не
+// уходит молча рекомендовавшему); выбранный исполнитель — в строке. Анализу «без врача» —
+// можно, и строка без исполнителя, а не у рекомендовавшего.
+test('окно визита → рекомендация: «— No doctor —» у услуги кабинета — отказ; выбранный исполнитель — в строке; анализ — без исполнителя (DIAG_ROUTE_V1)', async () => {
+  signInAs('admdoc', ADMIN_DOC, 'admin');
+  const toasts = [];
+  const toastEl = mk('div');
+  Object.defineProperty(toastEl, 'textContent', { get() { return ''; }, set(v) { toasts.push(String(v)); }, configurable: true });
+  const prevGet = document.getElementById;
+  document.getElementById = (id) => (id === 'toast' ? toastEl : null);
+  const lineOf = (sid) => DB.prepare("SELECT doctor_id FROM visit_services WHERE visit_id = 40 AND service_id = ? AND status <> 'cancelled'").get(sid);
+  // Своя услуга и своя рекомендация: общая рекомендация УЗИ (22) на время теста скрыта.
+  DB.prepare("UPDATE recommended_services SET status = 'dismissed' WHERE patient_id = 3 AND service_id = 22 AND status = 'pending'").run();
+  const rec = (sid, name) => DB.prepare("INSERT INTO recommended_services (patient_id, service_id, service_name, recommended_by, status) VALUES (3, ?, ?, ?, 'pending')").run(sid, name, ADMIN_DOC);
+  DB.prepare("INSERT INTO services (id, name, price, type) VALUES (25, 'УЗИ почек', 120000, 'imaging')").run();
+  DB.prepare("INSERT INTO services (id, name, price, type, is_lab) VALUES (24, 'ОАК', 30000, 'lab', 1)").run();
+  try {
+    rec(25, 'УЗИ почек');
+    let w = await openAttach();
+    w.select.value = '';
+    w.confirm.click();
+    await flush(80);
+    assert.equal(lineOf(25), undefined, 'УЗИ легло без исполнителя');
+    assert.ok(toasts.some((t) => t === tr('Выберите исполнителя услуги.')), 'отказ не сказан: ' + JSON.stringify(toasts));
+    w = await openAttach();
+    w.select.value = String(DOC);
+    w.confirm.click();
+    await flush(80);
+    assert.equal(lineOf(25) && lineOf(25).doctor_id, DOC, 'исполнитель — не выбранный');
+    // анализ: «без врача» — можно, и не рекомендовавшему
+    rec(24, 'ОАК');
+    w = await openAttach();
+    w.select.value = '';
+    w.confirm.click();
+    await flush(80);
+    assert.ok(lineOf(24), 'анализ не лёг');
+    assert.equal(lineOf(24).doctor_id, null, '«— No doctor —» отдал анализ рекомендовавшему');
+  } finally {
+    document.getElementById = prevGet;
+    DB.prepare("UPDATE recommended_services SET status = 'pending' WHERE patient_id = 3 AND service_id = 22 AND status = 'dismissed'").run();
+  }
 });
 
 // DOCTOR_REFERRAL_DESK_V1 · DUP_STOP_V1 — «Add to visit» рекомендации: отменённая строка той же
@@ -266,6 +331,7 @@ test('окно визита → рекомендация: отменённая �
   const dialog = document.body.children[document.body.children.length - 1];
   const confirmBtn = walk(dialog).find((n) => n.tagName === 'BUTTON' && textOf(n).includes(addLabel));
   assert.ok(confirmBtn, 'окно рекомендации не открылось — отменённая строка той же услуги его погасила');
+  walk(dialog).find((n) => n.tagName === 'SELECT').value = String(DOC);   // DIAG_ROUTE_V1 (D3) — исполнитель услуги кабинета выбирается
   confirmBtn.click();
   await flush(80);
   const line = DB.prepare("SELECT id FROM visit_services WHERE visit_id = 40 AND service_id = 22 AND status <> 'cancelled'").get();
@@ -298,6 +364,7 @@ test('окно визита → рекомендация: отказ привя�
     walk(document.body).find((n) => n.tagName === 'BUTTON' && textOf(n).includes(addLabel)).click();
     await flush();
     const dialog = document.body.children[document.body.children.length - 1];
+    walk(dialog).find((n) => n.tagName === 'SELECT').value = String(DOC);   // DIAG_ROUTE_V1 (D3) — исполнитель услуги кабинета выбирается
     walk(dialog).find((n) => n.tagName === 'BUTTON' && textOf(n).includes(addLabel)).click();
     await flush(80);
     assert.ok(DB.prepare('SELECT id FROM visit_services WHERE visit_id = 40 AND service_id = 23').get(), 'услуга рекомендации не легла в визит');

@@ -31,6 +31,7 @@ import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOI
 import { bookVisit, setVisitStatus as bookStatus } from './visit-booking.js';
 import { lineIdentity, linePerformer, isConsultPick } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога, исполнитель
 import { loadVisitOrders, blockedPickIds, precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 (ревью M3) — повтор услуги в визите — правило сервера
+import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D3) — исполнитель рекомендации — по услуге, не рекомендовавший
 import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B5) — «Услуга возвращена» в журнале счёта
 
 // BILLING_AUDIT_FIX_V1 (A1) — 'YYYY-MM-DD' местного дня для visit_date.
@@ -880,27 +881,37 @@ async function openAttachRecommendationModal(state, rec, onReload) {
 
     const doctorSelect = h('select', null, h('option', { value: '' }, 'Loading doctors…'));
     // Populate the doctor dropdown async. Falls back to "no doctor" when the
-    // users table is empty / unreachable. Preselects the original recommender.
-    (async () => {
-        const { data, error } = await supabase.from('users')
-            .select('id, full_name, specialty, role, is_doctor')
-            .eq('active', true)
-            .order('full_name');
+    // users table is empty / unreachable.
+    // DIAG_ROUTE_V1 (D3, решение владельца 2026-11-03) — исполнитель по умолчанию —
+    // тот, кому услуга отмечена в «Услугах и ставках» (один — сам), а НЕ
+    // рекомендовавший врач: УЗИ, рекомендованное терапевтом, ложилось в кабинет
+    // терапевта, и сонолог его не видел. Список — отмеченные услуге, иначе все
+    // врачи (doctorPoolFor). Услуге кабинета исполнитель обязателен
+    // (needsPerformer) — «Add to visit» без него не пускает.
+    let attachSvc = { id: rec.service_id };
+    const ready = (async () => {
+        const [{ data, error }, svcRes] = await Promise.all([
+            supabase.from('users')
+                .select('id, full_name, specialty, role, is_doctor, service_rates')
+                .eq('active', true)
+                .order('full_name'),
+            supabase.from('services').select('id, name, requires_doctor, type, is_lab').eq('id', rec.service_id).maybeSingle(),
+        ]);
         if (error) { console.warn('[attach-rec] doctor load failed:', error.message); }
+        if (svcRes && !svcRes.error && svcRes.data) attachSvc = svcRes.data;
         const all = data || [];
         const list = all.filter(u =>
             isOn(u.is_doctor) || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').length > 0   // ADMIN_DOCTOR_LIST_V1; ADMIN_DOCTOR_LOCAL_V1 — /api/db отдаёт флаг числом 1
         );
-        const final = list.length ? list : all;
+        const pool = doctorPoolFor(performerCandidates(all), attachSvc);
+        const final = pool.length ? pool : (list.length ? list : all);
         clear(doctorSelect);
         doctorSelect.appendChild(h('option', { value: '' }, '— No doctor —'));
         for (const d of final) {
-            doctorSelect.appendChild(h('option', {
-                value: d.id,
-                selected: d.id === rec.recommended_by ? true : null,
-            }, d.full_name + (d.specialty ? ' · ' + d.specialty : '')));
+            doctorSelect.appendChild(h('option', { value: d.id }, d.full_name + (d.specialty ? ' · ' + d.specialty : '')));
         }
-        if (rec.recommended_by) doctorSelect.value = rec.recommended_by;
+        const one = soleCandidate(pool);
+        doctorSelect.value = one ? String(one.id) : '';
     })();
 
     const price = rec.__service_price;
@@ -946,7 +957,7 @@ async function openAttachRecommendationModal(state, rec, onReload) {
                 h('label', null, 'Assigned doctor (editable)'),
                 doctorSelect,
                 h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
-                    'Defaults to the doctor who recommended it — change if someone else will perform it.'),
+                    'Исполнитель — тот, кому услуга отмечена в «Услугах и ставках»; если их несколько — выберите.'),   // DIAG_ROUTE_V1 (D3)
             ),
         ),
         h('footer', { class: 'modal-foot' },
@@ -957,7 +968,10 @@ async function openAttachRecommendationModal(state, rec, onReload) {
                 const btn = ev.currentTarget;
                 btn.disabled = true;
                 try {
+                    await ready;   // DIAG_ROUTE_V1 (D3) — список и услуга загружены
                     const chosenDoctorId = doctorSelect.value || null;
+                    // DIAG_ROUTE_V1 (D3) — услуге кабинета без исполнителя не место: её не увидит ни один врач.
+                    if (!chosenDoctorId && needsPerformer(attachSvc)) { toast(tr('Выберите исполнителя услуги.'), 'fail'); return; }
                     await attachRecommendation(state, rec, chosenDoctorId, onReload);
                     close();
                 } finally {
@@ -983,7 +997,9 @@ async function attachRecommendation(state, rec, chosenDoctorId, onReload) {
     // DUP_STOP_V1 · DOCTOR_REFERRAL_DESK_V1 — правило сервера (visit_dup_check) с врачом этой
     // строки: отменённая и возвращённая строка не мешают, администратор и главный врач называют
     // причину повтора — она уходит в строку (__repeat_reason) и в журнал счёта.
-    const lineDoctor = chosenDoctorId || rec.recommended_by || null;
+    // DIAG_ROUTE_V1 (D3) — «— No doctor —» значит «без исполнителя», а не «рекомендовавший»:
+    // прежде пустой выбор молча отдавал строку рекомендовавшему врачу.
+    const lineDoctor = chosenDoctorId || null;
     const pre = await precheckOrders({ visitId: state.visit.id, lines: [
         { service_id: rec.service_id, doctor_id: lineDoctor ? Number(lineDoctor) : null },
     ] });
