@@ -280,6 +280,8 @@ test('M2: строка «по умолчанию» — 25 000 → «сум» →
   body = await savedBody(card);
   assert.deepEqual(body.service_rates[0], { service_id: 1, pct: 41, branches: [1] });
   assert.deepEqual(body.service_rates[1], { service_id: 2, branches: [1] });
+  // STAFF_EDIT_V1 (ревью, остаток 7) — и нетронутая строка с суммой уходит как пришла: процент рядом не потерян.
+  assert.deepEqual(body.service_rates[2], { service_id: 3, pct: 30, fix: 15000, branches: [1] });
 });
 
 test('сум→%: число до 100 переносится процентом, больше 100 — процентом не становится', async () => {
