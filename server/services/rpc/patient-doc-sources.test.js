@@ -157,21 +157,6 @@ test('заключение визита — только если у визит�
   assert.equal(v.sections[0].html, 'Ранее: &lt;здоров&gt;');
 });
 
-// PASTE_SOURCES_V1 — протоколы, листы диагностики и заключения визита между
-// зданиями не ездят: строки и визиты соседнего здания (sync_origin) — не их
-// источник. Результаты анализов — проверяются вместе с анализами ниже.
-test('протокол, диагностика и заключение визита соседнего здания (sync_origin) не возвращаются', () => {
-  const db = seed();
-  line(db, 61, 50, 901, { notes: signedNotes({ chief_complaint: 'СВОЁ' }) });
-  line(db, 64, 51, 901, { notes: signedNotes({ chief_complaint: 'ФИЛИАЛ-СТРОКА' }) });
-  line(db, 65, 51, 902, { notes: signedNotes({ instrumental_text: 'ФИЛИАЛ-УЗИ' }, { docType: 'diag' }) });
-  db.prepare("UPDATE visit_services SET sync_origin = 'B' WHERE id IN (64, 65)").run();
-  db.prepare("INSERT INTO visits (id, patient_id, visit_date, conclusion, sync_origin) VALUES (52, 1, '2026-10-21T05:00:00Z', 'ФИЛИАЛ-ВИЗИТ', 'B')").run();
-  const s = JSON.stringify(patientDocSources(db, { patient_id: 1 }, DOCTOR));
-  assert.ok(s.includes('СВОЁ'));
-  assert.ok(!s.includes('ФИЛИАЛ-СТРОКА') && !s.includes('ФИЛИАЛ-УЗИ') && !s.includes('ФИЛИАЛ-ВИЗИТ'), 'документ соседнего здания в списке');
-});
-
 test('права — как у карты пациента: без раздела «Пациенты» — 403; закрытая вкладка — группа null и названа в closed; закрыто всё — 403 с названием вкладки', () => {
   const db = seed();
   line(db, 61, 50, 901, { notes: signedNotes({ chief_complaint: 'Кашель' }) });
@@ -214,4 +199,88 @@ test('размер ограничен: limit документов на груп�
 test('RPC зарегистрирован, при просроченной лицензии читается (READ_ONLY_RPCS)', () => {
   assert.equal(typeof getRpc('patient_doc_sources'), 'function');
   assert.equal(isReadOnlyRpc('patient_doc_sources'), true);
+});
+
+const result = (db, vs, parameter, value, { unit = '', ref = '', flag = 'normal', origin = null } = {}) =>
+  db.prepare('INSERT INTO lab_results (visit_service_id, parameter, value, unit, reference_range, flag, entered_by, sync_origin) VALUES (?,?,?,?,?,?,3,?)')
+    .run(vs, parameter, value, unit, ref, flag, origin);
+
+test('анализы — по визитам: «resulted» в списке с пометкой, проверенный — без; без показателей и отменённый — нет; повторный ввод показателя заменяет прежний', () => {
+  const db = seed();
+  line(db, 63, 50, 903, { status: 'resulted' });
+  line(db, 65, 51, 903, { status: 'completed', verified: '2026-10-20T09:00:00Z' });
+  line(db, 66, 51, 903, { status: 'queued' });
+  line(db, 67, 51, 903, { status: 'cancelled' });
+  result(db, 63, 'HGB', '96', { unit: 'г/л', ref: '120–160', flag: 'low' });
+  result(db, 63, 'WBC', '14.2', { flag: 'high' });
+  result(db, 63, 'HGB', '101', { unit: 'г/л', ref: '120–160', flag: 'low' });
+  result(db, 65, 'PLT', '250');
+  result(db, 67, 'ОТМЕНЁН', '1');
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  const byVisit = Object.fromEntries(out.groups.labs.map((d) => [d.visit_id, d]));
+  assert.deepEqual(Object.keys(byVisit).sort(), ['50', '51']);
+  assert.equal(byVisit[50].unverified, true, '«resulted» без пометки «не проверено»');
+  assert.deepEqual(byVisit[50].panels.map((p) => [p.visit_service_id, p.title, p.unverified]), [[63, 'Общий анализ крови', true]]);
+  assert.deepEqual(byVisit[50].panels[0].rows.map((r) => [r.parameter, r.value, r.flag]), [['WBC', '14.2', 'high'], ['HGB', '101', 'low']]);
+  assert.equal(byVisit[51].unverified, false);
+  assert.deepEqual(byVisit[51].panels.map((p) => p.visit_service_id), [65], 'анализ без показателей или отменённый — в списке');
+  assert.ok(!JSON.stringify(out).includes('ОТМЕНЁН'));
+  assert.equal(out.groups.consult.length + out.groups.diag.length, 0, 'анализ ушёл не в свою вкладку');
+  const ex = patientDocSources(db, { patient_id: 1, exclude_visit_service_id: 63 }, DOCTOR);
+  assert.deepEqual(ex.groups.labs.map((d) => d.visit_id), [51], 'текущая строка-анализ вернулась');
+});
+
+test('измерения исследования (показатели у УЗИ/ЭхоКГ) — раздел «Измерения» его заключения в «Диагностике», не в «Анализах»', () => {
+  const db = seed();
+  line(db, 68, 50, 904, { notes: signedNotes({ instrumental_text: 'Камеры не расширены', primary_diagnosis: 'Норма' }, { docType: 'diag' }) });
+  result(db, 68, 'ФВ', '62', { unit: '%', ref: '55–70' });
+  line(db, 69, 51, 904);
+  result(db, 69, 'КДР', '6.1', { unit: 'см', ref: '3.7–5.6', flag: 'high' });
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  assert.equal(out.groups.labs.length, 0);
+  const d68 = out.groups.diag.find((d) => d.visit_service_id === 68);
+  assert.deepEqual(d68.sections.map((s) => s.label), ['Описание', 'Заключение', 'Измерения']);
+  assert.match(d68.sections[2].html, /^<table class="a4-restbl">.*<td>ФВ<\/td><td>62 %<\/td><td>55–70<\/td>/);
+  const d69 = out.groups.diag.find((d) => d.visit_service_id === 69);
+  assert.deepEqual(d69.sections.map((s) => s.key), ['measurements']);
+  assert.match(d69.sections[0].html, /<b>6\.1 см<\/b>/, 'отклонение от нормы не выделено');
+});
+
+// PASTE_SOURCES_V1 — здание как у карты пациента (BRANCH_ORIGIN_V1): владелец
+// просил результаты «из других документов пациента», а результаты анализов
+// ездят между зданиями — они видны с буквой филиала (правило карты: метка
+// результата, иначе метка строки). Протоколы, листы диагностики и заключения
+// визита между зданиями не ездят — соседних в списке нет.
+test('результат анализа другого здания виден с пометкой филиала; протокол, диагностика и заключение визита соседнего здания — нет; текущая строка — нет', () => {
+  const db = seed();
+  line(db, 61, 50, 901, { notes: signedNotes({ chief_complaint: 'СВОЁ' }) });
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date, conclusion, sync_origin) VALUES (52, 1, '2026-10-21T05:00:00Z', 'ФИЛИАЛ-ВИЗИТ', 'B')").run();
+  line(db, 64, 52, 901, { notes: signedNotes({ chief_complaint: 'ФИЛИАЛ-СТРОКА' }) });
+  line(db, 65, 52, 904, { notes: signedNotes({ instrumental_text: 'ФИЛИАЛ-ЭХО' }, { docType: 'diag' }) });
+  line(db, 66, 52, 903, { status: 'completed', verified: '2026-10-21T09:00:00Z' });
+  line(db, 68, 52, 903, { status: 'resulted' });
+  db.prepare("UPDATE visit_services SET sync_origin = 'B' WHERE id IN (64, 65, 66, 68)").run();
+  result(db, 65, 'ФВ', '58', { unit: '%', origin: 'B' });
+  result(db, 66, 'HGB', '131', { unit: 'г/л', origin: 'B' });
+  result(db, 68, 'ТЕКУЩИЙ', '1', { origin: 'B' });
+  line(db, 63, 50, 903, { status: 'completed', verified: '2026-10-01T09:00:00Z' });
+  result(db, 63, 'WBC', '6.0');
+  line(db, 67, 50, 903, { status: 'completed', verified: '2026-10-01T09:00:00Z' });
+  result(db, 67, 'CRP', '2', { origin: 'C' });   // строка своя, результат приехал из филиала C
+  const out = patientDocSources(db, { patient_id: 1, exclude_visit_service_id: 68 }, DOCTOR);
+  const s = JSON.stringify(out);
+  assert.ok(s.includes('СВОЁ'));
+  assert.ok(!s.includes('ФИЛИАЛ-СТРОКА') && !s.includes('ФИЛИАЛ-ЭХО') && !s.includes('ФИЛИАЛ-ВИЗИТ'), 'протокол или заключение соседнего здания в списке');
+  assert.ok(!s.includes('ТЕКУЩИЙ'), 'текущая строка в списке');
+  const byVisit = Object.fromEntries(out.groups.labs.map((d) => [d.visit_id, d]));
+  assert.deepEqual(Object.keys(byVisit).sort(), ['50', '52'], 'анализ соседнего здания не виден');
+  assert.equal(byVisit[52].origin, 'B', 'у анализа соседнего здания нет пометки филиала');
+  assert.deepEqual(byVisit[52].panels.map((p) => [p.visit_service_id, p.origin, p.rows[0].parameter]), [[66, 'B', 'HGB']]);
+  assert.equal(byVisit[50].origin, null, 'свой визит со смешанными анализами — пометка у анализа, не у документа');
+  assert.deepEqual(byVisit[50].panels.map((p) => [p.visit_service_id, p.origin]), [[63, null], [67, 'C']]);
+  const echo = out.groups.diag.find((d) => d.visit_service_id === 65);
+  assert.ok(echo, 'измерения исследования соседнего здания не видны');
+  assert.equal(echo.origin, 'B');
+  assert.deepEqual(echo.sections.map((x) => x.key), ['measurements'], 'к измерениям приехал протокол соседнего здания');
+  assert.equal(out.groups.consult.every((d) => !d.origin), true, 'у своего протокола пометка филиала');
 });

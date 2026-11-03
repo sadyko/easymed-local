@@ -221,6 +221,8 @@ export function patientDocSources(db, args, user) {
   const found = { consult: [], diag: [], labs: [], inpatient: [], files: [] };
   // Протоколы и заключения — только своего здания (записи кабинета между зданиями не ездят).
   if (open.consult) collectTextDocs(db, pid, loadLines(db, pid, { ownOnly: true }), exclude, canRead('visit_documents', roles), found);
+  // Анализы и «Измерения» исследований — всех зданий, с буквой филиала (как в карте пациента).
+  if (open.labs) collectLabs(db, loadLines(db, pid, { ownOnly: false }), exclude, found);
 
   const groups = {};
   const truncated = {};
@@ -358,5 +360,114 @@ function collectTextDocs(db, pid, lines, exclude, archiveRead, found) {
       title: 'Заключение визита', doctor: v.doctor_name || '',
       at: v.visit_date, sections: [{ key: 'conclusion', label: 'Заключение', html }],
     });
+  }
+}
+
+/** Показателей у одного анализа — не больше (панель — не архив). */
+const LAB_ROWS_MAX = 200;
+const FLAGGED = new Set(['high', 'low', 'critical', 'abnormal']);
+
+// BRANCH_ORIGIN_V1 — буква филиала или null (то же правило, что record-origin.js originTag).
+const letterOf = (v) => {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  return t === '' ? null : t;
+};
+
+/**
+ * Показатели строк. Повторный ввод того же показателя ЗАМЕНЯЕТ прежний, разные
+ * показатели панели живут все — правило архива и панели истории болезни
+ * (case-doc-sources.js). У показателя — буква филиала, откуда он приехал (origin).
+ */
+function latestResults(db, ids) {
+  const by = new Map();
+  if (!ids.length) return by;
+  const lrOrigin = hasColumn(db, 'lab_results', 'sync_origin') ? 'sync_origin' : 'NULL';
+  const rows = db.prepare(`
+    SELECT id, visit_service_id, parameter, value, unit, reference_range, flag, ${lrOrigin} AS origin
+      FROM lab_results
+     WHERE visit_service_id IN (${ids.map(() => '?').join(',')})
+     ORDER BY id`).all(...ids);
+  const latest = new Map();
+  for (const r of rows) latest.set(JSON.stringify([r.visit_service_id, String(r.parameter || '')]), r);
+  for (const r of [...latest.values()].sort((x, y) => x.id - y.id)) {
+    if (!by.has(r.visit_service_id)) by.set(r.visit_service_id, []);
+    const list = by.get(r.visit_service_id);
+    if (list.length < LAB_ROWS_MAX) list.push({
+      parameter: String(r.parameter || ''), value: r.value == null ? '' : String(r.value),
+      unit: String(r.unit || ''), reference_range: String(r.reference_range || ''), flag: String(r.flag || ''),
+      origin: letterOf(r.origin),
+    });
+  }
+  return by;
+}
+
+/** Таблица показателей для документа (подписи — бланк, по-русски); отклонение — жирным. */
+export function resultsTableHtml(rows) {
+  if (!rows || !rows.length) return '';
+  const body = rows.map((r) => {
+    const v = escHtml(r.value) + (r.unit ? ' ' + escHtml(r.unit) : '');
+    return '<tr><td>' + escHtml(r.parameter) + '</td><td>' + (FLAGGED.has(String(r.flag).toLowerCase()) ? '<b>' + v + '</b>' : v)
+      + '</td><td>' + escHtml(r.reference_range) + '</td></tr>';
+  }).join('');
+  return '<table class="a4-restbl"><thead><tr><th>Показатель</th><th>Результат</th><th>Норма</th></tr></thead><tbody>' + body + '</tbody></table>';
+}
+
+/**
+ * Буква филиала анализа — правило карты пациента (BRANCH_ORIGIN_V1, views/patient-card.js:
+ * originTag(lr) || originTag(vs)): метка показателя, иначе метка строки. Своё — null.
+ */
+function panelOrigin(line, rows) {
+  const fromRow = rows.map((r) => r.origin).find(Boolean);
+  return fromRow || letterOf(line.vs_origin) || null;
+}
+
+/**
+ * Анализы — ДОКУМЕНТОМ НА ВИЗИТ (как «Результаты анализов» карты,
+ * LAB_DOC_ONE_PER_VISIT_V1), панель — анализ. Введено, но не проверено
+ * ('resulted' без verified_at) — в списке, с пометкой unverified: врач видит
+ * результат и знает, что лаборатория его ещё не подтвердила. Показатели,
+ * внесённые к исследованию (ЭхоКГ, УЗИ с размерами), — раздел «Измерения» его
+ * заключения во вкладке «Диагностика».
+ * Здание — как у карты пациента: анализ соседнего здания в списке, с буквой
+ * филиала у панели (origin); у документа визита буква — когда она у всех его
+ * панелей одна, иначе пометка только у панелей.
+ */
+function collectLabs(db, lines, exclude, found) {
+  const pick = lines.filter((l) => l.status !== 'cancelled' && !(exclude && l.id === exclude) && lineKind(l) !== 'consult');
+  const results = latestResults(db, pick.map((l) => l.id));
+  const byVisit = new Map();
+  for (const l of pick) {
+    const rows = results.get(l.id);
+    if (!rows || !rows.length) continue;
+    const origin = panelOrigin(l, rows);
+    const clean = rows.map(({ origin: _o, ...r }) => r);
+    if (lineKind(l) === 'labs') {
+      let doc = byVisit.get(l.visit_id);
+      if (!doc) {
+        doc = {
+          id: 'labs:' + l.visit_id, kind: 'labs', source: 'lab', visit_id: l.visit_id, visit_service_id: null,
+          title: 'Результаты анализов', doctor: '', at: l.visit_date, unverified: false, origin: null, panels: [],
+        };
+        byVisit.set(l.visit_id, doc);
+        found.labs.push(doc);
+      }
+      const unverified = l.status !== 'completed' && !l.verified_at;
+      doc.panels.push({ visit_service_id: l.id, title: l.name, unverified, origin, rows: clean });
+      if (unverified) doc.unverified = true;
+      continue;
+    }
+    const section = { key: 'measurements', label: 'Измерения', html: resultsTableHtml(clean) };
+    const doc = found.diag.find((d) => d.visit_service_id === l.id);
+    if (doc) doc.sections.push(section);
+    else found.diag.push({
+      id: 'line:' + l.id, kind: 'diag', source: 'lab', visit_service_id: l.id,
+      title: l.name, doctor: l.doctor_name || '', at: l.verified_at || l.visit_date, origin, sections: [section],
+    });
+  }
+  for (const doc of byVisit.values()) {
+    doc.panels.sort((a, b) => a.visit_service_id - b.visit_service_id);
+    const letters = new Set(doc.panels.map((p) => p.origin));
+    doc.origin = letters.size === 1 ? doc.panels[0].origin : null;
   }
 }
