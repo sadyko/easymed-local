@@ -402,15 +402,8 @@ test('варианты бланка остаются без DOM: Telegram рис
 });
 
 // ─── текстовые места ──────────────────────────────────────────────────────────
-test('F2: «Вставить результаты» и снимок истории — текст без тегов, без двойного экранирования', async () => {
+test('F2: снимок истории — текст без тегов, без двойного экранирования (вставка результатов — PASTE_SOURCES_V1, rpc patient_doc_sources: разметка врача сохраняется)', async () => {
     const f = { chief_complaint: '<i>Кашель</i> 3 дня', physical_exam: '<ul><li>Живот мягкий</li><li>SpO2 &lt;95%</li></ul>', recommendations_text: '<b>Диета</b>', primary_diagnosis: 'Бронхит' };
-    NOTES.set(10, notesOf(null, { history: [SIGNED(f)] }));
-    const body = new El('div');
-    const out = await WS.fillServiceConclusion(body, { id: 10 });
-    assert.equal(out.html, '<div>Осмотр: Живот мягкий; SpO2 &lt;95%. Диагноз: Бронхит. Рекомендации: Диета</div>');
-    const t = body.textContent;
-    assert.ok(t.includes('Кашель 3 дня') && t.includes('Живот мягкий'), t);
-    assert.ok(!/<\/?(i|b|ul|li)>|&lt;|&amp;/.test(t), 'сводка показывает разметку: ' + t);
     // окно записи истории («Снимок»)
     const ctx = await opened(11, notesOf({ chief_complaint: 'x' }));
     const before = document.body.children.length;

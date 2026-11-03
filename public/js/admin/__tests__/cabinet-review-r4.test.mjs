@@ -267,14 +267,11 @@ test('5: «Черновик» и «Сохранить» дважды подря�
 });
 
 // ─── 6. F8: код подписанной записи — и без названия ──────────────────────────
-test('6 (F8): код записи, которого нет среди диагнозов строки, печатается строкой кода; «Вставить результаты» — код подписанной записи', async () => {
+test('6 (F8): код записи, которого нет среди диагнозов строки, печатается строкой кода (вставка — rpc patient_doc_sources, PASTE_SOURCES_V1)', async () => {
     assert.equal(WS.entryDx({ icd10: 'J20.9', primary_diagnosis: 'Средней тяжести' }, []), 'J20.9\nСредней тяжести');
     assert.equal(WS.entryDx({ icd10: 'J20.9', primary_diagnosis: 'Средней тяжести' }, [J209]), 'J20.9 — Острый бронхит\nСредней тяжести');
     assert.equal(WS.entryDx({ icd10: 'N28.9', primary_diagnosis: 'N28.9 — Болезнь почки<br>Текст' }, []), 'N28.9 — Болезнь почки\nТекст', 'код старой записи повторён');
-    NOTES.set(9, notesOf(null, { diagnoses: [MSUD], history: [SIGNED({ primary_diagnosis: 'Текст врача', icd10: 'N28.9' })] }));
-    const out = await WS.fillServiceConclusion(new El('div'), { id: 9 });
-    assert.match(out.html, /Диагноз: N28\.9; Текст врача/, '«Вставить результаты» без кода подписанной записи: ' + out.html);
-    assert.ok(!/E71\.0/.test(out.html), 'под «Подписано» — нынешний основной диагноз');
+    // PASTE_SOURCES_V1 — «Вставить результаты» с кодом подписанной записи: server/services/rpc/patient-doc-sources.test.js.
 });
 
 // ─── 7. Архив не записался — врач узнаёт; повтор безопасен ────────────────────

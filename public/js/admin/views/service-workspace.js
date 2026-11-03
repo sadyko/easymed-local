@@ -40,6 +40,7 @@ import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICE
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
 import { renderDesignedVariant, visitTypeLabel } from './doc-variants.js?v=cabr3';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3
 import { openVitalsDialog } from './patient-card.js?v=labshared1';   // CARD_SPEC_V1 — same URL as admin.js (one instance)
+import { openPasteSourcesModal } from './paste-sources.js';   // PASTE_SOURCES_V1 — «Вставить результаты»: все документы пациента
 import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — chips must survive a NULL type_id
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
@@ -223,11 +224,8 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
             } catch (e) {}
         });
     }).catch(() => {});
-    // Async-load the full EMR for the patient (services + labs + diagnostics
-    // across all visits) and paint it into the left-column EMR card.
-    wsState.emr = null;
-    wsState.emrFilter = 'all';
-    loadPatientEmr(p, ctx).then(() => { if (wsState.ctx === ctx) paintEmr(); });   // CABINET_FIX_V1_R2 — только своей строке
+    // PASTE_SOURCES_V1 — история пациента здесь больше не грузится: окно «Вставить результаты»
+    // спрашивает сервер (rpc patient_doc_sources) при каждом открытии.
     // CABINET_FIX_V1_R4 (п. 2) — экран, нарисованный заново, пока подпись строки «в пути»
     // (смена языка), — «Завершить приём» заперта до её конца, как у прежнего экрана.
     if (lineSigning(ctx.visitServiceId)) setSignBusy(ctx, true);
@@ -327,36 +325,20 @@ function vitalChip(label, value, unit, status) {
 // ---------------------------------------------------------------------------
 // AURORA_CONSULT_EDITOR_V1 — left zone: 5 bespoke cards
 // (PatientCard, DiagnosisCard, ServicesCard, RecsCard, RxCard) followed by the
-// existing Patient EMR + Conditions cards (kept verbatim so paintEmr() still
-// has its [data-emr-body] mount).
-// AURORA_EMR_TOP_V1 — patient's previous completed services (grouped Все/Услуги/Лаб/Диаг),
-// shown at the TOP of the center work area. Populated async by loadPatientEmr()/paintEmr()
-// into [data-emr-body]; compact height so the document stays visible below.
-// AURORA_EMR_BTN_V1 — «Карта приёмов» opens the patient's previous completed services
-// (grouped Все/Услуги/Лаб/Диаг via loadPatientEmr/paintEmr) in a popup from the action bar.
+// Conditions card (PASTE_SOURCES_V1: the patient history moved to «Вставить результаты»).
+// PASTE_SOURCES_V1 — «Вставить результаты»: окно со ВСЕМИ документами пациента
+// (views/paste-sources.js, rpc patient_doc_sources) вместо прежней «Карты приёмов»:
+// та брала только завершённые строки, раскладывала их по имени вида услуги и
+// вставляла усечённую сводку. Текущая строка в окно не попадает; выбранное
+// вставляется прежним путём — «Куда вставить?» (_pastePickField) → a4InsertHtml.
 function openEmrModal(ctx) {
-    const overlay = h('div', { class: 'modal', style: { zIndex: '140' } });
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    document.addEventListener('keydown', onKey);
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-    overlay.appendChild(h('div', { class: 'modal-card', style: { width: '640px', maxWidth: 'calc(100vw - 32px)' } },
-        h('header', { class: 'modal-head' },
-            h('h2', null, Icon('Doc', { size: 16 }), ' Вставить результаты',
-                h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: '400', marginLeft: '8px' } }, 'выберите результат → «Вставить в документ»')),
-            h('button', { class: 'modal-close', type: 'button', onclick: close }, '×')),
-        h('div', { class: 'segmented', 'data-emr-tabs': '', style: { margin: '12px 14px 0', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' } },
-            emrTabBtn('all',         'Все'),
-            emrTabBtn('services',    'Услуги'),
-            emrTabBtn('labs',        'Лаб.'),
-            emrTabBtn('diagnostics', 'Диаг.'),
-        ),
-        h('div', { class: 'modal-body', 'data-emr-body': '', style: { padding: '0', maxHeight: '60vh', overflowY: 'auto' } },
-            h('div', { class: 'muted', style: { padding: '14px 16px', fontSize: '12.5px' } }, 'Загрузка…'),
-        ),
-    ));
-    document.body.appendChild(overlay);
-    if (wsState.emr) paintEmr(); else loadPatientEmr(ctx.patient, ctx).then(() => { if (wsState.ctx === ctx) paintEmr(); });   // CABINET_FIX_V1_R2 — только своей строке
+    const pid = ctx && ctx.patient && (ctx.patient.id || ctx.patient.patientId);
+    if (!pid) { toast('Нет контекста пациента.', 'fail'); return; }
+    openPasteSourcesModal({
+        patientId: pid,
+        excludeVisitServiceId: (ctx && ctx.visitServiceId) || null,
+        onInsert: (html, field) => _pastePickField(ctx, html, field, 'Результат вставлен в документ'),
+    });
 }
 
 function leftColumn(ctx) {
@@ -639,21 +621,6 @@ async function voidDispensedItemWs(ctx, it) {
     } catch (err) {
         toast(err?.message || String(err), 'fail');
     }
-}
-
-function emrTabBtn(id, label) {
-    return h('button', {
-        type: 'button',
-        'data-emr-tab': id,
-        class: id === 'all' ? 'on' : '',
-        onclick: (ev) => {
-            const root = ev.currentTarget.closest('[data-emr-tabs]');
-            if (!root) return;
-            root.querySelectorAll('[data-emr-tab]').forEach(b => b.classList.toggle('on', b === ev.currentTarget));
-            wsState.emrFilter = id;
-            paintEmr();
-        },
-    }, label);
 }
 
 // ---------------------------------------------------------------------------
@@ -958,9 +925,8 @@ export function soapForm(ctx) {
     const tplBtn = h('button', { class: 'btn btn-outline', type: 'button', 'data-ws-needs-load': '', onclick: () => openTemplateLibraryModal(ctx) },   // CABINET_FIX_V1_R4 — заперта, пока лист грузится
         Icon('Doc', { size: 13 }), ' Шаблоны');
 
-    // AURORA_EMR_BTN_V1 — «Карта приёмов»: previous-results popup.
-    const emrBtn = h('button', { class: 'btn btn-outline', type: 'button', 'data-ws-needs-load': '', onclick: () => openEmrModal(ctx) },   // CABINET_FIX_V1_R4 — заперта, пока лист грузится
-        Icon('Doc', { size: 13 }), ' Вставить результаты');
+    // PASTE_SOURCES_V1 — здесь создавалась кнопка «Вставить результаты» (emrBtn), но ни в одну
+    // панель не попадала; живая кнопка — на листе (_ic.results, openEmrModal).
 
     // WS_DOCPHONE_V1 — optional doctor-phone line in the document footer.
     const phoneBtn = h('button', { class: 'btn btn-outline', type: 'button', onclick: () => {
@@ -1807,519 +1773,9 @@ function noteInRecommendations(ctx, html) {
     } catch (e) { console.warn('[doc note]', e); }
 }
 
-// ===========================================================================
-// Patient EMR — every service the patient ever booked (visit_services join
-// services join service_types), bucketed by type into Services / Labs /
-// Diagnostics. Lab results, when present, fold under the matching order.
-// ---------------------------------------------------------------------------
-export async function loadPatientEmr(patient, ctx = null) {   // CABINET_FIX_V1_R2 — экспорт для проверки
-    // CABINET_FIX_V1_R2 (ревью п. 4) — ответ пишется в состояние СВОЕЙ строки (stateOf):
-    // поздний ответ строки, которая не открыта (wsState.ctx !== ctx), не задевает открытую.
-    const st = ctx ? stateOf(ctx) : wsState;
-    const patientId = patient?.id || patient?.patientId;
-    if (!patientId) { st.emr = { services: [], labs: [], diagnostics: [] }; return; }
-    const { data, error } = await supabase
-        .from('visit_services')
-        .select(`
-            id, status, quantity, unit_price, total, created_at, visit_id, service_id, doctor_id,
-            services(name, code, type_id, service_types(name), departments(kind)),
-            users:doctor_id(full_name, specialty),
-            visits!inner(visit_date, patient_id)
-        `)
-        .eq('visits.patient_id', patientId)
-        .eq('status', 'completed')
-        .order('created_at', { ascending: false })
-        .limit(200);
-    if (error) {
-        console.warn('[workspace EMR] load failed:', error.message);
-        (ctx ? stateOf(ctx) : wsState).emr = { services: [], labs: [], diagnostics: [] };
-        return;
-    }
-    const rows = (data || []).map(r => ({
-        id:          r.id,
-        status:      r.status,
-        visitId:     r.visit_id,
-        visitDate:   r.visits?.visit_date || r.created_at,
-        createdAt:   r.created_at,
-        serviceName: r.services?.name || '—',
-        serviceCode: r.services?.code || '',
-        typeName:    (r.services?.service_types?.name || '').toLowerCase(),
-        deptKind:    (r.services?.departments?.kind || ''),   // DEPT_KIND_ROUTING_V1
-        doctorName:  r.users?.full_name || '',
-        total:       Number(r.total || 0),
-    }));
-    const isLab        = (t) => /\blab|laborator|анализ|лаборатор/i.test(t);
-    const isDiagnostic = (t) => /diagn|imag|radio|usg|ultrasound|x[- ]?ray|mri|ct|эхо|узи|рентген|диагност|cardiogram|екг|ekg|ecg/i.test(t);
-    const services = [], labs = [], diagnostics = [];
-    // DEPT_KIND_ROUTING_V1 — the service's DEPARTMENT KIND is the primary router
-    // (laboratory / diagnostics / procedure); the type-name regex stays as fallback
-    // for services without a department.
-    for (const r of rows) {
-        if      (r.deptKind === 'laboratory')   labs.push(r);
-        else if (r.deptKind === 'diagnostics')  diagnostics.push(r);
-        else if (r.deptKind === 'procedure')    services.push(r);
-        else if (isLab(r.typeName))             labs.push(r);
-        else if (isDiagnostic(r.typeName))      diagnostics.push(r);
-        else                                    services.push(r);
-    }
-    (ctx ? stateOf(ctx) : wsState).emr = { services, labs, diagnostics };
-}
-
-function paintEmr() {
-    if (!wsState.payload && !wsState.emr) return;
-    // The body lives inside the workspace container that's still mounted.
-    const body = document.querySelector('[data-emr-body]');
-    if (!body) return;
-    clear(body);
-    const emr = wsState.emr;
-    if (!emr) {
-        body.appendChild(h('div', { class: 'muted', style: { padding: '14px 16px', fontSize: '12.5px' } }, 'Загрузка…'));
-        return;
-    }
-    const filter = wsState.emrFilter || 'all';
-    let groups = [];
-    if (filter === 'all') {
-        groups = [
-            { id: 'services',    label: 'Услуги',    icon: 'Stethoscope', rows: emr.services },
-            { id: 'labs',        label: 'Лаб. анализы',   icon: 'Flask',       rows: emr.labs },
-            { id: 'diagnostics', label: 'Диагностика', icon: 'Activity',    rows: emr.diagnostics },
-        ];
-    } else if (filter === 'services')    groups = [{ id: 'services',    label: 'Услуги',    icon: 'Stethoscope', rows: emr.services }];
-    else if (filter === 'labs')          groups = [{ id: 'labs',        label: 'Лаб. анализы',   icon: 'Flask',       rows: emr.labs }];
-    else if (filter === 'diagnostics')   groups = [{ id: 'diagnostics', label: 'Диагностика', icon: 'Activity',    rows: emr.diagnostics }];
-
-    const totalRows = groups.reduce((s, g) => s + g.rows.length, 0);
-    if (totalRows === 0) {
-        body.appendChild(h('div', {
-            style: { padding: '28px 16px', textAlign: 'center', color: 'var(--ink-400)' },
-        },
-            Icon('Folder', { size: 24 }),
-            h('div', { style: { fontSize: '12.5px', marginTop: '6px', fontWeight: 500 } }, 'Завершённых записей пока нет'),
-            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
-                'Записи появятся после подписания услуги.'),
-        ));
-        return;
-    }
-    for (const g of groups) {
-        if (g.rows.length === 0 && filter !== 'all') continue;
-        const accent = g.id === 'labs' ? 'var(--info-600)'
-                     : g.id === 'diagnostics' ? 'var(--purple-500)'
-                     : 'var(--primary-600)';
-        body.appendChild(h('div', {
-            style: {
-                padding: '10px 14px 8px',
-                background: 'var(--ink-25)',
-                borderTop: '1px solid var(--ink-100)',
-                display: 'flex', alignItems: 'center', gap: '8px',
-            },
-        },
-            h('span', {
-                style: { width: '22px', height: '22px', borderRadius: '6px',
-                         background: 'white', border: '1px solid var(--ink-100)',
-                         color: accent, display: 'grid', placeItems: 'center', flex: '0 0 auto' },
-            }, Icon(g.icon, { size: 13 })),
-            h('span', {
-                style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-800)',
-                         letterSpacing: '0.05em', textTransform: 'uppercase' },
-            }, g.label),
-            h('span', { class: 'grow' }),
-            h('span', {
-                class: 'num',
-                style: { fontSize: '12.5px', fontWeight: 700, color: accent,
-                         padding: '1px 8px', background: 'white',
-                         border: '1px solid var(--ink-100)', borderRadius: '999px' },
-            }, String(g.rows.length)),
-        ));
-        if (g.rows.length === 0) {
-            body.appendChild(h('div', { class: 'muted', style: { padding: '10px 14px', fontSize: '12.5px' } }, 'Нет'));
-            continue;
-        }
-        g.rows.forEach(r => body.appendChild(emrRow(r, accent, g.id)));
-    }
-}
-
-function emrRow(r, accent, groupId) {
-    const d = r.visitDate ? new Date(r.visitDate) : null;
-    const dateLabel = d && !isNaN(d.getTime())
-        ? d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: '2-digit' })
-        : '—';
-    return h('div', {
-        role: 'button',
-        tabindex: '0',
-        title: 'Открыть заключение / результаты',
-        onclick: () => openEmrResultModal(r, groupId),
-        onkeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openEmrResultModal(r, groupId); } },
-        onmouseenter: (ev) => { ev.currentTarget.style.background = 'var(--ink-25)'; },
-        onmouseleave: (ev) => { ev.currentTarget.style.background = 'transparent'; },
-        style: {
-            padding: '10px 14px', gap: '10px',
-            borderTop: '1px solid var(--ink-100)',
-            display: 'flex', alignItems: 'flex-start',
-            cursor: 'pointer', transition: 'background 120ms ease', outline: 'none',
-        },
-    },
-        h('span', {
-            style: { width: '6px', alignSelf: 'stretch', borderRadius: '3px', background: accent, flex: '0 0 auto', marginTop: '2px' },
-        }),
-        h('div', { style: { flex: 1, minWidth: 0 } },
-            h('div', {
-                style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)',
-                         lineHeight: '1.35', wordBreak: 'break-word' },
-                title: r.serviceName,
-            }, r.serviceName),
-            h('div', { class: 'row', style: { gap: '8px', marginTop: '4px', fontSize: '12.5px', color: 'var(--ink-600)', flexWrap: 'wrap' } },
-                h('span', null, Icon('Calendar', { size: 10 }), ' ', dateLabel),
-                r.doctorName && h('span', null, Icon('Stethoscope', { size: 10 }), ' ', r.doctorName),
-            ),
-        ),
-        h('div', { style: { flex: '0 0 auto', textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' } },
-            r.total > 0 && h('div', {
-                class: 'num',
-                style: { fontSize: '12.5px', color: 'var(--ink-700)', fontWeight: 600, whiteSpace: 'nowrap' },
-            }, r.total.toLocaleString('ru-RU'), h('span', { class: 'muted', style: { fontWeight: 500 } }, ' UZS')),
-            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, Icon('ArrowRight', { size: 10 })),
-        ),
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Result modal: opens the conclusion (SOAP) for a service row, or the lab
-// parameters for a labs / diagnostics row. Both paths share the same shell.
-// ---------------------------------------------------------------------------
-async function openEmrResultModal(row, groupId) {
-    const overlay = h('div', { class: 'modal', style: { zIndex: '140' } });
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-
-    const body = h('div', { class: 'modal-body' },
-        h('div', { class: 'muted', style: { padding: '8px 0', fontSize: '12.5px' } },
-            Icon('Clock', { size: 12 }), ' Загрузка…'));
-
-    // WS_PASTE_V1 — paste this result into the current appointment document.
-    const _pasteField = (groupId === 'labs') ? 'labs_text' : (groupId === 'diagnostics') ? 'instrumental_text' : 'physical_exam';
-    const _pasteSecByField = { labs_text: 'labs', instrumental_text: 'instrumental', physical_exam: 'exam' };
-    let _pasteHtml = null;
-    const pasteBtn = h('button', { class: 'btn btn-primary', type: 'button', disabled: '', onclick: () => {
-        if (!_pasteHtml || !wsState.ctx) return;
-        // EMR_PASTE_PICK_V1 — let the doctor choose the target section.
-        _pastePickField(wsState.ctx, _pasteHtml, _pasteField, 'Результат вставлен в документ');
-        close();
-    } }, Icon('Plus', { size: 13 }), ' Вставить в документ');
-    const d = row.visitDate ? new Date(row.visitDate) : null;
-    const dateLabel = d && !isNaN(d.getTime())
-        ? d.toLocaleString(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-        : '—';
-    const card = h('div', { class: 'modal-card', style: { width: '600px', maxWidth: 'calc(100vw - 32px)' } },
-        h('header', { class: 'modal-head' },
-            h('div', null,
-                h('h2', { style: { margin: 0 } }, Icon(groupId === 'labs' ? 'Flask' : groupId === 'diagnostics' ? 'Activity' : 'Stethoscope', { size: 16 }), ' ', row.serviceName),
-                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } },
-                    dateLabel, row.doctorName ? ' · ' + row.doctorName : ''),
-            ),
-            h('button', { class: 'modal-close', onclick: close }, '×'),
-        ),
-        body,
-        h('footer', { class: 'modal-foot' }, pasteBtn, h('button', { class: 'btn', onclick: close }, 'Закрыть')),
-    );
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-    document.addEventListener('keydown', onKey);
-
-    // DIAG_CONCLUSION_V1 (2026-09-05) — У ДИАГНОСТИКИ ОТВЕТ ЭТО ЗАКЛЮЧЕНИЕ.
-    //
-    // Владелец: «we need to add the conclusion section from the diagnostics».
-    //
-    // Здесь диагностика читалась из lab_results — той же таблицы, что анализы.
-    // У УЗИ и рентгена строк в ней нет и быть не должно: врач пишет описание и
-    // заключение в бланке исследования, и оно лежит в visit_services.notes.
-    // Поэтому вкладка «Диагностика» всегда отвечала «результаты ещё не
-    // внесены», а вставлять в приём было нечего — при том, что заключение
-    // было написано и подписано.
-    //
-    // Оба источника показываются вместе и в правильном порядке: сначала
-    // ЗАКЛЮЧЕНИЕ (это и есть ответ исследования), под ним измерения, если они
-    // были внесены. Обе функции сами очищают контейнер, поэтому каждая
-    // рисуется в свой, и только потом они складываются — иначе вторая стирала
-    // бы первую.
-    try {
-        let _res;
-        if (groupId === 'labs') {
-            _res = await fillLabResults(body, row);
-        } else if (groupId === 'diagnostics') {
-            const concBox = h('div');
-            const labBox  = h('div');
-            const conc = await fillServiceConclusion(concBox, row);
-            const meas = await fillLabResults(labBox, row);
-            clear(body);
-            if (conc && conc.html) body.appendChild(concBox);
-            if (meas && meas.html) body.appendChild(labBox);
-            if (!(conc && conc.html) && !(meas && meas.html)) {
-                body.appendChild(h('div', { class: 'muted', style: { padding: '14px 0', fontSize: '12.5px' } },
-                    tr('По этому исследованию ещё нет ни заключения, ни измерений.')));
-            }
-            _res = { html: [conc && conc.html, meas && meas.html].filter(Boolean).join('') || null };
-        } else {
-            _res = await fillServiceConclusion(body, row);
-        }
-        _pasteHtml = _res && _res.html;
-        if (_pasteHtml) pasteBtn.disabled = null;
-    } catch (err) {
-        clear(body);
-        body.appendChild(h('div', { class: 'muted', style: { padding: '14px 0', fontSize: '12.5px', color: 'var(--crit-700)' } },
-            trf('Не удалось загрузить результаты: {msg}', { msg: err?.message || err })));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// AURORA_CONSULT_TOOLBAR_V1 — Study-history picker. Lists the patient's REAL
-// completed studies from wsState.emr; selecting one inserts a formatted block
-// into the focused A4 section. mode: 'func'|'rad' (diagnostics) | 'lab' (labs).
-// NOTE: the EMR bucketer only tags labs + diagnostics — func and rad both list
-// wsState.emr.diagnostics (just different titles/icons/insert targets).
-// ---------------------------------------------------------------------------
-async function openStudyHistoryModal(ctx, mode) {
-    const META = {
-        func: { title: 'Функциональные исследования', icon: 'Activity', bucket: 'diagnostics' },
-        rad:  { title: 'Лучевая диагностика',         icon: 'Scan',     bucket: 'diagnostics' },
-        lab:  { title: 'Лабораторные исследования',   icon: 'Flask',    bucket: 'labs' },
-    };
-    const meta = META[mode] || META.lab;
-    const studies = (wsState.emr && wsState.emr[meta.bucket]) || [];
-
-    const overlay = h('div', { class: 'modal', style: { zIndex: '140' } });
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-
-    const prev = h('div', { class: 'st-prev' },
-        h('div', { class: 'muted', style: { padding: '12px', fontSize: '12.5px' } }, 'Выберите исследование'));
-
-    const listEl = h('div', { class: 'st-list' });
-    if (!studies.length) {
-        listEl.appendChild(h('div', { class: 'muted', style: { padding: '10px', fontSize: '12.5px' } }, 'Нет исследований'));
-    } else {
-        studies.forEach((s) => {
-            const d = s.visitDate ? new Date(s.visitDate) : null;
-            const dateLabel = d && !isNaN(d) ? d.toLocaleDateString('ru-RU') : '';
-            const item = h('button', { class: 'st-item', type: 'button', onclick: () => {
-                listEl.querySelectorAll('.st-item.on').forEach(x => x.classList.remove('on'));
-                item.classList.add('on');
-                renderStudyPreview(ctx, prev, s, mode, close);
-            } },
-                h('span', { class: 'st-item-n' }, s.serviceName || '—'),
-                h('span', { class: 'sub' }, [dateLabel, s.doctorName].filter(Boolean).join(' · ')),
-            );
-            listEl.appendChild(item);
-        });
-    }
-
-    const card = h('div', { class: 'modal-card', style: { width: '720px', maxWidth: 'calc(100vw - 32px)' } },
-        h('header', { class: 'modal-head' },
-            h('h2', { style: { margin: 0 } }, Icon(meta.icon, { size: 16 }), ' ', meta.title),
-            h('button', { class: 'modal-close', onclick: close }, '×'),
-        ),
-        h('div', { class: 'modal-body', style: { padding: '16px 18px' } },
-            h('div', { class: 'st-body' }, listEl, prev),
-        ),
-        h('footer', { class: 'modal-foot' },
-            h('span', { class: 'muted', style: { fontSize: '12.5px', marginRight: 'auto' } }, 'Выберите фрагмент и вставьте его в текущий приём'),
-            h('button', { class: 'btn', onclick: close }, 'Закрыть'),
-        ),
-    );
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-    document.addEventListener('keydown', onKey);
-}
-
-// Render the right preview pane for a selected study. Lab → checkbox result
-// table (lazy-loaded from lab_results); diagnostics → conclusion text + insert.
-async function renderStudyPreview(ctx, prev, study, mode, close) {
-    clear(prev);
-    const isLab = mode === 'lab';
-    const d = study.visitDate ? new Date(study.visitDate) : null;
-    const dateLabel = d && !isNaN(d) ? d.toLocaleDateString('ru-RU') : '';
-    prev.appendChild(h('div', { class: 'st-prev-t' }, study.serviceName || '—'));
-    prev.appendChild(h('div', { class: 'sub', style: { marginBottom: '10px' } }, [study.doctorName, dateLabel].filter(Boolean).join(' · ')));
-
-    if (!isLab) {
-        // Diagnostics: imaging conclusions are stored the same way (lab_results
-        // table keyed by visit_service_id). Build a free-text block and insert.
-        const loading = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка…');
-        prev.appendChild(loading);
-        const { data } = await supabase.from('lab_results')
-            .select('parameter, value, unit, reference_range, flag').eq('visit_service_id', study.id);
-        loading.remove();
-        const results = data || [];
-        const bodyText = results.length
-            ? results.map(r => `${esc(r.parameter)}: ${esc(r.value)}${r.unit ? ' ' + esc(r.unit) : ''}`).join('; ')
-            : '—';
-        prev.appendChild(h('div', { style: { fontSize: '13.5px', color: 'var(--ink-800)', lineHeight: '1.5' } }, bodyText));
-        prev.appendChild(h('button', { class: 'btn btn-primary btn-sm', style: { marginTop: '12px' }, onclick: () => {
-            // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма
-            const html = `<div><b>${esc(study.serviceName)} от ${dateLabel}.</b> ${bodyText}</div>`;
-            _pastePickField(ctx, html, 'instrumental_text', 'Вставлено в документ');
-            close && close();
-        } }, Icon('Plus', { size: 13 }), ' Вставить в документ'));
-        return;
-    }
-
-    // Lab mode: checkbox row selection from lab_results.
-    const loading = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка…');
-    prev.appendChild(loading);
-    const { data } = await supabase.from('lab_results')
-        .select('parameter, value, unit, reference_range, flag').eq('visit_service_id', study.id);
-    loading.remove();
-    const rows = data || [];
-    if (!rows.length) { prev.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Результаты не внесены')); return; }
-    const checked = rows.map(() => true);
-    const tbody = h('tbody');
-    rows.forEach((r, i) => {
-        const flagColor = r.flag === 'low' ? 'var(--primary-700)' : r.flag === 'high' ? 'var(--crit-700)' : 'var(--ink-800)';
-        const cb = h('input', { type: 'checkbox', checked: '', style: { pointerEvents: 'none' } });
-        const tr = h('tr', { class: 'on', onclick: () => { checked[i] = !checked[i]; tr.classList.toggle('on', checked[i]); cb.checked = checked[i]; } });
-        tr.append(
-            h('td', { style: { width: '30px' } }, cb),
-            h('td', null, esc(r.parameter)),
-            h('td', { style: { fontWeight: '600', color: flagColor } }, `${esc(r.value)}${r.unit ? ' ' + esc(r.unit) : ''}`),
-            h('td', { class: 'sub' }, r.reference_range || '—'),
-        );
-        tbody.appendChild(tr);
-    });
-    prev.appendChild(h('table', { class: 'st-tbl' },
-        h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Показатель'), h('th', null, 'Результат'), h('th', null, 'Норма'))),
-        tbody,
-    ));
-    prev.appendChild(h('button', { class: 'btn btn-primary btn-sm', style: { marginTop: '12px' }, onclick: () => {
-        const chosen = rows.filter((_, i) => checked[i]);
-        if (!chosen.length) { toast('Выберите хотя бы один показатель', 'warn'); return; }
-        const lines = chosen.map(r => `<tr><td>${esc(r.parameter)}</td><td>${esc(r.value)}${r.unit ? ' ' + esc(r.unit) : ''}</td><td>${esc(r.reference_range || '—')}</td></tr>`).join('');
-        /* i18n-exempt-start: HTML вставляется В ДОКУМЕНТ приёма (таблица результатов) */
-        const html = `<div><b>${esc(study.serviceName)} от ${dateLabel}:</b></div>`
-            + `<table class="a4-restbl"><thead><tr><th>Показатель</th><th>Результат</th><th>Норма</th></tr></thead><tbody>${lines}</tbody></table>`;
-        /* i18n-exempt-end */
-        _pastePickField(ctx, html, 'labs_text', 'Вставлено в документ');
-        close && close();
-    } }, Icon('Plus', { size: 14 }), ' Вставить результаты в документ'));
-}
-
-export async function fillServiceConclusion(body, row) {   // CABINET_FIX_V1_R4 — экспорт для проверки
-    const { data, error } = await supabase
-        .from('visit_services')
-        .select('notes')
-        .eq('id', row.id)
-        .maybeSingle();
-    clear(body);
-    if (error) throw error;
-    let payload = null;
-    try { payload = data?.notes ? JSON.parse(data.notes) : null; } catch {}
-    const history = payload?.history || [];
-    // Prefer the most recent signed entry; fall back to latest draft.
-    const signed = [...history].reverse().find(it => it.kind === 'signed');
-    const latest = signed || [...history].reverse().find(it => it.kind === 'draft');
-
-    if (!latest) {
-        body.appendChild(h('div', { class: 'muted', style: { padding: '14px 0', fontSize: '12.5px' } },
-            'Заключение по этой услуге не записано.'));
-        return { html: null };
-    }
-    if (signed) {
-        body.appendChild(h('div', {
-            style: { marginBottom: '12px', padding: '8px 10px', background: 'var(--ok-50)',
-                     border: '1px solid #c7e8d2', borderRadius: '8px',
-                     fontSize: '12.5px', color: 'var(--ok-700)', fontWeight: 600,
-                     display: 'flex', alignItems: 'center', gap: '6px' },
-        }, Icon('Check', { size: 12 }), ' Подписано · ', dateTimeShort(signed.savedAt)));
-    } else {
-        body.appendChild(h('div', {
-            style: { marginBottom: '12px', padding: '8px 10px', background: 'var(--warn-50)',
-                     border: '1px solid #f0d29b', borderRadius: '8px',
-                     fontSize: '12.5px', color: 'var(--warn-700)', fontWeight: 600 },
-        }, 'Черновик (не подписан)'));
-    }
-    const f = latest.fields || {};
-    const _dxF = entryDx(f, payload && payload.diagnoses);   // CABINET_FIX_V1_R2 — код больше не в поле врача · CABINET_FIX_V1_R3 (F8) — код подписанной записи, а не нынешний
-    // DOC_RICH_FORMAT_V1 (F2) — поля записи — разметка врача: сводка показывает текст без тегов.
-    body.append(
-        snapshotKv('Жалобы',            _blankStrip(f.chief_complaint) || '—', true),
-        snapshotKv('Анамнез',           _blankStrip(f.hpi)             || '—', true),
-        snapshotKv('Осмотр',            _blankStrip(f.physical_exam)   || '—', true),
-        h('div', { class: 'row', style: { gap: '12px', marginTop: '6px' } },
-            h('div', { style: { flex: 2 } }, snapshotKv('Основной диагноз', _dxF || '—')),
-            h('div', { style: { flex: 1 } }, snapshotKv('МКБ-10',           f.icd10             || '—')),
-        ),
-        h('div', { class: 'row', style: { gap: '12px' } },
-            h('div', { style: { flex: 1 } }, snapshotKv('Контроль',    f.follow_up || '—')),
-            h('div', { style: { flex: 1 } }, snapshotKv('Направление', f.referral  || '—')),
-        ),
-    );
-    const _parts = [];
-    /* i18n-exempt-start: HTML сводки уходит В ДОКУМЕНТ, не в интерфейс */
-    // DOC_RICH_FORMAT_V1 (F2) — текст поля, а не разметка: esc(разметки) давал «&lt;br&gt;» в документе.
-    // Строки (пункты списка, строки таблицы) — через «; », как у диагноза: сводка — одна строка.
-    const _exT = _blankStrip(f.physical_exam), _recT = _blankStrip(f.recommendations_text);
-    if (_exT)                   _parts.push('Осмотр: ' + esc(_exT).replace(/\s*\n+\s*/g, '; '));
-    if (_dxF)                   _parts.push('Диагноз: ' + esc(_dxF).replace(/\n/g, '; '));
-    if (_recT)                  _parts.push('Рекомендации: ' + esc(_recT).replace(/\s*\n+\s*/g, '; '));
-    /* i18n-exempt-end */
-    return { html: _parts.length ? '<div>' + _parts.join('. ') + '</div>' : null };
-}
-
-async function fillLabResults(body, row) {
-    const { data, error } = await supabase
-        .from('lab_results')
-        .select('parameter, value, unit, reference_range, flag')
-        .eq('visit_service_id', row.id);
-    clear(body);
-    if (error) throw error;
-    const results = data || [];
-    if (results.length === 0) {
-        body.appendChild(h('div', { class: 'muted', style: { padding: '14px 0', fontSize: '12.5px' } },
-            'Результаты по этому назначению ещё не внесены.'));
-        return { html: null };
-    }
-    const flagged = results.filter(r => r.flag && r.flag !== 'normal').length;
-    if (flagged > 0) {
-        body.appendChild(h('div', {
-            style: { marginBottom: '12px', padding: '8px 10px',
-                     background: 'var(--warn-50)', border: '1px solid #f0d29b',
-                     borderRadius: '8px', fontSize: '12.5px', color: 'var(--warn-700)', fontWeight: 600 },
-        }, Icon('Warning', { size: 12 }), ' ', String(flagged), ' показатель(ей) вне нормы'));
-    }
-    const tbl = h('table', { class: 'tbl', style: { fontSize: '12.5px' } },
-        h('thead', null, h('tr', null,
-            h('th', null, 'Параметр'),
-            h('th', { style: { textAlign: 'right' } }, 'Значение'),
-            h('th', null, 'Ед.'),
-            h('th', null, 'Норма'),
-            h('th', null, 'Флаг'),
-        )),
-        h('tbody', null, ...results.map(r => {
-            const flagColor = r.flag === 'critical' ? 'var(--crit-700)'
-                            : r.flag === 'high' || r.flag === 'low' || r.flag === 'abnormal' ? 'var(--warn-700)'
-                            : 'var(--ink-500)';
-            return h('tr', null,
-                h('td', { class: 'cell-strong' }, r.parameter || '—'),
-                h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: flagColor } },
-                    r.value != null ? String(r.value) : '—'),
-                h('td', { class: 'muted' }, r.unit || '—'),
-                h('td', { class: 'muted num', style: { fontSize: '12.5px' } }, r.reference_range || '—'),
-                h('td', null, r.flag && r.flag !== 'normal'
-                    ? h('span', {
-                        style: { fontSize: '12.5px', fontWeight: 700, color: flagColor,
-                                 padding: '1px 7px', borderRadius: '999px',
-                                 background: 'color-mix(in oklab, ' + flagColor + ' 10%, white)',
-                                 textTransform: 'uppercase', letterSpacing: '0.04em' },
-                    }, r.flag)
-                    : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—')),
-            );
-        })),
-    );
-    body.appendChild(tbl);
-    const _pasteHtml = '<div><b>' + esc(row.serviceName || 'Результаты') + '.</b> ' +
-        results.map(r => esc(r.parameter || '') + ': ' + esc(r.value != null ? String(r.value) : '—') + (r.unit ? ' ' + esc(r.unit) : '')).join('; ') + '</div>';
-    return { html: _pasteHtml };
-}
+// PASTE_SOURCES_V1 — история пациента для «Вставить результаты» — views/paste-sources.js и
+// rpc patient_doc_sources. Прежние loadPatientEmr / paintEmr / emrRow / openEmrResultModal /
+// fillServiceConclusion / fillLabResults и мёртвые openStudyHistoryModal / renderStudyPreview удалены.
 
 // ===========================================================================
 // Persistence — JSON blob inside visit_services.notes
@@ -2338,7 +1794,7 @@ async function fillLabResults(body, row) {
 // click only writes (no extra read round-trip).
 // ===========================================================================
 const DRAFT_TAG = '__service_workspace_v1';
-const wsState = { payload: null, recommendations: [], emr: null, emrFilter: 'all', saved: false, rtab: 'hints', lastA4: null, dispensed: [], docType: 'conclusion', blank: false, diagImages: [] };  // RX_SEPARATE_V1 · DIAG_IMAGES_V1
+const wsState = { payload: null, recommendations: [], saved: false, rtab: 'hints', lastA4: null, dispensed: [], docType: 'conclusion', blank: false, diagImages: [] };  // RX_SEPARATE_V1 · DIAG_IMAGES_V1 · PASTE_SOURCES_V1 — без emr/emrFilter
 // AURORA_CONSULT_TEMPLATES_V1 — template library («Шаблоны заключений») module state + helpers.
 // In-memory cache of the last load (re-initialised on each openTemplateLibraryModal call).
 let tplState = { rows: [], filter: 'all', q: '', selId: null, mode: 'view', draft: null };
@@ -2777,7 +2233,7 @@ function freshLineState() {
         wsDoctorPhone: '', docDoctorInfo: true, wsDoctorKnown: false,   // DOC_PHONE_SOURCE_V1 · DOC_DOCTOR_TOGGLE_V1
         docType: 'conclusion',                        // DOCTYPE_FROM_DOCUMENTS_V1
         diagImages: [],                               // DIAG_IMAGES_V1
-        recommendations: [], emr: null, emrFilter: 'all', dispensed: [],   // CABINET_FIX_V1_R2
+        recommendations: [], dispensed: [],   // CABINET_FIX_V1_R2 · PASTE_SOURCES_V1 — истории пациента в состоянии строки нет
         blank: wsState.blank, rtab: wsState.rtab, lastA4: null, _focusField: null,
     };
 }
@@ -2830,7 +2286,7 @@ export function activateWorkspace(ctx) {
 // строке, кабинет откладывает это в ctx строки (parkWorkspace), возвращаясь —
 // достаёт (resumeWorkspace). Поздние ответы сервера для строки, которая сейчас
 // не открыта, пишутся в её отложенное состояние (stateOf).
-const WS_PER_LINE = ['payload', 'payloadVs', 'saved', 'docType', 'docSections', 'docPhone', 'emr', 'emrFilter',
+const WS_PER_LINE = ['payload', 'payloadVs', 'saved', 'docType', 'docSections', 'docPhone',   // PASTE_SOURCES_V1 — без emr/emrFilter
     'diagImages', 'blank', 'recommendations', 'rtab', 'docZoom', 'wsDoctorPhone', 'sectionOrder', 'docDoctorInfo',
     'wsDoctorKnown', 'freeSeq', 'dispensed', 'lastA4', '_focusField'];
 function parkWorkspace() {
@@ -6070,7 +5526,7 @@ function openReferralWizard(ctx) {
     if (!ctx.patient || !ctx.patient.id) { toast('Нет контекста пациента.', 'fail'); return; }
     import('./visit-wizard.js?v=ownrep4')   // REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
         .then((mod) => mod.openVisitWizard(async (res) => {
-            try { await loadPatientEmr(ctx.patient); paintEmr(); } catch (e) {}
+            // PASTE_SOURCES_V1 — истории пациента в кабинете больше нет: окно «Вставить результаты» читает сервер при открытии.
             if (res && res.rows && res.rows.length) printRouteSheet(ctx, res);
         }, referralPatient(ctx), { title: 'Направить на услуги', referrerDoctorId: referringDoctorId(ctx) }))
         .catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));

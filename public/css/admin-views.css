@@ -2252,29 +2252,7 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .a4-input table.a4-restbl th{ background:var(--primary-50); color:var(--primary-700);
   font-weight:600; font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; }
 
-/* --- study-history modal --- */
-.st-body{ display:grid; grid-template-columns:268px 1fr; gap:16px; min-height:340px; max-height:74vh; }
-.st-list{ display:flex; flex-direction:column; gap:4px; overflow-y:auto;
-  border-right:1px solid var(--ink-100); padding-right:12px; }
-.st-item{ display:flex; flex-direction:column; align-items:flex-start; gap:2px; padding:8px 10px;
-  border:1px solid transparent; border-radius:var(--r-sm); background:transparent; color:var(--ink-800);
-  font:inherit; text-align:left; cursor:pointer; transition:background .12s, border-color .12s; }
-.st-item:hover{ background:var(--ink-50); }
-.st-item.on{ background:var(--primary-50); border-color:var(--primary-200); color:var(--primary-700); }
-.st-item .st-item-n{ font-size:13.5px; font-weight:600; }
-.st-item .sub{ font-size:12.5px; color:var(--ink-500); }
-.st-prev{ padding:12px 14px; background:var(--ink-25); border:1px solid var(--ink-100);
-  border-radius:var(--r-md); overflow-y:auto; }
-.st-prev .st-prev-t{ font-size:13.5px; font-weight:600; color:var(--ink-900); }
-.st-prev .sub{ font-size:12.5px; color:var(--ink-500); }
-.st-tbl{ width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px; }
-.st-tbl th{ text-align:left; font-size:12.5px; text-transform:uppercase; letter-spacing:.04em;
-  color:var(--ink-500); padding:6px 8px; border-bottom:1px solid var(--ink-200); }
-.st-tbl td{ padding:7px 8px; border-bottom:1px solid var(--ink-100); }
-.st-tbl tbody tr{ cursor:pointer; }
-.st-tbl tbody tr.on{ background:var(--primary-50); }
-.st-tbl input[type="checkbox"]{ accent-color:var(--primary-600); pointer-events:none; }
-.st-tbl .sub{ color:var(--ink-500); }
+/* PASTE_SOURCES_V1 — стили окна истории исследований (.st-*) удалены вместе с мёртвым openStudyHistoryModal */
 
 /* --- revisit modal --- */
 .rv-form{ display:grid; grid-template-columns:1fr 1fr; gap:12px 16px; margin-bottom:16px; }
@@ -2329,8 +2307,6 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .ws-bigaction.booked .ws-ba-sub{ color:var(--ok-700); }
 
 @media (max-width:760px){
-  .st-body{ grid-template-columns:1fr; }
-  .st-list{ border-right:none; border-bottom:1px solid var(--ink-100); padding-right:0; padding-bottom:12px; }
   .rv-cols{ grid-template-columns:1fr; }
   .rv-form{ grid-template-columns:1fr; }
 }

@@ -19,7 +19,6 @@ const KIND = new Map();           // visit_service_id -> { type, typeName }
 const HOLD = new Map();           // ключ -> Promise (ответ «в пути»)
 const LOG = [];                   // записи: { kind, ... }
 const REC = new Map();            // patient_id -> рекомендации
-const EMR = new Map();            // patient_id -> строки истории
 const hold = (key) => { let release; HOLD.set(key, new Promise((r) => { release = r; })); return () => { HOLD.delete(key); release(); }; };
 globalThis.fetch = async (url, opts) => {
     const u = String(url);
@@ -38,10 +37,6 @@ globalThis.fetch = async (url, opts) => {
         if (body.table === 'recommended_services' && body.op === 'select') {
             if (HOLD.has('rec:' + pid)) await HOLD.get('rec:' + pid);
             return ok(REC.get(pid) || []);
-        }
-        if (body.table === 'visit_services' && body.op === 'select' && /visits!inner/.test(String(body.columns))) {
-            if (HOLD.has('emr:' + pid)) await HOLD.get('emr:' + pid);
-            return ok(EMR.get(pid) || []);
         }
         if (body.table === 'visit_services' && body.op === 'select') {
             if (/^services\(type/.test(String(body.columns))) {
@@ -179,11 +174,8 @@ test('п. 2: «Диагноз» целиком (печать, вставка р�
     assert.equal(WS.dxParts('E71.0 — Болезнь &quot;кленового сиропа&quot;<br>Текст врача', [MSUD]).full, 'E71.0 — Болезнь "кленового сиропа"\nТекст врача', 'код старой записи напечатан дважды');
     assert.equal(WS.dxParts('Текст врача', []).full, 'Текст врача');
     assert.equal(WS.dxParts('', [{ code: 'K29.7', name: 'Гастрит', type: 'concomitant' }]).full, '', 'сопутствующий выдан за основной');
-    const c = code(WS_SRC);
-    const fill = c.slice(c.indexOf('async function fillServiceConclusion('), c.indexOf('async function fillLabResults('));
-    // CABINET_FIX_V1_R3 (F8) — через entryDx: код подписанной записи (её icd10), не нынешний
-    assert.match(fill, /entryDx\(f, payload && payload\.diagnoses\)/, '«Вставить результаты» теряет код МКБ');
-    assert.ok(!/f\.primary_diagnosis \|\| '—'/.test(fill) && !/esc\(f\.primary_diagnosis\)/.test(fill));
+    // PASTE_SOURCES_V1 — «Вставить результаты» берёт код подписанной записи на сервере
+    // (entryDxText в notesDocData): server/services/rpc/patient-doc-sources.test.js.
 });
 
 // ─── п. 3 и 6: подпись — снимок ЭТОЙ строки до первого ожидания; отказ — без записей ─
@@ -265,23 +257,22 @@ test('п. 4: поздний ответ «вид услуги» строки A н
     assert.match(c.slice(at, at + 1500), /wsState\.ctx !== ctx/, 'телефон врача: ответ не проверяет, чья строка открыта');
 });
 
-test('п. 4: поздние «рекомендации» и «история пациента» строки A уходят в её состояние — открытая строка B их не получает, A получает при возврате', async () => {
+test('п. 4: поздние «рекомендации» строки A уходят в её состояние — открытая строка B их не получает, A получает при возврате', async () => {
+    // PASTE_SOURCES_V1 — «история пациента» больше не держится в кабинете: окно «Вставить
+    // результаты» спрашивает сервер при каждом открытии (paste-sources-cabinet.test.mjs).
     REC.set(31, [{ id: 1, services: { name: 'A-REC' }, users: { full_name: 'Врач A' } }]);
     REC.set(32, [{ id: 2, services: { name: 'B-REC' }, users: { full_name: 'Врач B' } }]);
-    EMR.set(31, [{ id: 91, status: 'completed', created_at: '2026-09-01', visit_id: 1, services: { name: 'A-EMR', type: 'consultation' }, visits: { visit_date: '2026-09-01' } }]);
-    const relRec = hold('rec:31'), relEmr = hold('emr:31');
+    const relRec = hold('rec:31');
     const a = cabinet(31);
-    const recA = WS.loadRecommendations(a), emrA = WS.loadPatientEmr(a.patient, a);
+    const recA = WS.loadRecommendations(a);
     await tick(5);
     const b = cabinet(32);
     await WS.loadRecommendations(b);
-    relRec(); relEmr();
-    await recA; await emrA;
+    relRec();
+    await recA;
     assert.deepEqual(WS.docSnapshot(b, 'conclusion').referrals.map((r) => r.name), ['B-REC'], 'рекомендации строки A попали в открытую строку B');
-    assert.ok(JSON.stringify(a.__wsState.emr || null).includes('A-EMR'), 'история строки A потерялась');
     a.container.dispatch('pointerdown');   // врач вернулся к A
     assert.deepEqual(WS.docSnapshot(a, 'conclusion').referrals.map((r) => r.name), ['A-REC']);
-    assert.ok(!JSON.stringify(b.__wsState.emr || null).includes('A-EMR'), 'история строки A попала в строку B');
 });
 
 // ─── п. 5: рецепт и сопутствующие диагнозы — в печати и архиве диагностики ──────

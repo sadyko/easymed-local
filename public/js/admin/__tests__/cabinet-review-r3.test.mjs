@@ -231,7 +231,7 @@ test('F8: «Диагноз» подписанной записи — её код
     assert.equal(WS.entryDx(f, [{ code: 'N28.9', name: 'Болезнь почки', type: 'main' }]), 'N28.9 — Болезнь почки\nТекст врача');
     // код записи в строке сейчас — сопутствующий: название берётся, код — основной этой записи
     assert.equal(WS.entryDx({ primary_diagnosis: '', icd10: 'N28.9' }, now), 'N28.9 — Болезнь почки');
-    // поведение «Вставить результаты» — cabinet-review-r4.test.mjs, п. 6 (fillServiceConclusion)
+    // поведение «Вставить результаты» — server/services/rpc/patient-doc-sources.test.js (PASTE_SOURCES_V1)
 });
 
 // ─── F9: код — тоже содержимое «Диагноза» ─────────────────────────────────
