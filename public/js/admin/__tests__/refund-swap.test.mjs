@@ -655,3 +655,90 @@ test('ревью: узбекский апостроф в блоке словар
     assert.ok(uz.length >= 10, 'строк блока: ' + uz.length);
     assert.deepEqual(uz.filter((s) => s.includes("'")), []);
 });
+
+// LAB_TUBE_LABEL_V1 (К4, владелец 2026-11-02) — заменили анализ в окне «Платежи»:
+// касса напоминает перепечатать этикетку пробирки. Обычная замена — номер строки
+// тот же, но в пробирке другой анализ; «Вернуть эту услугу и выставить новую» —
+// у новой строки новый номер. Не анализ на не анализ — без напоминания.
+const REPRINT = ' · Перепечатайте этикетку пробирки.';
+const REPRINT_NEW = ' · Перепечатайте этикетку пробирки: у нового анализа новый номер.';
+
+test('К4: замена анализа — «Перепечатайте этикетку пробирки»; возврат с новой — «новый номер»; не анализ — без напоминания', async () => {
+    asRole('cashier');
+    const commit = async (serviceId, label, world_) => {
+        world_();
+        closeAll();
+        const win = await openAndPick(serviceId, 21);
+        buttonByText(win, label).click();
+        await tick(150);
+        return TOASTS.at(-1) || '';
+    };
+    // Неначатый анализ → другой анализ: обычная замена, номер строки тот же.
+    assert.ok((await commit(5, 'Заменить и вернуть 70 000 сум', () => world({ lab: true })))
+        .endsWith(REPRINT), TOASTS.join(' | '));
+    // Проба взята → «Вернуть эту услугу и выставить новую»: новый номер.
+    assert.ok((await commit(5, 'Вернуть эту услугу и выставить новую', () => world({ lab: true, lineStatus: 'collected', performed: true })))
+        .endsWith(REPRINT_NEW), TOASTS.join(' | '));
+    // Проба взята, а новая услуга — не анализ: прежний анализ ушёл из пробирки —
+    // этикетку перепечатать (номер даст следующая строка пробирки), но «у нового
+    // анализа новый номер» — неправда: нового анализа нет.
+    const rebillOut = await commit(2, 'Вернуть эту услугу и выставить новую', () => world({ lab: true, lineStatus: 'collected', performed: true }));
+    assert.ok(rebillOut.endsWith(REPRINT) && !rebillOut.includes('новый номер'), TOASTS.join(' | '));
+    // Приём → анализ: новый анализ встаёт в пробирку — тоже напоминание.
+    assert.ok((await commit(5, 'Заменить и вернуть 70 000 сум', () => world()))
+        .endsWith(REPRINT), TOASTS.join(' | '));
+    // Анализ → не анализ: этикетка с прежним анализом устарела.
+    assert.ok((await commit(2, 'Заменить и вернуть 70 000 сум', () => world({ lab: true })))
+        .endsWith(REPRINT), TOASTS.join(' | '));
+    // Не анализ → не анализ — без напоминания (как было).
+    assert.equal(await commit(2, 'Заменить и вернуть 70 000 сум', () => world()), 'Пациенту возвращено 70 000 сум.');
+    closeAll();
+});
+
+// LAB_TUBE_LABEL_V1 (К4, поправка владельца) — третья дверь замены: «Исправить
+// услуги» старшего кассира, замена в оплаченном счёте (openLineFix →
+// openSwapConfirm). Замена там — только у неначатой строки, номер строки тот же:
+// «Перепечатайте этикетку пробирки.» — те же слова, что у «Платежей». Смена
+// врача анализ в пробирке не меняет — без напоминания.
+const fix = await import('../views/cashier-line-fix.js?v=refbill4');   // тот же адрес, что у cashier-desk.js
+
+test('К4 (поправка): «Исправить услуги» — замена анализа в оплаченном счёте тоже напоминает перепечатать этикетку; смена врача и не анализ — без напоминания', async () => {
+    asRole('cashier');
+    const swap = async (world_, pick) => {
+        world_();
+        closeAll();
+        await fix.openLineFix(PAID);
+        const row = byAttr(lastModal(), 'data-line', '101');
+        assert.ok(row, 'строки 101 нет в «Исправить услуги»');
+        await pick(row);
+        buttonByText(lastModal(), 'Заменить и вернуть 70 000 сум').click();
+        await tick(150);
+        assert.equal(rpcCalls('cashier_line_swap_paid').length, 1, 'замена не ушла на сервер');
+        return TOASTS.at(-1) || '';
+    };
+    const service = (id) => async (row) => {
+        byAttr(row, 'data-swap', 'service').click();
+        await tick();
+        byAttr(lastModal(), 'data-service-id', String(id)).click();
+        await tick(80);
+    };
+    const doctor = async (row) => {
+        byAttr(row, 'data-swap', 'doctor').click();
+        await tick(60);
+        byAttr(lastModal(), 'data-performer', '21').click();
+        await tick(80);
+    };
+    // Анализ → анализ: номер строки тот же, в пробирке другой анализ.
+    assert.equal(await swap(() => world({ lab: true }), service(5)), 'Пациенту возвращено 70 000 сум.' + REPRINT, TOASTS.join(' | '));
+    // Окно знает, что прежняя услуга — анализ, со слов сервера: строки читаются с услугой.
+    assert.ok(calls.some(([n, b]) => n === 'db:visit_services' && /services\([^)]*is_lab[^)]*\)/.test(String(b.columns || ''))),
+        'строки счёта читаются без services(is_lab) — прежний анализ не узнать');
+    // Приём → анализ и анализ → не анализ — тоже.
+    assert.equal(await swap(() => world(), service(5)), 'Пациенту возвращено 70 000 сум.' + REPRINT, TOASTS.join(' | '));
+    assert.equal(await swap(() => world({ lab: true }), service(2)), 'Пациенту возвращено 70 000 сум.' + REPRINT, TOASTS.join(' | '));
+    // Не анализ → не анализ — как было.
+    assert.equal(await swap(() => world(), service(2)), 'Пациенту возвращено 70 000 сум.', TOASTS.join(' | '));
+    // Смена врача у анализа: тот же анализ в той же пробирке — этикетка верна.
+    assert.equal(await swap(() => world({ lab: true }), doctor), 'Пациенту возвращено 70 000 сум.', TOASTS.join(' | '));
+    closeAll();
+});

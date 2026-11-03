@@ -225,7 +225,7 @@ async function loadInvoiceState(invoiceId) {
     let lines = [];
     if (ids.length) {
         const { data } = await supabase.from('visit_services')
-            .select('id, service_id, status, total, invoice_item_id, clinic_item_id, consultation_type_id, doctor_id(id, full_name)')
+            .select('id, service_id, status, total, invoice_item_id, clinic_item_id, consultation_type_id, services(name, is_lab, type), doctor_id(id, full_name)')   // services: LAB_TUBE_LABEL_V1 (К4) — прежняя услуга — анализ?
             .in('invoice_item_id', ids);
         lines = data || [];
     }
@@ -554,7 +554,11 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
         }
         if (error) { toast(error.message || tr('Не удалось.'), 'fail'); setBusy(false); okBtn.disabled = false; return; }
         s.overlay.remove();
-        if (onDone) await onDone({ ...(data || {}), rebill: rebill || !!(data && data.rebill) });
+        // LAB_TUBE_LABEL_V1 (К4) — в замене анализ (прежняя или новая услуга): касса
+        // напомнит перепечатать этикетку пробирки (cashier-desk.js afterRefundSwap).
+        // labNew — новая услуга сама анализ: у «Вернуть эту услугу и выставить
+        // новую» только тогда «у нового анализа новый номер».
+        if (onDone) await onDone({ ...(data || {}), rebill: rebill || !!(data && data.rebill), lab: oldLab || isLabService(svc), labNew: isLabService(svc) });
     });
 
     paintIntro();
@@ -629,7 +633,10 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', 'data-swap': 'service', onclick: async () => {
                     const svc = await pickService(tr('Заменить услугу'), { visitId: st.invoice.visit_id, exceptLineId: line.id, doctorId: lineDoctorId(line) });   // DUP_STOP_V1 · ревью m5
                     if (!svc) return;
-                    await openSwapConfirm({ visit_service_id: line.id, new_service_id: svc.id }, { onDone: afterSwap });
+                    // LAB_TUBE_LABEL_V1 (К4, поправка владельца) — в замене анализ (прежняя
+                    // или новая услуга): уведомление напомнит перепечатать этикетку пробирки.
+                    const lab = isLabService(line.services) || isLabService(svc);
+                    await openSwapConfirm({ visit_service_id: line.id, new_service_id: svc.id }, { onDone: (r) => afterSwap({ ...r, lab }) });
                 } }, 'Заменить услугу'));
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', 'data-swap': 'doctor', onclick: async () => {
                     const who = await pickPerformer(tr('Сменить врача'), { visit_service_id: line.id });
@@ -653,11 +660,15 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
     };
 
     // CASHIER_PAID_SWAP_V1 — после замены в оплаченном счёте: что стало с деньгами.
+    // LAB_TUBE_LABEL_V1 (К4, поправка владельца) — заменили анализ (r.lab): одно
+    // уведомление заканчивается «Перепечатайте этикетку пробирки.» — номер строки
+    // тот же, но в пробирке другой анализ. Смена врача анализ не меняет — r.lab нет.
     async function afterSwap(r) {
+        const reprint = r.lab ? ' · ' + tr('Перепечатайте этикетку пробирки.') : '';
         if (Number(r.refunded) > 0) {
-            toast(r.to_balance
+            toast((r.to_balance
                 ? trf('Разница {sum} сум зачислена на баланс пациента.', { sum: fmtSum(r.refunded) })
-                : trf('Пациенту возвращено {sum} сум.', { sum: fmtSum(r.refunded) }), 'ok');
+                : trf('Пациенту возвращено {sum} сум.', { sum: fmtSum(r.refunded) })) + reprint, 'ok');
             if (printSlip) {
                 try {
                     printSlip({ kind: 'swap', invoice: r.invoice || current, patient: { full_name: current.patient_name, mrn: current.mrn },
@@ -665,9 +676,9 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
                 } catch (e) { /* печать не отменяет проведённый возврат */ }
             }
         } else if (Number(r.due) > 0) {
-            toast(trf('Услуга заменена — к доплате {sum} сум.', { sum: fmtSum(r.due) }), 'info');
+            toast(trf('Услуга заменена — к доплате {sum} сум.', { sum: fmtSum(r.due) }) + reprint, 'info');
         } else {
-            toast(tr('Услуга заменена — сумма счёта не изменилась.'), 'ok');
+            toast(tr('Услуга заменена — сумма счёта не изменилась.') + reprint, 'ok');
         }
         await paint();
         await changed();
