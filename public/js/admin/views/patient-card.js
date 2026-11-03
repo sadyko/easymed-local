@@ -190,6 +190,22 @@ function paintTelegramPill(st, pill, dot, text) {
     pill.title = tr(TG_WORDS[st.state]);
 }
 
+/**
+ * LAST_VISIT_TRUE_V1 (ревью, minor-3) — СКОЛЬКО КАЛЕНДАРНЫХ ДНЕЙ НАЗАД был визит
+ * (подпись «N дн. назад» / «сегодня» клетки «Последний визит»). Прошедшие
+ * миллисекунды, делённые на сутки, называли визит вчера в 23:00, открытый
+ * сегодня в 08:00, «сегодня». Сравниваются МЕСТНЫЕ полуночи визита и «сейчас»;
+ * Math.round — сутки с переводом часов короче или длиннее 24 ч. Не раньше нуля
+ * (часы машины отстали от сервера). null — дата нечитаема.
+ */
+export function lastVisitDaysAgo(at, nowMs = Date.now()) {
+    const d = new Date(at);
+    const n = new Date(nowMs);
+    if (Number.isNaN(d.getTime()) || Number.isNaN(n.getTime())) return null;
+    const dayOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    return Math.max(0, Math.round((dayOf(n) - dayOf(d)) / 86400000));
+}
+
 export function renderPatientCard(container, { onNavigate, payload } = {}) {
     clear(container);
 
@@ -645,10 +661,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // вообще: будущая запись и отменённый визит выигрывали у приёма.
         const lastVisitAt = tabOpen('visits') ? lastVisitDate : null;
         const nextVisitAt = tabOpen('visits') ? nextVisitDate : null;
-        let daysAgo = null;
-        if (lastVisitAt) {
-            daysAgo = Math.max(0, Math.floor((Date.now() - new Date(lastVisitAt).getTime()) / 86400000));
-        }
+        // LAST_VISIT_TRUE_V1 (ревью, minor-3) — календарные дни, не прошедшие сутки.
+        const daysAgo = lastVisitAt ? lastVisitDaysAgo(lastVisitAt) : null;
         let outstanding = 0;
         for (const inv of invoices) {
             if (inv.status === 'unpaid' || inv.status === 'partial' || inv.status === 'debt') {

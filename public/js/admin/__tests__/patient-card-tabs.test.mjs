@@ -430,3 +430,36 @@ test('LAST_VISIT_TRUE_V1: «Последний визит» шапки — с с
   assert.ok(t.includes('12 августа 2026'), 'в клетке не последний состоявшийся визит: ' + t);
   assert.ok(t.includes('запись: 1 марта 2099'), 'ближайшая запись не названа: ' + t);
 });
+
+// LAST_VISIT_TRUE_V1 (ревью, minor-3) — «N дн. назад» — КАЛЕНДАРНЫЕ ДНИ, а не сутки.
+// Подпись делила прошедшие миллисекунды на сутки: визит вчера в 23:00, открытый
+// сегодня в 08:00 (9 часов), был «сегодня». Теперь сравниваются местные полуночи.
+// Пояс прибит (Ташкент, UTC+5) и возвращается после теста; «сейчас» — Date.now.
+// Имя пояса — IANA: часы JS (ICU) не понимают POSIX-строку 'UZT-5' и молча
+// считают её UTC.
+test('LAST_VISIT_TRUE_V1 (ревью, minor-3): вчера в 23:00, открыто в 08:00 — «1 дн. назад», а не «сегодня»', async () => {
+  const PC = await import('../views/patient-card.js');
+  const prevTz = process.env.TZ;
+  const realNow = Date.now;
+  process.env.TZ = 'Asia/Tashkent';
+  try {
+    const NOW = Date.parse('2026-11-03T03:00:00Z');                       // 03.11 08:00 по Ташкенту
+    assert.equal(PC.lastVisitDaysAgo('2026-11-02T18:00:00Z', NOW), 1, 'вчера 23:00 — не «сегодня»');
+    assert.equal(PC.lastVisitDaysAgo('2026-11-03T01:00:00Z', NOW), 0, 'сегодня 06:00 — «сегодня»');
+    assert.equal(PC.lastVisitDaysAgo('2026-11-02T19:30:00Z', NOW), 0, 'сегодня 00:30 (19:30Z накануне) — «сегодня»');
+    assert.equal(PC.lastVisitDaysAgo('2026-10-27T05:00:00Z', NOW), 7);
+    assert.equal(PC.lastVisitDaysAgo('2026-11-05T05:00:00Z', NOW), 0, 'часы машины отстали — не «−2 дн.»');
+    assert.equal(PC.lastVisitDaysAgo('мусор', NOW), null);
+    Date.now = () => NOW;
+    const p = fullPayload();
+    p.visit_count = 1; p.last_visit_date = '2026-11-02T18:00:00Z'; p.next_visit_date = null;
+    const box = await render(p);
+    const cell = buttons(box).find((b) => textOf(b).includes('Последний визит'));
+    assert.ok(cell, 'нет клетки «Последний визит»');
+    const t = textOf(cell);
+    assert.ok(t.includes('1 дн. назад') && !t.includes('сегодня'), 'подпись клетки: ' + t);
+  } finally {
+    Date.now = realNow;
+    if (prevTz === undefined) delete process.env.TZ; else process.env.TZ = prevTz;
+  }
+});
