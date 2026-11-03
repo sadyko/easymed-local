@@ -186,3 +186,117 @@ test('«Документы»: услуга лаборатории по груп�
   const names = (byVisit[10] || []).map((r) => r.panelName).sort();
   assert.deepEqual(names, ['Мазок по группе', 'Мазок по панели'], 'группа «Лаборатория» и панель; отделение и консультация — нет');
 });
+
+// ═══ Ревью M2 (проба r6) — мазок по РАЗДЕЛАМ бланка: те же показатели в «Разделе бланка» U, V
+// и C (lab_panel_save это принимает, мигр. 271 оставляет). Результат хранит только имя, а бланк
+// печатал одну строку на имя: 9 сохранённых значений печатались тремя, все со значением C.
+const SITES = ['U', 'V', 'C'];
+const SITE_NAMES = ['Лейкоциты', 'Эпит. клетки', 'Микрофлора'];
+const SITE_VAL = { U: '1-2', V: '10-15', C: '20-30' };
+function seedSites(db) {
+  db.prepare("INSERT INTO patients (id, full_name, mrn, gender, date_of_birth) VALUES (77, 'Тест Пациент', 'T-1', 'female', '1990-01-01')").run();
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (10, 77, date('now'), 'arrived')").run();
+  db.prepare("INSERT INTO services (id, name, price, type, is_lab, active) VALUES (50, 'Мазок на флору', 50000, 'lab', 1, 1)").run();
+  db.prepare("INSERT INTO lab_panels (id, name, service_id, modality, active) VALUES (900, 'Мазок на флору', 50, 'lab', 1)").run();
+  const a = db.prepare("INSERT INTO lab_panel_analytes (panel_id, name, value_type, sort_order, group_label) VALUES (900, ?, 'text', ?, ?)");
+  let i = 0;
+  for (const g of SITES) for (const n of SITE_NAMES) a.run(n, i++, g);
+  db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status, sample_collected_at) VALUES (2382, 10, 50, 'collected', strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run();
+}
+const printedRows = () => {
+  const html = printed[printed.length - 1] || '';
+  const tbody = (html.split('<tbody>')[1] || '').split('</tbody>')[0];
+  return tbody.split('<tr>').slice(1).map((tr) => ((tr.match(/<td class="pname">([^<]*)/) || [])[1] || '').trim() + '=' + ((tr.match(/<span class="val[^"]*">([^<]*)/) || [])[1] || '').trim());
+};
+
+test('M2: мазок U/V/C — каждый раздел получает своё значение обратно, правка U пишет строку U, бланк печатает все 9', async (t) => {
+  const app = await mount(seedSites);
+  t.after(() => app.close());
+  let modal = await openSheet(app.root);
+  let ls = lines(modal);
+  assert.equal(ls.length, 9, '3 раздела × 3 показателя');
+  ls.forEach((l, i) => type(l.input, SITE_VAL[SITES[Math.floor(i / SITE_NAMES.length)]]));
+  await saveAll(modal);
+  assert.equal(results(app.db).length, 9);
+  modal = await openSheet(app.root);
+  ls = lines(modal);
+  assert.deepEqual(ls.map((l) => l.input.value), SITES.flatMap((g) => SITE_NAMES.map(() => SITE_VAL[g])), 'лист: у каждого раздела — его значение (прежде везде C)');
+  type(ls[0].input, '3-4');   // U · Лейкоциты
+  await saveAll(modal);
+  const now = results(app.db);
+  assert.equal(now.length, 9, 'правка не добавила строк');
+  assert.deepEqual(now.filter((r) => r.parameter === 'Лейкоциты').map((r) => r.value), ['3-4', '10-15', '20-30'], 'правка U — в строке U, V и C целы');
+  for (const m of byClass(body, 'modal')) m.remove();
+  printed.length = 0;
+  buttonByText(app.root, 'Бланк').click();
+  await settle(24);
+  assert.deepEqual(printedRows(), [
+    'Лейкоциты=3-4', 'Эпит. клетки=1-2', 'Микрофлора=1-2',
+    'Лейкоциты=10-15', 'Эпит. клетки=10-15', 'Микрофлора=10-15',
+    'Лейкоциты=20-30', 'Эпит. клетки=20-30', 'Микрофлора=20-30',
+  ], 'по строке на каждый раздел');
+});
+
+// Ревью L3 — «N показателей», худший флаг и критические в «Подтвердить» считались по ВСЕМ строкам,
+// включая скрытые копии времени задвоенных панелей: «15 показателей» при 5 на бланке, и старая
+// критическая копия объявлялась, хотя не печатается.
+test('L3: скрытые копии не считаются — «5 показателей», старая критическая копия не объявляется', async (t) => {
+  const app = await mount((db) => {
+    seed(db, { status: 'resulted' });
+    const r = db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, flag, notes) VALUES (2382, ?, ?, ?, '')");
+    for (const v of ['1', '2', '3']) for (const n of NAMES) r.run(n, 'v' + v, v === '1' && n === 'Лейкоциты' ? 'critical' : 'normal');
+  });
+  t.after(() => { answerConfirm(true); app.close(); });
+  byClass(app.root, 'lq-toggle')[0].click();   // раскрыть анализы карточки
+  await settle(8);
+  const text = textOf(app.root);
+  assert.ok(text.includes('5 показателей') && !text.includes('15 показателей'), 'счёт — как на бланке');
+  assert.ok(!text.includes('критич.'), 'нет «критич.» на карточке');
+  assert.equal(byClass(app.root, 'lq-flag--critical').length, 0, 'нет худшего флага «Критично»');
+  answerConfirm(false);
+  confirms.length = 0;
+  const verify = buttonByText(app.root, 'Подтвердить');   // карточка; у строки — «Проверить и выдать»
+  assert.ok(verify, 'кнопка «Подтвердить»');
+  verify.click();
+  await settle(4);
+  assert.equal(confirms.length, 1);
+  assert.ok(!confirms[0].includes('КРИТИЧЕСКИХ'), confirms[0]);
+});
+
+test('L3: мазок U/V/C — «9 показателей» (по строке на раздел)', async (t) => {
+  const app = await mount((db) => {
+    seedSites(db);
+    db.prepare("UPDATE visit_services SET status = 'resulted' WHERE id = 2382").run();
+    const r = db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, flag, notes) VALUES (2382, ?, ?, 'normal', '')");
+    for (const g of SITES) for (const n of SITE_NAMES) r.run(n, SITE_VAL[g]);
+  });
+  t.after(() => app.close());
+  byClass(app.root, 'lq-toggle')[0].click();
+  await settle(8);
+  assert.ok(textOf(app.root).includes('9 показателей'), textOf(app.root).slice(0, 400));
+});
+
+// Ревью L5 — правка одной «Оценки» у сохранённого значения не считалась несохранённой: закрытие
+// окна молча её теряло.
+test('L5: поправлена одна «Оценка» — закрыть только после вопроса; без правки — без вопроса', async (t) => {
+  const app = await mount((db) => {
+    seed(db, { copies: 1, status: 'resulted' });
+    db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, flag) VALUES (2382, 'Лейкоциты', '5-7', 'normal')").run();
+  });
+  t.after(() => { answerConfirm(true); app.close(); });
+  let modal = await openSheet(app.root);
+  confirms.length = 0;
+  buttonByText(modal, 'Закрыть').click();
+  assert.deepEqual(confirms, [], 'ничего не правили — без вопроса');
+  assert.ok(!open(modal));
+  modal = await openSheet(app.root);
+  const row = byClass(modal, 'le-row').find((r) => textOf(byClass(r, 'le-name')[0] || r) === 'Лейкоциты');
+  const sel = byClass(row, 'le-flag')[0];
+  sel.value = 'abnormal';
+  sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+  answerConfirm(false);
+  confirms.length = 0;
+  buttonByText(modal, 'Закрыть').click();
+  assert.deepEqual(confirms, [ASK], 'вопрос задан');
+  assert.ok(open(modal), '«Отмена» — окно открыто');
+});

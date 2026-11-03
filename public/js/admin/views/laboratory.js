@@ -147,6 +147,7 @@ const state = {
     refundedIds: new Set(),   // REFUND_ANY_V1 (ревью B4) — номера строк «услуга возвращена» (метка lqItem)
     refundedKnown: true,      // LAB_TUBE_LABEL_V1 (ревью U11, L4) — false: rpc refunded_lines не ответил, возвраты не известны
     panelByService: {},// service_id -> lab_panels row
+    slotsByService: {},// LAB_PANEL_DEDUP_V1 (ревью M2/L3) — service_id -> Map(имя показателя -> строк панели с этим именем)
     deviceByService: {},   // LAB_TUBE_LABEL_V1 — service_id -> прибор панели услуги (lab_panels.device_id), как у приёма
     deptKindById: {},  // department_id -> kind   (LAB_SERVICE_ROUTING_V1)
     typeNameById: {},  // service_type_id -> name (LAB_SERVICE_ROUTING_V1)
@@ -743,6 +744,7 @@ async function fetchAndPaint() {
         // уходит сразу, вместе с чтениями ниже (пациенты, результаты, стационар),
         // а ответ ждётся только там, где он нужен, — загрузку он не удлиняет.
         const refundedP = loadRefundedLineIds(rows.map((r) => r.id));
+        const slotsP = loadPanelSlots(rows);   // LAB_PANEL_DEDUP_V1 (ревью L3) — тем же заходом, ответ ждётся ниже
 
         // Patient info per visit (2-hop embeds are not supported → second read).
         const visitIds = [...new Set(rows.map(r => r.visit_id))];
@@ -789,6 +791,9 @@ async function fetchAndPaint() {
             for (const k of Object.keys(resultsByVs)) resultsByVs[k].sort((a, b) => a.id - b.id);
         }
 
+        const slotsByService = await slotsP;   // LAB_PANEL_DEDUP_V1 (ревью L3)
+        if (token !== lastFetchToken) return;
+
         // LAB_PATIENT_ORIGIN_V1 (2026-09-10) — владелец: «stationary/ambulatory».
         //
         // Пробу лежащего пациента несут в отделение, а пришедший ждёт у окна
@@ -822,6 +827,7 @@ async function fetchAndPaint() {
         state.rows = withoutRefundedIdle(rows, hideIdle, resultsByVs);
         state.patientMap = patientMap;
         state.resultsByVs = resultsByVs;
+        state.slotsByService = slotsByService;   // LAB_PANEL_DEDUP_V1 (ревью L3)
         paintFilters();
         paintRows();
     } catch (e) {
@@ -1030,7 +1036,7 @@ const fmtBirth = (iso) => fmtDate(iso);
 
 // Результат строки: значение (если показатель один) и худший флаг.
 function resultsCell(r) {
-    const results = state.resultsByVs[r.id] || [];
+    const results = shownResults(r);   // LAB_PANEL_DEDUP_V1 (ревью L3) — скрытые копии флаг не дают
     if (!results.length) return null;
     const one = results.length === 1 ? results[0] : null;
     return h('div', { class: 'lq-res' },
@@ -1060,7 +1066,7 @@ function lqItem(r, patient) {
             h('div', { class: 'lq-name' }, svc.name || '—', externalLabTag(svc), refundedTag(r)),   // EXTERNAL_LAB_V1 · REFUND_ANY_V1 (ревью B4)
             h('div', { class: 'lq-type' },
                 svc.specimen ? h('span', null, svc.specimen) : null,
-                results.length ? h('span', null, trf('{n} показателей', { n: results.length })) : null,
+                results.length ? h('span', null, trf('{n} показателей', { n: shownResults(r).length })) : null,   // LAB_PANEL_DEDUP_V1 (ревью L3) — как на бланке
                 r.sample_collected_at
                     ? h('span', { class: 'lq-collected' }, trf('взято {when}', { when: fmtDateTime(r.sample_collected_at) }))
                     : null,
@@ -1079,7 +1085,7 @@ function labGroupCard(g, byVisit = new Map()) {
     const hasRes = (r) => (state.resultsByVs[r.id] || []).length > 0;
     const done = rows.filter(hasRes).length;
     const awaiting = rows.filter(r => r.status === 'queued').length;
-    const critCount = rows.filter(r => (state.resultsByVs[r.id] || []).some(x => x.flag === 'critical')).length;
+    const critCount = rows.filter(r => shownResults(r).some(x => x.flag === 'critical')).length;   // LAB_PANEL_DEDUP_V1 (ревью L3)
     const anyActive = rows.some(r => r.status !== 'added');   // 'added' = ждём кассу
     const anyResulted = rows.some(hasRes);
     const anyToVerify = rows.some(r => r.status === 'resulted');
@@ -1318,8 +1324,11 @@ async function verifyGroup(g) {
     const panels = g.rows.filter(r => r.status === 'resulted');
     if (!panels.length) { toast('Нет результатов для подтверждения.', 'fail'); return; }
 
+    // LAB_PANEL_DEDUP_V1 (ревью L3) — критические — из того, что напечатает бланк:
+    // старая копия времени задвоенных панелей вопросом не объявляется.
+    // Отметка о проверке ниже ставится всем строкам заказа, как прежде.
     const allResults = [];
-    for (const p of panels) allResults.push(...(state.resultsByVs[p.id] || []));
+    for (const p of panels) allResults.push(...shownResults(p));
     const critical = allResults.filter(x => x.flag === 'critical');
 
     let prompt = trf('Подтвердить и выдать {n} анализ(ов) для {name}?', { n: panels.length, name: g.patientName }) + '\n\n';
@@ -1567,18 +1576,76 @@ function uniqueAnalytes(list) {
     return out;
 }
 
+// LAB_PANEL_DEDUP_V1 (ревью M2) — сколько строк панели носят это имя (без
+// копий): один показатель в нескольких «Разделах бланка» (мазок U/V/C —
+// «Лейкоциты» трижды) — законная раскладка, и результат каждого раздела —
+// своя строка lab_results с тем же именем. Map(имя без пробелов по краям -> k).
+function analyteSlots(list) {
+    const m = new Map();
+    for (const a of uniqueAnalytes(list)) {
+        const n = String(a.name == null ? '' : a.name).trim();
+        if (n) m.set(n, (m.get(n) || 0) + 1);
+    }
+    return m;
+}
+
 // LAB_PANEL_DEDUP_V1 — одна строка бланка на показатель, свежая (больший id)
 // побеждает: правило карты пациента и «Документов» (LAB_DOC_ALL_ANALYTES_V1).
 // Пока панель держала копии, показатель записывался по разу на каждую — и
 // бланк печатал его дважды и трижды.
-function latestPerParameter(results) {
+// Ревью M2 — точнее: k САМЫХ НОВЫХ строк на имя, где k — число строк панели с
+// этим именем (slots; analyteSlots). У обычной панели k = 1, и записи времени
+// копий по-прежнему схлопываются; у мазка U/V/C печатаются все три раздела
+// (прежде 9 сохранённых значений печатались тремя — все со значением C).
+function latestPerParameter(results, slots = null) {
     const byParam = new Map();
     for (const x of results || []) {
         const k = String(x.parameter || '');
-        const prev = byParam.get(k);
-        if (!prev || Number(x.id) > Number(prev.id)) byParam.set(k, x);
+        if (!byParam.has(k)) byParam.set(k, []);
+        byParam.get(k).push(x);
     }
-    return [...byParam.values()].sort((a, b) => Number(a.id) - Number(b.id));
+    const out = [];
+    for (const [k, list] of byParam) {
+        const n = Math.max(1, (slots && slots.get(k.trim())) || 1);
+        list.sort((a, b) => Number(a.id) - Number(b.id));
+        out.push(...list.slice(-n));
+    }
+    return out.sort((a, b) => Number(a.id) - Number(b.id));
+}
+
+// Ревью L3 — результаты заказа так, как их печатает бланк (без скрытых копий
+// времени задвоенных панелей): по ним считаются «N показателей», худший флаг
+// и критические значения в «Проверить и выдать».
+function shownResults(r) {
+    return latestPerParameter(state.resultsByVs[r.id] || [], state.slotsByService[r.service_id] || null);
+}
+
+// Ревью L3 — сколько строк каждой панели очереди носят одно имя: только имена,
+// партиями. Не прочиталось — {} (по строке на имя, как у обычной панели);
+// очередь из-за этого не падает. -> { service_id: Map(имя -> k) }
+async function loadPanelSlots(rows) {
+    const out = {};
+    const panelIds = [...new Set((rows || []).map((r) => state.panelByService[r.service_id]).filter(Boolean).map((p) => p.id))];
+    if (!panelIds.length) return out;
+    try {
+        const CH = 150;
+        const jobs = [];
+        for (let i = 0; i < panelIds.length; i += CH) {
+            jobs.push(supabase.from('lab_panel_analytes').select('id,panel_id,name,group_label')
+                .in('panel_id', panelIds.slice(i, i + CH)).limit(100000));
+        }
+        const byPanel = new Map();
+        for (const part of await Promise.all(jobs)) {
+            for (const a of ((part && !part.error && part.data) || [])) {
+                if (!byPanel.has(a.panel_id)) byPanel.set(a.panel_id, []);
+                byPanel.get(a.panel_id).push(a);
+            }
+        }
+        for (const [sid, p] of Object.entries(state.panelByService)) {
+            if (byPanel.has(p.id)) out[sid] = analyteSlots(byPanel.get(p.id));
+        }
+    } catch (e) { console.warn('[labs] panel slots:', e && e.message); }
+    return out;
 }
 
 async function resolveAnalyteRows(r, patient) {
@@ -1618,9 +1685,24 @@ async function resolveAnalyteRows(r, patient) {
             ref_low_f: dict ? dict.ref_low_f : null, ref_high_f: dict ? dict.ref_high_f : null,
         }];
     }
+    // LAB_PANEL_DEDUP_V1 (ревью M2) — одно имя на нескольких строках панели
+    // (разделы бланка U/V/C): каждой строке — СВОЙ сохранённый результат, по
+    // порядку из k самых новых с этим именем. Прежде все три строки получали
+    // одну (последнюю, C), и правка U и V переписывала строку C.
+    const lineCount = new Map();
+    for (const a of analytes) lineCount.set(a.name, (lineCount.get(a.name) || 0) + 1);
+    const nth = new Map();
     return analytes.map(a => {
         const ref = refFor(a, gender);
-        const prev = byParam.get(a.name) || byParam.get(a.code) || null;
+        const k = lineCount.get(a.name) || 1;
+        let prev;
+        if (k > 1) {
+            const j = nth.get(a.name) || 0;
+            nth.set(a.name, j + 1);
+            prev = existing.filter(x => x.parameter === a.name).sort((x, y) => Number(x.id) - Number(y.id)).slice(-k)[j] || null;
+        } else {
+            prev = byParam.get(a.name) || byParam.get(a.code) || null;
+        }
         const named = matchedNamedRanges(a, gender, age);
         return { a, ref, prev, named, seeded: true };
     });
@@ -1802,7 +1884,11 @@ const askUser = (q) => (typeof window !== 'undefined' && window && typeof window
 // «Сохранить всё» пустые строки и так не пишет.
 function entryUnsaved(e) {
     const cur = String((e.input && e.input.value) || '').trim();
-    return cur !== '' && cur !== String((e.prev && e.prev.value) || '').trim();
+    if (cur === '') return false;
+    if (cur !== String((e.prev && e.prev.value) || '').trim()) return true;
+    // Ревью L5 — у сохранённого значения поправлена одна «Оценка» (флаг листа):
+    // «Сохранить всё» её запишет, а закрытие без вопроса молча теряло.
+    return !!e.prev && e.flag != null && String(e.flag || 'normal') !== String(e.prev.flag || 'normal');
 }
 function worksheetUnsaved(sections) {
     return (sections || []).some((s) => (s.interpEl && String(s.interpEl.value || '').trim() !== '') || (s.entries || []).some(entryUnsaved));
@@ -2123,7 +2209,9 @@ function verifyDialog(r, patient, results) {
     const printCb = h('input', { type: 'checkbox', checked: true });
     const okBtn = lockSignButton(h('button', { class: 'btn btn-primary', type: 'button' }, 'Подтвердить и выдать'));   // ADMIN_ACT_AS_V1 (R3)
 
-    const rows = results.map(x => h('div', { class: 'row', style: { gap: '10px', padding: '6px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '12.5px' } },
+    // LAB_PANEL_DEDUP_V1 (ревью L3) — на проверку показывается то, что напечатает бланк
+    // (без скрытых копий); отметка о проверке ниже ставится всем строкам заказа.
+    const rows = latestPerParameter(results, state.slotsByService[r.service_id] || null).map(x => h('div', { class: 'row', style: { gap: '10px', padding: '6px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '12.5px' } },
         h('span', { style: { flex: 1, fontWeight: 600 } }, x.parameter || '—'),
         h('span', { class: 'num' }, [x.value, x.unit].filter(Boolean).join(' ')),
         h('span', { class: 'muted num', style: { flex: '0 0 90px' } }, x.reference_range || '—'),
@@ -2228,10 +2316,11 @@ async function labPanelHints(r) {
 }
 
 async function labGroupFor(r, patient, allResults) {
-    // LAB_PANEL_DEDUP_V1 — одна строка бланка на показатель, свежая побеждает.
-    const results = latestPerParameter(allResults);
     const svc = r.services || {};
     const { codeByName, local, panelList, idx } = await labPanelHints(r);
+    // LAB_PANEL_DEDUP_V1 — одна строка бланка на показатель, свежая побеждает;
+    // ревью M2 — по строке на каждый раздел, где панель держит это имя (U/V/C).
+    const results = latestPerParameter(allResults, analyteSlots(panelList));
     const gender = (patient.gender || '').toLowerCase();
     const age = ageYears(patient.date_of_birth);
 
