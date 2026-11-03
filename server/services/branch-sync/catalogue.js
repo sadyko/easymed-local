@@ -602,7 +602,7 @@ const norm = normName;
  * @returns {{changed:number, created:object, updated:object, adopted:object,
  *   settings:boolean, roster?:number, deactivated?:object}}
  */
-export function applyCatalogue(db, payload, { dryRun = false } = {}) {
+export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: passwordOut = null } = {}) {   // passwordSetFor — STAFF_EDIT_V1 (ревью, остаток 8)
   const summary = { changed: 0, created: {}, updated: {}, adopted: {}, settings: false };
   if (!payload || typeof payload !== 'object') return summary;
 
@@ -793,8 +793,11 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
   // services/auth.js) у каждой установки своя, в памяти процесса. Сброс пароля
   // на главной снимал её только там: в филиале сотрудник с новым паролем ещё
   // 5 минут получал «Слишком много попыток». Приехавший новый хеш (и новый
-  // сотрудник) — та же установка пароля, что PATCH /api/users. Снимается в
-  // конце приёма: строка, упавшая на середине, откатит всё — и снимать нечего.
+  // сотрудник) — та же установка пароля, что PATCH /api/users.
+  // STAFF_EDIT_V1 (ревью, остаток 8) — снимает её commitCatalogue ПОСЛЕ COMMIT: здесь
+  // список только собирается (opts.passwordSetFor). Прежде блокировка снималась в конце
+  // этого прохода, то есть внутри транзакции: приём, откатившийся после (сбой на COMMIT),
+  // оставлял прежний пароль без блокировки.
   const passwordSetFor = [];
 
   const insertMap = db.prepare(
@@ -1050,7 +1053,25 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
   }
 
   // STAFF_EDIT_V1 (ревью 3) — приехавший пароль снимает блокировку входа (см. passwordSetFor).
-  for (const name of passwordSetFor) clearLoginLocks(name);
+  // STAFF_EDIT_V1 (ревью, остаток 8) — не здесь, а после COMMIT (commitCatalogue): список — вызывающему.
+  if (Array.isArray(passwordOut)) passwordOut.push(...passwordSetFor);
 
+  return summary;
+}
+
+/**
+ * STAFF_EDIT_V1 (ревью, остаток 8) — ПРИЁМ СПРАВОЧНИКА ОДНОЙ ТРАНЗАКЦИЕЙ, И ТОЛЬКО ПОСЛЕ
+ * COMMIT — СНЯТЬ БЛОКИРОВКУ ВХОДА логинам, которым приехал пароль (см. passwordSetFor в
+ * applyCatalogue). Блокировка живёт в памяти процесса и откату базы не подчиняется: снятая
+ * внутри транзакции, она оставалась снятой и тогда, когда приём откатился. Транзакция
+ * бросила — бросает и это, и ничего не снято.
+ * @returns то же, что applyCatalogue (логинов в нём нет)
+ */
+export function commitCatalogue(db, payload) {
+  const passwordSetFor = [];
+  const summary = db.transaction(() => applyCatalogue(db, payload, { passwordSetFor }))();
+  for (const name of passwordSetFor) {
+    try { clearLoginLocks(name); } catch (e) { console.warn('[branch-sync] login lock not cleared:', e && e.message); }   // приём уже принят
+  }
   return summary;
 }

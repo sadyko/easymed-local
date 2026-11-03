@@ -2,7 +2,7 @@ import path from 'node:path';
 import { hasAnyRole } from '../roles.js';
 import { getDataDir } from '../control/config.js';
 import { createBackup } from '../backup.js';
-import { applyCatalogue } from '../branch-sync/catalogue.js';
+import { applyCatalogue, commitCatalogue } from '../branch-sync/catalogue.js';   // commitCatalogue — STAFF_EDIT_V1 (ревью, остаток 8)
 import { pullCatalogue } from '../branch-sync/pull.js';
 // BRANCH_REISSUE_V1 — личность ЭТОЙ установки у поставщика (control.json) и
 // погашение кода активации. Оба нужны обеим половинам перевыпуска: главная
@@ -2103,7 +2103,8 @@ async function syncCatalogue(db, dataDir, {
 
   let summary;
   try {
-    summary = db.transaction(() => applyCatalogue(db, pulled.catalogue))();
+    // STAFF_EDIT_V1 (ревью, остаток 8) — одна транзакция; блокировки входа — после её COMMIT.
+    summary = commitCatalogue(db, pulled.catalogue);
   } catch (e) {
     // Транзакция откатилась целиком — база ровно такая, какой была. Копия из
     // шага 3 остаётся лежать: она не понадобилась, но её наличие и есть

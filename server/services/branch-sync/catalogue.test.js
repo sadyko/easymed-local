@@ -18,7 +18,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { exportCatalogue, applyCatalogue, TABLES, DOC_SETTINGS_COLUMNS } from './catalogue.js';
+import { exportCatalogue, applyCatalogue, commitCatalogue, TABLES, DOC_SETTINGS_COLUMNS } from './catalogue.js';   // commitCatalogue — STAFF_EDIT_V1 (ревью, остаток 8)
 import { becomeSecondary } from './identity.js';
 import { COMPANY_CLINIC_WIDE, COMPANY_BUILDING } from '../../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1
 import fs from 'node:fs';   // CLINIC_PROFILE_V1 — база до миграции 240
@@ -82,7 +82,7 @@ function receiver() {
   return db;
 }
 
-const apply = (db, cat) => db.transaction(() => applyCatalogue(db, cat))();
+const apply = (db, cat) => commitCatalogue(db, cat);   // как rpc/branch-sync.js: одна транзакция, блокировки — после COMMIT (STAFF_EDIT_V1, ревью, остаток 8)
 
 test('выгрузка отдаёт ровно перечисленные колонки — и ни одной лишней', () => {
   // seedStaff — чтобы в выгрузке БЫЛИ сотрудники: без единой строки цикл ниже
@@ -688,6 +688,29 @@ test('новый пароль из главной клиники снимает 
   assert.ok(login(branch, 'novyi.vrach', 'vrach-parol1', ip).session, 'нового сотрудника заперли чужие ошибки');
   assert.equal(branch.prepare("SELECT phone FROM users WHERE username = 'glavvrach'").get().phone, '+998907770000');
   assert.equal(login(branch, 'glavvrach', 'adminpass1', ip).error, 'locked', 'блокировку сняла правка без нового пароля');
+  main.close(); branch.close();
+});
+
+// STAFF_EDIT_V1 (ревью, остаток 8) — блокировка входа (память процесса) снимается ПОСЛЕ
+// COMMIT приёма, а не внутри транзакции: приём, откатившийся после снятия (сбой на COMMIT,
+// на любой строке ниже), оставлял прежний пароль без блокировки — ещё 5 попыток подбора.
+test('приём, откатившийся до COMMIT, блокировку входа не снимает; принятый — снимает (STAFF_EDIT_V1, ревью, остаток 8)', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+  const ip = { ip: '10.3.3.8' };
+  for (let i = 0; i < 5; i += 1) login(branch, 'ivanov', 'nevernyi', ip);
+  assert.equal(login(branch, 'ivanov', 'sekret12345', ip).error, 'locked');
+  main.prepare("UPDATE users SET password_hash = ? WHERE username = 'ivanov'").run(hashPassword('novyi-parol8'));
+  const cat = exportCatalogue(main);
+
+  assert.throws(() => branch.transaction(() => { applyCatalogue(branch, cat); throw new Error('сбой до COMMIT'); })(), /сбой до COMMIT/);
+  assert.equal(login(branch, 'ivanov', 'sekret12345', ip).error, 'locked', 'откатившийся приём снял блокировку прежнего пароля');
+
+  const summary = commitCatalogue(branch, cat);
+  assert.equal(summary.updated.users, 1);
+  assert.ok(!('passwordSetFor' in summary) && !JSON.stringify(summary).includes('ivanov'), 'логины не уходят в итог приёма');
+  assert.ok(login(branch, 'ivanov', 'novyi-parol8', ip).session, 'принятый пароль не снял блокировку');
   main.close(); branch.close();
 });
 
