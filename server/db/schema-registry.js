@@ -1373,7 +1373,9 @@ export const REGISTRY = {
   // в branch-sync/catalogue.js явные, а прибор соседнего здания в нашей базе не
   // означает ничего (пин: миграция 123.test.js).
   lab_panels: {
-    read:  { roles: ALL_STAFF, columns: ['id','name','code','modality','has_narrative','service_id','core_panel_id','active','created_at','device_id'] },
+    // LAB_PANEL_DEDUP_V1 (мигр. 272, ревью M1) — retired_at: панель СПИСАНА «Удалить» главного
+    // здания с филиалами (rpc/lab-panels.js); экран её не показывает. Пишет только сервер.
+    read:  { roles: ALL_STAFF, columns: ['id','name','code','modality','has_narrative','service_id','core_panel_id','active','created_at','device_id','retired_at'] },
     write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','core_panel_id','active','device_id'] },
              update: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','active','device_id'] },
              delete: { roles: LAB_SECTION_ROLES } },

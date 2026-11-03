@@ -139,7 +139,11 @@ export const TABLES = [
     // core_panel_id — не внешний ключ на местную таблицу, а номер панели в
     // облачном каталоге CORE; он одинаково осмыслен во всех установках и едет
     // как есть.
-    columns: ['name', 'code', 'modality', 'has_narrative', 'service_id', 'core_panel_id', 'active'],
+    // retired_at (мигр. 272, ревью M1) — панель, списанная «Удалить» главного
+    // здания с филиалами: едет обычной правкой строки (выключена, без услуги),
+    // и филиал 3.21 тоже прячет её с экрана. Филиал старше 272 колонку не знает
+    // (её нет в его перечне) — выключение и отвязку он всё равно принимает.
+    columns: ['name', 'code', 'modality', 'has_narrative', 'service_id', 'core_panel_id', 'active', 'retired_at'],
     refs: { service_id: 'services' },
     natural: ['code', 'name'],
     // LAB_PANEL_DEDUP_V1 — панель, которую главное здание УДАЛИЛО (её нет в
@@ -855,7 +859,12 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
     const rows = Array.isArray(payload[spec.name]) ? payload[spec.name] : [];
     // Колонки, которые ставим сразу. Самоссылка (service_categories.parent_id)
     // откладывается: на первом проходе половина родителей ещё не существует.
-    const firstPass = spec.columns.filter((c) => c !== spec.selfRef);
+    // LAB_PANEL_DEDUP_V1 (мигр. 272) — колонка, которой у ЭТОЙ базы ещё нет
+    // (retired_at у базы до 272), не пишется: приехавший ключ пропускается, как
+    // у doc_settings (`col in local`) и у выгрузки (have) — иначе INSERT/UPDATE
+    // упал бы на «no such column» и откатил весь приём.
+    const localCols = new Set(db.prepare(`PRAGMA table_info("${spec.name}")`).all().map((c) => c.name));
+    const firstPass = spec.columns.filter((c) => c !== spec.selfRef && localCols.has(c));
 
     // --- LAB_PANEL_DEDUP_V1: удалённые главным зданием — отвязать ДО приёма --
     //
@@ -873,9 +882,11 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
       const prefix = spec.name + ':';
       const liveLocal = new Set();
       const deadLocal = new Set();
+      const deadKeys = [];
       for (const [key, localId] of mapped) {
         if (!key.startsWith(prefix)) continue;
-        (live.has(key.slice(prefix.length)) ? liveLocal : deadLocal).add(localId);
+        if (live.has(key.slice(prefix.length))) liveLocal.add(localId);
+        else { deadLocal.add(localId); deadKeys.push([key, localId]); }
       }
       const pick = db.prepare(`SELECT id, "${clearCol}" AS c, "${flagCol}" AS f FROM "${spec.name}" WHERE id = ?`);
       for (const localId of deadLocal) {
@@ -887,6 +898,16 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
         summary.changed += 1;
         freed.add(localId);
         if (!dryRun) db.prepare(`UPDATE "${spec.name}" SET "${clearCol}" = NULL, "${flagCol}" = 0 WHERE id = ?`).run(localId);
+      }
+      // Ревью L7 — отвязанная строка дальше СВОЯ: мёртвые соответствия уходят.
+      // Иначе она навсегда оставалась «панелью главного», и если здание снова
+      // включало её или привязывало к услуге, каждая синхронизация отвязывала
+      // её опять (а «Удалить» и смену услуги закрывал бы отказ филиала, ревью H2).
+      for (const [key, localId] of deadKeys) {
+        if (liveLocal.has(localId)) continue;
+        mapped.delete(key);
+        claimSet(spec.name).delete(localId);
+        if (!dryRun) db.prepare('DELETE FROM branch_sync_map WHERE table_name = ? AND remote_id = ?').run(spec.name, Number(key.slice(prefix.length)));
       }
     }
 

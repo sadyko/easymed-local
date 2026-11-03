@@ -160,3 +160,14 @@ test('«Удалить» панель с показателями: панель 
   assert.equal(app.db.prepare('SELECT COUNT(*) n FROM lab_panel_analytes').get().n, 0);
   assert.ok(!toasts.some((m) => /Не удалось удалить/.test(m)), JSON.stringify(toasts));
 });
+
+// Ревью M1 (мигр. 272) — панель, списанная «Удалить» главного здания с филиалами, на экране не видна.
+test('M1: списанная панель (retired_at) в списке не показывается', async (t) => {
+  const app = await mount((db) => {
+    seedPanel(db);
+    db.prepare("INSERT INTO lab_panels (name, modality, active, retired_at) VALUES ('Списанная панель', 'lab', 0, '2026-11-03T10:00:00Z')").run();
+  });
+  t.after(() => app.close());
+  assert.ok(textOf(app.root).includes('Анализ гинекологического мазка'));
+  assert.ok(!textOf(app.root).includes('Списанная панель'));
+});

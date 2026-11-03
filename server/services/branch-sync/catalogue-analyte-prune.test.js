@@ -19,7 +19,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { exportCatalogue, applyCatalogue, commitCatalogue } from './catalogue.js';
+import { exportCatalogue, applyCatalogue, commitCatalogue, TABLES } from './catalogue.js';
 import { labPanelSave, labPanelDelete } from '../rpc/lab-panels.js';
 import { changesLabel } from '../../../public/js/admin/branch-sync-logic.js';
 
@@ -302,5 +302,91 @@ test('H2 (б): главное здание переносит услугу с о
   const svc = (name) => branch.prepare('SELECT s.name FROM lab_panels p LEFT JOIN services s ON s.id = p.service_id WHERE p.name = ?').get(name).name;
   assert.equal(svc('Первая'), 'Анализ гинекологического мазка');
   assert.equal(svc(PANEL), 'Мазок (запасная)');
+  assert.equal(sync().changed, 0);
+});
+
+// ═══ Ревью M1 (проба r2) — смешанные версии: главное 3.21 удаляет панель и заводит замену на
+// ту же услугу, филиал ещё на 3.20. Приём 3.20 (61679d07) не знал отвязки исчезнувших, удаления
+// исчезнувших показателей, занятой услуги и колонки retired_at — здесь он воспроизведён тем же
+// applyCatalogue без этих свойств (ревью прогоняло настоящий файл 61679d07 — итог тот же).
+function asReceiver320(fn) {
+  const saved = TABLES.map((s) => ({ s, copy: { ...s, columns: [...s.columns] } }));
+  for (const s of TABLES) {
+    delete s.unlinkMissing; delete s.yieldUnique; delete s.pruneMissing; delete s.narrow;
+    s.columns = s.columns.filter((c) => c !== 'retired_at');
+  }
+  try { return fn(); } finally {
+    for (const { s, copy } of saved) { for (const k of Object.keys(s)) delete s[k]; Object.assign(s, copy); }
+  }
+}
+const withBranches = (db) => db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES ('B', 'issue')").run();
+const replacePanel = (main, id) => {
+  const out = labPanelDelete(main, { id }, LAB);
+  labPanelSave(main, { panel: { name: 'Мазок (новая)', modality: 'lab', service_id: 50, active: true }, analytes: NAMES.map((name) => ({ name })) }, LAB);
+  main.prepare('UPDATE services SET price = 120 WHERE id = 50').run();   // посторонняя правка едет тем же приёмом
+  return out;
+};
+
+test('M1: главное без филиалов удаляет панель как прежде — приём 3.20 при замене падает (так воспроизведена проба r2)', () => {
+  const { main, branch, save } = pair();
+  const id = save();
+  asReceiver320(() => commitCatalogue(branch, exportCatalogue(main)));
+  assert.deepEqual(replacePanel(main, id), { deleted: true, analytes: NAMES.length });
+  assert.equal(main.prepare('SELECT COUNT(*) n FROM lab_panels WHERE id = ?').get(id).n, 0, 'стёрта');
+  assert.throws(() => asReceiver320(() => commitCatalogue(branch, exportCatalogue(main))), /UNIQUE constraint failed: lab_panels\.service_id/);
+});
+
+test('M1: главное с филиалами панель СПИСЫВАЕТ — приём 3.20 принимает замену, цена доезжает; 3.21 — тоже, и прячет списанную', () => {
+  for (const receiver of ['3.20', '3.21']) {
+    const { main, branch, save } = pair();
+    withBranches(main);
+    const id = save();
+    const apply = () => (receiver === '3.20' ? asReceiver320(() => commitCatalogue(branch, exportCatalogue(main))) : commitCatalogue(branch, exportCatalogue(main)));
+    apply();
+    const out = replacePanel(main, id);
+    assert.deepEqual(out, { deleted: true, retired: true, analytes: 0 }, receiver);
+    const retired = main.prepare('SELECT active, service_id, device_id, retired_at FROM lab_panels WHERE id = ?').get(id);
+    assert.equal(retired.active, 0); assert.equal(retired.service_id, null); assert.equal(retired.device_id, null);
+    assert.match(retired.retired_at, /^\d{4}-\d\d-\d\dT/);
+    assert.equal(main.prepare('SELECT COUNT(*) n FROM lab_panel_analytes WHERE panel_id = ?').get(id).n, NAMES.length, 'показатели списанной — на месте');
+    for (let k = 1; k <= 2; k++) apply();   // ни разу не падает
+    assert.equal(branch.prepare("SELECT price FROM services WHERE name = 'Анализ гинекологического мазка'").get().price, 120, receiver + ': цена доехала');
+    const svcOf = (name) => branch.prepare('SELECT service_id, active FROM lab_panels WHERE name = ?').get(name);
+    assert.ok(svcOf('Мазок (новая)').service_id != null, receiver + ': замена — на услуге');
+    assert.deepEqual(svcOf(PANEL), { service_id: null, active: 0 }, receiver + ': прежняя — выключена и отвязана');
+    if (receiver === '3.21') {
+      assert.ok(branch.prepare('SELECT retired_at FROM lab_panels WHERE name = ?').get(PANEL).retired_at, 'метка списания доехала — экран филиала её прячет');
+    }
+  }
+});
+
+test('M1: списанную панель не оживляет ни вкладка до «Удалить», ни повторное «Удалить»', () => {
+  const { main, save } = pair();
+  withBranches(main);
+  const id = save();
+  labPanelDelete(main, { id }, LAB);
+  assert.throws(() => labPanelSave(main, { panel: { id, name: PANEL, modality: 'lab', service_id: 50, active: true }, analytes: [{ name: 'А' }] }, LAB), (e) => e.status === 404);
+  assert.throws(() => labPanelDelete(main, { id }, LAB), (e) => e.status === 404);
+  assert.equal(main.prepare('SELECT service_id FROM lab_panels WHERE id = ?').get(id).service_id, null);
+});
+
+// Ревью L7 — панель, которую приём отвязал (главное её удалило), остаётся «панелью главного»
+// по мёртвому соответствию: здание снова включало её или привязывало к своей услуге — и каждая
+// синхронизация отвязывала её опять. Теперь после отвязки она своя.
+test('L7: отвязанная приёмом панель — своя: её можно снова включить и привязать, синхронизация не трогает', () => {
+  const { main, branch, save, sync } = pair();
+  const id = save();
+  labPanelSave(main, { panel: { name: 'Другая панель главного', modality: 'lab', service_id: null, active: true }, analytes: [{ name: 'А' }] }, LAB);   // выгрузка не пустеет
+  sync();
+  asBranch(branch);
+  const bp = branchPanel(branch);
+  labPanelDelete(main, { id }, LAB);
+  sync();
+  assert.deepEqual(branch.prepare('SELECT service_id, active FROM lab_panels WHERE id = ?').get(bp.id), { service_id: null, active: 0 });
+  assert.equal(branch.prepare("SELECT COUNT(*) n FROM branch_sync_map WHERE table_name = 'lab_panels' AND local_id = ?").get(bp.id).n, 0, 'соответствие снято');
+  labPanelSave(branch, { panel: { id: bp.id, name: PANEL, modality: 'lab', service_id: bp.service_id, active: true },
+    analytes: NAMES.map((name) => ({ name, value_type: 'numeric' })) }, LAB);   // своя панель: 409 больше нет
+  sync(); sync();
+  assert.deepEqual(branch.prepare('SELECT service_id, active FROM lab_panels WHERE id = ?').get(bp.id), { service_id: bp.service_id, active: 1 }, 'синхронизация её не трогает');
   assert.equal(sync().changed, 0);
 });

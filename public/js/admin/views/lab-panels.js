@@ -201,7 +201,9 @@ export async function mountLabPanels(container) {
         if (panelsRes.error)   state.loadError = trf('панели: {msg}', { msg: panelsRes.error.message || panelsRes.error });
         if (servicesRes.error) state.loadError = (state.loadError ? state.loadError + ' · ' : '') + trf('услуги: {msg}', { msg: servicesRes.error.message || servicesRes.error });
         if (state.loadError) toast(trf('Не удалось загрузить: {msg}', { msg: state.loadError }), 'fail');
-        state.panels = panelsRes.data || [];
+        // LAB_PANEL_DEDUP_V1 (ревью M1, мигр. 272) — списанная «Удалить» панель главного здания
+        // с филиалами (retired_at) для экрана удалена: в списке её нет.
+        state.panels = (panelsRes.data || []).filter((p) => !p.retired_at);
         state.services = servicesRes.data || [];
         // Lookups for the lab-service rule. A failure here is not fatal — it only
         // means the department/type branches cannot fire, so a service still counts

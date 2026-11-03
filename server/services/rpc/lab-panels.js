@@ -209,8 +209,11 @@ export function labPanelSave(db, args, user) {
           throw new RpcError('Эта панель приходит из главного здания: удалить её или сменить у неё услугу можно только там.', 409);
         }
       }
+      // Ревью M1 — списанная панель (retired_at, мигр. 272) для экрана удалена:
+      // вкладка, открытая до «Удалить», её не оживляет (иначе невидимая панель
+      // снова заняла бы услугу).
       const res = db.prepare(`UPDATE lab_panels SET name = @name, modality = @modality, has_narrative = @has_narrative,
-          service_id = @service_id, active = @active, device_id = @device_id WHERE id = @id`).run({ ...panel, id: panelId });
+          service_id = @service_id, active = @active, device_id = @device_id WHERE id = @id AND retired_at IS NULL`).run({ ...panel, id: panelId });
       if (!res.changes) throw new RpcError('Панель не найдена — обновите страницу.', 404);
     } else {
       const info = db.prepare(`INSERT INTO lab_panels (name, code, modality, has_narrative, service_id, core_panel_id, active, device_id)
@@ -233,9 +236,31 @@ export function labPanelSave(db, args, user) {
 }
 
 /**
+ * Ревью M1 — главное здание с филиалами: этой установке выдавались буквы других
+ * зданий (branch_letters_spent, 'issue'; своя буква — не в счёт). Сомнение — «нет»:
+ * клиника без филиалов удаляет панель, как и прежде.
+ */
+export function mainWithBranches(db) {
+  try {
+    const me = readIdentity(db);
+    if (me.role === 'secondary') return false;
+    const own = String(me.letter || '').trim().toUpperCase();
+    return !!db.prepare("SELECT 1 FROM branch_letters_spent WHERE kind = 'issue' AND UPPER(TRIM(letter)) <> ? LIMIT 1").get(own);
+  } catch { return false; }
+}
+
+/**
  * lab_panel_delete — панель вместе с её показателями.
- * args: { id }  ->  { deleted: true, analytes }
+ * args: { id }  ->  { deleted: true, analytes }   (списана — { deleted: true, retired: true, analytes: 0 })
  * Результаты анализов не трогаются: на панель они не ссылаются.
+ *
+ * Ревью M1 — ГЛАВНОЕ ЗДАНИЕ С ФИЛИАЛАМИ панель не стирает, а СПИСЫВАЕТ: выключает,
+ * отвязывает от услуги и анализатора, ставит retired_at (мигр. 272); показатели
+ * остаются. Стёртая панель исчезала из выгрузки, а филиал 3.20 исчезнувшее не
+ * отвязывает: новая панель на ту же услугу роняла у него UNIQUE (мигр. 048) и
+ * весь приём справочника, пока филиал не обновится. Списанная едет обычной
+ * правкой строки раньше новой панели (выгрузка — по id), и её принимает филиал
+ * любой версии. Экран списанную не показывает (views/lab-panels.js).
  */
 export function labPanelDelete(db, args, user) {
   if (!tableWriteAllowed('lab_panels', 'delete', user, db)
@@ -245,12 +270,17 @@ export function labPanelDelete(db, args, user) {
   const id = refId(args && args.id, 'Панель не найдена — обновите страницу.');
   if (!id) throw new RpcError('Панель не найдена — обновите страницу.', 404);
   return db.transaction(() => {
-    if (!db.prepare('SELECT 1 FROM lab_panels WHERE id = ?').get(id)) {
+    if (!db.prepare('SELECT 1 FROM lab_panels WHERE id = ? AND retired_at IS NULL').get(id)) {
       throw new RpcError('Панель не найдена — обновите страницу.', 404);
     }
     // Ревью H2 — панель главного здания в филиале не удаляется: её завела бы заново ближайшая синхронизация.
     if (mainBuildingPanel(db, id)) {
       throw new RpcError('Эта панель приходит из главного здания: удалить её или сменить у неё услугу можно только там.', 409);
+    }
+    if (mainWithBranches(db)) {
+      db.prepare(`UPDATE lab_panels SET active = 0, service_id = NULL, device_id = NULL,
+                    retired_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`).run(id);
+      return { deleted: true, retired: true, analytes: 0 };
     }
     const gone = db.prepare('DELETE FROM lab_panel_analytes WHERE panel_id = ?').run(id).changes;
     db.prepare('DELETE FROM lab_panels WHERE id = ?').run(id);
