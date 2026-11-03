@@ -662,7 +662,8 @@ const valueOf = (obs) => (obs.valueType === 'NM' ? decimalPoint(obs.value) : obs
 function analyzerValuesOf(db, orderId, { fresh = false } = {}) {
   return new Map(db.prepare(`SELECT parameter, value FROM lab_results
                               WHERE visit_service_id = ? AND source = 'analyzer' AND TRIM(COALESCE(value, '')) <> ''
-                                AND (? = 0 OR entered_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?))`)
+                                AND (? = 0 OR entered_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?))
+                              ORDER BY id`)   // LAB_PANEL_DEDUP_V1 (ревью L2) — у повторов имени в Map остаётся самая новая строка
     .all(orderId, fresh ? 1 : 0, sinceArg(SERIES_FORM_MAX_AGE_MS)).map((r) => [r.parameter, r.value]));
 }
 
@@ -986,7 +987,11 @@ function writeFills(db, orderId, fills) {
       || (a.ref_low != null || a.ref_high != null ? `${a.ref_low == null ? '' : a.ref_low}-${a.ref_high == null ? '' : a.ref_high}`
         : (hasDeviceRange(obs.range) ? obs.range : ''));
 
-    const existing = db.prepare('SELECT id FROM lab_results WHERE visit_service_id = ? AND parameter = ?').get(orderId, a.name);
+    // LAB_PANEL_DEDUP_V1 (ревью L2) — строк с этим показателем у заказа может быть несколько
+    // (время задвоенных панелей): обновляется САМАЯ НОВАЯ — её показывают лист ввода и бланк
+    // (больший id побеждает). Без порядка SQLite отдавал самую старую, и значение прибора
+    // на бланке не появлялось.
+    const existing = db.prepare('SELECT id FROM lab_results WHERE visit_service_id = ? AND parameter = ? ORDER BY id DESC LIMIT 1').get(orderId, a.name);
     if (existing) {
       // D6 — машина побеждает в ЧЕРНОВИКЕ (выданное отсеяно выше).
       db.prepare(`UPDATE lab_results SET value = ?, numeric_value = ?, unit = ?, reference_range = ?,
@@ -1054,7 +1059,7 @@ function closeStaleRows(db, { sides, k, deviceId, msgId, profile }) {
   if (!rows.length) return;
   // Заказы — как у самой пробы: этот первым, потом другие заказы визита.
   const order = [target, ...sides.filter((s, i) => i !== k)];
-  const inBlank = db.prepare('SELECT value FROM lab_results WHERE visit_service_id = ? AND parameter = ?');
+  const inBlank = db.prepare('SELECT value FROM lab_results WHERE visit_service_id = ? AND parameter = ? ORDER BY id DESC LIMIT 1');   // LAB_PANEL_DEDUP_V1 (ревью L2) — та строка, что на бланке
   for (const r of rows) {
     const d = String(r.detail || '');
     if (d.startsWith(SERIES_PENDING_PREFIX) || d.includes('повтор:') || d.includes('не подтверждено')
