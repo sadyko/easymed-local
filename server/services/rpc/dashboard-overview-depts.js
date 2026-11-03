@@ -28,6 +28,7 @@ import { sourceEachSql } from '../crm/sources.js';
 import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 import { inboxStats } from '../meta/inbox-stats.js';
+import { procedureSql } from '../../../public/js/shared/service-route.js';   // DIAG_ROUTE_V1 — маршрут решает группа
 
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const r1 = (n) => Math.round((Number(n) || 0) * 10) / 10;
@@ -38,8 +39,8 @@ const LIVE_VISIT_SQL = "COALESCE(v.status, '') NOT IN ('cancelled','no_show')";
 const LIVE_CALL_SQL = "COALESCE(c.disposition, '') NOT IN ('ONLINE','CALLING')";
 /** Строка услуги ВЫПОЛНЕНА — список отчётов (reports.js VS_PERFORMED_STATUSES), как у обзора. */
 const VS_PERFORMED_SQL = "vs.status IN ('collected','in_progress','resulted','completed')";
-/** Что считается процедурой — rpc/procedures.js PROCEDURE_SERVICE_SQL. */
-const PROCEDURE_SQL = "(s.type = 'procedure' OR d.kind = 'procedure')";
+/** Что считается процедурой — rpc/procedures.js PROCEDURE_SERVICE_SQL (DIAG_ROUTE_V1: группа, отделение — только без группы). */
+const PROCEDURE_SQL = procedureSql('s', 'd');
 const IN_BED = IN_BED_STATUSES.map((s) => `'${s}'`).join(',');
 
 function sees(db, user, section) {

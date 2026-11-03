@@ -77,6 +77,7 @@ import { hasColumn } from '../domain/buildings.js';
 import { richForSheet, notesDocData, lastSignedEntry } from '../../../public/js/shared/cabinet-doc.js';
 import { hasMarkup, htmlToText, textIsBlank } from '../../../public/js/shared/rich-text.js';
 import { loadCaseDocTitles, reviewSections } from './inpatient-reviews.js';   // PASTE_SOURCES_V1 — имена своих родов и свои разделы записи
+import { serviceRoute } from '../../../public/js/shared/service-route.js';   // DIAG_ROUTE_V1 — анализ ли строка, решает группа
 
 /** Группы ответа — те же вкладки, что у окна (views/paste-sources.js PASTE_TABS). */
 export const PASTE_GROUPS = Object.freeze(['consult', 'diag', 'labs', 'inpatient', 'files']);
@@ -179,13 +180,16 @@ export function diagSections(b, rich) {
  * Вкладка строки. Сначала services.type (и is_lab — ему верит лаборатория),
  * потом отдел услуги: консультация, заведённая в отделе диагностики (ЭКГ),
  * — «Диагностика», как было у DEPT_KIND_ROUTING_V1.
+ * DIAG_ROUTE_V1 — анализ ли это, решает ГРУППА (shared/service-route.js, то же
+ * правило, что у очереди лаборатории): отделение-лаборатория делает строку
+ * анализом только у услуги без группы. Отдел диагностики по-прежнему разводит
+ * бланк приёма и бланк диагностики внутри кабинета — маршрута он не меняет.
  */
 export function lineKind({ type = '', is_lab = 0, dept_kind = '' } = {}) {
+  if (serviceRoute({ type, is_lab: Number(is_lab), dept_kind }) === 'lab') return 'labs';
   const t = String(type || '').toLowerCase();
-  if (t === 'lab' || Number(is_lab) === 1) return 'labs';
   if (t === 'imaging' || t === 'radiology') return 'diag';
   if (dept_kind === 'diagnostics') return 'diag';
-  if (dept_kind === 'laboratory') return 'labs';
   return 'consult';
 }
 

@@ -47,6 +47,7 @@ import { refuseSignWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 
 import { refundedOpenLineIds } from '../domain/pay-releases.js';   // REFUND_ANY_V1 (ревью B4, п. 9b)
 import { lineHasWork } from '../domain/line-work.js';   // REFUND_ANY_V1 (ревью B4, п. 9b)
 import { REFUNDED_WORK_REFUSAL } from '../../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B4, п. 9b)
+import { procedureSql } from '../../../public/js/shared/service-route.js';   // DIAG_ROUTE_V1 — маршрут решает группа
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -71,7 +72,10 @@ const OPEN_STATUSES = ['added', 'queued', 'in_progress', 'completed'];
 // SERVICE_GROUP_ROUTING_V1 — что считается процедурой. Одно выражение на оба
 // запроса: разойдясь, они дали бы медсестре очередь, отличную от очереди
 // администратора, на одних и тех же данных.
-const PROCEDURE_SERVICE_SQL = "(s.type = 'procedure' OR d.kind = 'procedure')";
+// DIAG_ROUTE_V1 — группа «Процедуры»; вид отделения «Процедурный» — только у
+// строки без группы (shared/service-route.js): ЭКГ группы «Диагностика» из
+// отделения видом «Процедурный» остаётся в кабинете врача.
+const PROCEDURE_SERVICE_SQL = procedureSql('s', 'd');
 
 function parseRoles(v) {
   if (Array.isArray(v)) return v;

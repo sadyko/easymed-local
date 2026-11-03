@@ -44,6 +44,7 @@ import { localRangeWhere, today } from '../domain/day.js';
 // Pure browser-shared module (no DOM) — same cross-import precedent as
 // reports.js taking formatMethods from public/js/shared/payment-methods.js.
 import { LAB_NAME_RE } from '../../../public/js/admin/views/lab-service.js';
+import { noGroupSql } from '../../../public/js/shared/service-route.js';   // DIAG_ROUTE_V1 — маршрут решает группа
 // LAB_ONE_CLINIC_V1 / BUILDING_REPORTS_V1 — граница «чьи это заказы».
 //
 // У этого экрана фильтра не было ВООБЩЕ: он считал заказы всей клиники по
@@ -116,6 +117,12 @@ export function labUsageStats(db, args, user) {
   const typeClause = labTypeIds.length
     ? `OR s.type_id IN (${labTypeIds.map(() => '?').join(',')})`
     : '';
+  // DIAG_ROUTE_V1 — правило очереди лаборатории (lab-service.js isLabService →
+  // shared/service-route.js): группа «Лаборатория» / is_lab; отделение-лаборатория
+  // и «лабораторный» тип — только у услуги без группы.
+  const LAB_SVC_SQL = `(s.type = 'lab' OR s.is_lab = 1
+            OR (${noGroupSql('s')} AND (s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory')
+            ${typeClause})))`;
 
   // Блок «Панели»: заказы услуг, к которым привязана активная панель.
   const panels = db.prepare(`
@@ -152,9 +159,7 @@ export function labUsageStats(db, args, user) {
       JOIN services s ON s.id = vs.service_id
      WHERE ${range}${scopeSql}
        AND s.id NOT IN (SELECT service_id FROM pmap)
-       AND (s.type = 'lab' OR s.is_lab = 1
-            OR s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory')
-            ${typeClause})
+       AND ${LAB_SVC_SQL}
      GROUP BY s.id
      ORDER BY ordered DESC, s.name
   `).all(...rangeParams, ...labTypeIds);
@@ -171,9 +176,7 @@ export function labUsageStats(db, args, user) {
       JOIN services s ON s.id = vs.service_id
      WHERE ${range}${scopeSql}
        AND (s.id IN (SELECT service_id FROM pmap)
-            OR s.type = 'lab' OR s.is_lab = 1
-            OR s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory')
-            ${typeClause})
+            OR ${LAB_SVC_SQL})
      GROUP BY origin
   `).all(...rangeParams, ...labTypeIds);
   const buildings = summariseByBuilding(ctx, perBuilding, {

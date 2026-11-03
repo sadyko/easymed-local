@@ -1,0 +1,68 @@
+// DIAG_ROUTE_V1 (2026-11-03) — «маршрут решает ГРУППА услуги, а не название».
+// Случаи — из расследования «диагностика не видна у врача» (A01–A17): группа
+// «Диагностика» с «лабораторным» типом каталога или с отделением видом
+// «Процедурный»/«Лаборатория» уходила из кабинета врача.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { serviceRoute, serviceGroup, goesToCabinet, procedureSql, noGroupSql, SERVICE_GROUPS, LAB_NAME_RE } from './service-route.js';
+import { openDb } from '../../../server/db/connection.js';
+import { migrate } from '../../../server/db/migrate.js';
+
+const deptKindById = { 2: 'clinical', 3: 'procedure', 5: 'laboratory', 6: 'diagnostics' };
+const typeNameById = { 2: 'Лаборатория', 3: 'Процедуры', 4: 'Диагностика', 9: 'Лабораторная диагностика', 10: 'Laboratoriya va diagnostika' };
+const L = { deptKindById, typeNameById };
+
+test('группа решает: Лаборатория → лаборатория, Процедуры → процедуры, остальные четыре → кабинет', () => {
+  assert.equal(serviceRoute({ type: 'lab' }), 'lab');
+  assert.equal(serviceRoute({ type: 'procedure' }), 'procedure');
+  for (const g of ['consultation', 'imaging', 'radiology', 'other']) assert.equal(serviceRoute({ type: g }), 'cabinet', g);
+  assert.equal(serviceRoute({ type: 'imaging', is_lab: 1 }), 'lab', 'is_lab — зеркало группы «Лаборатория» (мигр. 048)');
+  assert.equal(serviceRoute({ type: ' IMAGING ' }), 'cabinet', 'регистр и пробелы');
+});
+
+test('A09–A13: тип каталога и вид отделения НЕ уводят услугу группы «Диагностика» из кабинета', () => {
+  assert.equal(serviceRoute({ type: 'imaging', type_id: 9 }, L), 'cabinet', 'A09 «Лабораторная диагностика»');
+  assert.equal(serviceRoute({ type: 'imaging', type_id: 10 }, L), 'cabinet', 'A10 «Laboratoriya va diagnostika»');
+  assert.equal(serviceRoute({ type: 'imaging', type_id: 2 }, L), 'cabinet', 'A11 тип «Лаборатория» по ошибке');
+  assert.equal(serviceRoute({ type: 'imaging', department_id: 3 }, L), 'cabinet', 'A12 отделение видом «Процедурный»');
+  assert.equal(serviceRoute({ type: 'imaging', department_id: 5 }, L), 'cabinet', 'A13 отделение видом «Лаборатория»');
+  // встроенные ответы /api/db (services(service_types(name), departments(kind))) — то же правило
+  assert.equal(serviceRoute({ type: 'imaging', service_types: { name: 'Лабораторная диагностика' }, departments: { kind: 'procedure' } }), 'cabinet');
+  assert.equal(serviceRoute({ type: 'procedure', service_types: { name: 'Диагностика' } }), 'procedure', 'A14 ЭКГ группы «Процедуры» — процедура');
+  assert.equal(serviceRoute({ type: 'consultation', department_id: 5, type_id: 2 }, L), 'cabinet', 'группа «Консультации» тоже решает сама');
+});
+
+test('строка без группы — прежнее правило: отделение и тип каталога', () => {
+  assert.equal(serviceRoute({ department_id: 5 }, L), 'lab');
+  assert.equal(serviceRoute({ type_id: 9 }, L), 'lab');
+  assert.equal(serviceRoute({ department_id: 3 }, L), 'procedure');
+  assert.equal(serviceRoute({ departments: { kind: 'laboratory' } }), 'lab');
+  assert.equal(serviceRoute({ dept_kind: 'procedure' }), 'procedure');
+  assert.equal(serviceRoute({ type: 'xray', department_id: 6 }, L), 'cabinet', 'неизвестная группа = без группы');
+  assert.equal(serviceRoute({}, L), 'cabinet');
+  assert.equal(serviceRoute(null), 'cabinet');
+  assert.equal(serviceGroup({ type: 'xray' }), '');
+  assert.equal(goesToCabinet({ type: 'imaging', type_id: 9 }, L), true);
+  assert.ok(LAB_NAME_RE.test('Лабораторная диагностика') && LAB_NAME_RE.test('Lab tests') && !LAB_NAME_RE.test('Диагностика'));
+});
+
+test('SQL сервера — то же правило: группа «Диагностика» из отделения видом «Процедурный» — не процедура', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    const dep = Number(db.prepare("INSERT INTO departments (name, kind) VALUES ('Кабинет функциональной диагностики', 'procedure')").run().lastInsertRowid);
+    const S = db.prepare('INSERT INTO services (id, name, price, type, department_id) VALUES (?, ?, 0, ?, ?)');
+    S.run(1, 'ЭКГ', 'imaging', dep);       // A12
+    S.run(2, 'Капельница', 'procedure', null);
+    S.run(3, 'Перевязка', 'procedure', dep);
+    S.run(4, 'Приём', 'consultation', dep);
+    const ids = db.prepare(`SELECT s.id FROM services s LEFT JOIN departments d ON d.id = s.department_id
+                             WHERE s.id IN (1,2,3,4) AND ${procedureSql('s', 'd')} ORDER BY s.id`).all().map((r) => r.id);
+    assert.deepEqual(ids, [2, 3]);
+    // Колонка services.type NOT NULL (мигр. 023): у сохранённой услуги группа есть ВСЕГДА — ветка «без группы»
+    // в SQL срабатывает только у строки без услуги.
+    assert.equal(db.prepare(`SELECT ${noGroupSql('s')} AS ng FROM (SELECT NULL AS type) s`).get().ng, 1);
+    assert.equal(db.prepare(`SELECT ${noGroupSql('s')} AS ng FROM (SELECT 'imaging' AS type) s`).get().ng, 0);
+    assert.deepEqual([...SERVICE_GROUPS].sort(), ['consultation', 'imaging', 'lab', 'other', 'procedure', 'radiology']);
+  } finally { db.close(); }
+});

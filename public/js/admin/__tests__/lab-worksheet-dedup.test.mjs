@@ -161,7 +161,11 @@ test('бланк: одна строка на показатель, свежая 
   assert.deepEqual(rows, ['Лейкоциты=3-7', 'Эпит. клетки=v3', 'Микрофлора=v3', 'Гонококки=v3', 'Трихомонады=v3']);
 });
 
-test('«Документы»: услуга лаборатории по отделению или по панели (не только is_lab) попадает в результаты визита', async (t) => {
+// DIAG_ROUTE_V1 (решение владельца 2026-11-03: «маршрут решает группа, а не название») —
+// отделение «Лаборатория» анализом услугу с группой больше не делает: «Мазок по отделению»
+// группы «Хирургия» — не анализ (в очередь лаборатории он тоже не попадает). Анализом его
+// делает группа «Лаборатория» или привязанная панель («Мазок по панели»).
+test('«Документы»: услуга лаборатории по группе или по панели (не только is_lab) попадает в результаты визита; отделение группу не перебивает', async (t) => {
   const app = await startApp((db) => {
     db.prepare("INSERT INTO patients (id, full_name) VALUES (77, 'Тест Пациент')").run();
     db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (10, 77, date('now'), 'arrived')").run();
@@ -171,7 +175,8 @@ test('«Документы»: услуга лаборатории по отде�
     db.prepare("INSERT INTO services (id, name, price, type, is_lab, active) VALUES (61, 'Мазок по панели', 1, 'other', 0, 1)").run();
     db.prepare("INSERT INTO lab_panels (id, name, service_id, modality, active) VALUES (901, 'Мазок по панели', 61, 'lab', 1)").run();
     db.prepare("INSERT INTO services (id, name, price, type, is_lab, active) VALUES (62, 'Консультация', 1, 'other', 0, 1)").run();
-    for (const [vs, svc] of [[3001, 60], [3002, 61], [3003, 62]]) {
+    db.prepare("INSERT INTO services (id, name, price, type, is_lab, active) VALUES (63, 'Мазок по группе', 1, 'lab', 1, 1)").run();
+    for (const [vs, svc] of [[3001, 60], [3002, 61], [3003, 62], [3004, 63]]) {
       db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (?, 10, ?, 'resulted')").run(vs, svc);
       db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (?, 'Лейкоциты', '5')").run(vs);
     }
@@ -179,5 +184,5 @@ test('«Документы»: услуга лаборатории по отде�
   t.after(() => app.close());
   const byVisit = await fetchLabByVisit([10]);
   const names = (byVisit[10] || []).map((r) => r.panelName).sort();
-  assert.deepEqual(names, ['Мазок по отделению', 'Мазок по панели'], 'обе лабораторные услуги; консультация — нет');
+  assert.deepEqual(names, ['Мазок по группе', 'Мазок по панели'], 'группа «Лаборатория» и панель; отделение и консультация — нет');
 });

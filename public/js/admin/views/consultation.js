@@ -42,6 +42,7 @@ import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — ф�
 import { REFUNDED_LINE_MARK, REFUNDED_START_REFUSAL } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (поправка 3) — «Услуга возвращена»; отказ начать — ревью B4
 import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4) — один вопрос refunded_lines на список
 import { onLineStatus } from '../queue-fresh.js';   // QUEUE_FRESH_V1 — окно приёма сообщает новый статус строки (один экземпляр: без ?v=)
+import { serviceRoute } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 — маршрут строки решает группа услуги
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -348,17 +349,14 @@ async function loadServices() {
         return false;   // QUEUE_FRESH_V1 — перечитывание узнаёт о сбое и оставляет прежний список
     }
     // SERVICE_ROUTING: lab services go to the Laboratory module, not the doctor queue.
-    const LAB_RE = /^lab|laborator|лаборатор/i;
     // SERVICE_ROUTING_V2 — lab → #labs, procedure → #procedures; the cabinet keeps the rest (consultation/diagnostics/surgery)
-    // SERVICE_ROUTING_V3 — ALSO honor the built-in services.type enum: the
-    // service_types(name) join can come back null (RLS on a cross-clinic
-    // type row, PostgREST schema-cache lag), which silently re-routed lab
-    // orders into the doctor queue. services.type is a plain column on the
-    // row we already read, so it survives all join failures.
-    const _goesElsewhere = (r) => ['laboratory', 'procedure'].includes(r.services?.departments?.kind)
-        || r.services?.type === 'lab'
-        || r.services?.type === 'procedure'   // SERVICE_GROUP_ROUTING_V1
-        || LAB_RE.test(r.services?.service_types?.name || '');
+    // DIAG_ROUTE_V1 (решение владельца 2026-11-03) — «маршрут решает ГРУППА услуги,
+    // а не название». Прежде тип каталога с «лабораторным» именем («Лабораторная
+    // диагностика») и отделение видом «Процедурный»/«Лаборатория» уводили УЗИ и ЭКГ
+    // группы «Диагностика» из кабинета диагноста. Теперь одно правило на кабинет,
+    // лабораторию и процедуры (shared/service-route.js): тип и отделение решают
+    // только у строки без группы. Строка без услуги (вид приёма) — кабинет.
+    const _goesElsewhere = (r) => !!r.services && serviceRoute(r.services) !== 'cabinet';
     // RT2_FIX_V1 — a paid/partial invoice releases the order even when visit_services.status is
     // still 'added' (a partial payment doesn't flip the status). Cross-check invoice status by item.
     const _rtItemIds = [...new Set((data || []).map(r => r.invoice_item_id).filter(Boolean))];

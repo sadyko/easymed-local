@@ -37,6 +37,9 @@ function reference(db, period) {
   const labTypeIds = db.prepare('SELECT id, name FROM service_types').all()
     .filter((t) => LAB_NAME_RE.test(t.name || '')).map((t) => Number(t.id)).filter(Number.isInteger);
   const typeClause = labTypeIds.length ? `OR s.type_id IN (${labTypeIds.map(() => '?').join(',')})` : '';
+  // DIAG_ROUTE_V1 — правило «что такое лабораторная услуга» сменилось (маршрут решает группа):
+  // отдел-лаборатория и «лабораторный» тип — только у услуги без группы. Опорные запросы — с ним же.
+  const noGroup = "COALESCE(s.type, '') NOT IN ('consultation','lab','procedure','imaging','radiology','other')";
   const panels = db.prepare(`
     WITH ${PMAP_CTE}
     SELECT lp.id AS panel_id, lp.name AS name, lp.code AS code, lp.service_id AS service_id, s.name AS service_name,
@@ -55,7 +58,7 @@ function reference(db, period) {
      WHERE ${range}${scopeSql}
        AND s.id NOT IN (SELECT service_id FROM pmap)
        AND (s.type = 'lab' OR s.is_lab = 1
-            OR s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory') ${typeClause})
+            OR (${noGroup} AND (s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory') ${typeClause})))
      GROUP BY s.id ORDER BY ordered DESC, s.name`).all(...rangeParams, ...labTypeIds);
   const perBuilding = db.prepare(`
     WITH ${PMAP_CTE}
@@ -64,7 +67,7 @@ function reference(db, period) {
       FROM visit_services vs JOIN services s ON s.id = vs.service_id
      WHERE ${range}${scopeSql}
        AND (s.id IN (SELECT service_id FROM pmap) OR s.type = 'lab' OR s.is_lab = 1
-            OR s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory') ${typeClause})
+            OR (${noGroup} AND (s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory') ${typeClause})))
      GROUP BY origin`).all(...rangeParams, ...labTypeIds);
   const buildings = summariseByBuilding(ctx, perBuilding, {
     ordered: (r) => r.ordered || 0, completed: (r) => r.completed || 0,

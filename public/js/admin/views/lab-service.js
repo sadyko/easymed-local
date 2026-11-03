@@ -24,7 +24,10 @@
 
 // Matches Лаборатория / Laboratory / Lab. The explicit Cyrillic branch is
 // deliberate: `лаборатор` does not fold to `lab` under any case rule.
-export const LAB_NAME_RE = /^lab|laborator|лаборатор/i;
+// DIAG_ROUTE_V1 — правило живёт в shared/service-route.js (общее с кабинетом и
+// сервером); здесь — то же имя для прежних импортов.
+import { LAB_NAME_RE, serviceRoute } from '../../shared/service-route.js';
+export { LAB_NAME_RE };
 
 /**
  * @param service   a `services` row (needs type / is_lab, optionally
@@ -34,21 +37,21 @@ export const LAB_NAME_RE = /^lab|laborator|лаборатор/i;
  */
 export function isLabService(service, lookups = {}) {
     if (!service) return false;
-    const { deptKindById = {}, typeNameById = {}, hasPanel = null } = lookups;
+    const { hasPanel = null } = lookups;
 
-    // 1. the routing enum the Services editor writes, and the older boolean that
-    //    migration 048's triggers now keep in step with it
-    if (service.type === 'lab' || service.is_lab === 1 || service.is_lab === true) return true;
+    // 1. DIAG_ROUTE_V1 — ГРУППА РЕШАЕТ: группа «Лаборатория» (и is_lab, её
+    //    зеркало по миграции 048). Отделение-лаборатория и «лабораторное» имя
+    //    типа каталога спрашиваются ТОЛЬКО у строки без группы
+    //    (shared/service-route.js): УЗИ группы «Диагностика» с типом
+    //    «Лабораторная диагностика» в лабораторию больше не уходит.
+    if (serviceRoute(service, lookups) === 'lab') return true;
 
-    // 2. the department the service belongs to is a laboratory
-    if (service.department_id != null && deptKindById[service.department_id] === 'laboratory') return true;
-
-    // 3. the service's catalogue type is named like a laboratory
-    if (service.type_id != null && LAB_NAME_RE.test(typeNameById[service.type_id] || '')) return true;
-
-    // 4. local addition: a linked panel IS a declaration that this produces a lab
+    // 2. local addition: a linked panel IS a declaration that this produces a lab
     //    result. The server has no equivalent because there every panel is linked
     //    to an already-lab service; here a clinic can link one first.
+    //    DIAG_ROUTE_V1 — панель маршрут не меняет: исследование с панелью
+    //    («Измерения» УЗИ) остаётся в кабинете врача по своей группе, а здесь
+    //    получает ввод показателей.
     if (typeof hasPanel === 'function' ? hasPanel(service.id) : hasPanel === true) return true;
 
     return false;

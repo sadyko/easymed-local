@@ -115,21 +115,30 @@ test('кабинет врача: новый документ на возвращ
 
 // ── ревью B4 ──────────────────────────────────────────────────────────────
 // Анализ — то же правило, что у листа лаборатории (lab-service.js
-// isLabService): не только is_lab / type 'lab', но и отдел «лаборатория», вид
-// услуги с «лабораторным» именем, привязанная панель. Иначе анализ, который
-// клиника завела в отдел лаборатории, после возврата шёл в работу.
-test('анализ отдела «Лаборатория» (type «other», is_lab 0): после возврата в работу не идёт', () => {
+// isLabService): is_lab / группа 'lab' и привязанная панель. DIAG_ROUTE_V1
+// (решение владельца 2026-11-03: «маршрут решает группа») — отдел
+// «лаборатория» и «лабораторное» имя вида услуги анализом больше не делают
+// услугу с группой: у неё отказ — словами работы, не анализа.
+test('анализ с панелью (группа «Хирургия», is_lab 0): после возврата в работу не идёт; отдел «Лаборатория» анализом не делает (DIAG_ROUTE_V1)', () => {
   const f = seed();
   const dept = f.db.prepare("SELECT id FROM departments WHERE kind = 'laboratory' LIMIT 1").get();
   assert.ok(dept, 'нет отдела лаборатории (мигр. 049)');
-  const svc = f.db.prepare("INSERT INTO services (name, price, type, is_lab, department_id) VALUES ('Ферритин', 50000, 'other', 0, ?)").run(dept.id).lastInsertRowid;
-  const line = f.db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?, ?, 1, 0, 0)').run(f.vid, svc).lastInsertRowid;
-  const inv = createInvoiceForVisit(f.db, { visit_id: f.vid, visit_service_ids: [line] }, registrar).invoice;
-  recordPayment(f.db, { invoice_id: inv.id, amount: inv.total_amount, method: 'cash' }, cashier);
-  f.db.prepare("UPDATE visit_services SET status = 'collected' WHERE id = ?").run(line);
-  refundInvoiceLine(f.db, { invoice_item_id: itemOf(f.db, line) }, cashier);
-  assert.equal(statusOf(f.db, line), 'collected');
-  assert.equal(unpaidWorkRefusal(f.db, [line], 'in_progress'), REFUNDED_LAB_REFUSAL);
+  const refundedLine = (name, panel) => {
+    const svc = f.db.prepare("INSERT INTO services (name, price, type, is_lab, department_id) VALUES (?, 50000, 'other', 0, ?)").run(name, dept.id).lastInsertRowid;
+    if (panel) f.db.prepare('INSERT INTO lab_panels (name, service_id, active) VALUES (?, ?, 1)').run(name, svc);
+    const line = f.db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?, ?, 1, 0, 0)').run(f.vid, svc).lastInsertRowid;
+    const inv = createInvoiceForVisit(f.db, { visit_id: f.vid, visit_service_ids: [line] }, registrar).invoice;
+    recordPayment(f.db, { invoice_id: inv.id, amount: inv.total_amount, method: 'cash' }, cashier);
+    f.db.prepare("UPDATE visit_services SET status = 'collected' WHERE id = ?").run(line);
+    refundInvoiceLine(f.db, { invoice_item_id: itemOf(f.db, line) }, cashier);
+    assert.equal(statusOf(f.db, line), 'collected');
+    return line;
+  };
+  const withPanel = refundedLine('Ферритин', true);
+  assert.equal(unpaidWorkRefusal(f.db, [withPanel], 'in_progress'), REFUNDED_LAB_REFUSAL);
+  const deptOnly = refundedLine('Пункция', false);
+  // Не анализ: строка со следом работы ('collected') дописывается, как любая работа (ревью B4, п. 9b).
+  assert.notEqual(unpaidWorkRefusal(f.db, [deptOnly], 'in_progress'), REFUNDED_LAB_REFUSAL, 'отдел «Лаборатория» сделал анализом услугу группы «Хирургия»');
 });
 
 // «Оставить услугу в визите»: неначатый анализ остаётся строкой 'added' без
