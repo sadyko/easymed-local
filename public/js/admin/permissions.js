@@ -1445,6 +1445,16 @@ export function canWriteServiceTemplates() {
 export const VISIT_LINE_ROLES = Object.freeze(['admin', 'registrar', 'doctor']);
 export function canAddVisitLines() { return hasActorRole(VISIT_LINE_ROLES); }
 
+// DIAG_ROUTE_V1 (D8; ревью L-1, M-1) — ЗЕРКАЛО server/services/domain/line-referral.js
+// VISIT_SOURCE_ROLES: кто называет направившего ВИЗИТА («Кто направил» / «Пациент по
+// направлению» мастера записи, шаг «Направление» мастера календаря). Источник визита
+// платит за каждую строку визита, поэтому его называет только стойка и колл-центр —
+// основной или дополнительной ролью; администратор-врач у стойки — стойка. От врача и
+// медсестры сервер присланное значение молча не читает (61679d07), поэтому экран им
+// этот вопрос и не задаёт.
+export const VISIT_SOURCE_ROLES = Object.freeze(['admin', 'registrar', 'callcenter']);
+export function canNameVisitSource() { return hasActorRole(VISIT_SOURCE_ROLES); }
+
 // FINAL_ROLES_SYNC_FIX_V1 (I2) — ЗЕРКАЛО SERVICE_ADD_ROLES
 // (server/services/rpc/admission-charges.js): кто заводит услугу у койки.
 // Настроенный в «Ролях» уровень «Услуги в стационаре» решает сам, как у

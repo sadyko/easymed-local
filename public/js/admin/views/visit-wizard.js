@@ -45,7 +45,7 @@ import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
          askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=ownrep4';
 import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ до визита
 import { loadVisitOrders, orderedMatch, orderedLabel, precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 — уже назначено в визите дня
-import { hasActorRole, canWriteServiceTemplates, VISIT_LINE_ROLES, canAddVisitLines } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1 · LIVE_AUDIT_FIX_V1 — шаблоны сметы
+import { hasActorRole, canWriteServiceTemplates, VISIT_LINE_ROLES, canAddVisitLines, canNameVisitSource } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1 · LIVE_AUDIT_FIX_V1 — шаблоны сметы
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
@@ -2720,7 +2720,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // REFERRAL_LINE_V1 (ревью полировки L-1) — в мастере направления из кабинета галочки
         // нет: направившего ВИЗИТА (процент со всех строк визита) выбирает только стойка в своих
         // окнах, а источник направляющего врача ложится в строки (lineReferralSource).
-        if (!referralMode) {
+        // DIAG_ROUTE_V1 (D8; ревью L-1, M-1) — и только той роли, чьё «Кто направил» сервер
+        // сохранит (canNameVisitSource: стойка, колл-центр): врач в «Добавить услуги» карты
+        // пациента видел галочку и шаг, подтверждение называло партнёра, а сервер молча
+        // записывал визит без него — без процента партнёру со всего визита.
+        if (!referralMode && canNameVisitSource()) {
             const refChk = h('input', {
                 type: 'checkbox', checked: wiz.hasReferral,
                 style: { width: '19px', height: '19px', accentColor: 'var(--primary-600)', cursor: 'pointer', flex: '0 0 auto' },
@@ -3281,7 +3285,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     visit_type: wiz.visitType,
                     // REFERRAL_LINE_V1 (ревью полировки L-1) — только «Кто направил», выбранный
                     // стойкой руками; мастер направления врача его не шлёт, от врача сервер не читает.
-                    referral_source_id: !referralMode && wiz.sourceId ? Number(wiz.sourceId) : null,
+                    referral_source_id: !referralMode && canNameVisitSource() && wiz.sourceId ? Number(wiz.sourceId) : null,   // DIAG_ROUTE_V1 (D8)
                     branch_id: branchId,
                     notes: wiz.notes.trim() || null,
                 };

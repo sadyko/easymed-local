@@ -35,7 +35,7 @@ import { h, Icon, clear, toast, Avatar, initials, avColor } from '../ui.js';
 // регистрации (quick-patient-modal.js), и путь сохранения теперь один.
 import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
-import { canWriteServiceTemplates, canAddVisitLines } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы
+import { canWriteServiceTemplates, canAddVisitLines, canNameVisitSource } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы · DIAG_ROUTE_V1 (D8) — шаг «Направление»
 import { precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 — повтор услуги в визите дня — отказ до записи
 import { surgeryBedRefusal, linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация, хирургия без койки; BACKLOG_1011_V1 — исполнитель по умолчанию
 import { gw } from '../gateway.js';
@@ -2607,7 +2607,15 @@ export function openServicePickerModal({
         // WIZ_4STEPS_V1 — Оплата удалён (оплата живёт в смете, WIZ_PAY_RAIL_V1);
         // шаг 3 «Кто платит» пропускается при самооплате (нечего распределять).
         if (n > 4) n = 4;
+        // DIAG_ROUTE_V1 (D8; ревью L-1, M-1) — шаг «Направление» (направивший ВИЗИТА)
+        // только той роли, чьё значение сервер сохранит (canNameVisitSource: стойка,
+        // колл-центр); врачу из календаря кабинета он пропускается, как «Кто платит» при
+        // самооплате: calendar_book от врача его молча не читает.
+        const skipReferral = !canNameVisitSource();
+        if (n === 2 && skipReferral) n = (wiz.step >= 2) ? 1 : 3;
         if (n === 3 && wiz.payment.mode === 'patient') n = (wiz.step >= 3) ? 2 : 4;
+        if (n === 2 && skipReferral) n = 1;   // назад с «Подтверждения» мимо обоих пропущенных шагов
+        if (n < 1) n = 1;
         wiz.step = n;
         if (n === 1) { mountCatalog(); return; }   // re-renders chips/footer itself
         clear(body);
@@ -2621,12 +2629,16 @@ export function openServicePickerModal({
         // WIZ_4STEPS_V1 — 4 шага; «Кто платит» затемняется при самооплате (пропускается).
         const _selfPay = wiz.payment.mode === 'patient';
         const items = [[1, 'Услуги и пациент'], [2, 'Направление'], [3, 'Кто платит'], [4, 'Подтверждение']];
+        const _noReferral = !canNameVisitSource();   // DIAG_ROUTE_V1 (D8)
         for (const [n, label] of items) {
-            const skipped = n === 3 && _selfPay;
+            const skipped = (n === 3 && _selfPay) || (n === 2 && _noReferral);
             const cls = 'pkw-step' + (wiz.step === n ? ' on' : (wiz.step > n && !skipped ? ' done' : ''));
             const props = { class: cls, type: 'button',
                 onclick: () => { if (!skipped && n < wiz.step) wizGoto(n); } };
-            if (skipped) { props.disabled = ''; props.style = { opacity: '0.45' }; props.title = 'Пациент платит сам — распределение не требуется'; }
+            if (skipped) {
+                props.disabled = true; props.style = { opacity: '0.45' };   // DIAG_ROUTE_V1 (D8) — '' h() не ставил вовсе
+                props.title = n === 2 ? 'Кто направил пациента, укажет регистратура' : 'Пациент платит сам — распределение не требуется';
+            }
             wizChipsEl.appendChild(h('button', props,
                 h('span', { class: 'n' }, (wiz.step > n && !skipped) ? Icon('Check', { size: 12 }) : String(n)), label));
         }
@@ -3142,7 +3154,7 @@ export function openServicePickerModal({
                 start:            visitDate,
                 duration_minutes: totalDur,
                 status:           'scheduled',
-                referral_source_id: visitReferralSourceId(),   // LIVE_AUDIT_FIX_V1 (A6) — источник направления — на визите
+                referral_source_id: canNameVisitSource() ? visitReferralSourceId() : null,   // LIVE_AUDIT_FIX_V1 (A6) — источник направления — на визите · DIAG_ROUTE_V1 (D8) — только стойка и колл-центр
             }, { autoTime: !_explicit });
             if (!booked) {   // отказались от экстренной записи — не создано НИЧЕГО
                 toast(tr('Запись не сохранена — время занято.'), 'info');
