@@ -9,7 +9,7 @@ process.env.TZ = 'Asia/Tashkent';
 
 const { default: test } = await import('node:test');
 const { default: assert } = await import('node:assert/strict');
-const { tubeGroups, tubeDeviceMap, tubeDay, localDay, shortTestName, tubeLabelStamp, TUBE_STATUSES } = await import('../views/lab-tube.js');
+const { tubeGroups, tubeDeviceMap, tubeDay, localDay, shortTestName, tubeLabelStamp, TUBE_STATUSES, tubeRecent, BARE_ID_MAX_AGE_DAYS } = await import('../views/lab-tube.js');
 
 const BLOOD = { name: 'Анализ крови', is_lab: 1, specimen: null };
 const URINE = { name: 'Анализ мочи', is_lab: 1, specimen: null };
@@ -93,7 +93,11 @@ test('в пробирку — только открытые оплаченные
         line(50, 40, BLOOD, 'completed'), line(51, 40, BLOOD, 'added'), line(52, 40, BLOOD, 'cancelled'),
         line(53, 40, BLOOD, 'resulted'), line(54, 40, BLOOD, 'in_progress'), line(55, 40, BLOOD, 'queued'),
     ];
-    assert.deepEqual(summary(tubeGroups(rows, { deviceByService: BC780, today: TODAY })), [[53, [53, 54, 55], ['Анализ крови']]]);
+    // Ревью U11, M1: № 55 ещё ждёт забора, а № 53 и № 54 уже взяты — № 55 своя пробирка (новый забор).
+    assert.deepEqual(summary(tubeGroups(rows, { deviceByService: BC780, today: TODAY })), [
+        [53, [53, 54], ['Анализ крови']],
+        [55, [55], ['Анализ крови']],
+    ]);
     assert.deepEqual(tubeGroups([line(60, 40, BLOOD, 'added'), line(61, 40, BLOOD, 'completed')], { deviceByService: BC780, today: TODAY }), [],
         'клеить нечего — этикеток нет');
 });
@@ -142,7 +146,7 @@ test('прибор услуги — панель услуги, как у при�
     assert.deepEqual(map, { 40: 3, 41: null });
 });
 
-test('короткое название: сокращение из имени, иначе из скобок, иначе имя до 18 знаков', () => {
+test('короткое название: сокращение из имени, иначе из скобок, иначе имя до скобок или до 18 знаков', () => {
     const cases = [
         ['Анализ крови', 'Анализ крови'],
         ['Общий анализ крови (ОАК, клинический анализ крови без лейкоцитарной формулы)', 'ОАК'],
@@ -150,11 +154,80 @@ test('короткое название: сокращение из имени, �
         ['Антимюллеров гормон АМГ (ИФА)', 'АМГ'],
         ['Гемоглобин (Hb, гемоглобин крови)', 'Hb'],
         ['Тиреотропный гормон  ТТГ  (TSH)', 'ТТГ'],
-        ['Витамин D (25-OH витамин D, кальциферол)', 'Витамин D (25-OH…'],
+        // Ревью U11, L3: имя до скобок помещается — оно и есть (было «Витамин D (25-OH…»).
+        ['Витамин D (25-OH витамин D, кальциферол)', 'Витамин D'],
         ['Время свертываемости крови (Корел)', 'Время свертываемо…'],
         ['', ''], [null, ''],
     ];
     for (const [name, want] of cases) assert.equal(shortTestName(name), want, String(name));
+});
+
+// Ревью U11, L3 (проба p4): короткое имя бралось у метода или у части анализа:
+// «… методом ИХЛА» → «ИХЛА», «Коагулограмма (ПТИ, МНО, …)» → «ПТИ», «Т4 свободный
+// (Free T4) …» → «Т4», любое «… (ИФА)» длиннее 18 знаков → «ИФА», «На …» — сокращение.
+test('ревью U11, L3: метод (ИХЛА, ИФА, ПЦР…), состав панели и обычное слово — не короткое имя анализа', () => {
+    const cases = [
+        ['Ферритин в сыворотке крови методом ИХЛА', 'Ферритин в сыворо…'],
+        ['Коагулограмма (ПТИ, МНО, АЧТВ, фибриноген)', 'Коагулограмма'],
+        ['Липидограмма (ХС, ТГ, ЛПВП, ЛПНП, индекс атерогенности)', 'Липидограмма'],
+        ['Т4 свободный (Free T4) в крови', 'Т4 свободный'],
+        ['ПСА общий (простатспецифический антиген)', 'ПСА общий'],
+        ['Пролактин в крови (ИФА)', 'Пролактин в крови'],
+        ['Антитела к вирусу гепатита C (ИФА)', 'Антитела к вирусу…'],
+        ['Вирус папилломы человека (ПЦР)', 'Вирус папилломы ч…'],
+        ['На скрытую кровь в кале, количественно', 'На скрытую кровь…'],
+        // сокращение САМОГО анализа по-прежнему берётся
+        ['С-реактивный белок (СРБ) количественно', 'СРБ'],
+        ['Хорионический гонадотропин (ХГЧ)', 'ХГЧ'],
+        ['Антитела к ТПО в крови (ИФА)', 'ТПО'],
+        ['Гликированный гемоглобин HbA1c', 'HbA1c'],
+        ['Общий анализ крови (ОАК, CBC) с лейкоформулой', 'ОАК'],
+        ['ТТГ (тиреотропный гормон, третье поколение)', 'ТТГ'],
+    ];
+    for (const [name, want] of cases) assert.equal(shortTestName(name), want, name);
+});
+
+// Ревью U11, M1 (проба P2k): «Биохимия» утром взята и посчитана (не выдана), вечером
+// врач назначил «Электролиты» на тот же BS-200 — новый забор. Одна пробирка на обе
+// давала вечерней пробирке номер утренней строки, и вечерний калий перезаписывал
+// утренний черновик. Теперь «уже взята» — часть ключа: строка, которая ещё ждёт
+// забора, не делит пробирку со взятыми — у неё своя этикетка. Анализ, добавленный
+// ДО забора, по-прежнему в той же пробирке и номер не меняет.
+test('ревью U11, M1: строка, ждущая забора, не делит пробирку со взятыми; до забора — одна пробирка, номер прежний', () => {
+    const BIO = { name: 'Биохимия', is_lab: 1, specimen: 'Сыворотка' };
+    const ELY = { name: 'Электролиты', is_lab: 1, specimen: 'Сыворотка' };
+    const BS200 = { 9: 1, 14: 1 };
+    // Утро взято (resulted), вечер ждёт забора: две пробирки, у вечерней — свой номер.
+    const evening = tubeGroups([line(66, 14, ELY, 'queued'), line(60, 9, BIO, 'resulted')], { deviceByService: BS200, today: TODAY });
+    assert.deepEqual(evening.map((t) => [t.labelId, t.rowIds, t.drawn]), [[60, [60], true], [66, [66], false]]);
+    // Обе ещё ждут забора — одна пробирка, номер самой старой (анализ добавили до забора).
+    const before = tubeGroups([line(66, 14, ELY, 'queued'), line(60, 9, BIO, 'queued')], { deviceByService: BS200, today: TODAY });
+    assert.deepEqual(before.map((t) => [t.labelId, t.rowIds]), [[60, [60, 66]]]);
+    // Взятые вместе (проба взята, в работе, результаты внесены) — одна пробирка.
+    const drawn = tubeGroups([line(66, 14, ELY, 'collected'), line(60, 9, BIO, 'in_progress'), line(61, 9, BIO, 'resulted')], { deviceByService: BS200, today: TODAY });
+    assert.deepEqual(drawn.map((t) => [t.labelId, t.rowIds]), [[60, [60, 61, 66]]]);
+    // Без прибора, по материалу — то же правило; без материала — своя этикетка у строки, как было.
+    const URINE_M = { name: 'Общий анализ мочи', is_lab: 1, specimen: 'Моча' };
+    const byMaterial = tubeGroups([line(12, 13, URINE_M, 'queued'), line(11, 13, URINE_M, 'collected'), line(10, 13, URINE_M, 'collected')], { today: TODAY });
+    assert.deepEqual(byMaterial.map((t) => [t.labelId, t.rowIds]), [[10, [10, 11]], [12, [12]]]);
+});
+
+// Ревью U11, L6: голый номер заказа старше 7 дней приём отказывает («старше 7 дней»,
+// bareIdRefusal) — карточка такую пробирку не печатает. Срок — одна константа с
+// приёмом (shared/lab-label-age.js), а не своё число.
+test('ревью U11, L6: пробирка «свежая», пока приём примет её номер: день не раньше, чем 7 дней назад (как orderAge)', () => {
+    assert.equal(BARE_ID_MAX_AGE_DAYS, 7);
+    assert.equal(tubeRecent('2026-11-02', TODAY), true, 'сегодня');
+    assert.equal(tubeRecent('2026-10-26', TODAY), true, 'ровно 7 дней — ещё принимается (day >= today − 7)');
+    assert.equal(tubeRecent('2026-10-25', TODAY), false, '8 дней — уже нет');
+    assert.equal(tubeRecent('', TODAY), false, 'день не известен — приём тоже отказывает');
+    assert.equal(tubeRecent('2026-02-22', '2026-03-01'), true, 'через конец февраля — календарём');
+    assert.equal(tubeRecent('2026-02-21', '2026-03-01'), false);
+    const tubes = tubeGroups([
+        line(31, 40, BLOOD, 'queued', { created_at: '2026-11-02T06:00:00Z' }),
+        line(28, 40, BLOOD, 'queued', { created_at: '2026-10-24T06:00:00Z' }),   // стационар: забытая строка 9 дней назад
+    ], { deviceByService: BC780, visitDate: '2026-10-24T05:00:00Z', today: TODAY });
+    assert.deepEqual(tubes.map((t) => [t.labelId, t.day, t.recent]), [[28, '2026-10-24', false], [31, '2026-11-02', true]]);
 });
 
 test('время на этикетке — местное, числом: 14:06 UTC — «02.11.2026, 19:06»', () => {

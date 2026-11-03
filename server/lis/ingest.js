@@ -44,6 +44,7 @@ import { LAB_RESULT_STATUSES } from '../services/visit-status-guard.js';   // LI
 import { today, localDate } from '../services/domain/day.js';
 import { refundedWithoutResult } from '../services/domain/pay-releases.js';   // REFUND_ANY_V1 — «по заказу возврат»
 import { specimenKey } from '../../public/js/shared/specimen-key.js';   // LAB_TUBE_LABEL_V1 — одно правило материала для приёма и этикетки
+import { BARE_ID_MAX_AGE_DAYS } from '../../public/js/shared/lab-label-age.js';   // LAB_TUBE_LABEL_V1 (ревью U11, L6) — один срок голого номера для приёма и этикетки
 
 /**
  * LIS_REAL_ANALYZERS_V1_SAMPLE — номер пробы БЕЗ «LAB-» (голые цифры)
@@ -68,8 +69,12 @@ import { specimenKey } from '../../public/js/shared/specimen-key.js';   // LAB_T
  * голых цифр пропускает как открытый, но дальше стоят ворота лаборатории
  * (gateRefusal): голый номер неоплаченного заказа отказывается той же
  * причиной, что и этикетка, — «заказ ещё не оплачен…», без привязки.
+ *
+ * LAB_TUBE_LABEL_V1 (ревью U11, L6) — само число (7) живёт в
+ * public/js/shared/lab-label-age.js: по нему же карточка очереди не печатает
+ * этикетку пробирки, чей номер здесь будет отказан. Экспорт отсюда оставлен.
  */
-export const BARE_ID_MAX_AGE_DAYS = 7;
+export { BARE_ID_MAX_AGE_DAYS };
 const OPEN_LAB_STATUSES = new Set(['added', 'queued', 'collected', 'in_progress', 'resulted']);
 
 // ═══ LIS_VENDOR_EXACT_V1 — ПРАВИЛО ГОЛОГО НОМЕРА: ТОЛЬКО НОМЕР С ЭТИКЕТКИ ═══════

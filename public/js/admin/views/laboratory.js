@@ -35,7 +35,7 @@ import { h, Icon, clear, toast, Tag, fmtDate, fmtDateTime, field, avColor, initi
 import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printBarcodeLabel, printBarcodeLabels } from './lab-barcode.js';   // LAB_TUBE_LABEL_V1 — этикетки визита одним окном печати
-import { tubeGroups, tubeDeviceMap, tubeLabelStamp, shortTestName } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 — этикетка на пробирку (чистые правила)
+import { tubeGroups, tubeDeviceMap, tubeLabelStamp, shortTestName, BARE_ID_MAX_AGE_DAYS } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 — этикетка на пробирку (чистые правила); срок голого номера — ревью U11, L6
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels, hasActorRole } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=panelsv14';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now · LIS_REAL_ANALYZERS_V1 — штамп
@@ -145,6 +145,7 @@ const state = {
     inBed: new Set(),  // LAB_PATIENT_ORIGIN_V1 — patient_id тех, кто сейчас в койке
     resultsByVs: {},   // visit_service_id -> lab_results rows (all analytes)
     refundedIds: new Set(),   // REFUND_ANY_V1 (ревью B4) — номера строк «услуга возвращена» (метка lqItem)
+    refundedKnown: true,      // LAB_TUBE_LABEL_V1 (ревью U11, L4) — false: rpc refunded_lines не ответил, возвраты не известны
     panelByService: {},// service_id -> lab_panels row
     deviceByService: {},   // LAB_TUBE_LABEL_V1 — service_id -> прибор панели услуги (lab_panels.device_id), как у приёма
     deptKindById: {},  // department_id -> kind   (LAB_SERVICE_ROUTING_V1)
@@ -814,6 +815,9 @@ async function fetchAndPaint() {
         const refunded = await refundedP;
         if (token !== lastFetchToken) return;
         state.refundedIds = refunded || new Set();
+        // LAB_TUBE_LABEL_V1 (ревью U11, L4) — не прочитались: пустой список значит «не
+        // знаем», а не «возвратов нет» — карточка этикеток пробирок не печатает.
+        state.refundedKnown = refunded != null;
         const hideIdle = resultsFailed ? null : refunded;
         state.rows = withoutRefundedIdle(rows, hideIdle, resultsByVs);
         state.patientMap = patientMap;
@@ -986,6 +990,38 @@ function accessionButton(acc) {
         Icon('Copy', { size: 12 }));
 }
 
+// LAB_TUBE_LABEL_V1 (ревью U11, M2) — НОМЕРА ПРОБ ВИЗИТА — ПО ПРОБИРКАМ.
+//
+// Было: шапка окна «Внести результаты» показывала g.accession — самую новую видимую
+// строку (то, что U11 исправил на карточке), а карточка — первую пробирку, даже
+// если её не кормит ни один прибор. Номер набирают в анализатор, когда этикетка не
+// читается, и в «Привязать»: номер мочи на пробирке сыворотки увёл бы креатинин в
+// «Креатинин мочи». Теперь пробирки визита считаются один раз (visitTubes), и оба
+// экрана показывают одни и те же номера — по кнопке на пробирку: номер и что в ней.
+// Где место только на один номер (строка очереди), — первая пробирка, которую
+// кормит прибор (и которую карточка печатает).
+function tubeChip(t) {
+    const value = labAccession(t.labelId);
+    const tests = (t.tests || []).join(', ');
+    return h('button', {
+        class: 'lq-acc lq-tube', type: 'button', 'data-tube': t.code,
+        title: 'Скопировать номер пробы', 'aria-label': 'Скопировать номер пробы',
+        onclick: () => copyAccession(value),
+    },
+        h('span', { class: 'k' }, 'Проба'),
+        h('span', { class: 'v' }, value),
+        tests ? h('span', { class: 'lq-tube-tests' }, tests) : null,
+        Icon('Copy', { size: 12 }));
+}
+function headAccession(tubes, fallback) {
+    const t = tubes.find((x) => x.recent && x.deviceId != null) || tubes.find((x) => x.recent)
+        || tubes.find((x) => x.deviceId != null) || tubes[0];
+    return t ? labAccession(t.labelId) : fallback;
+}
+function tubeChips(tubes, fallback) {
+    return tubes.length > 1 ? tubes.map(tubeChip) : [accessionButton(headAccession(tubes, fallback))];
+}
+
 // ДАТА РОЖДЕНИЯ. На снимке владельца в узбекском интерфейсе стояло
 // «1994 M11 15» — корневая локаль Intl на машине без данных для uz. Карточка чинила
 // это у себя (MONTH_WORDS_V1 убрал ту запасную сборку): теперь общий fmtDate
@@ -1070,7 +1106,7 @@ function labGroupCard(g, byVisit = new Map()) {
     }, Icon(icon, { size: 13 }), ' ' + label);
     const defs = [
         anyActive && canWriteLabResults() ? ['worksheet', 'Внести результаты', 'Flask',
-            'Внести результаты всех анализов одним документом', () => openPatientWorksheet(g, patient)] : null,
+            'Внести результаты всех анализов одним документом', () => openPatientWorksheet(g, patient, tubes)] : null,   // tubes: ревью U11, M2 — те же номера, что на карточке
         anyToVerify && canWriteLabResults() ? ['verify', 'Подтвердить', 'Check',
             'Подтвердить и выдать результаты', () => verifyGroup(g)] : null,
         // LAB_BLANK_ALL_PANELS_V1 — печатаем ВЕСЬ образец, а не одну строку.
@@ -1136,7 +1172,9 @@ function labGroupCard(g, byVisit = new Map()) {
                         Icon('Warning', { size: 12 }), trf('{n} критич.', { n: critCount })) : null,
                 ),
             ),
-            accessionButton(tubes.length ? labAccession(tubes[0].labelId) : g.accession),   // LAB_TUBE_LABEL_V1 — номер первой пробирки, тот же, что на её этикетке
+            // LAB_TUBE_LABEL_V1 — номер пробирки, тот же, что на её этикетке; ревью U11, M2 —
+            // места на один: первая пробирка, которую кормит прибор (все — в списке ниже).
+            accessionButton(headAccession(tubes, g.accession)),
         ),
         // 3. В КАКОМ СОСТОЯНИИ — и 4. ЧТО ДЕЛАТЬ ДАЛЬШЕ.
         h('div', { class: 'lq-status' },
@@ -1153,8 +1191,11 @@ function labGroupCard(g, byVisit = new Map()) {
                 title: isOpen ? tr('Скрыть анализы') : tr('Показать анализы'), 'aria-label': isOpen ? tr('Скрыть анализы') : tr('Показать анализы'),
                 onclick: toggle }, Icon('ChevronDown', { size: 14 })),
         ),
-        // 2. ЧТО В ПРОБЕ.
-        h('div', { class: 'lq-list' }, ...rows.map(r => lqItem(r, patient))),
+        // 2. ЧТО В ПРОБЕ. LAB_TUBE_LABEL_V1 (ревью U11, M2) — пробирок несколько: сначала
+        // номер каждой (как в окне «Внести результаты»), потом анализы.
+        h('div', { class: 'lq-list' },
+            tubes.length > 1 ? h('div', { class: 'lq-tubes' }, ...tubeChips(tubes, g.accession)) : null,
+            ...rows.map(r => lqItem(r, patient))),
     );
 }
 
@@ -1219,14 +1260,31 @@ function visitTubes(g, byVisit, info) {
 
 // LAB_TUBE_LABEL_V1 — этикетки всех пробирок визита ОДНИМ окном: второе окно
 // подряд браузер блокирует как всплывающее. Время — местное.
+//
+// Ревью U11, L4 — возвраты кассы не прочитались (refunded_lines): пустой список
+// значит «не знаем», и возвращённая строка стала бы номером пробирки. Этикеток
+// пробирок не печатаем, говорим почему; этикетка строки («Забор пробы», «Печать
+// этикетки») — номер самой строки, она печатается, как прежде.
+// Ревью U11, L6 — пробирку старше срока голого номера (BARE_ID_MAX_AGE_DAYS — тот
+// же, что у приёма) не печатаем: приём её номер отказал бы. Остальные — печатаем.
 function printTubeLabels(tubes, patient) {
-    printBarcodeLabels(tubes.map((t) => ({
-        code: t.code,
-        patientName: patient.full_name || '',
-        mrn: patient.mrn || '',
-        dateStr: tubeLabelStamp(t.collectedAt),
-        tests: t.tests.join(', '),
-    })));
+    if (!state.refundedKnown) {
+        toast(tr('Не удалось проверить возвраты кассы — этикетки пробирок не печатаются. Этикетку строки печатают «Забор пробы» и «Печать этикетки».'), 'warn');
+        return;
+    }
+    const fresh = tubes.filter((t) => t.recent);
+    if (fresh.length) {
+        printBarcodeLabels(fresh.map((t) => ({
+            code: t.code,
+            patientName: patient.full_name || '',
+            mrn: patient.mrn || '',
+            dateStr: tubeLabelStamp(t.collectedAt),
+            tests: t.tests.join(', '),
+        })));
+    }
+    if (fresh.length < tubes.length) {
+        toast(trf('Пробирки старше {days} дней не напечатаны: результат анализатора по такому номеру не принимается — привяжите его кнопкой «Привязать».', { days: BARE_ID_MAX_AGE_DAYS }), 'warn');
+    }
 }
 
 function printLabel(r, patient) {
@@ -1863,7 +1921,7 @@ function wsSection(section) {
     );
 }
 
-async function openPatientWorksheet(g, patient) {
+async function openPatientWorksheet(g, patient, tubes = []) {   // tubes: LAB_TUBE_LABEL_V1 (ревью U11, M2) — пробирки карточки
     const panels = g.rows;
     if (!panels.length) { toast('Нет анализов для этого пациента.', 'warn'); return; }
 
@@ -1891,7 +1949,9 @@ async function openPatientWorksheet(g, patient) {
         ),
         // LAB_WS_V2 — the sample number is the same quiet, copyable mono button
         // as in the queue (LAB_CARD_V3), not a black block louder than the name.
-        h('div', { class: 'lw-accwrap' }, accessionButton(g.accession)),
+        // LAB_TUBE_LABEL_V1 (ревью U11, M2) — номера тех же пробирок, что на карточке,
+        // по кнопке на пробирку; было g.accession — самая новая видимая строка.
+        h('div', { class: 'lw-accwrap' }, ...tubeChips(tubes || [], g.accession)),
     ));
 
     for (const section of sections) body.appendChild(wsSection(section));

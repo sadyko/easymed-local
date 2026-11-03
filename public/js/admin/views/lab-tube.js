@@ -22,12 +22,24 @@
 //   • В пробирку идут только открытые оплаченные строки (queued … resulted):
 //     голый номер выданного заказа приём отказывает (bareIdRefusal), неоплаченного —
 //     ворота (gateRefusal). Возвращённые без результата (skipIds) — тоже нет.
+//   • Ревью U11, M1 — «уже взята» тоже часть ключа: строка, которая ещё ждёт
+//     забора (queued), не делит пробирку со строками, чья проба уже взята
+//     (collected, in_progress, resulted). Иначе отдельный забор того же дня
+//     (утром «Биохимия» взята и посчитана, вечером врач назначил «Электролиты» на
+//     тот же BS-200) получал номер утренней строки, и вечерний калий перезаписывал
+//     утренний черновик. Анализ, добавленный ДО забора, — в той же пробирке, номер
+//     прежний. Добавленный ПОСЛЕ — своя этикетка; а прогнать снова ту же пробирку
+//     с прежней этикеткой можно: приём заполнит новую строку как соседа (D3).
+//   • Ревью U11, L6 — recent: примет ли приём голый номер этикетки (срок
+//     BARE_ID_MAX_AGE_DAYS — общий с приёмом). Старую пробирку карточка не печатает.
 // Модуль чистый: без DOM и сети — его тестирует node --test, его же берёт тест
 // приёма (server/lis/tube-label.test.js).
 import { specimenKey } from '../../shared/specimen-key.js';
 import { labBarcodeValue } from './lab-doc.js?v=labshared1';   // тот же адрес, что у laboratory.js — один экземпляр модуля
 import { dateNumeric } from '../../shared/date-words.js';
+import { BARE_ID_MAX_AGE_DAYS } from '../../shared/lab-label-age.js';   // LAB_TUBE_LABEL_V1 (ревью U11, L6) — срок голого номера, общий с приёмом
 
+export { BARE_ID_MAX_AGE_DAYS };
 export const TUBE_STATUSES = Object.freeze(['queued', 'collected', 'in_progress', 'resulted']);
 
 const isOn = (v) => v === true || Number(v) === 1;
@@ -51,25 +63,64 @@ export function tubeDay(r, { visitDate = null, today = localDay(new Date()) } = 
     return days.length ? days.sort().pop() : '';
 }
 
+/** 'YYYY-MM-DD' на n дней раньше по местному календарю; '' — не разобрать. */
+function daysBefore(ymd, n) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || ''));
+    return m ? localDay(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) - n)) : '';
+}
+
+/**
+ * LAB_TUBE_LABEL_V1 (ревью U11, L6) — примет ли приём голый номер этикетки
+ * пробирки этого дня: как orderAge (ingest.js) — день известен и не раньше, чем
+ * BARE_ID_MAX_AGE_DAYS дней назад (сам день-граница — ещё да). Старше — приём
+ * отказывает («старше 7 дней»), и карточка такую этикетку не печатает.
+ */
+export function tubeRecent(day, today = localDay(new Date())) {
+    const cutoff = daysBefore(today, BARE_ID_MAX_AGE_DAYS);
+    return !!day && !!cutoff && day >= cutoff;
+}
+
 // Короткое название анализа для этикетки (в справочнике короткого имени нет):
 // сокращение в самом имени («Антимюллеров гормон АМГ (ИФА)» → «АМГ»), иначе
-// первое в скобках («Общий анализ крови (ОАК, …)» → «ОАК»), иначе имя,
-// обрезанное до 18 знаков. Сокращение — до 10 знаков, не меньше двух заглавных
-// (или из 2–3 знаков с заглавной: «Hb»; одна буква — «Витамин D» — не сокращение).
+// первое в скобках («Общий анализ крови (ОАК, …)» → «ОАК»), иначе имя до скобок,
+// если помещается, иначе имя, обрезанное до 18 знаков. Сокращение — до 10 знаков,
+// не меньше двух заглавных (или из 2–3 знаков с заглавной: «Hb»; одна буква —
+// «Витамин D» — не сокращение).
+//
+// Ревью U11, L3 — сокращение должно называть САМ анализ:
+//   • метод — не анализ: «… методом ИХЛА», «… (ИФА)», «(ПЦР)» пропускаются;
+//   • обычное короткое слово с заглавной («На скрытую кровь…», «По …») — не сокращение;
+//   • первое слово, за которым идёт уточнение («Т4 свободный …», «ПСА общий …»), —
+//     не весь анализ: берётся имя до скобок;
+//   • в скобках у панели («Коагулограмма (ПТИ, МНО, …)», «Липидограмма (…)») — её
+//     состав, а не сокращение; и сокращение из скобок начинается с той же буквы,
+//     что имя («Общий анализ крови (ОАК…)»), латинское — как есть («Hb», «ABO»).
 const SHORT_MAX = 18;
 const ABBR = /^[\p{Lu}\d][\p{L}\d%#.+\-]{0,9}$/u;
 const capsOf = (w) => (w.match(/\p{Lu}/gu) || []).length;
 const isAbbr = (w) => ABBR.test(w) && (capsOf(w) >= 2 || (w.length >= 2 && w.length <= 3 && capsOf(w) >= 1));
+// i18n-exempt: не текст экрана — сокращения методов в НАЗВАНИЯХ услуг справочника, с ними сравнивается имя
+const METHODS = new Set(['ИФА', 'ИХЛА', 'ХЛА', 'ЭХЛА', 'ИХЛ', 'ИХА', 'РИА', 'РИФ', 'ПЦР', 'ПЦР-РВ', 'ELISA', 'CLIA', 'ECLIA', 'CMIA', 'PCR', 'RT-PCR']);
+const isMethod = (w) => METHODS.has(String(w).toUpperCase());
+const isWord = (w) => /^\p{Lu}[а-яё]{1,2}$/u.test(w);
+const isLatin = (w) => /^[A-Za-z\d%#.+\-]+$/.test(w);
+const PANEL = /грамм|профил|панел|комплекс|скрининг/i;
+const testAbbr = (w) => isAbbr(w) && !isMethod(w) && !isWord(w);
 export function shortTestName(name) {
     const s = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
     if (s.length <= SHORT_MAX) return s;
-    const outside = s.replace(/\([^()]*\)/g, ' ').split(' ').find(isAbbr);
+    const head = s.split('(')[0].trim();
+    const words = s.replace(/\([^()]*\)/g, ' ').split(' ').filter(Boolean);
+    const outside = words.find((w, i) => testAbbr(w) && !(i === 0 && words.length > 1));
     if (outside) return outside;
-    for (const m of s.matchAll(/\(([^()]*)\)/g)) {
-        const head = m[1].split(/[,;]/)[0].trim();
-        if (isAbbr(head)) return head;
+    if (!PANEL.test(head)) {
+        for (const m of s.matchAll(/\(([^()]*)\)/g)) {
+            const abbr = m[1].split(/[,;]/)[0].trim();
+            if (testAbbr(abbr) && (isLatin(abbr) || abbr[0].toLowerCase() === s[0].toLowerCase())) return abbr;
+        }
     }
-    return s.slice(0, SHORT_MAX - 1).trimEnd() + '…';
+    const base = head || s;
+    return base.length <= SHORT_MAX ? base : base.slice(0, SHORT_MAX - 1).trimEnd() + '…';
 }
 
 /**
@@ -92,8 +143,10 @@ export function tubeDeviceMap(panels) {
  * @param {object[]} rows  лабораторные строки ОДНОГО визита (visit_services + services{name, specimen, is_lab})
  * @param {{deviceByService?: object|Map, skipIds?: Set<number>, visitDate?: string|null, today?: string}} [opts]
  * @returns {Array<{key:string, labelId:number, code:string, rowIds:number[], tests:string[],
- *                  collectedAt:string|null, deviceId:any, material:string, day:string}>}
- *          по возрастанию номера этикетки
+ *                  collectedAt:string|null, deviceId:any, material:string, day:string,
+ *                  drawn:boolean, recent:boolean}>}
+ *          по возрастанию номера этикетки; drawn — проба пробирки уже взята (ревью U11, M1),
+ *          recent — приём примет голый номер её этикетки (ревью U11, L6)
  */
 export function tubeGroups(rows, opts = {}) {
     const devices = opts.deviceByService || {};
@@ -113,13 +166,17 @@ export function tubeGroups(rows, opts = {}) {
         const material = specimenKey(svc.specimen);
         const deviceId = isOn(svc.is_lab) ? deviceOf(r.service_id) : null;
         const day = tubeDay(r, { visitDate, today });
-        const key = deviceId != null ? day + '|d' + deviceId + '|m' + material
-            : material ? day + '|m' + material
+        // Ревью U11, M1 — ждёт забора или уже взята: разные пробирки (см. шапку модуля).
+        const drawn = r.status !== 'queued';
+        const stage = drawn ? '|drawn' : '|wait';
+        const key = deviceId != null ? day + stage + '|d' + deviceId + '|m' + material
+            : material ? day + stage + '|m' + material
             : day + '|r' + r.id;
         let g = byKey.get(key);
         if (!g) {
             // Строки идут по возрастанию номера: группу заводит её САМАЯ СТАРАЯ строка.
-            g = { key, labelId: Number(r.id), code: labBarcodeValue(r.id), rowIds: [], tests: [], collectedAt: null, deviceId, material, day };
+            g = { key, labelId: Number(r.id), code: labBarcodeValue(r.id), rowIds: [], tests: [], collectedAt: null, deviceId, material, day,
+                drawn, recent: tubeRecent(day, today) };   // ревью U11, M1 и L6
             byKey.set(key, g);
         }
         g.rowIds.push(Number(r.id));
