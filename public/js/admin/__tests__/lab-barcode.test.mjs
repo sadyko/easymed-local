@@ -85,3 +85,32 @@ test('тихая зона: 10 модулей пустоты с каждой ст
     assert.match(svg, /viewBox="0 0 138\.6 48"/);
     assert.match(barcodeSVG('00000028', { moduleW: 1.4, quiet: 0 }), /<rect x="0\.00"/, 'quiet: 0 — без зоны');
 });
+
+test('несколько этикеток — одним окном печати; на каждой номер, время, пациент и что в пробирке', () => {
+    printed.length = 0; opened = 0;
+    const ok = printBarcodeLabels([
+        { code: '00000028', patientName: 'Тестов <Пациент>', mrn: 'P-1', dateStr: '02.11.2026, 19:06', tests: 'ОАК, СОЭ' },
+        { code: '00000029', patientName: 'Тестов <Пациент>', mrn: 'P-1', dateStr: '02.11.2026, 19:07', tests: 'ОАМ' },
+    ]);
+    assert.equal(ok, true);
+    assert.equal(opened, 1, 'второе окно подряд браузер заблокирует — одно окно на все этикетки');
+    const html = printed[0];
+    assert.equal((html.match(/<div class="lbl">/g) || []).length, 2);
+    assert.match(html, /class="acc">№ 00000028</);
+    assert.match(html, /class="acc">№ 00000029</);
+    assert.match(html, /class="tests">ОАК, СОЭ</);
+    assert.match(html, /class="date">02\.11\.2026, 19:06</);
+    assert.match(html, /Тестов &lt;Пациент&gt;/);
+    assert.match(html, /<rect x="14\.00"/, 'штрих-код с тихой зоной');
+});
+
+test('одна этикетка — прежний вызов, то же окно; без tests и mrn этих строк нет; пустой список — окна нет', () => {
+    printed.length = 0; opened = 0;
+    printBarcodeLabel({ code: '00000031', patientName: 'Тестов', mrn: '', dateStr: '02.11.2026, 19:06' });
+    assert.equal(opened, 1);
+    assert.equal((printed[0].match(/<div class="lbl">/g) || []).length, 1);
+    assert.ok(!printed[0].includes('class="tests"'));
+    assert.ok(!printed[0].includes('class="mrn"'));
+    assert.equal(printBarcodeLabels([]), false);
+    assert.equal(opened, 1);
+});

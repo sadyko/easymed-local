@@ -65,23 +65,33 @@ export function barcodeSVG(text, opts) {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${w.toFixed(1)}" height="${height}" viewBox="0 0 ${w.toFixed(1)} ${height}" preserveAspectRatio="none" shape-rendering="crispEdges">${rects}</svg>`;
 }
 
-const _esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const _esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-// Printer-agnostic sample label: opens a label-sized print window and calls window.print()
-// so the user picks any installed printer (Xprinter XP-365B or other). One label per call.
-export function printBarcodeLabel(o) {
-    const { code = "", patientName = "", mrn = "", dateStr = "", widthMm = 58, heightMm = 40, copies = 1 } = o || {};
+// One label's markup. LAB_TUBE_LABEL_V1 — строка «tests»: что в пробирке (короткие названия).
+function labelHtml(o, heightMm) {
+    const { code = "", patientName = "", mrn = "", dateStr = "", tests = "" } = o || {};
     const svg = barcodeSVG(code, { height: Math.max(28, Math.round(heightMm * 1.2)), moduleW: 1.4 });
-    const one = `
+    return `
       <div class="lbl">
         <div class="top"><span class="acc">№ ${_esc(code)}</span><span class="date">${_esc(dateStr)}</span></div>
         <div class="name" title="${_esc(patientName)}">${_esc(patientName)}</div>
         ${mrn ? `<div class="mrn">ID: ${_esc(mrn)}</div>` : ""}
+        ${tests ? `<div class="tests">${_esc(tests)}</div>` : ""}
         <div class="bc">${svg}</div>
         <div class="bcnum">${_esc(code)}</div>
       </div>`;
-    const pages = Array.from({ length: Math.max(1, copies) }, () => one).join("");
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${_esc(code)}</title><style>
+}
+
+// Printer-agnostic sample labels: opens ONE label-sized print window and calls window.print()
+// so the user picks any installed printer (Xprinter XP-365B or other).
+// LAB_TUBE_LABEL_V1 — этикетки всех пробирок визита — одним окном и одной печатью:
+// второе window.open подряд браузер блокирует как всплывающее окно.
+export function printBarcodeLabels(list, opts) {
+    const labels = (Array.isArray(list) ? list : []).filter(Boolean);
+    if (!labels.length) return false;
+    const { widthMm = 58, heightMm = 40 } = opts || {};
+    const pages = labels.map((o) => Array.from({ length: Math.max(1, Number(o.copies) || 1) }, () => labelHtml(o, heightMm)).join("")).join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${_esc(labels.map((o) => o.code).join(" "))}</title><style>
 ${PRINT_FONT_FACE_CSS}
       @page { size: ${widthMm}mm ${heightMm}mm; margin: 0; }
       * { box-sizing: border-box; }
@@ -94,6 +104,7 @@ ${PRINT_FONT_FACE_CSS}
       .date { font-size:8pt; color:#000; }
       .name { font-size:10.5pt; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .mrn { font-size:8pt; margin-top:-1mm; }
+      .tests { font-size:7.5pt; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .bc { text-align:center; line-height:0; }
       .bc svg { width:100%; height:auto; max-height:${Math.round(heightMm * 0.42)}mm; }
       .bcnum { text-align:center; font-size:8pt; letter-spacing:2px; margin-top:0.3mm; }
@@ -101,7 +112,14 @@ ${PRINT_FONT_FACE_CSS}
     <script>window.onload=function(){(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(function(){try{window.focus();window.print();}catch(e){}setTimeout(function(){window.close();},400);});};<\/script>
     </body></html>`;
     const win = window.open("", "_blank", "width=460,height=380");
-    if (!win) { alert("Разрешите всплывающие окна, чтобы печатать этикетки."); return; }
+    if (!win) { alert("Разрешите всплывающие окна, чтобы печатать этикетки."); return false; }
     win.document.write(html);
     win.document.close();
+    return true;
+}
+
+// One label (строка очереди: «Печать этикетки», «Забор пробы») — то же окно, что раньше.
+export function printBarcodeLabel(o) {
+    const { widthMm = 58, heightMm = 40 } = o || {};
+    return printBarcodeLabels([o || {}], { widthMm, heightMm });
 }
