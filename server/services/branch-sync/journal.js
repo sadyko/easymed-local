@@ -72,6 +72,10 @@ export const SHIPPED = {
   // справочник не везёт users.room_id. Длительность приезжает готовым числом в
   // duration_minutes, поэтому и услуга для показа чужой карточки не нужна.
   visits: ['visit_date', 'duration_minutes', 'visit_kind', 'visit_type', 'status', 'notes', 'booked_at'],
+  // REFERRAL_LINE_V1 (мигр. 270) — referred_by_source_id и referral_note НЕ ЕЗДЯТ: id
+  // источника направления у соседа другой (справочник источников не синхронизируется), а
+  // вознаграждение за строку считает здание, выставившее счёт. Окно регистрации видит
+  // направления только своего здания.
   visit_services: ['quantity', 'status'],
   lab_results: [
     'parameter', 'value', 'numeric_value', 'unit', 'reference_range',
