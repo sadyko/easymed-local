@@ -142,6 +142,15 @@ export const TABLES = [
     columns: ['name', 'code', 'modality', 'has_narrative', 'service_id', 'core_panel_id', 'active'],
     refs: { service_id: 'services' },
     natural: ['code', 'name'],
+    // LAB_PANEL_DEDUP_V1 — панель, которую главное здание УДАЛИЛО (её нет в
+    // выгрузке): здесь она отвязывается от услуги и выключается, ДО приёма
+    // панелей (см. applyCatalogue). Удаление панели с показателями теперь
+    // работает (rpc/lab-panels.js), и клиника делает ровно это: удаляет
+    // сломанную панель и заводит новую на ту же услугу. Без отвязки новая
+    // панель главного здания упиралась бы здесь в «одна услуга — одна панель»
+    // (UNIQUE, мигр. 048), и приём справочника откатывался бы целиком при
+    // каждой синхронизации.
+    unlinkMissing: { clear: 'service_id', flag: 'active' },
   },
   {
     name: 'lab_panel_analytes',
@@ -153,6 +162,12 @@ export const TABLES = [
     refs: { panel_id: 'lab_panels' },
     natural: ['code', 'name'],
     scopeRef: 'panel_id',
+    // LAB_PANEL_DEDUP_V1 — показатели, которых у главного здания больше нет,
+    // здесь УДАЛЯЮТСЯ (см. applyCatalogue, «исчезнувшие показатели»): редактор
+    // панелей при каждом сохранении пересоздаёт строки с новыми id, и без
+    // этого каждое пересохранение панели в главном здании добавляло филиалу
+    // ещё одну копию каждого показателя.
+    pruneMissing: true,
   },
 
   // ---------------------------------------------------------------------------
@@ -384,7 +399,10 @@ export const SEALED_FORM = 'sealed';
  * Строки берутся ЦЕЛИКОМ, включая active = 0. Снятая с продажи услуга обязана
  * доехать до филиала именно как снятая: пропустить её означало бы, что филиал
  * продолжает её продавать, а «удалить у себя то, чего нет у главного» этот этап
- * делать не будет (см. applyCatalogue — ничего не удаляем).
+ * делать не будет (см. applyCatalogue — ничего не удаляем). Исключение одно —
+ * показатели лабораторных панелей (LAB_PANEL_DEDUP_V1, pruneMissing): редактор
+ * пересоздаёт их при каждом сохранении, и без удаления исчезнувших филиал
+ * копил копии.
  */
 export function exportCatalogue(db, { now = () => new Date() } = {}) {
   const out = {
@@ -826,6 +844,37 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
     // откладывается: на первом проходе половина родителей ещё не существует.
     const firstPass = spec.columns.filter((c) => c !== spec.selfRef);
 
+    // --- LAB_PANEL_DEDUP_V1: удалённые главным зданием — отвязать ДО приёма --
+    //
+    // Строка главного здания, которой больше нет в выгрузке (её удалили там),
+    // а здесь она есть и сопоставлена только с исчезнувшими строками: колонка
+    // `clear` (у панели — услуга) обнуляется, `flag` (active) — 0. Строка и её
+    // данные остаются: удалять чужими руками историю здания незачем, а
+    // освободить место «одна услуга — одна панель» нужно сейчас — следом в
+    // этой же выгрузке может ехать новая панель на ту же услугу.
+    // Пустая выгрузка (старая главная, филиал) не отвязывает ничего.
+    if (spec.unlinkMissing && rows.length) {
+      const { clear: clearCol, flag: flagCol } = spec.unlinkMissing;
+      const live = new Set(rows.filter((r) => r && r.id !== undefined && r.id !== null).map((r) => String(r.id)));
+      const prefix = spec.name + ':';
+      const liveLocal = new Set();
+      const deadLocal = new Set();
+      for (const [key, localId] of mapped) {
+        if (!key.startsWith(prefix)) continue;
+        (live.has(key.slice(prefix.length)) ? liveLocal : deadLocal).add(localId);
+      }
+      const pick = db.prepare(`SELECT id, "${clearCol}" AS c, "${flagCol}" AS f FROM "${spec.name}" WHERE id = ?`);
+      for (const localId of deadLocal) {
+        if (liveLocal.has(localId)) continue;
+        const row = pick.get(localId);
+        if (!row || (row.c == null && !row.f)) continue;
+        summary.deactivated = summary.deactivated || {};
+        summary.deactivated[spec.name] = (summary.deactivated[spec.name] || 0) + 1;
+        summary.changed += 1;
+        if (!dryRun) db.prepare(`UPDATE "${spec.name}" SET "${clearCol}" = NULL, "${flagCol}" = 0 WHERE id = ?`).run(localId);
+      }
+    }
+
     // Кандидаты на усыновление — все свои строки таблицы, по одному чтению.
     const localRows = db.prepare(`SELECT * FROM "${spec.name}"`).all();
     // DOCTOR_PROFILE_V1 (ревью шага 5, №5) — у этой базы есть «работает с»
@@ -1029,6 +1078,61 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
           db.prepare(`UPDATE "${spec.name}" SET "${spec.deactivateMissing}" = 0 WHERE id = ?`).run(row.id);
         }
       }
+    }
+
+    // --- LAB_PANEL_DEDUP_V1: исчезнувшие показатели — УДАЛИТЬ ---------------
+    //
+    // Редактор панелей при каждом сохранении пересоздаёт строки показателей с
+    // новыми id. Здесь прежняя строка оставалась закреплённой за мёртвым id
+    // главного здания, новая строка не находила, кого усыновить, и вставлялась
+    // рядом: каждое пересохранение панели в главном здании — ещё одна копия
+    // каждого показателя в филиале (лист ввода показывал их все, бланк терял
+    // анализы). Теперь строка, ВСЕ соответствия которой ведут к строкам,
+    // которых в выгрузке нет, удаляется, а мёртвые соответствия — следом.
+    //
+    // Только в панелях главного здания, которые у него ЕСТЬ (панель
+    // сопоставлена со строкой этой же выгрузки): показатель, заведённый здесь
+    // (соответствия нет), и показатели панели, удалённой там (её выше
+    // отвязали и выключили), остаются. Результаты анализов на строки панели не
+    // ссылаются (только услуга визита и имя показателя) — ничего не рвётся.
+    // Пустая выгрузка (главная старой версии, филиал) не удаляет ничего.
+    // Та же транзакция, что у всего приёма; dryRun считает и не пишет — иначе
+    // приём, где меняется только это, не случился бы вовсе (changed = 0).
+    if (spec.pruneMissing && spec.scopeRef && rows.length) {
+      const parent = spec.refs[spec.scopeRef];
+      const live = new Set(rows.filter((r) => r && r.id !== undefined && r.id !== null).map((r) => String(r.id)));
+      const parentRows = Array.isArray(payload[parent]) ? payload[parent] : [];
+      const liveParents = new Set(parentRows
+        .filter((r) => r && r.id !== undefined && r.id !== null)
+        .map((r) => mapped.get(`${parent}:${r.id}`))
+        .filter((id) => id !== undefined && id !== null));
+      const prefix = spec.name + ':';
+      const liveLocal = new Set();
+      const dead = [];   // [чужой id, свой id] — соответствия строкам, которых в выгрузке нет
+      for (const [key, localId] of mapped) {
+        if (!key.startsWith(prefix)) continue;
+        const remoteId = key.slice(prefix.length);
+        if (live.has(remoteId)) liveLocal.add(localId); else dead.push([remoteId, localId]);
+      }
+      const byId = new Map(localRows.map((r) => [r.id, r]));
+      const gone = new Set();
+      for (const [, localId] of dead) {
+        if (liveLocal.has(localId) || gone.has(localId)) continue;
+        const row = byId.get(localId);
+        if (!row || !liveParents.has(row[spec.scopeRef])) continue;
+        gone.add(localId);
+        summary.removed = summary.removed || {};
+        summary.removed[spec.name] = (summary.removed[spec.name] || 0) + 1;
+        summary.changed += 1;
+      }
+      if (!dryRun) {
+        const del = db.prepare(`DELETE FROM "${spec.name}" WHERE id = ?`);
+        for (const localId of gone) del.run(localId);
+        const unmap = db.prepare('DELETE FROM branch_sync_map WHERE table_name = ? AND remote_id = ?');
+        for (const [remoteId] of dead) unmap.run(spec.name, Number(remoteId));
+      }
+      for (const [remoteId] of dead) mapped.delete(prefix + remoteId);
+      for (const localId of gone) claimSet(spec.name).delete(localId);
     }
 
     // --- второй проход: самоссылка ----------------------------------------

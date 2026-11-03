@@ -156,6 +156,9 @@ export function changesLabel(record, translate = ID) {
   // строки», и назвать его вслух обязательно: иначе человек перестал бы входить
   // в систему, а экран синхронизации сообщал бы «изменений не было».
   group(record.deactivated, 'отключено');
+  // LAB_PANEL_DEDUP_V1 — показатели панелей, которых у главной клиники больше
+  // нет (копии от прежних пересохранений панели), филиал удаляет — и говорит.
+  group(record.removed, 'удалено');
   if (record.settings) parts.push(translate('обновлены сведения о клинике'));
   if (!parts.length) return translate('Изменений не было — справочник уже совпадает.');
   return parts.join('; ') + '.';
