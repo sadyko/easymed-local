@@ -58,6 +58,7 @@ import { visitDupCheck } from './dup-order-check.js';   // DUP_STOP_V1 — чт�
 import { bookingLinesAdd, bookingLineRemove } from './booking-lines.js';   // CRM_CALENDAR_MIRROR_V1 — услуги записи от колл-центра
 import { removeOwnVisitLine, visitSetReferralSource } from './visit-lines.js';   // LIVE_AUDIT_FIX_V1 — врач снимает свою невыставленную услугу
 import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
+import { patientReferralOrders, referralRecommendationAttach, referralVisitLinks } from './referral-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача» у стойки
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
 import { doctorUpcomingVisits } from './doctor-upcoming.js';   // REPEAT_VISIT_V1 — «Записи вперёд» кабинета врача
 import { branchHoursImpact } from './branch-hours.js';   // BRANCH_PROFILE_V1
@@ -321,6 +322,9 @@ export const RPC = {
   pay_period_close:         (db, args, user) => payPeriodClose(db, args, user),
   pay_period_reopen:        (db, args, user) => payPeriodReopen(db, args, user),
   pay_period_status:        (db, args, user) => payPeriodStatus(db, args, user),
+  patient_referral_orders:   (db, args, user) => patientReferralOrders(db, args, user),          // DOCTOR_REFERRAL_DESK_V1 — направления врача пациента (чтение)
+  referral_recommendation_attach: (db, args, user) => referralRecommendationAttach(db, args, user),   // DOCTOR_REFERRAL_DESK_V1 — строка по рекомендации
+  referral_visit_links:      (db, args, user) => referralVisitLinks(db, args, user),             // DOCTOR_REFERRAL_DESK_V1 — метка «от врача» календаря
   visit_set_doctor_referrer: (db, args, user) => visitSetDoctorReferrer(db, args, user),  // REPORTS_V2 ревью I3/I5 — свой источник врача, если направившего нет
   owner_report:             (db, args, user) => ownerReport(db, args, user),   // REPORTS_HUB_RU_V1 — «Отчёт владельца» charts
   // BUILDING_REPORTS_V1 — перечень ЗДАНИЙ клиники для выборки в «Отчётах».

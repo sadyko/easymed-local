@@ -112,6 +112,9 @@ const RPC_LABELS = {
     referrals_doctor_detail: 'Реферирование: врач клиники',
     referrals_assign_representative: 'Закрепление врача за представителем',
     referrals_representative_options: 'Реферирование: список медпредставителей',   // REFERRAL_REP_ON_CREATE_V1
+    patient_referral_orders: 'Направления врача пациента',          // DOCTOR_REFERRAL_DESK_V1
+    referral_recommendation_attach: 'Рекомендация врача — в визит', // DOCTOR_REFERRAL_DESK_V1
+    referral_visit_links: 'Метки «от врача» в календаре',            // DOCTOR_REFERRAL_DESK_V1
     doctor_bot_settings_get: 'Бот для врачей: настройки',
     doctor_bot_settings_save: 'Бот для врачей: сохранение настроек',
     doctor_bot_token_clear: 'Бот для врачей: удаление токена',

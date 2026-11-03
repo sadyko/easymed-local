@@ -111,6 +111,9 @@ const READ_ONLY_RPCS = new Set([
   'crm_duplicate_groups',
   // …и метка «из заявки» на записях календаря (crm_visit_links) — чтение.
   'crm_visit_links',
+  // DOCTOR_REFERRAL_DESK_V1 — направления врача пациента у стойки и метка «от врача»
+  // календаря — чтения. Привязка рекомендации к строке (referral_recommendation_attach) — запись.
+  'patient_referral_orders', 'referral_visit_links',
   // CRM_LINK_ALL_V1 (редакция 2) — «Записи пациента» карточки (crm_card_bookings) — чтение.
   'crm_card_bookings',
   // CUSTDEV_V1 — доска и отчёт по обзвону. Чистое чтение. Клиника с
