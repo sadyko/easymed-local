@@ -49,6 +49,9 @@
  *   сбой — out.attachError (строка уже в визите, счёт выставляется как обычно).
  *   CRM_LINK_ALL_V1 (R7a) — bookedVsId: строка «из записи» — она УЖЕ в визите дня
  *   (views/booked-rows.js): её не вставляют второй раз, в счёт идёт она сама.
+ *   DIAG_ROUTE_V1 (ревью M-1) — bookedSetDoctor: у строки записи исполнителя не было,
+ *   регистратор его выбрал — он пишется в строку визита (patient_card_set_doctor, дверь
+ *   «Сменить врача» карты) ДО визита и счёта; отказ — до первой записи.
  * dropVsIds: [visit_service_id] — строки записи, которые регистратор убрал: они
  *   снимаются с визита (booking_line_remove, как в календаре) ДО визита; снятая
  *   удаляется из массива — повтор нажатия её не снимает второй раз.
@@ -67,7 +70,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { readEnsureVisit } from '../ensure-visit-answer.js';
 import { precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 — повтор услуги в визите дня — отказ до визита
 import { lineIdentity, isConsultPick, consultDoctorId, surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога
-import { isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (ред. 2) — строка той же услуги, что строка записи
+import { isBookedTwin, setLinePerformer } from './booked-rows.js';   // CRM_LINK_ALL_V1 (ред. 2) — строка той же услуги, что строка записи; DIAG_ROUTE_V1 (ревью M-1) — её исполнитель
 import { isAppended, appendedPartDiscount } from '../invoice-append.js';   // INVOICE_APPEND_V1 — строки легли в неоплаченный счёт визита
 
 const isPosInt = (v) => {
@@ -234,6 +237,18 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
         excludeIds: (Array.isArray(dropVsIds) ? dropVsIds : []).filter(isPosInt).map(Number),
     });
     if (!pre.ok) throw new Error(pre.text || tr('Повторное назначение отменено — ничего не записано.'));
+
+    // DIAG_ROUTE_V1 (ревью M-1) — исполнитель строки записи, у которой его не было: той же
+    // дверью, что «Сменить врача» карты пациента, ДО визита и счёта — иначе строка уйдёт в
+    // счёт без исполнителя, и её не увидит ни один кабинет.
+    for (const l of items) {
+        if (!isPosInt(l.bookedVsId) || !l.bookedSetDoctor) continue;
+        const doc = lineDoctorOf(l);
+        if (!isPosInt(doc)) throw new Error(trf('Укажите врача для услуги «{name}»', { name: (l.service && l.service.name) || '' }));
+        const err = await setLinePerformer({ patientId: pid, vsId: Number(l.bookedVsId), doctorId: doc });
+        if (err) throw new Error(trf('Исполнитель услуги «{name}» не записан: {msg}', { name: (l.service && l.service.name) || '', msg: tr(err) }));
+        l.bookedSetDoctor = false;   // записан — повтор нажатия его не пишет второй раз
+    }
 
     // CRM_LINK_ALL_V1 (R7a) — строки записи, которые регистратор убрал, снимаются
     // с визита до всего остального — той же дверью, что в календаре

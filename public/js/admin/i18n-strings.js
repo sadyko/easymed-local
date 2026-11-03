@@ -3,6 +3,11 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // DIAG_ROUTE_V1 (ревью M-1) — исполнитель строки «из записи» пишется в строку визита до счёта (walk-in-booking.js, visit-wizard.js)
+  "Исполнитель услуги «{name}» не записан: {msg}": {"en":"The performer of “{name}” was not saved: {msg}","ru":"Исполнитель услуги «{name}» не записан: {msg}","uz":"«{name}» xizmati ijrochisi saqlanmadi: {msg}"},   // DIAG_ROUTE_V1 (ревью M-1)
+  // DIAG_ROUTE_V1 (ревью M-1, страховка) — кабинет: группа «Без исполнителя» у администратора и регистратуры (consultation.js)
+  "Без исполнителя · {n}": {"en":"No performer · {n}","ru":"Без исполнителя · {n}","uz":"Ijrochisiz · {n}"},   // DIAG_ROUTE_V1 (ревью M-1)
+  "Услуги кабинета без исполнителя — их не видит ни один врач. Назначьте исполнителя.": {"en":"Cabinet services without a performer — no doctor sees them. Assign a performer.","ru":"Услуги кабинета без исполнителя — их не видит ни один врач. Назначьте исполнителя.","uz":"Ijrochisiz kabinet xizmatlari — ularni hech bir shifokor ko‘rmaydi. Ijrochini tayinlang."},   // DIAG_ROUTE_V1 (ревью M-1)
   // DIAG_ROUTE_V1 — исполнитель у каждой услуги кабинета врача (visit-wizard.js, fast-registration.js, room-calendar.js)
   "время не требуется — запись на день": {"en":"no time needed — booked for the day","ru":"время не требуется — запись на день","uz":"vaqt kerak emas — kunga yoziladi"},   // DIAG_ROUTE_V1
   "выберите исполнителя": {"en":"choose who performs it","ru":"выберите исполнителя","uz":"ijrochini tanlang"},   // DIAG_ROUTE_V1

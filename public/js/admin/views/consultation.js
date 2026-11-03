@@ -43,6 +43,10 @@ import { REFUNDED_LINE_MARK, REFUNDED_START_REFUSAL } from '../../shared/refunde
 import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4) — один вопрос refunded_lines на список
 import { onLineStatus } from '../queue-fresh.js';   // QUEUE_FRESH_V1 — окно приёма сообщает новый статус строки (один экземпляр: без ?v=)
 import { serviceRoute } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 — маршрут строки решает группа услуги
+// DIAG_ROUTE_V1 (ревью M-1, страховка) — «Без исполнителя · N» у администратора и регистратуры:
+// пул исполнителей — тот же, что у записи; дверь — та же, что «Сменить врача» карты.
+import { doctorPoolFor, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';
+import { setLinePerformer } from './booked-rows.js';
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -71,6 +75,11 @@ const state = {
     // QUEUE_FRESH_V1 — группа «Незавершённые с прошлых дней» раскрыта? Каждое
     // открытие кабинета её сворачивает (renderConsultation), внутри — выбор держится.
     pastOpen:     false,
+    // DIAG_ROUTE_V1 (ревью M-1, страховка) — строки кабинета без исполнителя (сегодня и вперёд):
+    // их не видит ни один врач. Только администратору и регистратуре (loadUnassigned); группа
+    // «Без исполнителя · N» при каждом открытии кабинета свёрнута.
+    unassigned:     [],
+    unassignedOpen: false,
     workRootEl:   null,      // WORK_ONE_SCREEN_V1 — корень вкладки «Мои приёмы», ему подгоняется высота окна
     // Today's referrals THIS doctor made (for the KPI cards / RecsModal). Lazy
     // and tolerant — see loadTodayReferrals(). { loaded, rows: [...] }
@@ -166,6 +175,8 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // поэтому выбранный фильтр живёт, пока кабинет открыт.
     state.statusFilter = 'active';
     state.pastOpen = false;   // QUEUE_FRESH_V1 — группа прошлых дней при каждом открытии свёрнута
+    state.unassignedOpen = false;   // DIAG_ROUTE_V1 (ревью M-1) — и группа «Без исполнителя»
+    unassignedPeople = null;        // её список исполнителей — заново
     clear(container);
     container.appendChild(h('div', { class: 'empty', style: { padding: '40px' } }, 'Загружаем кабинет…'));
     // DOCTOR_DASHBOARD_V1 — дашборд перечитывается при каждом входе в раздел:
@@ -391,6 +402,145 @@ export async function markRefundedRows(rows) {
 }
 
 // ---------------------------------------------------------------------------
+// DIAG_ROUTE_V1 (ревью M-1, 2026-11-03) — СТРАХОВКА ДЛЯ СТАРЫХ ДАННЫХ: «БЕЗ ИСПОЛНИТЕЛЯ · N».
+//
+// Строка кабинета без исполнителя не видна ни одному врачу (SERVICE_SCOPE_V3) — это и
+// была жалоба клиники. С 3.21 регистратура выбирает исполнителя у каждой услуги кабинета,
+// но строки, записанные раньше (календарь, касса «Без врача», CRM, бот, импорт), лежат без
+// него. Администратор и регистратура видят их в кабинете свёрнутой группой: сегодня и
+// вперёд, открытые (не начатые и не сделанные), услуги кабинета (маршрут — группа услуги,
+// shared/service-route.js) и консультации по виду приёма; отменённые и несостоявшиеся визиты —
+// нет. «Назначить» — тот же пул исполнителей, что у записи (doctorPoolFor), и та же дверь,
+// что «Сменить врача» карты пациента (patient_card_set_doctor; строка в неоплаченном счёте —
+// касса cashier_line_set_doctor, оплаченная — отказ сервера его словами). Врачам группа не
+// видна; плитки её не считают — это не чья-то работа, а недоделанная запись.
+// ---------------------------------------------------------------------------
+export const UNASSIGNED_ROLES = Object.freeze(['admin', 'registrar']);
+const UNASSIGNED_LIMIT = 500;
+const UNASSIGNED_TEXT = 'Без исполнителя · {n}';
+export function canSeeUnassigned() {
+    // Роли САМОГО вошедшего (основная и «Дополнительные роли»), а не полный доступ экрана:
+    // врачу, которому выдан весь интерфейс, чужие строки без исполнителя не показываются.
+    const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
+    if (!u) return false;
+    if (u.is_admin || u.is_super_admin) return true;
+    const roles = [u.role, ...(Array.isArray(u.extra_roles) ? u.extra_roles : [])].map((r) => String(r == null ? '' : r).trim().toLowerCase());
+    return roles.some((r) => UNASSIGNED_ROLES.includes(r));
+}
+async function loadUnassigned() {
+    if (!canSeeUnassigned()) return [];
+    const from = new Date(); from.setHours(0, 0, 0, 0);   // местная полночь сегодня
+    let query = supabase.from('visit_services')
+        .select(`id, status, visit_id, service_id, consultation_type_id, clinic_item_id, invoice_item_id,
+            services(name, type, is_lab, department_id, type_id, service_types(name), departments(kind)),
+            consultation_types(name_ru, name_uz),
+            visits!inner(visit_date, patient_id, status, patients(full_name, last_name, first_name, mrn))`)
+        .is('sync_origin', null)
+        .is('doctor_id', null)
+        .in('status', CABINET_OPEN_STATUSES)
+        .gte('visits.visit_date', from.toISOString())
+        .not('visits.status', 'in', '(cancelled,no_show)');
+    const cid = (window.CLINIC && window.CLINIC.id) || null;
+    if (cid) query = query.eq('company_id', cid);
+    const { data, error } = await query.order('created_at', { ascending: false }).limit(UNASSIGNED_LIMIT);
+    if (error) { console.warn('[my-services] unassigned (tolerated):', error.message); return []; }
+    return (data || [])
+        .filter((r) => r.clinic_item_id == null && (r.consultation_type_id != null || (r.services && serviceRoute(r.services) === 'cabinet')))
+        .map((r) => {
+            const p = (r.visits && r.visits.patients) || {};
+            const consult = r.service_id == null;
+            return {
+                id: r.id, status: r.status, visitId: r.visit_id, patientId: r.visits && r.visits.patient_id,
+                patientName: [p.last_name, p.first_name].filter(Boolean).join(' ').trim() || p.full_name || '—',
+                patientMrn: p.mrn || '',
+                serviceName: consult ? ((r.consultation_types && (r.consultation_types.name_ru || r.consultation_types.name_uz)) || 'Консультация') : (r.services.name || '—'),
+                // услуга для пула исполнителей: консультации нужен врач (все врачи, если никому не отмечена)
+                svc: consult ? { id: 'c|' + r.consultation_type_id, requires_doctor: 1 } : { id: r.service_id, ...r.services },
+                visitDate: r.visits && r.visits.visit_date,
+                billed: r.invoice_item_id != null,
+            };
+        })
+        .sort((a, b) => String(a.visitDate || '').localeCompare(String(b.visitDate || '')));
+}
+
+// Кандидаты в исполнители — один раз на открытие группы (тот же список, что у записи).
+let unassignedPeople = null;
+async function unassignedCandidates() {
+    if (unassignedPeople) return unassignedPeople;
+    const { data, error } = await supabase.from('users').select('id, full_name, is_doctor, service_rates').eq('active', true).order('full_name');
+    if (error) throw new Error(error.message || String(error));
+    unassignedPeople = performerCandidates(data || []);
+    return unassignedPeople;
+}
+
+/** «Назначить» строки группы: выбор исполнителя и запись той же дверью, что «Сменить врача». */
+async function assignUnassigned(r, cell) {
+    let pool;
+    try { pool = doctorPoolFor(await unassignedCandidates(), r.svc); }
+    catch (e) { toast(trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }), 'fail'); return; }
+    if (!pool.length) { toast(tr('Нет сотрудников, которые оказывают эту услугу.'), 'warn'); return; }
+    const one = soleCandidate(pool);
+    const sel = h('select', { 'data-unassigned-select': String(r.id), style: { padding: '4px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', maxWidth: '200px' } },
+        h('option', { value: '' }, '— выберите врача —'),
+        ...pool.map((d) => h('option', { value: String(d.id) }, d.full_name || String(d.id))));
+    sel.value = one ? String(one.id) : '';
+    const ok = h('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-unassigned-save': String(r.id) }, 'ОК');
+    ok.addEventListener('click', async () => {
+        const doctorId = Number(sel.value);
+        if (!doctorId) { toast(tr('выберите исполнителя'), 'warn'); return; }
+        ok.disabled = true;
+        let err = null;
+        if (r.billed) {
+            // Строка уже в счёте: исполнителя меняет дверь кассы (пока по счёту нет денег) —
+            // она же пересчитывает цену строки у этого исполнителя.
+            const { error } = await supabase.rpc('cashier_line_set_doctor', { visit_service_id: r.id, doctor_id: doctorId });
+            err = error ? (error.message || String(error)) : null;
+        } else {
+            err = await setLinePerformer({ patientId: r.patientId, vsId: r.id, doctorId });
+        }
+        if (err) { ok.disabled = false; toast(trf('Не сохранилось: {msg}', { msg: tr(err) }), 'fail'); return; }
+        toast(tr('Врач изменён.'));
+        if (await reloadQueue()) { paintBody(); paintKpi(); }
+    });
+    clear(cell);
+    cell.appendChild(h('span', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end' } }, sel, ok));
+}
+
+/** Свёрнутая группа «Без исполнителя · N» над списком (администратор, регистратура). */
+function unassignedBlock() {
+    const list = state.unassigned || [];
+    if (!list.length || !canSeeUnassigned()) return null;
+    const head = h('button', {
+        type: 'button', class: 'btn btn-ghost btn-sm', 'data-unassigned-toggle': '',
+        'aria-expanded': state.unassignedOpen ? 'true' : 'false',
+        onclick: () => { state.unassignedOpen = !state.unassignedOpen; paintBody(); },
+    },
+        h('span', { style: { display: 'inline-flex', transition: 'transform .15s', transform: state.unassignedOpen ? 'rotate(90deg)' : 'none' } },
+            Icon('ChevronRight', { size: 14 })),
+        ' ', Icon('Warning', { size: 13 }), ' ', trf(UNASSIGNED_TEXT, { n: list.length }));
+    const box = h('div', { 'data-unassigned-group': String(list.length), style: { margin: '10px 14px 0', padding: '6px 10px', background: 'var(--warn-50, #fffbeb)', border: '1px solid var(--warn-200, #fde68a)', borderRadius: '10px' } },
+        h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, head,
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Услуги кабинета без исполнителя — их не видит ни один врач. Назначьте исполнителя.'))));
+    if (!state.unassignedOpen) return box;
+    const rows = list.map((r) => {
+        const act = h('td', { style: { textAlign: 'right' } });
+        act.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-unassigned-assign': String(r.id),
+            onclick: () => assignUnassigned(r, act) }, Icon('Edit', { size: 13 }), ' ', tr('Назначить')));
+        return h('tr', { 'data-unassigned-row': String(r.id) },
+            h('td', null, h('div', { class: 'cell-strong' }, r.patientName), r.patientMrn ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.patientMrn) : null),
+            h('td', null, r.serviceName),
+            h('td', { class: 'num', style: { fontSize: '12.5px' } }, r.visitDate ? fmtDateTime(r.visitDate) : '—'),
+            h('td', null, tr(STATUS_RU[r.status] || r.status)),
+            act);
+    });
+    box.appendChild(h('table', { class: 'tbl', style: { marginTop: '6px' } },
+        h('thead', null, h('tr', null, h('th', null, 'Пациент'), h('th', null, 'Услуга'), h('th', null, 'Запись'), h('th', null, 'Статус услуги'),
+            h('th', { style: { textAlign: 'right' } }, 'Действие'))),
+        h('tbody', null, ...rows)));
+    return box;
+}
+
+// ---------------------------------------------------------------------------
 // Data
 // ---------------------------------------------------------------------------
 // DIAG_ROUTE_V1 (D7) — ОТКРЫТАЯ РАБОТА ВРАЧА НЕ ОБРЕЗАЕТСЯ. Здесь стоял один запрос
@@ -433,10 +583,12 @@ async function loadServices() {
         if (docId) query = query.eq('doctor_id', docId);
         return query;
     };
+    const unassignedP = loadUnassigned();   // DIAG_ROUTE_V1 (ревью M-1) — параллельно, своим запросом
     const [openRes, doneRes] = await Promise.all([
         build().in('status', CABINET_OPEN_STATUSES).order('created_at', { ascending: false }).limit(CABINET_OPEN_LIMIT),
         build().eq('status', 'completed').order('created_at', { ascending: false }).limit(CABINET_DONE_WINDOW),
     ]);
+    state.unassigned = await unassignedP;
     const error = openRes.error || doneRes.error;
     const data = [...(openRes.data || []), ...(doneRes.data || [])];
     if (error) {
@@ -1215,6 +1367,9 @@ function paintBody() {
                 Icon('Calendar', { size: 13 }), ' Календарь'),
         ),
     ));
+    // DIAG_ROUTE_V1 (ревью M-1, страховка) — администратору и регистратуре: строки без исполнителя.
+    const unassigned = unassignedBlock();
+    if (unassigned) body.appendChild(unassigned);
 
     if (state.view === 'calendar') { body.appendChild(calendarView(filtered)); return; }
 

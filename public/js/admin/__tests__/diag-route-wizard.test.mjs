@@ -250,3 +250,51 @@ test('анализ и процедура — без выбора исполни�
     assert.equal(lineDoctor(), null, type);
   }
 });
+
+// DIAG_ROUTE_V1 (ревью M-1, проба RD-W7) — СТРОКА «ИЗ ЗАПИСИ» БЕЗ ИСПОЛНИТЕЛЯ. Визит дня держит
+// УЗИ без исполнителя (записано до 3.21, касса «Без врача», CRM, бот): мастер ставил её в смету
+// «из записи», «Далее» был открыт, и счёт уходил на строку, которую не видит ни один кабинет.
+// Теперь строка ждёт выбора в смете («Выберите врача»), без него «Далее» закрыт, а выбранный
+// пишется в ту же строку визита (дверь «Сменить врача» карты) до счёта.
+async function openBooked(cfg) {
+  seed(cfg);
+  const d = new Date(); d.setHours(15, 0, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (3, NULL, ?, 'scheduled')").run(d.toISOString()).lastInsertRowid);
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, unit_price, total, status) VALUES (?, 31, NULL, 100000, 100000, 'added')").run(vid);
+  document.body.children.length = 0; TOASTS.length = 0; RPC.length = 0;
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Тест-Пациент' }, {});
+  await flush(20); await wait(200); await flush(30);
+  const ov = () => document.body.children.find(isWizard);
+  assert.ok(ov(), 'мастер не открылся');
+  assert.ok(TOASTS.some((x) => /Из записи на сегодня: Svc-УЗИ/.test(x)), 'строка записи не встала в смету: ' + JSON.stringify(TOASTS));
+  return ov;
+}
+const waitSelect = (ov) => {
+  const box = walk(ov()).find((n) => n.attrs && 'data-wait-doctor' in n.attrs);
+  return box ? walk(box).find((n) => n.tagName === 'SELECT') || null : null;
+};
+const lines31 = () => DB.prepare('SELECT doctor_id, invoice_item_id IS NOT NULL AS billed FROM visit_services WHERE service_id = 31').all();
+
+test('M-1 (RD-W7): строка «из записи» без исполнителя — выбор в смете, «Далее» закрыт; выбранный — в той же строке до счёта', async () => {
+  const ov = await openBooked({ performers: [D(21), D(22)] });
+  const sel = waitSelect(ov);
+  assert.ok(sel, 'у строки записи нет выбора исполнителя');
+  assert.deepEqual(optionIds(sel), [21, 22], 'кандидаты');
+  assert.ok('disabled' in nextButton(ov).attrs, '«Далее» открыт без исполнителя');
+  await pressUntilCreate(ov);
+  assert.ok(!RPC.some((c) => c.name === 'ensure_visit' || c.name === 'patient_card_set_doctor'), 'запись пошла без исполнителя');
+  assert.deepEqual(lines31(), [{ doctor_id: null, billed: 0 }]);
+  sel.value = '22';
+  sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+  await flush(20);
+  await pressUntilCreate(ov);
+  assert.ok(RPC.some((c) => c.name === 'patient_card_set_doctor'), 'исполнитель не записан дверью «Сменить врача»');
+  assert.deepEqual(lines31(), [{ doctor_id: 22, billed: 1 }], 'исполнитель не в строке записи (или вторая строка): ' + JSON.stringify(TOASTS.slice(-3)));
+});
+
+test('M-1: строка «из записи» без исполнителя, кандидат один — выбран сам и записан в строку', async () => {
+  const ov = await openBooked({ performers: [D(25, 'nurse', 0)] });
+  assert.equal(waitSelect(ov), null, 'единственный кандидат не выбран сам');
+  await pressUntilCreate(ov);
+  assert.deepEqual(lines31(), [{ doctor_id: 25, billed: 1 }], JSON.stringify(TOASTS.slice(-3)));
+});

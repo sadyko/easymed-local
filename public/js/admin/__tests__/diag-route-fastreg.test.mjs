@@ -131,3 +131,86 @@ test('единственный кандидат — сам: отмеченная
     assert.equal(s.line() && s.line().doctor_id, 25);
   } finally { s.close(); }
 });
+
+// DIAG_ROUTE_V1 (ревью M-1, проба RD-FR1) — СТРОКА «ИЗ ЗАПИСИ» БЕЗ ИСПОЛНИТЕЛЯ. Визит дня пациента
+// уже держит УЗИ без исполнителя (записано до 3.21, касса «Без врача», CRM, бот). Прежде строка
+// вставала «из записи» с закрытым выбором врача, сохранение проходило молча, и счёт уходил на
+// строку без исполнителя — её не видел ни один кабинет. Теперь выбор открыт, без исполнителя
+// сохранение отказывает, выбранный пишется в ту же строку визита (дверь «Сменить врача» карты)
+// до счёта; второй строки нет.
+const { localDay, at } = await import('../../../../server/test-helpers/crm-unify-app.js');
+async function openBooked(perf, { order = false } = {}) {
+  let vid = null;
+  const t = await startCrmApp((db) => {
+    seedWith(perf, { extraDoctor: false })(db);
+    vid = Number(db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (77, NULL, ?, ?)").run(at(localDay(0), 15), order ? 'arrived' : 'scheduled').lastInsertRowid);
+    if (!order) db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, unit_price, total, status) VALUES (?, 60, NULL, 100000, 100000, 'added')").run(vid);
+  });
+  // «Направления врача» до 3.21: врач направил на УЗИ, исполнителя строка не получила.
+  if (order) {
+    const r = await t.dbq('doc', { table: 'visit_services', op: 'insert', values: { visit_id: vid, service_id: 60, quantity: 1, unit_price: 100000, total: 100000, status: 'added' } });
+    assert.equal(r.status, 200, r.text);
+  }
+  const base = `http://127.0.0.1:${t.server.address().port}`;
+  const res = await realFetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'reg', password: 'password1' }) });
+  LIVE = { base, cookie: res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ') };
+  toasts.length = 0; document.body.children.length = 0;
+  setFullAccess('Admin');
+  const dlg = openFastRegistrationDialog({});
+  for (let i = 0; i < 60 && !(dlg.state.catalog && dlg.state.catalog.length && dlg.state.doctors); i++) await tick(50);
+  dlg.searchInput.value = 'Пациент'; dlg.searchInput.fireInput();
+  for (let i = 0; i < 60 && !walk(dlg.card).some((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')); i++) await tick(50);
+  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  for (let i = 0; i < 60 && !dlg.state.rows.length; i++) await tick(50);
+  await tick(100);
+  const row = () => dlg.state.rows.find((r) => Number(r.service.id) === 60);
+  const save = async () => {
+    btnByText(dlg.card, 'Сохранить').click();
+    for (let i = 0; i < 60 && !(dlg.state.result && dlg.state.result.invoice); i++) await tick(50);
+  };
+  const lines = () => t.db.prepare('SELECT doctor_id, invoice_item_id IS NOT NULL AS billed FROM visit_services WHERE service_id = 60').all();
+  return { t, dlg, row, save, lines, close: () => { try { dlg.close(); } catch (e) { /* закрыто */ } LIVE = null; t.close(); } };
+}
+
+test('M-1 (RD-FR1): строка «из записи» без исполнителя — выбор открыт, без него сохранение отказывает; выбранный — в той же строке до счёта', async () => {
+  const s = await openBooked([{ id: 21 }, { id: 22 }]);
+  try {
+    const r = s.row();
+    assert.ok(r && r.booked, 'строка записи не встала «из записи»');
+    assert.equal(r.doctorId, null, 'исполнитель выбран сам при двух кандидатах');
+    assert.ok(r.sel && !r.sel.disabled, 'выбор исполнителя у строки записи закрыт');
+    await s.save();
+    assert.equal(s.dlg.state.result, null, 'зарегистрировано без исполнителя');
+    assert.ok(toasts.some((x) => /Укажите врача для услуги «Svc-УЗИ»/.test(x)), 'отказ не сказан: ' + JSON.stringify(toasts.slice(-3)));
+    assert.deepEqual(s.lines(), [{ doctor_id: null, billed: 0 }], 'строка тронута до выбора');
+    r.sel.value = '22';
+    r.sel.dispatchEvent({ type: 'change', target: r.sel, currentTarget: r.sel });
+    await s.save();
+    assert.ok(s.dlg.state.result && s.dlg.state.result.invoice, 'не зарегистрировано: ' + JSON.stringify(toasts.slice(-3)));
+    assert.deepEqual(s.lines(), [{ doctor_id: 22, billed: 1 }], 'исполнитель не в строке записи (или вторая строка)');
+  } finally { s.close(); }
+});
+
+test('M-1: строка «из записи» без исполнителя, кандидат один — выбран сам и записан в строку', async () => {
+  const s = await openBooked([{ id: 25, role: 'nurse', is_doctor: 0 }]);
+  try {
+    assert.equal(s.row().doctorId, 25);
+    await s.save();
+    assert.deepEqual(s.lines(), [{ doctor_id: 25, billed: 1 }]);
+  } finally { s.close(); }
+});
+
+test('M-1: «Направления врача» до 3.21 — строка направления без исполнителя: тот же выбор, тот же отказ, исполнитель — в строке врача', async () => {
+  const s = await openBooked([{ id: 21 }, { id: 22 }], { order: true });
+  try {
+    const r = s.row();
+    assert.ok(r && r.booked && r.booked.doctorOrder, 'направление не встало строкой «от врача»: ' + JSON.stringify(toasts.slice(-3)));
+    assert.ok(r.sel && !r.sel.disabled, 'выбор исполнителя у строки направления закрыт');
+    await s.save();
+    assert.equal(s.dlg.state.result, null, 'зарегистрировано без исполнителя');
+    r.sel.value = '21';
+    r.sel.dispatchEvent({ type: 'change', target: r.sel, currentTarget: r.sel });
+    await s.save();
+    assert.deepEqual(s.lines(), [{ doctor_id: 21, billed: 1 }], JSON.stringify(toasts.slice(-3)));
+  } finally { s.close(); }
+});

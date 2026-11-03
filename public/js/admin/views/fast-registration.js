@@ -495,7 +495,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         sel.addEventListener('change', () => { row.doctorId = sel.value ? Number(sel.value) : null; });
         if (state.result) sel.disabled = true;
         // CRM_LINK_ALL_V1 (R7a) — врач строки «из записи» — врач записи: строка уже в визите.
-        if (row.booked) { sel.disabled = true; sel.title = tr('Врач записи — чтобы сменить, уберите строку и добавьте услугу заново'); }
+        // DIAG_ROUTE_V1 (ревью M-1) — строку записи БЕЗ исполнителя у услуги кабинета регистратура
+        // назначает здесь (booked.setDoctor): сохранение запишет его в строку визита до счёта.
+        if (row.booked && !row.booked.setDoctor) { sel.disabled = true; sel.title = tr('Врач записи — чтобы сменить, уберите строку и добавьте услугу заново'); }
         row.sel = sel;
         return h('td', null, sel);
     }
@@ -791,6 +793,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             // CRM_LINK_ALL_V1 (ревью денег S3) — пакет на строку записи не ложится (её не вставляют).
             if (twin && twin.package) { delete twin.package; unpacked.push(service.name || ''); }
             row.booked = { vsId: r.vsId, status: b.visit.status, unitPrice: r.unitPrice };
+            markBookedPerformer(row, r.doctorId);   // DIAG_ROUTE_V1 (ревью M-1)
         }
         if (unpacked.length) toast(trf('Уже из записи — по цене записи, без пакета: {names}', { names: unpacked.join(', ') }), 'info');
         const billed = b.rows.filter((r) => r.billed && !skip.has(Number(r.vsId))).map((r) => r.name).filter(Boolean);   // DOCTOR_REFERRAL_DESK_V1
@@ -852,8 +855,28 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         if (twin && twin.package) delete twin.package;   // строку не вставляют второй раз — пакета ей не дать
         row.booked = { vsId: Number(l.visit_service_id), status: l.visit_status, unitPrice: Number(l.unit_price) || 0,
             doctorOrder: true, referrerName: l.referrer_name || '', note: l.referral_note || '', bonus: l.bonus_to || [] };
+        markBookedPerformer(row, l.doctor_id);   // DIAG_ROUTE_V1 (ревью M-1) — направление, сделанное до 3.21
         state.bookedVisitId = Number(l.visit_id);
         return true;
+    }
+
+    /**
+     * DIAG_ROUTE_V1 (ревью M-1) — СТРОКА ЗАПИСИ (или направления врача) БЕЗ ИСПОЛНИТЕЛЯ у
+     * услуги кабинета: прежде она регистрировалась и выставлялась без исполнителя — её не
+     * видел ни один кабинет. Теперь выбор исполнителя у неё открыт (booked.setDoctor), один
+     * кандидат — сам, сохранение без исполнителя отказывает (checkDoctors), а выбранного
+     * регистрация записывает в строку визита до счёта (registerWalkIn → setLinePerformer).
+     * Услуга без колонки группы (не из каталога) маршрута не называет — её не трогаем.
+     */
+    function markBookedPerformer(row, bookedDoctorId) {
+        if (!row || !row.booked || Number(bookedDoctorId) > 0) return;
+        const svc = row.service;
+        if (!svc || (!svc.__consult && !Object.prototype.hasOwnProperty.call(svc, 'type')) || !needsPerformer(svc)) return;
+        row.booked.setDoctor = true;
+        if (row.doctorId == null) {
+            const one = soleCandidate(doctorPoolFor(state.doctors, svc));
+            if (one) { row.doctorId = Number(one.id); row.doctor = { id: one.id, full_name: one.full_name }; }
+        }
     }
 
     function paintDoctorOrders() {
@@ -972,8 +995,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     // (всё, кроме групп «Лаборатория» и «Процедуры»): без исполнителя строку не увидит ни один врач.
     function checkDoctors() {
         for (const row of state.rows) {
-            // строка «из записи» уже в визите и врача здесь не меняет — её проверяет только «нужен врач»
-            if (!row.doctorId && (row.service.requires_doctor || (!row.booked && needsPerformer(row.service)))) {
+            // DIAG_ROUTE_V1 (ревью M-1) — и строка «из записи» без исполнителя: её исполнителя
+            // назначают здесь (markBookedPerformer), с исполнителем — врач записи, проверка проходит.
+            if (!row.doctorId && (row.service.requires_doctor || ((!row.booked || row.booked.setDoctor) && needsPerformer(row.service)))) {
                 toast(trf('Укажите врача для услуги «{name}»', { name: row.service.name || '' }), 'fail');
                 try { if (row.sel && row.sel.focus) row.sel.focus(); } catch (e) { /* нет фокуса — не беда */ }
                 return false;
@@ -1082,6 +1106,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 // CRM_LINK_ALL_V1 (R7a) — строки «из записи» регистрируются как есть, убранные снимаются.
                 lines: state.rows.map((r) => ({ service: r.service, doctorId: r.doctorId, packageId: r.package ? r.package.id : null,
                     bookedVsId: r.booked ? r.booked.vsId : null, bookedUnitPrice: r.booked ? r.booked.unitPrice : null,
+                    bookedSetDoctor: !!(r.booked && r.booked.setDoctor),   // DIAG_ROUTE_V1 (ревью M-1) — исполнитель строки записи
                     recommendationId: r.fromRec || null })),   // DOCTOR_REFERRAL_DESK_V1 — строка по рекомендации врача
                 dropVsIds: state.dropBooked,
                 bookedVisitId: state.bookedVisitId,

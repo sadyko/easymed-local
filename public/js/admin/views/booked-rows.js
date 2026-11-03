@@ -103,3 +103,19 @@ export function isBookedTwin(line, b) {
 export function bookedStatusLabel(status) {
   return status === 'confirmed' ? 'Подтверждён' : 'Записан';
 }
+
+/**
+ * DIAG_ROUTE_V1 (ревью M-1) — ИСПОЛНИТЕЛЬ СТРОКИ, КОТОРАЯ УЖЕ В ВИЗИТЕ. Строка записи
+ * (календарь до 3.21, касса «Без врача», CRM, бот) лежит в визите без исполнителя — её не
+ * видит ни один кабинет (SERVICE_SCOPE_V3). Регистратура ставит исполнителя той же дверью,
+ * что «Сменить врача» карты пациента (patient_card_set_doctor): только строка не в счёте,
+ * не закрытый месяц начислений, живой исполнитель — правила сервера, не экрана.
+ * → null — записано; иначе текст отказа (сервера — его словами; переводит вызывающий).
+ */
+export async function setLinePerformer({ patientId, vsId, doctorId }) {
+  if (!isPosInt(vsId) || !isPosInt(doctorId)) return 'Исполнитель указан неверно.';
+  const { error } = await supabase.rpc('patient_card_set_doctor', {
+    patient_id: isPosInt(patientId) ? Number(patientId) : null, visit_service_id: Number(vsId), doctor_id: Number(doctorId),
+  });
+  return error ? String(error.message || error.msg || error) : null;
+}
