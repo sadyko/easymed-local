@@ -23,6 +23,14 @@
 // разметкой, очищенной общим санитайзером (shared/rich-text.js), простой текст —
 // экранированным: «SpO2 <95%» не тег и не «&amp;lt;».
 //
+// ОТОЗВАННЫЙ ДОКУМЕНТ (ревью H1, 2026-11-03). «Отозвать документ» в карте —
+// «он останется в карте, но перестанет открываться». Строка с ЛЮБОЙ копией в
+// архиве (живой или отозванной) — документ архива, её запись (notes) документом
+// не выводится: то же правило, что у карты (views/patient-card.js paintList —
+// archived = копии с этой строкой, отозванные тоже). И визит такой строки
+// «с документом»: его visits.conclusion пишет та же подпись (WS_CONCLUSION_V1),
+// и отозванный текст не возвращается «Заключением визита».
+//
 // РАСКЛАДКА — ПО services.type (CHECK миграций 022/023, пустым не бывает), не по
 // имени вида услуги: справочник «Типы услуг» у клиник пуст или назван по-своему.
 // Отдел услуги (departments.kind) — запасной путь, после типа.
@@ -31,6 +39,11 @@
 // «Документы» (протоколы, диагностика, файлы), «Лаборатория» (анализы), «История»
 // (стационар) и реестр таблиц. Закрытая группа приходит null и названа в
 // `closed`; закрыто всё — отказ, который называет вкладку.
+// Ревью M3 (решение по умолчанию, владельцу сообщается): роль клиники с кабинетом
+// врача, но без «Пациентов» (свой «Врач-УЗИ»), прежним окном читала строки через
+// /api/db. Ей окно открывается по ТЕКУЩЕЙ строке кабинета (exclude_visit_service_id):
+// строка назначена этому врачу — тот же отбор, что у «Мои услуги», откуда кабинет
+// её открывает, — и только для пациента ЭТОЙ строки (cabinetLineAccess).
 //
 // ЗДАНИЕ — КАК У КАРТЫ ПАЦИЕНТА (BRANCH_ORIGIN_V1): владелец просил результаты
 // «из других документов пациента», а результаты анализов ездят между зданиями
@@ -44,14 +57,21 @@
 // ТЕКУЩАЯ СТРОКА (exclude_visit_service_id) не возвращается: вставлять документ
 // в самого себя незачем.
 //
-// РАЗМЕР ОГРАНИЧЕН: строк пациента — LINE_LIMIT, документов в группе — limit
-// (40, не больше 100), раздел — SECTION_MAX знаков, весь ответ — BUDGET знаков
-// разметки; обрезанная группа помечена в `truncated`. Изображения снимков
-// диагностики (base64 в теле архива) не отдаются никогда.
+// РАЗМЕР ОГРАНИЧЕН (ревью M1, M2, L7). У каждого источника — свой предел, и
+// упёршийся в предел источник помечает СВОЮ группу в `truncated`: строки анализов
+// не вытесняют приёмы, протоколы — заключения диагностики. Тела (notes, копии
+// архива, записи стационара) читаются только у тех документов, которые уйдут в
+// ответ: сначала лёгкий список (без тел), новейшие первыми, потом тело — по
+// одному, пока группе нужно (limit — 40, не больше 100). Строки с копией в
+// архиве своей записи не разбирают вовсе. Раздел — SECTION_MAX знаков
+// (сокращённый помечен cut — окно об этом говорит); весь ответ — BUDGET знаков,
+// у каждой группы своя доля (fitGroups). Изображения снимков диагностики
+// (base64 в теле архива) не отдаются никогда.
 //
 // ТОЛЬКО ЧТЕНИЕ: ничего не пишет (READ_ONLY_RPCS в control/gate.js).
 import { RpcError } from './crm-config.js';
 import { patientCardAccess, fileOnThisMachine, DENIED_TEMPLATE, TAB_LABELS } from './patient-card.js';
+import { effectiveRoles, canViewSection, PATIENT_CARD_TABS, patientTabLevel } from '../roles.js';
 import { canRead } from '../../db/schema-registry.js';
 import { hasColumn } from '../domain/buildings.js';
 import { richForSheet, notesDocData, lastSignedEntry } from '../../../public/js/shared/cabinet-doc.js';
@@ -61,14 +81,18 @@ import { loadCaseDocTitles, reviewSections } from './inpatient-reviews.js';   //
 /** Группы ответа — те же вкладки, что у окна (views/paste-sources.js PASTE_TABS). */
 export const PASTE_GROUPS = Object.freeze(['consult', 'diag', 'labs', 'inpatient', 'files']);
 
-/** Сколько последних строк пациента (копий архива, визитов с заключением) просматривается. */
-const LINE_LIMIT = 300;
 const DOC_LIMIT_DEFAULT = 40;
 const DOC_LIMIT_MAX = 100;
-/** Самый длинный раздел, знаков разметки: длиннее — текстом, с «…». */
+/** Подписанных записей строк без копии в архиве, разбираемых на группу (их notes тяжёлые). */
+const NOTES_LIMIT = 300;
+/** Предохранитель лёгких списков (без тел): строк, копий, визитов одного пациента. */
+const SCAN_LIMIT = 5000;
+/** Самый длинный раздел, знаков разметки: длиннее — текстом, с «…» (cut). */
 export const SECTION_MAX = 20000;
-/** Весь ответ, знаков разметки: дальше документы не добавляются (truncated). */
+/** Весь ответ, знаков разметки: у каждой группы своя доля (fitGroups). */
 const BUDGET = 1500000;
+/** Сколько id в одном IN (…). */
+const IN_CHUNK = 500;
 
 const posInt = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
 // Своё здание: строка заведена здесь. Колонки нет (база до 083) — все строки свои.
@@ -78,13 +102,28 @@ function escHtml(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/** Простой текст → разметка: экранирование, строки — <br>. Длиннее предела — обрезка с «…». */
-export function textHtml(v) {
+const NO_PART = Object.freeze({ html: '', cut: false });
+
+// PASTE_SOURCES_V1 (ревью L1) — раздел и пометка «сокращён пределом»: окно
+// говорит врачу, что полный текст (и оформление) — в карте пациента.
+function textPart(v) {
   const t = String(v == null ? '' : v).replace(/\r\n?/g, '\n').trim();
-  if (textIsBlank(t)) return '';
-  const cut = t.length > SECTION_MAX ? t.slice(0, SECTION_MAX) + '…' : t;
-  return escHtml(cut).replace(/\n/g, '<br>');
+  if (textIsBlank(t)) return NO_PART;
+  const cut = t.length > SECTION_MAX;
+  return { html: escHtml(cut ? t.slice(0, SECTION_MAX) + '…' : t).replace(/\n/g, '<br>'), cut };
 }
+
+function sectionPart(v, rich = true) {
+  if (v == null || v === '') return NO_PART;
+  if (!rich) return textPart(v);
+  const r = richForSheet(String(v));
+  if (!r) return NO_PART;
+  if (hasMarkup(r)) return r.length <= SECTION_MAX ? { html: r, cut: false } : { html: textPart(htmlToText(r)).html, cut: true };
+  return textPart(r);
+}
+
+/** Простой текст → разметка: экранирование, строки — <br>. Длиннее предела — обрезка с «…». */
+export function textHtml(v) { return textPart(v).html; }
 
 /**
  * Раздел записи → разметка вставки.
@@ -93,40 +132,35 @@ export function textHtml(v) {
  * разметкой, набранное без оформления — текстом. Не rich (снимок до
  * DOC_RICH_FORMAT_V1) — значение всегда текст: набранное «<b>» тегом не станет.
  */
-export function sectionHtml(v, rich = true) {
-  if (v == null || v === '') return '';
-  if (!rich) return textHtml(v);
-  const r = richForSheet(String(v));
-  if (!r) return '';
-  if (hasMarkup(r)) return r.length <= SECTION_MAX ? r : textHtml(htmlToText(r));
-  return textHtml(r);
-}
+export function sectionHtml(v, rich = true) { return sectionPart(v, rich).html; }
 
 /** Рецепт — нумерованный список «название — доза, частота, длительность». */
 function rxHtml(list) {
   const rows = (Array.isArray(list) ? list : []).filter((r) => r && typeof r === 'object' && String(r.name || '').trim());
-  if (!rows.length) return '';
-  return '<ol>' + rows.map((r) => {
+  if (!rows.length) return NO_PART;
+  return { html: '<ol>' + rows.map((r) => {
     const tail = [r.dose, r.freq, r.dur, r.notes].map((x) => String(x == null ? '' : x).trim()).filter(Boolean).join(', ');
     return '<li><b>' + escHtml(String(r.name).trim()) + '</b>' + (tail ? ' — ' + escHtml(tail) : '') + '</li>';
-  }).join('') + '</ol>';
+  }).join('') + '</ol>', cut: false };
 }
 
-function pushSection(out, key, label, html) { if (html) out.push({ key, label, html }); }
+function pushSection(out, key, label, part) {
+  if (part && part.html) out.push(part.cut ? { key, label, html: part.html, cut: true } : { key, label, html: part.html });
+}
 
 /** Разделы протокола приёма — снимок формы buildBlankData / notesDocData, порядок листа. */
 export function protocolSections(b, rich) {
   const d = b || {};
   const out = [];
-  pushSection(out, 'complaint', 'Жалобы', sectionHtml(d.complaint, rich));
-  pushSection(out, 'hpi', 'Анамнез', sectionHtml(d.hpi, rich));
-  pushSection(out, 'exam', 'Осмотр', sectionHtml(d.exam, rich));
-  pushSection(out, 'labs', 'Лабораторные исследования', sectionHtml(d.labs, rich));
-  pushSection(out, 'instrumental', 'Инструментальные исследования', sectionHtml(d.instrumental, rich));
-  pushSection(out, 'dx', 'Диагноз', textHtml(d.dx || [d.dxAuto, d.dxText].filter(Boolean).join('\n')));
-  pushSection(out, 'therapy', 'Терапия', sectionHtml(d.therapy, rich));
-  pushSection(out, 'recs', 'Рекомендации', sectionHtml(d.recsText, rich));
-  pushSection(out, 'conclusion', 'Заключение', sectionHtml(d.conclusionText, rich));
+  pushSection(out, 'complaint', 'Жалобы', sectionPart(d.complaint, rich));
+  pushSection(out, 'hpi', 'Анамнез', sectionPart(d.hpi, rich));
+  pushSection(out, 'exam', 'Осмотр', sectionPart(d.exam, rich));
+  pushSection(out, 'labs', 'Лабораторные исследования', sectionPart(d.labs, rich));
+  pushSection(out, 'instrumental', 'Инструментальные исследования', sectionPart(d.instrumental, rich));
+  pushSection(out, 'dx', 'Диагноз', textPart(d.dx || [d.dxAuto, d.dxText].filter(Boolean).join('\n')));
+  pushSection(out, 'therapy', 'Терапия', sectionPart(d.therapy, rich));
+  pushSection(out, 'recs', 'Рекомендации', sectionPart(d.recsText, rich));
+  pushSection(out, 'conclusion', 'Заключение', sectionPart(d.conclusionText, rich));
   pushSection(out, 'rx', 'Рецепт', rxHtml(d.prescriptions));
   return out;
 }
@@ -135,8 +169,8 @@ export function protocolSections(b, rich) {
 export function diagSections(b, rich) {
   const d = b || {};
   const out = [];
-  pushSection(out, 'description', 'Описание', sectionHtml(d.description, rich));
-  pushSection(out, 'conclusion', 'Заключение', textHtml(d.conclusion || [d.conclusionAuto, d.conclusionBody].filter(Boolean).join('\n')));
+  pushSection(out, 'description', 'Описание', sectionPart(d.description, rich));
+  pushSection(out, 'conclusion', 'Заключение', textPart(d.conclusion || [d.conclusionAuto, d.conclusionBody].filter(Boolean).join('\n')));
   pushSection(out, 'rx', 'Рецепт', rxHtml(d.prescriptions));
   return out;
 }
@@ -190,16 +224,92 @@ function docSize(doc) {
 }
 
 /**
+ * PASTE_SOURCES_V1 (ревью M2) — ДОЛИ ОТВЕТА ПО ГРУППАМ. Раньше один бюджет
+ * тратился группами по порядку и обрывался на первом документе, который не
+ * влез: 39 длинных годовалых приёмов съедали его, и сегодняшнее УЗИ, анализы,
+ * стационар и файлы приходили пустыми. Теперь — справедливая доля: группа,
+ * которой нужно меньше равной доли, берёт своё; остаток поровну делят большие.
+ * Внутри группы — новейшие первыми; документ, который не влез, пропускается
+ * (следующий, поменьше, может влезть), а не обрывает группу.
+ * @param {Record<string, number[]>} sizes размеры документов группы, новые первыми
+ * @param {number} budget
+ * @returns {Record<string, boolean[]>} кто остаётся в ответе
+ */
+export function fitGroups(sizes, budget) {
+  const keys = Object.keys(sizes);
+  const need = Object.fromEntries(keys.map((k) => [k, sizes[k].reduce((a, b) => a + b, 0)]));
+  const share = Object.fromEntries(keys.map((k) => [k, 0]));
+  let left = budget;
+  let pending = keys.filter((k) => need[k] > 0);
+  while (pending.length) {
+    const fair = left / pending.length;
+    const small = pending.filter((k) => need[k] <= fair);
+    if (!small.length) { for (const k of pending) share[k] = fair; break; }
+    for (const k of small) { share[k] = need[k]; left -= need[k]; }
+    pending = pending.filter((k) => !small.includes(k));
+  }
+  const out = {};
+  for (const k of keys) {
+    let room = share[k];
+    out[k] = sizes[k].map((n) => { if (n <= room) { room -= n; return true; } return false; });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// ПРАВА.
+// ---------------------------------------------------------------------------
+const CABINET_SECTION = 'consultation';
+
+/**
+ * PASTE_SOURCES_V1 (ревью M3) — окно вставки по ТЕКУЩЕЙ строке кабинета.
+ * Роль с кабинетом врача, но без раздела «Пациенты», видит документы пациента
+ * той строки, которую кабинет ей открывает: строка своего здания, не отменена,
+ * назначена этому человеку (у администратора — любая с исполнителем) — тот же
+ * отбор, что у «Мои услуги» (views/consultation.js loadServices, SERVICE_SCOPE_V3).
+ * Пациент запроса — пациент строки; иначе null. Шире строки не открывает ничего:
+ * уровни вкладок и реестр таблиц — те же, что у карты.
+ */
+function cabinetLineAccess(db, user, pid, vsId) {
+  if (!pid || !vsId || !user) return null;
+  if (!canViewSection(db, user, CABINET_SECTION)) return null;
+  const roles = effectiveRoles(user);
+  if (!canRead('patients', roles)) return null;
+  const vsOrigin = hasColumn(db, 'visit_services', 'sync_origin') ? 'vs.sync_origin' : 'NULL';
+  const line = db.prepare(`SELECT vs.doctor_id, vs.status, vs.clinic_item_id, ${vsOrigin} AS vs_origin, v.patient_id
+      FROM visit_services vs JOIN visits v ON v.id = vs.visit_id WHERE vs.id = ?`).get(vsId);
+  if (!line || Number(line.patient_id) !== pid || line.status === 'cancelled' || line.clinic_item_id != null || line.vs_origin != null) return null;
+  const me = posInt(user.id);
+  const assigned = line.doctor_id != null && Number(line.doctor_id) === me;
+  if (!assigned && !(roles.includes('admin') && line.doctor_id != null)) return null;
+  const tabs = {};
+  for (const t of PATIENT_CARD_TABS) tabs[t] = patientTabLevel(db, user, t);
+  return { roles, tabs };
+}
+
+/** Права карты; нет раздела «Пациенты» — текущая строка кабинета (ревью M3); иначе — прежний отказ. */
+function docSourcesAccess(db, user, pid, currentLine) {
+  try {
+    return patientCardAccess(db, user);
+  } catch (e) {
+    if (!(e instanceof RpcError) || e.status !== 403) throw e;
+    const via = cabinetLineAccess(db, user, pid, currentLine);
+    if (!via) throw e;
+    return via;
+  }
+}
+
+/**
  * Документы пациента для «Вставить результаты».
- * args: { patient_id, exclude_visit_service_id?, limit? }
+ * args: { patient_id, exclude_visit_service_id? (текущая строка кабинета), limit? }
  * → { patient_id, groups: { consult, diag, labs, inpatient, files } (закрытая — null), closed, truncated }
  */
 export function patientDocSources(db, args, user) {
-  const { roles, tabs } = patientCardAccess(db, user);
   const pid = posInt(args && args.patient_id);
+  const exclude = posInt(args && args.exclude_visit_service_id);
+  const { roles, tabs } = docSourcesAccess(db, user, pid, exclude);
   if (!pid) throw new RpcError('Не указан пациент.', 400);
   if (!db.prepare('SELECT 1 FROM patients WHERE id = ?').get(pid)) throw new RpcError('Пациент не найден.', 404);
-  const exclude = posInt(args && args.exclude_visit_service_id);
   const limit = Math.min(posInt(args && args.limit) || DOC_LIMIT_DEFAULT, DOC_LIMIT_MAX);
 
   const lineRead = canRead('visits', roles) && canRead('visit_services', roles);
@@ -219,149 +329,224 @@ export function patientDocSources(db, args, user) {
     throw e;
   }
 
-  const found = { consult: [], diag: [], labs: [], inpatient: [], files: [] };
+  // c.cut[g] — источник группы упёрся в свой предел: документов у пациента больше.
+  const c = {
+    db, pid, exclude, limit,
+    found: { consult: [], diag: [], labs: [], inpatient: [], files: [] },
+    cut: { consult: false, diag: false, labs: false, inpatient: false, files: false },
+    cutLines: new Set(),   // строки, чей текстовый документ не взят пределом: их «Измерения» отдельным документом не всплывают
+  };
   // Протоколы и заключения — только своего здания (записи кабинета между зданиями не ездят).
-  if (open.consult) collectTextDocs(db, pid, loadLines(db, pid, { ownOnly: true }), exclude, canRead('visit_documents', roles), found);
+  if (open.consult) collectTextDocs(c, canRead('visit_documents', roles));
   // Анализы и «Измерения» исследований — всех зданий, с буквой филиала (как в карте пациента).
-  if (open.labs) collectLabs(db, loadLines(db, pid, { ownOnly: false }), exclude, found);
-  if (open.inpatient) collectInpatient(db, pid, found);
-  if (open.files) collectFiles(db, pid, found);
+  if (open.labs) collectLabs(c);
+  if (open.inpatient) collectInpatient(c);
+  if (open.files) collectFiles(c);
 
   const groups = {};
   const truncated = {};
-  let budget = BUDGET;
+  const picked = {};
+  for (const g of PASTE_GROUPS) {
+    if (!open[g]) continue;
+    const all = c.found[g].sort(byAtDesc);
+    picked[g] = all.slice(0, limit);
+    truncated[g] = c.cut[g] || all.length > limit;
+  }
+  const keep = fitGroups(Object.fromEntries(Object.entries(picked).map(([g, list]) => [g, list.map(docSize)])), BUDGET);
   for (const g of PASTE_GROUPS) {
     if (!open[g]) { groups[g] = null; truncated[g] = false; continue; }
-    const all = found[g].sort(byAtDesc);
-    const kept = [];
-    for (const doc of all) {
-      if (kept.length >= limit) break;
-      const size = docSize(doc);
-      if (size > budget) break;
-      budget -= size;
-      kept.push(doc);
-    }
-    groups[g] = kept;
-    truncated[g] = kept.length < all.length;
+    groups[g] = picked[g].filter((_, i) => keep[g][i]);
+    if (groups[g].length < picked[g].length) truncated[g] = true;
   }
   return { patient_id: pid, groups, closed, truncated };
 }
 
-/**
- * Строки визитов пациента (услуги, не товары), новые первыми.
- * ownOnly — только своего здания (протоколы); иначе — все здания, с буквой
- * филиала строки (vs_origin) для результатов анализов. notes читаются только
- * для своих строк: у приехавших их нет, а тело записи тяжёлое.
- */
-function loadLines(db, pid, { ownOnly = true } = {}) {
-  const vsOrigin = hasColumn(db, 'visit_services', 'sync_origin') ? 'vs.sync_origin' : 'NULL';
-  const where = ownOnly ? ownWhere(db, 'visits', 'v') + ownWhere(db, 'visit_services', 'vs') : '';
-  return db.prepare(`
-    SELECT vs.id, vs.visit_id, vs.status, ${ownOnly ? 'vs.notes' : 'NULL AS notes'}, vs.verified_at, vs.created_at,
-           ${vsOrigin} AS vs_origin,
-           v.visit_date,
-           COALESCE(s.name, '') AS name, COALESCE(s.type, '') AS type, COALESCE(s.is_lab, 0) AS is_lab,
-           COALESCE(dp.kind, '') AS dept_kind,
-           du.full_name AS doctor_name
-      FROM visit_services vs
-      JOIN visits v ON v.id = vs.visit_id
-      LEFT JOIN services s ON s.id = vs.service_id
-      LEFT JOIN departments dp ON dp.id = s.department_id
-      LEFT JOIN users du ON du.id = vs.doctor_id
-     WHERE v.patient_id = ? AND vs.clinic_item_id IS NULL${where}
-     ORDER BY v.visit_date DESC, vs.id DESC
-     LIMIT ?`).all(pid, LINE_LIMIT);
+// Колонки услуги строки — для lineKind (вкладка) и названия документа.
+const SERVICE_COLS = `COALESCE(s.name, '') AS name, COALESCE(s.type, '') AS type, COALESCE(s.is_lab, 0) AS is_lab,
+           COALESCE(dp.kind, '') AS dept_kind`;
+
+/** Предел лёгкого списка: лишняя строка выборки (LIMIT n + 1) говорит «есть ещё». */
+function capRows(rows, n) {
+  if (rows.length <= n) return { rows, more: false };
+  return { rows: rows.slice(0, n), more: true };
 }
 
-/** Протоколы и заключения: копии архива, подписанные записи строк, заключения визитов. */
-function collectTextDocs(db, pid, lines, exclude, archiveRead, found) {
-  const docVisits = new Set();       // визиты, у строк которых есть документ (и у текущей)
-  const archivedLines = new Set();   // строки с копией в архиве — их запись не задваивается
+// Ревью L7 — ТЯЖЁЛЫЙ ТЕКСТ (notes строки, тело копии архива) читается байтами и
+// переводится в строку здесь: длинный текст с кириллицей better-sqlite3 отдаёт
+// строкой JS в 2–3 раза дольше, чем Buffer.toString (замер: 27 МБ записей —
+// 220 мс против 60). Байты — UTF-8 базы; у базы в другой кодировке — обычное чтение.
+const UTF8_DB = new WeakMap();
+function dbIsUtf8(db) {
+  if (!UTF8_DB.has(db)) {
+    let enc = '';
+    try { enc = String(db.pragma('encoding', { simple: true }) || ''); } catch { enc = ''; }
+    UTF8_DB.set(db, enc.toUpperCase() === 'UTF-8');
+  }
+  return UTF8_DB.get(db);
+}
+/** Читатель одного текстового поля по id: (id) → строка или null. */
+function textReader(db, table, col) {
+  const st = db.prepare(`SELECT ${dbIsUtf8(db) ? `CAST(${col} AS BLOB)` : col} AS v FROM ${table} WHERE id = ?`);
+  return (id) => {
+    const r = st.get(id);
+    const v = r ? r.v : null;
+    if (v == null) return null;
+    return Buffer.isBuffer(v) ? v.toString('utf8') : String(v);
+  };
+}
+// Есть ли подстрока в тексте — побайтно (instr над текстом считает символы и в 2 раза медленнее).
+const hasText = (expr, needle) => `instr(CAST(${expr} AS BLOB), CAST('${needle}' AS BLOB)) > 0`;
 
-  // 1. Архив: копия подписанного документа — то, что карта пациента печатает.
+/** Протоколы и заключения: копии архива, подписанные записи строк, заключения визитов. */
+function collectTextDocs(c, archiveRead) {
+  const { db, pid, exclude, limit, found } = c;
+  const docVisits = new Set();       // визиты, у строк которых есть документ (и у текущей)
+  const archivedLines = new Set();   // строки с копией в архиве — их запись не выводится
+
+  // 0. Ревью H1 — ВСЕ копии протоколов и заключений пациента, отозванные тоже:
+  //    строка с копией — документ архива (правило карты, views/patient-card.js
+  //    paintList), а её визит — «с документом». Список лёгкий, без тел; права на
+  //    чтение архива ему не нужны — наружу он не уходит, только прячет.
+  for (const r of db.prepare(`
+      SELECT d.visit_service_id, COALESCE(d.visit_id, vs.visit_id) AS visit_id
+        FROM visit_documents d
+        LEFT JOIN visit_services vs ON vs.id = d.visit_service_id
+       WHERE d.patient_id = ? AND d.doc_type IN ('protocol', 'diag')`).all(pid)) {
+    if (r.visit_service_id != null) archivedLines.add(r.visit_service_id);
+    if (r.visit_id != null) docVisits.add(r.visit_id);
+  }
+
+  // 1. Архив: ЖИВАЯ копия подписанного документа — то, что карта пациента печатает.
+  //    Сначала лёгкий список (новые первыми), тело — по одному, пока вкладке нужно (ревью M1, L7).
   if (archiveRead) {
-    const rows = db.prepare(`
-      SELECT d.id, d.visit_service_id, COALESCE(d.visit_id, vs.visit_id) AS visit_id, d.doc_type, d.title, d.body, d.created_at,
-             u.full_name AS created_by_name,
-             COALESCE(s.name, '') AS name, COALESCE(s.type, '') AS type, COALESCE(s.is_lab, 0) AS is_lab,
-             COALESCE(dp.kind, '') AS dept_kind
+    const { rows, more } = capRows(db.prepare(`
+      SELECT d.id, d.visit_service_id, COALESCE(d.visit_id, vs.visit_id) AS visit_id, d.doc_type, d.title, d.created_at,
+             u.full_name AS created_by_name, v.visit_date,
+             ${SERVICE_COLS}
         FROM visit_documents d
         LEFT JOIN users u ON u.id = d.created_by
         LEFT JOIN visit_services vs ON vs.id = d.visit_service_id
+        LEFT JOIN visits v ON v.id = COALESCE(d.visit_id, vs.visit_id)
         LEFT JOIN services s ON s.id = vs.service_id
         LEFT JOIN departments dp ON dp.id = s.department_id
        WHERE d.patient_id = ? AND d.voided_at IS NULL AND d.doc_type IN ('protocol', 'diag')
        ORDER BY d.created_at DESC, d.id DESC
-       LIMIT ?`).all(pid, LINE_LIMIT);
+       LIMIT ?`).all(pid, SCAN_LIMIT + 1), SCAN_LIMIT);
+    if (more) { c.cut.consult = true; c.cut.diag = true; }
+    const bodyOf = textReader(db, 'visit_documents', 'body');
+    const made = { consult: 0, diag: 0 };
     const seen = new Set();
     for (const r of rows) {
-      if (r.visit_service_id != null) archivedLines.add(r.visit_service_id);
-      if (r.visit_id != null) docVisits.add(r.visit_id);
       if (exclude && r.visit_service_id === exclude) continue;
       // До V3120_FIX у строки могло остаться несколько копий одного вида — берётся новейшая.
       const key = (r.visit_service_id == null ? 'd' + r.id : 'l' + r.visit_service_id) + ':' + r.doc_type;
       if (seen.has(key)) continue;
       seen.add(key);
-      const body = parseBody(r.body);
-      if (!body) continue;
       const isDiag = r.doc_type === 'diag';
+      const tab = isDiag || lineKind(r) === 'diag' ? 'diag' : 'consult';
+      if (made[tab] >= limit) {
+        c.cut[tab] = true;
+        if (r.visit_service_id != null) c.cutLines.add(r.visit_service_id);
+        continue;
+      }
+      const body = parseBody(bodyOf(r.id));
+      if (!body) continue;
       const sections = isDiag ? diagSections(body, !!body.rich) : protocolSections(body, !!body.rich);
       if (!sections.length) continue;
-      const tab = isDiag || lineKind(r) === 'diag' ? 'diag' : 'consult';
+      made[tab] += 1;
       found[tab].push({
         id: 'doc:' + r.id, kind: tab, source: 'archive',
         visit_service_id: r.visit_service_id == null ? null : r.visit_service_id,
         title: r.name || String(body.service || '') || String(r.title || ''),
         doctor: String(body.doctorName || '') || r.created_by_name || '',
-        at: r.created_at, sections,
+        at: r.created_at, origin: null,
+        // Ревью L5 — день заголовка вставки: день, напечатанный на копии (PRINT_VISIT_DATE_V1), иначе — по визиту.
+        visit_date: r.visit_date || null,
+        issue_date: typeof body.issueDate === 'string' && body.issueDate ? body.issueDate : null,
+        sections,
       });
     }
   }
 
   // 2. Подписанная запись строки без копии в архиве (WS_DERIVED_DOCS_V1 карты).
-  for (const l of lines) {
-    const got = lastSignedEntry(l.notes);
-    if (!got) continue;
+  //    Ревью L7 — строки с копией в архиве и строки без подписи (instr) notes не
+  //    читают вовсе; ревью M1 — у приёмов и исследований свой предел записей
+  //    (раскладка — lineKind и сохранённый тип бланка, его видно и без разбора).
+  const { rows: signedRows, more: signedMore } = capRows(db.prepare(`
+    SELECT vs.id, vs.visit_id, vs.created_at, v.visit_date,
+           ${SERVICE_COLS},
+           du.full_name AS doctor_name,
+           ${hasText('vs.notes', '"docType":"diag"')} AS diag_hint
+      FROM visit_services vs
+      JOIN visits v ON v.id = vs.visit_id
+      LEFT JOIN services s ON s.id = vs.service_id
+      LEFT JOIN departments dp ON dp.id = s.department_id
+      LEFT JOIN users du ON du.id = vs.doctor_id
+     WHERE v.patient_id = ? AND vs.clinic_item_id IS NULL AND ${hasText('vs.notes', '"signed"')}
+           ${ownWhere(db, 'visits', 'v')}${ownWhere(db, 'visit_services', 'vs')}
+     ORDER BY v.visit_date DESC, vs.id DESC
+     LIMIT ?`).all(pid, SCAN_LIMIT + 1), SCAN_LIMIT);
+  if (signedMore) { c.cut.consult = true; c.cut.diag = true; }
+  const notesOf = textReader(db, 'visit_services', 'notes');
+  const parsed = { consult: 0, diag: 0 };
+  for (const l of signedRows) {
     docVisits.add(l.visit_id);
     if (archivedLines.has(l.id) || (exclude && l.id === exclude)) continue;
+    const kind = lineKind(l);
+    const part = kind === 'diag' || l.diag_hint ? 'diag' : 'consult';
+    if (parsed[part] >= NOTES_LIMIT) { c.cut[part] = true; c.cutLines.add(l.id); continue; }
+    parsed[part] += 1;
+    const got = lastSignedEntry(notesOf(l.id));
+    if (!got) continue;
     const { entry, payload } = got;
     const fields = entry.fields && typeof entry.fields === 'object' ? entry.fields : {};
     const data = notesDocData(fields, {
       diagnoses: Array.isArray(payload.diagnoses) ? payload.diagnoses : [],
       prescriptions: Array.isArray(payload.prescriptions) ? payload.prescriptions : [],
     });
-    const kind = lineKind(l);
     const isDiag = signedIsDiag(payload, fields, kind);
     const sections = isDiag
       ? diagSections({ description: data.instrumental, conclusion: data.dx, prescriptions: data.prescriptions }, true)
       : protocolSections(data, true);
     if (!sections.length) continue;
     const tab = isDiag || kind === 'diag' ? 'diag' : 'consult';
+    // Ревью L5 — день документа: день визита, но не позже ПЕРВОЙ подписи (docDayText окна).
+    const firstSigned = payload.history.find((e) => e && typeof e === 'object' && e.kind === 'signed' && e.savedAt);
     found[tab].push({
       id: 'line:' + l.id, kind: tab, source: 'notes', visit_service_id: l.id,
       title: l.name, doctor: l.doctor_name || String(entry.byName || ''),
-      at: entry.savedAt || l.created_at, sections,
+      at: entry.savedAt || l.created_at, origin: null,
+      visit_date: l.visit_date || null, first_signed_at: firstSigned ? String(firstSigned.savedAt) : null,
+      sections,
     });
   }
 
   // 3. Заключение визита — только у визита без документов строк: кабинет пишет
   //    туда текст своего же «Заключения» (WS_CONCLUSION_V1), второй раз его не показываем.
-  const visits = db.prepare(`
-    SELECT v.id, v.visit_date, v.conclusion, v.conclusion_type, du.full_name AS doctor_name
+  //    Текст читается только у тех, кто уйдёт в ответ.
+  const { rows: visits, more: visitsMore } = capRows(db.prepare(`
+    SELECT v.id, v.visit_date, v.conclusion_type, du.full_name AS doctor_name
       FROM visits v
       LEFT JOIN users du ON du.id = v.doctor_id
      WHERE v.patient_id = ? AND TRIM(COALESCE(v.conclusion, '')) <> ''${ownWhere(db, 'visits', 'v')}
      ORDER BY v.visit_date DESC, v.id DESC
-     LIMIT ?`).all(pid, LINE_LIMIT);
+     LIMIT ?`).all(pid, SCAN_LIMIT + 1), SCAN_LIMIT);
+  if (visitsMore) { c.cut.consult = true; c.cut.diag = true; }
+  const conclusionOf = textReader(db, 'visits', 'conclusion');
+  const madeVisit = { consult: 0, diag: 0 };
   for (const v of visits) {
     if (docVisits.has(v.id)) continue;
-    const html = textHtml(v.conclusion);
-    if (!html) continue;
     const tab = v.conclusion_type === 'diagnostic' ? 'diag' : 'consult';
+    if (madeVisit[tab] >= limit) { c.cut[tab] = true; continue; }
+    const part = textPart(conclusionOf(v.id));
+    if (!part.html) continue;
+    madeVisit[tab] += 1;
+    const sections = [];
+    pushSection(sections, 'conclusion', 'Заключение', part);
     found[tab].push({
       id: 'visit:' + v.id, kind: tab, source: 'visit', visit_service_id: null,
       title: 'Заключение визита', doctor: v.doctor_name || '',
-      at: v.visit_date, sections: [{ key: 'conclusion', label: 'Заключение', html }],
+      at: v.visit_date, origin: null, sections,
     });
   }
 }
@@ -386,11 +571,15 @@ function latestResults(db, ids) {
   const by = new Map();
   if (!ids.length) return by;
   const lrOrigin = hasColumn(db, 'lab_results', 'sync_origin') ? 'sync_origin' : 'NULL';
-  const rows = db.prepare(`
-    SELECT id, visit_service_id, parameter, value, unit, reference_range, flag, ${lrOrigin} AS origin
-      FROM lab_results
-     WHERE visit_service_id IN (${ids.map(() => '?').join(',')})
-     ORDER BY id`).all(...ids);
+  const rows = [];
+  for (let i = 0; i < ids.length; i += IN_CHUNK) {
+    const part = ids.slice(i, i + IN_CHUNK);
+    rows.push(...db.prepare(`
+      SELECT id, visit_service_id, parameter, value, unit, reference_range, flag, ${lrOrigin} AS origin
+        FROM lab_results
+       WHERE visit_service_id IN (${part.map(() => '?').join(',')})`).all(...part));
+  }
+  rows.sort((x, y) => x.id - y.id);
   const latest = new Map();
   for (const r of rows) latest.set(JSON.stringify([r.visit_service_id, String(r.parameter || '')]), r);
   for (const r of [...latest.values()].sort((x, y) => x.id - y.id)) {
@@ -431,47 +620,97 @@ function panelOrigin(line, rows) {
  * ('resulted' без verified_at) — в списке, с пометкой unverified: врач видит
  * результат и знает, что лаборатория его ещё не подтвердила. Показатели,
  * внесённые к исследованию (ЭхоКГ, УЗИ с размерами), — раздел «Измерения» его
- * заключения во вкладке «Диагностика».
+ * заключения во вкладке «Диагностика» — с буквой филиала результата (ревью L2)
+ * и той же пометкой «не проверено» (ревью L3).
  * Здание — как у карты пациента: анализ соседнего здания в списке, с буквой
  * филиала у панели (origin); у документа визита буква — когда она у всех его
  * панелей одна, иначе пометка только у панелей.
+ * Ревью M1 — строки с показателями — своим лёгким списком (без notes); анализы —
+ * последние limit визитов, показатели читаются только у них и у исследований.
  */
-function collectLabs(db, lines, exclude, found) {
-  const pick = lines.filter((l) => l.status !== 'cancelled' && !(exclude && l.id === exclude) && lineKind(l) !== 'consult');
-  const results = latestResults(db, pick.map((l) => l.id));
-  const byVisit = new Map();
-  for (const l of pick) {
-    const rows = results.get(l.id);
-    if (!rows || !rows.length) continue;
-    const origin = panelOrigin(l, rows);
-    const clean = rows.map(({ origin: _o, ...r }) => r);
-    if (lineKind(l) === 'labs') {
-      let doc = byVisit.get(l.visit_id);
-      if (!doc) {
-        doc = {
-          id: 'labs:' + l.visit_id, kind: 'labs', source: 'lab', visit_id: l.visit_id, visit_service_id: null,
-          title: 'Результаты анализов', doctor: '', at: l.visit_date, unverified: false, origin: null, panels: [],
-        };
-        byVisit.set(l.visit_id, doc);
-        found.labs.push(doc);
+function collectLabs(c) {
+  const { db, pid, exclude, limit, found } = c;
+  const vsOrigin = hasColumn(db, 'visit_services', 'sync_origin') ? 'vs.sync_origin' : 'NULL';
+  const { rows, more } = capRows(db.prepare(`
+    SELECT vs.id, vs.visit_id, vs.status, vs.verified_at, ${vsOrigin} AS vs_origin, v.visit_date,
+           ${SERVICE_COLS},
+           du.full_name AS doctor_name
+      FROM visit_services vs
+      JOIN visits v ON v.id = vs.visit_id
+      LEFT JOIN services s ON s.id = vs.service_id
+      LEFT JOIN departments dp ON dp.id = s.department_id
+      LEFT JOIN users du ON du.id = vs.doctor_id
+     WHERE v.patient_id = ? AND vs.clinic_item_id IS NULL AND COALESCE(vs.status, '') <> 'cancelled'
+       AND EXISTS (SELECT 1 FROM lab_results lr WHERE lr.visit_service_id = vs.id)
+     ORDER BY v.visit_date DESC, vs.id DESC
+     LIMIT ?`).all(pid, SCAN_LIMIT + 1), SCAN_LIMIT);
+  if (more) { c.cut.labs = true; c.cut.diag = true; }
+  const labVisits = [];
+  const labLines = [];
+  const measureLines = [];
+  for (const l of rows) {
+    if (exclude && l.id === exclude) continue;
+    const kind = lineKind(l);
+    if (kind === 'labs') {
+      if (!labVisits.includes(l.visit_id)) {
+        if (labVisits.length >= limit) { c.cut.labs = true; continue; }
+        labVisits.push(l.visit_id);
       }
-      const unverified = l.status !== 'completed' && !l.verified_at;
-      doc.panels.push({ visit_service_id: l.id, title: l.name, unverified, origin, rows: clean });
-      if (unverified) doc.unverified = true;
-      continue;
+      labLines.push(l);
+    } else if (kind === 'diag') {
+      if (c.cutLines.has(l.id)) { c.cut.diag = true; continue; }   // описание исследования не взято пределом — измерения с ним
+      measureLines.push(l);
     }
-    const section = { key: 'measurements', label: 'Измерения', html: resultsTableHtml(clean) };
-    const doc = found.diag.find((d) => d.visit_service_id === l.id);
-    if (doc) doc.sections.push(section);
-    else found.diag.push({
-      id: 'line:' + l.id, kind: 'diag', source: 'lab', visit_service_id: l.id,
-      title: l.name, doctor: l.doctor_name || '', at: l.verified_at || l.visit_date, origin, sections: [section],
-    });
+  }
+  const results = latestResults(db, [...labLines, ...measureLines].map((l) => l.id));
+  const unverifiedOf = (l) => l.status !== 'completed' && !l.verified_at;
+
+  const byVisit = new Map();
+  for (const l of labLines) {
+    const rowsOf = results.get(l.id);
+    if (!rowsOf || !rowsOf.length) continue;
+    const origin = panelOrigin(l, rowsOf);
+    let doc = byVisit.get(l.visit_id);
+    if (!doc) {
+      doc = {
+        id: 'labs:' + l.visit_id, kind: 'labs', source: 'lab', visit_id: l.visit_id, visit_service_id: null,
+        title: 'Результаты анализов', doctor: '', at: l.visit_date, unverified: false, origin: null, panels: [],
+      };
+      byVisit.set(l.visit_id, doc);
+      found.labs.push(doc);
+    }
+    const unverified = unverifiedOf(l);
+    doc.panels.push({ visit_service_id: l.id, title: l.name, unverified, origin, rows: rowsOf.map(({ origin: _o, ...r }) => r) });
+    if (unverified) doc.unverified = true;
   }
   for (const doc of byVisit.values()) {
     doc.panels.sort((a, b) => a.visit_service_id - b.visit_service_id);
     const letters = new Set(doc.panels.map((p) => p.origin));
     doc.origin = letters.size === 1 ? doc.panels[0].origin : null;
+  }
+
+  // Документ строки — первый (новейший) из её документов: у УЗИ бывают копия «Приёма» и копия «Диагностики».
+  const diagByLine = new Map();
+  for (const d of found.diag) if (d.visit_service_id != null && !diagByLine.has(d.visit_service_id)) diagByLine.set(d.visit_service_id, d);
+  for (const l of measureLines) {
+    const rowsOf = results.get(l.id);
+    if (!rowsOf || !rowsOf.length) continue;
+    const origin = panelOrigin(l, rowsOf);
+    const unverified = unverifiedOf(l);
+    const section = {
+      key: 'measurements', label: 'Измерения', html: resultsTableHtml(rowsOf.map(({ origin: _o, ...r }) => r)),
+      origin, unverified,
+    };
+    const doc = diagByLine.get(l.id);
+    if (doc) {
+      doc.sections.push(section);
+      if (unverified) doc.unverified = true;
+    } else {
+      found.diag.push({
+        id: 'line:' + l.id, kind: 'diag', source: 'lab', visit_service_id: l.id,
+        title: l.name, doctor: l.doctor_name || '', at: l.verified_at || l.visit_date, origin, unverified, sections: [section],
+      });
+    }
   }
 }
 
@@ -489,32 +728,39 @@ const REVIEW_BODY_LABEL = Object.freeze({ operation: 'Протокол опер�
  * (case_doc_types.title), у встроенного — пусто, его называет окно словарём
  * истории болезни (views/case-docs.js CASE_DOC_TITLE) на языке экрана.
  * Диагноз записи хранится простым текстом, остальные разделы — разметкой.
+ * Ревью M1/L7 — сначала лёгкий список, текст записи — только у тех, кто уйдёт в ответ.
  */
-function collectInpatient(db, pid, found) {
+function collectInpatient(c) {
+  const { db, pid, limit, found } = c;
   const titles = loadCaseDocTitles(db);
-  const rows = db.prepare(`
-    SELECT r.id, r.kind, r.type_kind, r.complaints, r.objective, r.diagnosis, r.plan, r.body, r.sections_json,
-           r.published_at, r.entry_date, u.full_name AS author_name, a.admission_no
+  const { rows, more } = capRows(db.prepare(`
+    SELECT r.id, r.kind, r.type_kind, r.published_at, r.entry_date, u.full_name AS author_name, a.admission_no
       FROM admission_reviews r
       JOIN admissions a ON a.id = r.admission_id
       LEFT JOIN users u ON u.id = r.author_id
      WHERE a.patient_id = ? AND r.published_at IS NOT NULL AND r.superseded_by IS NULL
      ORDER BY COALESCE(r.entry_date, r.published_at) DESC, r.id DESC
-     LIMIT ?`).all(pid, LINE_LIMIT);
+     LIMIT ?`).all(pid, SCAN_LIMIT + 1), SCAN_LIMIT);
+  if (more) c.cut.inpatient = true;
+  const textOf = db.prepare('SELECT complaints, objective, diagnosis, plan, body, sections_json FROM admission_reviews WHERE id = ?');
+  let made = 0;
   for (const r of rows) {
+    if (made >= limit) { c.cut.inpatient = true; break; }
+    const text = textOf.get(r.id) || {};
     const kind = r.type_kind || r.kind;
-    const secs = reviewSections(r);
+    const secs = reviewSections(text);
     const own = secs.titles && typeof secs.titles === 'object' ? secs.titles : {};
     const out = [];
     for (const key of REVIEW_KEYS) {
       const label = String(own[key] || (key === 'body' && REVIEW_BODY_LABEL[kind]) || REVIEW_LABEL[key]);
-      pushSection(out, key, label, key === 'diagnosis' ? textHtml(r.diagnosis) : sectionHtml(r[key], true));
+      pushSection(out, key, label, key === 'diagnosis' ? textPart(text.diagnosis) : sectionPart(text[key], true));
     }
     (Array.isArray(secs.extra) ? secs.extra : []).forEach((x, i) => {
       if (!x || typeof x !== 'object') return;
-      pushSection(out, 'extra' + i, String(x.title || '').trim() || 'Раздел', sectionHtml(x.html, true));
+      pushSection(out, 'extra' + i, String(x.title || '').trim() || 'Раздел', sectionPart(x.html, true));
     });
     if (!out.length) continue;
+    made += 1;
     found.inpatient.push({
       id: 'review:' + r.id, kind: 'inpatient', source: 'review', visit_service_id: null,
       doc_kind: kind, title: String(titles.get(kind) || ''), doctor: r.author_name || '',
@@ -523,22 +769,22 @@ function collectInpatient(db, pid, found) {
   }
 }
 
-/** Файлов в ответе — не больше (их содержимое не читается никогда). */
-const FILE_LIMIT = 100;
-
 /**
  * Загруженные файлы пациента: только название, путь и «лежит ли на этом
  * компьютере» (тем же правилом, что карта пациента, — fileOnThisMachine).
  * Отозванный документ не показывается. Вставлять нечего — окно его открывает.
+ * Ревью M1 — лишний файл сверх limit помечает группу truncated.
  */
-function collectFiles(db, pid, found) {
-  const rows = db.prepare(`
+function collectFiles(c) {
+  const { db, pid, limit, found } = c;
+  const { rows, more } = capRows(db.prepare(`
     SELECT d.id, d.title, d.file_name, d.file_path, d.created_at, u.full_name AS created_by_name
       FROM visit_documents d
       LEFT JOIN users u ON u.id = d.created_by
      WHERE d.patient_id = ? AND d.voided_at IS NULL AND COALESCE(d.file_path, '') <> ''
      ORDER BY d.created_at DESC, d.id DESC
-     LIMIT ?`).all(pid, FILE_LIMIT);
+     LIMIT ?`).all(pid, limit + 1), limit);
+  if (more) c.cut.files = true;
   for (const r of rows) {
     found.files.push({
       id: 'file:' + r.id, kind: 'files', source: 'file', document_id: r.id, visit_service_id: null,

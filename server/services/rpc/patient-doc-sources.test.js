@@ -17,6 +17,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { patientDocSources, SECTION_MAX, lineKind } from './patient-doc-sources.js';
+import { patientCardDeleteDocument } from './patient-card.js';   // PASTE_SOURCES_V1 (ревью H1) — «Отозвать документ» карты
 import { getRpc } from './index.js';
 import { isReadOnlyRpc } from '../control/gate.js';
 import fs from 'node:fs';
@@ -340,4 +341,225 @@ test('результат анализа другого здания виден �
   assert.equal(echo.origin, 'B');
   assert.deepEqual(echo.sections.map((x) => x.key), ['measurements'], 'к измерениям приехал протокол соседнего здания');
   assert.equal(out.groups.consult.every((d) => !d.origin), true, 'у своего протокола пометка филиала');
+});
+
+// ---------------------------------------------------------------------------
+// PASTE_SOURCES_V1 — РЕВЬЮ U3 (2026-11-03): то, что ревьюер доказал пробами.
+// ---------------------------------------------------------------------------
+const arch = (db, vs, visit, type, body, at = '2026-10-01T08:00:00Z') => db.prepare(`INSERT INTO visit_documents
+    (visit_service_id, visit_id, patient_id, doc_type, title, body, created_by, created_at) VALUES (?, ?, 1, ?, 'Копия', ?, 3, ?)`)
+  .run(vs, visit, type, JSON.stringify(body), at).lastInsertRowid;
+const visitRow = (db, id, date, pid = 1) => db.prepare('INSERT INTO visits (id, patient_id, doctor_id, visit_date) VALUES (?, ?, 3, ?)').run(id, pid, date);
+const dayIso = (base, i) => new Date(Date.parse(base) + i * 3600000).toISOString();
+
+// H1 — «Отозвать документ» в карте: «Он останется в карте, но перестанет
+// открываться». Окно вставки брало подписанную запись строки (notes), раз живой
+// копии больше нет, и отозванный текст возвращался обычным документом; а
+// visits.conclusion, записанное той же подписью (WS_CONCLUSION_V1), — «Заключением визита».
+test('ревью H1: отозванные в карте протокол и диагностика не возвращаются ни записью строки, ни заключением визита; новая подпись после отзыва — видна', () => {
+  const db = seed();
+  line(db, 61, 50, 901, { notes: signedNotes({ chief_complaint: 'ОТОЗВАН-ПРИЁМ', conclusion_text: 'ОТОЗВАН-ЗАКЛ' }) });
+  db.prepare("UPDATE visits SET conclusion = 'ОТОЗВАН-ЗАКЛ', conclusion_type = 'consultation' WHERE id = 50").run();
+  const p = arch(db, 61, 50, 'protocol', { rich: 1, complaint: 'ОТОЗВАН-ПРИЁМ', conclusionText: 'ОТОЗВАН-ЗАКЛ' });
+  line(db, 62, 51, 902, { notes: signedNotes({ instrumental_text: 'ОТОЗВАН-УЗИ' }, { docType: 'diag' }) });
+  db.prepare("UPDATE visits SET conclusion = 'ОТОЗВАН-УЗИ-ЗАКЛ', conclusion_type = 'diagnostic' WHERE id = 51").run();
+  const d = arch(db, 62, 51, 'diag', { rich: 1, description: 'ОТОЗВАН-УЗИ' });
+  const before = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  assert.deepEqual(before.groups.consult.map((x) => x.source), ['archive']);
+  assert.deepEqual(before.groups.diag.map((x) => x.source), ['archive']);
+  patientCardDeleteDocument(db, { document_id: p, reason: 'не тот пациент' }, DOCTOR);
+  patientCardDeleteDocument(db, { document_id: d, reason: 'не тот пациент' }, DOCTOR);
+  const after = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  assert.ok(!JSON.stringify(after).includes('ОТОЗВАН'), 'отозванный документ вернулся: ' + JSON.stringify(after.groups));
+  assert.deepEqual(after.groups.consult, []);
+  assert.deepEqual(after.groups.diag, []);
+  // Карта при этом тоже ничего не выводит из notes: правило одно (patient-card.js paintList).
+  arch(db, 61, 50, 'protocol', { rich: 1, complaint: 'НОВАЯ-ПОДПИСЬ' }, '2026-10-02T08:00:00Z');
+  const again = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  assert.deepEqual(again.groups.consult.map((x) => [x.source, x.sections[0].html]), [['archive', 'НОВАЯ-ПОДПИСЬ']]);
+});
+
+// M1 — один LIMIT на все строки пациента: каждый анализ — своя строка, и 10
+// чек-апов по 30 анализов вытесняли давний приём и давний анализ; окно писало
+// «Документов этого вида у пациента пока нет».
+test('ревью M1: строки анализов не вытесняют приёмы и диагностику — у каждого источника свой предел; давние приём, УЗИ и анализ видны', () => {
+  const db = seed();
+  line(db, 61, 50, 901, { notes: signedNotes({ chief_complaint: 'ДАВНИЙ-ПРИЁМ' }) });
+  line(db, 62, 50, 902, { notes: signedNotes({ instrumental_text: 'ДАВНЕЕ-УЗИ' }, { docType: 'diag' }) });
+  line(db, 63, 50, 903, { status: 'completed', verified: '2026-10-01T09:00:00Z' });
+  result(db, 63, 'HGB', '130');
+  let id = 1000;
+  for (let i = 0; i < 12; i++) {
+    visitRow(db, 200 + i, dayIso('2026-10-21T05:00:00Z', i * 24));
+    for (let k = 0; k < 30; k++) { line(db, ++id, 200 + i, 903, { status: 'completed', verified: '2026-10-21T09:00:00Z' }); result(db, id, 'P' + k, '1'); }
+  }
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  assert.ok(JSON.stringify(out.groups.consult).includes('ДАВНИЙ-ПРИЁМ'), 'давний приём вытеснен анализами');
+  assert.ok(JSON.stringify(out.groups.diag).includes('ДАВНЕЕ-УЗИ'), 'давнее УЗИ вытеснено анализами');
+  assert.equal(out.groups.labs.length, 13);
+  assert.ok(out.groups.labs.some((d) => d.visit_id === 50), 'давний анализ вытеснен');
+  assert.deepEqual(out.truncated, { consult: false, diag: false, labs: false, inpatient: false, files: false });
+});
+
+test('ревью M1: у копий архива протоколов и диагностики — свои пределы; новейшие выигрывают; обрезанное помечено truncated', () => {
+  const db = seed();
+  let id = 2000;
+  // 45 заключений диагностики (2025) и 320 протоколов (2026) — все копии архива
+  for (let i = 0; i < 45; i++) {
+    const v = 300 + i;
+    visitRow(db, v, dayIso('2025-01-01T05:00:00Z', i * 24));
+    line(db, ++id, v, 902);
+    arch(db, id, v, 'diag', { rich: 1, description: 'УЗИ ' + i }, dayIso('2025-01-01T08:00:00Z', i * 24));
+  }
+  for (let i = 0; i < 320; i++) {
+    const v = 400 + i;
+    visitRow(db, v, dayIso('2026-01-01T05:00:00Z', i * 12));
+    line(db, ++id, v, 901);
+    arch(db, id, v, 'protocol', { rich: 1, complaint: 'Приём ' + i }, dayIso('2026-01-01T08:00:00Z', i * 12));
+  }
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  const htmls = (g) => out.groups[g].map((d) => d.sections[0].html);
+  assert.equal(out.groups.diag.length, 40, 'копии диагностики вытеснены протоколами');
+  assert.ok(htmls('diag').includes('УЗИ 44') && !htmls('diag').includes('УЗИ 4'), 'показаны не новейшие заключения');
+  assert.equal(out.truncated.diag, true, 'обрезанная диагностика не помечена');
+  assert.equal(out.groups.consult.length, 40);
+  assert.ok(htmls('consult').includes('Приём 319') && !htmls('consult').includes('Приём 279'), 'показаны не новейшие протоколы');
+  assert.equal(out.truncated.consult, true);
+});
+
+test('ревью M1: подписанные записи без копии — приёмы не вытесняют исследования; предел записей помечает свою группу', () => {
+  const db = seed();
+  line(db, 61, 50, 902, { notes: signedNotes({ instrumental_text: 'СТАРОЕ-УЗИ' }, { docType: 'diag' }) });
+  line(db, 62, 50, 904, { notes: signedNotes({ instrumental_text: 'СТАРАЯ-ЭХО' }, { docType: 'diag' }) });
+  let id = 3000;
+  for (let i = 0; i < 310; i++) {
+    visitRow(db, 800 + i, dayIso('2026-10-21T05:00:00Z', i));
+    line(db, ++id, 800 + i, 901, { notes: signedNotes({ chief_complaint: 'Приём ' + i }) });
+  }
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  assert.deepEqual(out.groups.diag.map((d) => d.sections[0].html).sort(), ['СТАРАЯ-ЭХО', 'СТАРОЕ-УЗИ'], 'исследования вытеснены приёмами');
+  assert.equal(out.truncated.diag, false);
+  assert.equal(out.groups.consult.length, 40);
+  assert.equal(out.truncated.consult, true);
+});
+
+// M2 — один бюджет ответа тратился группами по порядку с break: 39 длинных
+// годовалых консультаций съедали его, и сегодняшнее УЗИ не попадало в ответ.
+test('ревью M2: у каждой группы своя доля ответа — длинные давние приёмы не вытесняют сегодняшнее УЗИ, анализ и файл', () => {
+  const db = seed();
+  const big = '<p>' + 'x'.repeat(19000) + '</p>';
+  for (let i = 0; i < 40; i++) {
+    visitRow(db, 500 + i, dayIso('2025-06-01T05:00:00Z', i * 24));
+    line(db, 600 + i, 500 + i, 901, { notes: signedNotes({ chief_complaint: big, hpi: big }) });
+  }
+  visitRow(db, 590, '2026-11-02T05:00:00Z');
+  line(db, 691, 590, 903, { status: 'resulted' });
+  result(db, 691, 'HGB', '96');
+  line(db, 692, 590, 902, { notes: signedNotes({ instrumental_text: 'СЕГОДНЯ-УЗИ ' + 'y'.repeat(15000) }, { docType: 'diag' }) });
+  db.prepare("INSERT INTO visit_documents (patient_id, title, file_name, file_path, doc_type, created_by) VALUES (1, 'Скан', 'a.pdf', 'patients/1/docs/a.pdf', 'upload', 3)").run();
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  assert.equal(out.groups.diag.length, 1, 'сегодняшнее УЗИ вытеснено давними приёмами');
+  assert.ok(out.groups.diag[0].sections[0].html.startsWith('СЕГОДНЯ-УЗИ'));
+  assert.equal(out.groups.labs.length, 1);
+  assert.equal(out.groups.files.length, 1);
+  assert.equal(out.truncated.diag, false);
+  assert.equal(out.truncated.consult, true, 'обрезанные приёмы не помечены');
+  assert.ok(out.groups.consult.length >= 30, 'приёмам досталось слишком мало: ' + out.groups.consult.length);
+  assert.ok(JSON.stringify(out).length <= 1600000, 'ответ вышел за бюджет');
+});
+
+test('ревью M2: fitGroups — малые группы берут своё, большие делят остаток поровну; документ, который не влез, пропускается, а не обрывает группу', async () => {
+  const { fitGroups } = await import('./patient-doc-sources.js');
+  assert.equal(typeof fitGroups, 'function');
+  assert.deepEqual(fitGroups({ a: [5, 5], b: [100, 100, 100] }, 120), { a: [true, true], b: [true, false, false] });
+  assert.deepEqual(fitGroups({ a: [50, 5, 5] }, 20), { a: [false, true, true] }, 'после документа, который не влез, группа оборвалась');
+  assert.deepEqual(fitGroups({ a: [30, 30, 30], b: [30, 30, 30], c: [] }, 120), { a: [true, true, false], b: [true, true, false], c: [] });
+});
+
+// M3 (решение по умолчанию, владельцу сообщается): своя роль клиники с
+// кабинетом врача, но без раздела «Пациенты» (например, «Врач-УЗИ»). Прежнее
+// окно читало строки через /api/db и работало; новое отвечало 403. Теперь —
+// права карты ИЛИ строка, открытая в кабинете (она назначена этому врачу), и
+// тогда только пациент ЭТОЙ строки.
+test('ревью M3: роль только с кабинетом — по своей строке видит документы ЕЁ пациента; чужой пациент, чужая строка, без строки и колл-центр — 403', () => {
+  const db = seed();
+  db.prepare("INSERT INTO role_permissions (role, permissions) VALUES ('uzi_doc', ?)").run(JSON.stringify({ sections: ['consultation'] }));
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (12, 'cc', 'x', 'Оператор', 'callcenter', 0)").run();
+  db.prepare("INSERT INTO patients (id, full_name, mrn) VALUES (2, 'Пациент Второй', 'T-2')").run();
+  visitRow(db, 60, '2026-10-22T05:00:00Z', 2);
+  line(db, 61, 50, 902, { doctor: 3 });                                                    // текущая строка врача УЗИ
+  line(db, 64, 51, 901, { doctor: 4, notes: signedNotes({ chief_complaint: 'ПРИЁМ-ПАЦИЕНТА-1' }) });
+  line(db, 65, 60, 902, { doctor: 3, notes: signedNotes({ instrumental_text: 'УЗИ-ПАЦИЕНТА-2' }, { docType: 'diag' }) });
+  const uzi = { id: 3, role: 'doctor', custom_role_code: 'uzi_doc' };
+  const out = patientDocSources(db, { patient_id: 1, exclude_visit_service_id: 61 }, uzi);
+  assert.ok(JSON.stringify(out.groups.consult).includes('ПРИЁМ-ПАЦИЕНТА-1'), 'документы пациента своей строки не видны');
+  assert.ok(!JSON.stringify(out).includes('УЗИ-ПАЦИЕНТА-2'), 'документы другого пациента в ответе');
+  const denied = (args, user = uzi) => assert.throws(() => patientDocSources(db, args, user), (e) => e.status === 403, JSON.stringify(args));
+  denied({ patient_id: 2, exclude_visit_service_id: 61 });          // строка — пациента 1, просят пациента 2
+  denied({ patient_id: 1, exclude_visit_service_id: 64 });          // строка другого врача
+  denied({ patient_id: 1 });                                        // без строки
+  denied({ patient_id: 1, exclude_visit_service_id: 99999 });       // строки нет
+  denied({ patient_id: 1, exclude_visit_service_id: 61 }, { id: 12, role: 'callcenter' });
+  db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = 61").run();
+  denied({ patient_id: 1, exclude_visit_service_id: 61 });          // отменённая строка кабинетом не открывается
+  // права карты — как раньше: штатный врач видит пациента и без строки
+  assert.ok(Array.isArray(patientDocSources(db, { patient_id: 2 }, DOCTOR).groups.diag));
+});
+
+// L1 — раздел длиннее предела терял всё оформление (таблица — текстом через
+// табуляцию) или обрезался «…», и окно об этом молчало.
+test('ревью L1: раздел, сокращённый пределом, помечен cut — и потерявший оформление, и обрезанный; обычный — без пометки', () => {
+  const db = seed();
+  const rows = Array.from({ length: 500 }, (_, i) => `<tr><td><b>Показатель ${i}</b></td><td>${i}.0</td></tr>`).join('');
+  line(db, 61, 50, 904, { notes: signedNotes({ instrumental_text: '<table class="a4-tbl"><tbody>' + rows + '</tbody></table>', primary_diagnosis: 'Норма' }, { docType: 'diag' }) });
+  line(db, 62, 50, 901, { notes: signedNotes({ chief_complaint: 'Кашель', hpi: 'z'.repeat(SECTION_MAX + 10) }) });
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  const desc = out.groups.diag[0].sections.find((s) => s.key === 'description');
+  assert.equal(desc.cut, true, 'раздел без оформления не помечен');
+  assert.equal(out.groups.diag[0].sections.find((s) => s.key === 'conclusion').cut, undefined);
+  const c = out.groups.consult[0].sections;
+  assert.equal(c.find((s) => s.key === 'hpi').cut, true, 'обрезанный раздел не помечен');
+  assert.ok(c.find((s) => s.key === 'hpi').html.endsWith('…'));
+  assert.equal(c.find((s) => s.key === 'complaint').cut, undefined);
+});
+
+// L2, L3 — «Измерения» у своего исследования: результат другого здания
+// терял «Филиал X», а введённый, но не проверенный — пометку «не проверено».
+test('ревью L2/L3: «Измерения» своего исследования — с буквой филиала результата и с пометкой «не проверено»; проверенные — без неё', () => {
+  const db = seed();
+  line(db, 68, 50, 904, { status: 'resulted', notes: signedNotes({ instrumental_text: 'Эхо-текст' }, { docType: 'diag' }) });
+  result(db, 68, 'ФВ', '60', { unit: '%', origin: 'B' });
+  line(db, 69, 51, 904, { status: 'completed', verified: '2026-10-20T09:00:00Z', notes: signedNotes({ instrumental_text: 'Эхо-2' }, { docType: 'diag' }) });
+  result(db, 69, 'КДР', '5.0', { unit: 'см' });
+  line(db, 70, 51, 902, { status: 'resulted' });
+  result(db, 70, 'Печень', '14', { unit: 'см' });
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  const by = Object.fromEntries(out.groups.diag.map((d) => [d.visit_service_id, d]));
+  const m68 = by[68].sections.find((s) => s.key === 'measurements');
+  assert.equal(by[68].origin, null, 'описание своего здания подписано чужим филиалом');
+  assert.equal(m68.origin, 'B', 'у измерений другого здания нет буквы филиала');
+  assert.equal(m68.unverified, true, 'непроверенные измерения без пометки');
+  assert.equal(by[68].unverified, true);
+  const m69 = by[69].sections.find((s) => s.key === 'measurements');
+  assert.ok(!m69.unverified && !m69.origin && !by[69].unverified, 'у проверенных своих измерений лишние пометки');
+  assert.equal(by[70].unverified, true, 'непроверенные измерения без документа — без пометки');
+});
+
+// L5 — день в заголовке вставки — день документа (docDayText, PRINT_VISIT_DATE_V1),
+// а не время последней подписи: сервер отдаёт исходные значения, день считает окно.
+test('ревью L5: у записи строки — день визита и первая подпись; у копии архива — день, напечатанный на ней (issueDate)', () => {
+  const db = seed();
+  line(db, 61, 50, 901, { notes: JSON.stringify({ __service_workspace_v1: 1, history: [
+    { kind: 'signed', savedAt: '2026-10-01T07:00:00.000Z', fields: { chief_complaint: 'Первая' } },
+    { kind: 'signed', savedAt: '2026-10-08T07:00:00.000Z', fields: { chief_complaint: 'Переподпись' } }] }) });
+  line(db, 62, 51, 901);
+  arch(db, 62, 51, 'protocol', { rich: 1, complaint: 'Копия', issueDate: '20.10.2026' }, '2026-10-27T08:00:00Z');
+  const out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
+  const n = out.groups.consult.find((d) => d.visit_service_id === 61);
+  assert.equal(n.at, '2026-10-08T07:00:00.000Z');
+  assert.equal(n.visit_date, '2026-10-01T05:00:00Z');
+  assert.equal(n.first_signed_at, '2026-10-01T07:00:00.000Z');
+  const a = out.groups.consult.find((d) => d.visit_service_id === 62);
+  assert.equal(a.issue_date, '20.10.2026');
+  assert.equal(a.visit_date, '2026-10-20T05:00:00Z');
 });
