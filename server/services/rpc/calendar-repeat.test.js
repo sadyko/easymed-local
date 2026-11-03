@@ -173,6 +173,23 @@ test('REPEAT_VISIT_V1: свободный день — визит «повтор
   } finally { db.close(); }
 });
 
+// REPEAT_VISIT_V1 (ревью, minor-4) — СВЕРКА КАРТОЧКИ CRM ПОСЛЕ COMMIT НЕ ОТМЕНЯЕТ ЗАПИСЬ.
+// onVisitLinesAdded звался за транзакцией без try/catch: сбой карточки отдавал браузеру
+// 500, когда визит и строка уже сохранены, — окно писало «Не удалось записать», а
+// повтор упирался в revisit_day_taken. Теперь — как у кассы (billing.js): лог, ответ.
+test('REPEAT_VISIT_V1 (ревью, minor-4): сбой сверки карточки после записи — ответ с визитом и строкой, ошибка в логе', async () => {
+  const db = freshDb();
+  const logged = [];
+  const origError = console.error;
+  console.error = (...a) => { logged.push(a.map(String).join(' ')); };
+  try {
+    const out = await calendarBook(db, repeatArgs(), DOC, { onVisitLinesAdded: () => { throw new Error('карточка сломана'); } });
+    assert.deepEqual([out.created, out.visit.visit_kind, !!(out.line && out.line.id)], [true, 'repeat', true], 'запись с ответом не вернулась');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(out.visit.id).n, 1);
+    assert.ok(logged.some((l) => l.includes('карточка сломана') && l.includes(String(out.visit.id))), 'сбой не попал в лог: ' + JSON.stringify(logged));
+  } finally { console.error = origError; db.close(); }
+});
+
 test('REPEAT_VISIT_V1: у пациента в этот день уже есть визит — отказ словами, ничего не записано', async () => {
   const db = freshDb();
   try {

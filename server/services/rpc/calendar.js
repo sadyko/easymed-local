@@ -1042,7 +1042,9 @@ function revisitDayTaken(db, dayVisit) {
  * которую никто не прочтёт. Запись в своё здание не ждёт ничего.
  *
  * deps — шов для тестов: publishImpl подменяет выгрузку, dataDir — папку
- * установки. В бою оба берутся сами (index.js зовёт вызов тремя аргументами).
+ * установки, onVisitLinesAdded — сверку карточки CRM после новой строки
+ * (REPEAT_VISIT_V1, ревью). В бою всё берётся само (index.js зовёт вызов тремя
+ * аргументами).
  */
 export async function calendarBook(db, args, user, deps = {}) {
   requireRole(user, BOOK_ROLES);
@@ -1364,7 +1366,14 @@ export async function calendarBook(db, args, user, deps = {}) {
   if (!existing) {
     crmLinkVisit(db, out.visit.id, user);   // CRM_UNIFY_V1
     crmVisitStatus(db, { visitId: out.visit.id, from: null, to: status });   // CRM_LINK_ALL_V1 (F-6) — после связи
-    if (lineId) onVisitLinesAdded(db, out.visit.id, [lineId]);   // REPEAT_VISIT_V1 — та же сверка карточки, что у новой строки /api/db
+    // REPEAT_VISIT_V1 — та же сверка карточки, что у новой строки /api/db.
+    // REPEAT_VISIT_V1 (ревью, minor-4) — визит и строка уже сохранены: сбой
+    // карточки — в лог (как у кассы, billing.js), а не 500 браузеру — окно
+    // сказало бы «Не удалось записать», а повтор упёрся бы в revisit_day_taken.
+    if (lineId) {
+      try { (deps.onVisitLinesAdded || onVisitLinesAdded)(db, out.visit.id, [lineId]); }
+      catch (e) { console.error('[crm] строка новой записи', lineId, 'визита', out.visit.id, 'не отражена в карточке:', e && e.message); }
+    }
   } else if (BUSY_STATUSES.includes(status)
       && (existing.visit_date !== out.visit.visit_date || Number(existing.doctor_id || 0) !== Number(out.visit.doctor_id || 0))) {
     followVisitMove(db, out.visit.id, { oldDoctorId: existing.doctor_id });   // CRM_ONE_WAY_V1 (O6)
