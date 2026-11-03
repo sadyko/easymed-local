@@ -87,9 +87,14 @@ const REFERRER_ID_SQL = `COALESCE(lrs.doctor_id,
 const NOT_REFUNDED_SQL = `NOT (vs.invoice_item_id IS NULL
          AND EXISTS (SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = 'out' AND prr.line_id = vs.id))`;
 
+// DOCTOR_REFERRAL_DESK_V1 (полировка 3.21.0; страж domain/no-drift.test.js) — подпись счёта для
+// стойки: СОХРАНЁННЫЙ статус счёта (его ставит касса через invoiceStatusFor), а не новая
+// «лестница» по суммам: оплачен — «оплачено», любой другой живой — «в счёте».
+const BILL_STATE = Object.freeze({ paid: 'paid' });
 function billOf(r) {
   if (r.invoice_id == null) return { state: 'none', invoice_id: null, invoice_number: null };
-  return { state: r.invoice_status === 'paid' ? 'paid' : 'invoiced', invoice_id: r.invoice_id,
+  const own = Object.prototype.hasOwnProperty.call(BILL_STATE, String(r.invoice_status));
+  return { state: own ? BILL_STATE[r.invoice_status] : 'invoiced', invoice_id: r.invoice_id,
            invoice_number: r.invoice_number || String(r.invoice_id) };
 }
 const namesOf = (bens, baseName, lineName) => bens.map((b) => (b.via === 'visit' ? baseName : lineName)).filter(Boolean);
