@@ -81,6 +81,18 @@ function requireCard(db, user) {
   return roles;
 }
 
+/**
+ * PASTE_SOURCES_V1 — та же дверь для «Вставить результаты» кабинета врача
+ * (rpc/patient-doc-sources.js): раздел «Пациенты» и уровни вкладок карты.
+ * Окно вставки показывает ровно то, что этой роли показала бы карта.
+ */
+export function patientCardAccess(db, user) {
+  const roles = requireCard(db, user);
+  const tabs = {};
+  for (const t of PATIENT_CARD_TABS) tabs[t] = patientTabLevel(db, user, t);
+  return { roles, tabs };
+}
+
 function patientId(args) {
   const id = Number(args && args.patient_id);
   if (!Number.isInteger(id) || id <= 0) throw new RpcError('Не указан пациент.', 400);

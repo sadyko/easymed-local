@@ -132,6 +132,7 @@ import {
   patientCardSetServiceDoctor, requireServicesEdit, requireServicesDelete,
 } from './patient-card.js';   // PATIENT_TAB_ACCESS_V1
 import { visitDocumentArchive } from './patient-card.js';   // V3120_FIX (F2) — подпись протокола отзывает прежний, а не стирает
+import { patientDocSources } from './patient-doc-sources.js';   // PASTE_SOURCES_V1 — «Вставить результаты» кабинета: все документы пациента
 import { rxMyDrugs } from './rx.js';   // RX_TEMPLATES_V1 — «свои» препараты врача для подсказок рецепта
 
 export const RPC = {
@@ -149,6 +150,7 @@ export const RPC = {
   patient_card_doc_void:    (db, args, user) => patientCardDeleteDocument(db, args, user),
   patient_card_set_doctor:  (db, args, user) => patientCardSetServiceDoctor(db, args, user),
   visit_document_archive:   (db, args, user) => visitDocumentArchive(db, args, user),   // V3120_FIX (F2)
+  patient_doc_sources:      (db, args, user) => patientDocSources(db, args, user),   // PASTE_SOURCES_V1 — «Вставить результаты»: документы пациента по вкладкам
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
   callcenter_report:        (db, args, user) => callcenterReport(db, args, user),
   // CUSTDEV_V1 — обзвон пациентов после визита
