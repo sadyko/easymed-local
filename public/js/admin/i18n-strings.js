@@ -13434,4 +13434,7 @@ export const STRINGS = {
   "Записи вперёд": {"en":"Upcoming bookings","ru":"Записи вперёд","uz":"Oldindagi yozuvlar"},   // REPEAT_VISIT_V1 (ревью, minor-5) — подпись группы без числа: не загрузилось
   "Не удалось загрузить записи вперёд": {"en":"Could not load the upcoming bookings","ru":"Не удалось загрузить записи вперёд","uz":"Oldindagi yozuvlarni yuklab bo'lmadi"},   // REPEAT_VISIT_V1 (ревью, minor-5) — кабинет врача
   // /REPEAT_VISIT_V1
+  // REFERRAL_LINE_V1 — направивший строки визита (server/services/domain/line-referral.js); «Источник направления указан неверно.» уже есть выше
+  "Источник направления не найден или выключен — выберите другой.": {"en":"The referral source was not found or is switched off — choose another one.","ru":"Источник направления не найден или выключен — выберите другой.","uz":"Yo‘llanma manbasi topilmadi yoki o‘chirilgan — boshqasini tanlang."},   // REFERRAL_LINE_V1
+  // /REFERRAL_LINE_V1
 };
