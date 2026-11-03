@@ -160,6 +160,23 @@ test('значение анализатора замещает набранно�
   db.close();
 });
 
+// LAB_PANEL_DEDUP_V1 (ревью L2) — у черновика из времени задвоенных панелей по показателю
+// несколько строк; лист ввода и бланк показывают САМУЮ НОВУЮ (больший id). Прибор обновлял
+// самую старую (SELECT без порядка) — его значение на бланке не появлялось.
+test('несколько строк одного показателя в черновике — значение анализатора ложится в самую новую', () => {
+  const db = fresh();
+  const ins = db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, entered_by) VALUES (123,'Лейкоциты',?,'manual',7)");
+  const older = Number(ins.run('9.9').lastInsertRowid);
+  const newer = Number(ins.run('8.8').lastInsertRowid);
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1');
+  const byId = new Map(results(db).map((r) => [r.id, r]));
+  assert.equal(byId.get(newer).value, '6.1', 'новая строка — значение прибора');
+  assert.equal(byId.get(newer).source, 'analyzer');
+  assert.equal(byId.get(older).value, '9.9', 'старая строка не тронута');
+  assert.equal(results(db).filter((r) => r.parameter === 'Лейкоциты').length, 2, 'строк не прибавилось');
+  db.close();
+});
+
 // LIS_VENDOR_EXACT_V1 (N1) — раньше второе сообщение молча меняло черновик
 // (6.1 → 7.2; приёмка: WBC 5.40 → 14.20 чужой пробирки, ни строки в лотке).
 // Теперь значение прибора в черновике не меняется молча: сообщение — в лоток
