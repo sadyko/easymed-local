@@ -102,7 +102,9 @@ export async function calendarPickerBook(t, who, day, { hour = 12, svc = 30, doc
   const args = { patient_id: pid, doctor_id: doctor, service_id: svc, start, duration_minutes: 30, status: 'scheduled' };
   let r = await t.rpc('calendar_book', who, args);
   let addedToDay = false;
-  if (r.status !== 200 && /day_visit_busy/.test(r.text)) {
+  // REPEAT_VISIT_V1 (поправка 2) — браузер так же предлагает «добавить в визит дня» и на
+  // day_visit_other_doctor (пустая запись к другому врачу), service-picker-modal.js calendarBookOrAsk.
+  if (r.status !== 200 && /day_visit_busy|day_visit_other_doctor/.test(r.text)) {
     r = await t.rpc('calendar_book', who, { ...args, add_to_day_visit: true });
     addedToDay = true;
   }
