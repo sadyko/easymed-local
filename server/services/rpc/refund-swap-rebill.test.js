@@ -507,3 +507,17 @@ test('журнал услуг: после возврата с новой — н�
   assert.deepEqual(journal(), [['УЗИ', 'Врач Второй']], 'новая — оказана, прежняя возвращена');
   assertBalanced(db, a.invoiceId);
 });
+
+// REFERRAL_LINE_V1 — «Вернуть эту услугу и выставить новую»: позиция счёта уходит к НОВОЙ строке
+// визита — с ней и направивший строки, и рекомендация врача. Иначе вознаграждение
+// направившего за эту позицию пропало бы вместе со старой строкой.
+test('REFERRAL_LINE_V1: возврат с новой услугой переносит направившего и рекомендацию на новую строку', () => {
+  const { db, pid, CONS, USG } = clinic();
+  const a = started(db, pid, CONS, DOC);
+  const src = db.prepare('SELECT id FROM referral_sources WHERE doctor_id = ?').get(DOC2).id;
+  db.prepare("UPDATE visit_services SET referred_by_source_id = ?, referral_note = 'натощак' WHERE id = ?").run(src, a.vs);
+  const r = call('cashier_line_rebill_paid', db, { visit_service_id: a.vs, new_service_id: USG, doctor_id: DOC }, cashier);
+  const nl = vsRow(db, r.line.id);
+  assert.notEqual(nl.id, a.vs);
+  assert.deepEqual([nl.referred_by_source_id, nl.referral_note], [src, 'натощак']);
+});

@@ -2119,10 +2119,14 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
     markRefundRelease(db, { invoiceId: inv.id, kind: 'out', lineIds: [vsId], always: true });
     // Время строки (scheduled_at) — прежнее: у многодневного визита по нему
     // считаются день очереди (issueQueueNumbers) и слот календаря.
+    // REFERRAL_LINE_V1 — направивший и рекомендация врача идут с позицией счёта к новой строке
+    // (К3): вознаграждение платится по позиции счёта, а у прежней строки её больше нет.
     lineId = Number(db.prepare(`
-      INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, invoice_item_id, scheduled_at, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, 'added', ?, ?, ?, ?)`)
-      .run(vs.visit_id, newServiceId, targetDoctor, vs.quantity || 1, unit, lineTotal, tier, item.id, vs.scheduled_at || null, user.id).lastInsertRowid);
+      INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, invoice_item_id, scheduled_at, created_by,
+                                  referred_by_source_id, referral_note)
+      VALUES (?, ?, ?, ?, ?, ?, 'added', ?, ?, ?, ?, ?, ?)`)
+      .run(vs.visit_id, newServiceId, targetDoctor, vs.quantity || 1, unit, lineTotal, tier, item.id, vs.scheduled_at || null, user.id,
+        vs.referred_by_source_id ?? null, vs.referral_note ?? null).lastInsertRowid);
   } else {
     if (serviceChanges) {
       db.prepare('UPDATE visit_services SET service_id = ?, doctor_id = ?, unit_price = ?, total = ?, package_id = NULL, package_full = NULL, package_price = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')   // SERVICES_PACKAGES_V1
