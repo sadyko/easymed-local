@@ -96,7 +96,7 @@ async function bookRevisit(pid, doc = { id: PETROV, name: 'Петров Пётр
     // REPEAT_VISIT_V1 (ревью) — лист кабинета догружается своими запросами; тест не
     // кончается раньше: иначе чтение после test.after (fetch уже настоящий) падает,
     // и повтор загрузки (scheduleHydrateRetry) держит процесс живым.
-    await until(() => ctx.__hydrated && !ctx.__hydrating);
+    await until(() => !ctx.__hydrating);   // загрузка начата синхронно в activateWorkspace
     return { ctx, container, dlg };
 }
 const tenthNextMonth = (hh) => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth() + 1, 10, hh, 0, 0, 0); };
@@ -223,4 +223,53 @@ test('REPEAT_VISIT_V1 (ревью, M1): врач не оказывает ни о
     const v = DB.prepare('SELECT id FROM visits WHERE patient_id = 81').get();
     assert.ok(v, 'визит не записан');
     assert.equal(DB.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(v.id).n, 0);
+});
+
+// REPEAT_VISIT_V1 (ревью, minor-7) — ИСПОЛНИТЕЛЬ СТРОКИ — МЕДСЕСТРА. Врач окна
+// берётся из строки кабинета (resolveWsDoctorId), а строку записи сервер пишет только
+// врачу (calendar_book: «Врач строки не найден среди врачей клиники») — запись падала
+// целиком, хотя до 3.21 проходила. Теперь: вошёл врач — запись к нему со строкой;
+// вошёл не врач — запись к исполнителю без строки, и окно говорит это словами.
+// Строка с не-врачом не уходит никогда.
+const NURSE = 14;
+addUser.run(NURSE, 'nurse', hashPassword('password1'), 'Сестра Мария', 'nurse', 0, WEEK);
+addUser.run(15, 'doc5', hashPassword('password1'), 'Назаров Назар', 'doctor', 1, WEEK);
+
+test('REPEAT_VISIT_V1 (ревью, minor-7): исполнитель строки — медсестра, вошёл врач — запись к вошедшему врачу со строкой', { timeout: 30000 }, async () => {
+    TOASTS.length = 0; bookCalls.length = 0;
+    DB.prepare("INSERT INTO patients (id, full_name) VALUES (82,'Пациент Процедуры')").run();
+    window.easymed = { state: { user: { id: 15, role: 'doctor', is_doctor: true, extra_roles: [] } } };
+    try {
+        await bookRevisit(82, { id: NURSE, name: 'Сестра Мария' });
+        assert.equal(bookCalls.length, 1);
+        assert.deepEqual([bookCalls[0].doctor_id, bookCalls[0].line], [15, { consultation_type_id: 6 }], 'запись ушла не к вошедшему врачу');
+        const v = DB.prepare('SELECT id, doctor_id FROM visits WHERE patient_id = 82').get();
+        assert.ok(v, 'визит не записан: ' + JSON.stringify(TOASTS));
+        assert.equal(v.doctor_id, 15);
+        assert.deepEqual(DB.prepare('SELECT consultation_type_id, doctor_id FROM visit_services WHERE visit_id = ?').all(v.id)
+            .map((r) => [r.consultation_type_id, r.doctor_id]), [[6, 15]]);
+        assert.ok(TOASTS.some((t) => t.includes('Пациент записан на повторный визит')));
+    } finally { delete window.easymed; }
+});
+
+test('REPEAT_VISIT_V1 (ревью, minor-7): исполнитель строки — медсестра, вошёл не врач — запись к исполнителю без строки, окно это говорит', { timeout: 30000 }, async () => {
+    TOASTS.length = 0; bookCalls.length = 0;
+    DB.prepare("INSERT INTO patients (id, full_name) VALUES (83,'Пациент Сестры')").run();
+    window.easymed = { state: { user: { id: 1, role: 'admin', is_doctor: false, extra_roles: [] } } };
+    try {
+        let note = null, offered = null;
+        await bookRevisit(83, { id: NURSE, name: 'Сестра Мария' }, { beforeBook: (dlg) => {
+            note = (dlg.querySelector('.rv-noline') || {}).textContent || null;
+            offered = serviceOptions(dlg);
+        } });
+        assert.equal(note, 'Исполнитель — не врач: повторный визит запишется без услуги.', 'окно не сказало, что строки не будет');
+        assert.deepEqual(offered, ['', [['', '— без услуги —']]]);
+        assert.equal(bookCalls.length, 1);
+        assert.deepEqual([bookCalls[0].doctor_id, bookCalls[0].line], [NURSE, undefined], 'строка ушла с не-врачом');
+        const v = DB.prepare('SELECT id, doctor_id, visit_kind FROM visits WHERE patient_id = 83').get();
+        assert.ok(v, 'визит не записан: ' + JSON.stringify(TOASTS));
+        assert.deepEqual([v.doctor_id, v.visit_kind], [NURSE, 'repeat']);
+        assert.equal(DB.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(v.id).n, 0);
+        assert.ok(TOASTS.some((t) => t.includes('Пациент записан на повторный визит')));
+    } finally { delete window.easymed; }
 });

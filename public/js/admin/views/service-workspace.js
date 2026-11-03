@@ -1460,14 +1460,32 @@ async function openHospitalizationRequestModal(ctx) {
 async function openRevisitModal(ctx) {
     const patientId = ctx.patient?.id;
     if (!patientId) { toast('Нет контекста пациента.', 'fail'); return; }
-    const doctorId = await resolveWsDoctorId(ctx);   // NULL_DOCTOR_GUARD_A23
+    let doctorId = await resolveWsDoctorId(ctx);   // NULL_DOCTOR_GUARD_A23
     if (!doctorId) { toast('Не удалось определить врача для повторного визита', 'fail'); return; }
+    // REPEAT_VISIT_V1 (ревью, minor-7) — ИСПОЛНИТЕЛЬ СТРОКИ МОЖЕТ БЫТЬ НЕ ВРАЧОМ.
+    // resolveWsDoctorId берёт исполнителя строки кабинета — у процедуры это бывает
+    // медсестра, а строку записи calendar_book пишет только врачу («Врач строки не
+    // найден среди врачей клиники») и отказывал во всей записи (до 3.21 она
+    // проходила без строки). Выбора врача в окне нет, поэтому: вошёл врач — запись к
+    // нему; иначе — к исполнителю, БЕЗ строки, и окно говорит это словами. Строка с
+    // не-врачом не уходит никогда. Врач — то же правило, что у сервера: is_doctor
+    // или основная роль 'doctor'.
+    const rvIsDoctor = (u) => !!u && (isOn(u.is_doctor) || String(u.role || '') === 'doctor');
+    let staff = await rvStaffRow(doctorId);
+    let lineOff = false;
+    if (!rvIsDoctor(staff)) {
+        const me = currentUser();
+        if (me && me.id != null && rvIsDoctor(me)) {
+            if (String(me.id) !== String(doctorId)) staff = await rvStaffRow(me.id);
+            doctorId = me.id;
+        } else lineOff = true;
+    }
 
     const cid = currentClinicId();
     // CONSULT_PER_DOCTOR_V1 — consultations are per-doctor: load the clinic's active
     // types, then keep only the ones THIS doctor offers, priced/named per doctor.
     let consultTypes = [], docConsult = {};
-    if (cid) {
+    if (cid && !lineOff) {
         const [{ data: ctData }, { data: dcData }] = await Promise.all([
             supabase.from('consultation_types')
                 .select('id, name_ru, name_uz, sort_order, active, price, duration_minutes')   // DOCTOR_PROFILE_V1 — общая цена и длительность вида
@@ -1496,8 +1514,8 @@ async function openRevisitModal(ctx) {
     // выбрана; несколько или ни одной — выбрано «— без услуги —», и визит
     // записывается без строки, как до 3.21.
     let rvServices = [];
-    if (!consultTypes.length) {
-        const ids = rvPerformedIds(await rvStaffRow(doctorId));
+    if (!consultTypes.length && !lineOff) {
+        const ids = rvPerformedIds(staff);
         if (ids.length) {
             const { data: sData } = await supabase.from('services')
                 .select('id, name, duration_minutes').in('id', ids).eq('type', 'consultation').eq('active', true)
@@ -1523,6 +1541,11 @@ async function openRevisitModal(ctx) {
                 ? [h('option', { value: 's:' + rvServices[0].id, selected: true }, rvServices[0].name)]
                 : [h('option', { value: '', selected: true }, tr('— без услуги —')),
                     ...rvServices.map(s => h('option', { value: 's:' + s.id }, s.name))]));
+    // REPEAT_VISIT_V1 (ревью, minor-7) — почему строки не будет.
+    const noLineNote = lineOff
+        ? h('div', { class: 'muted rv-noline', style: { fontSize: '12.5px', marginTop: '4px' } },
+            tr('Исполнитель — не врач: повторный визит запишется без услуги.'))
+        : null;
     const commentInput = h('textarea', { rows: '2', placeholder: 'Например: с результатами анализов' });
     // DOCTOR_PROFILE_V1 (ревью шага 5, №1) — сколько длится визит выбранного вида.
     const rvMinutes = () => {
@@ -1656,7 +1679,8 @@ async function openRevisitModal(ctx) {
             // «Добавить в этот визит» здесь нет: день, в который у пациента уже
             // есть приём, сервер отказывает (revisit_day_taken), и окно остаётся
             // открытым с этим отказом.
-            const line = ct ? { consultation_type_id: ct.id } : (svc ? { service_id: svc.id } : null);
+            // REPEAT_VISIT_V1 (ревью, minor-7) — строка только с врачом.
+            const line = lineOff ? null : (ct ? { consultation_type_id: ct.id } : (svc ? { service_id: svc.id } : null));
             const booked = await bookVisit({
                 patient_id:       patientId,
                 doctor_id:        doctorId,
@@ -1729,7 +1753,7 @@ async function openRevisitModal(ctx) {
     const body = h('div', { class: 'modal-body', style: { padding: '16px 18px', display: 'block' } },
         h('div', { class: 'rv-form' },
             h('div', { class: 'field' }, h('label', null, 'Причина визита'), reasonSel),
-            h('div', { class: 'field' }, h('label', null, 'Услуга'), svcSel),
+            h('div', { class: 'field' }, h('label', null, 'Услуга'), svcSel, noLineNote),
             h('div', { class: 'field rv-f-wide' }, h('label', null, 'Комментарий'), commentInput),
         ),
         h('div', { class: 'rv-cols' },

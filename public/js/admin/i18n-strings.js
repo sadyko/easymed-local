@@ -13430,5 +13430,6 @@ export const STRINGS = {
   "Записи вперёд · {n}": {"en":"Upcoming bookings · {n}","ru":"Записи вперёд · {n}","uz":"Oldindagi yozuvlar · {n}"},   // REPEAT_VISIT_V1 — кабинет врача
   "Записей на ближайшие 30 дней нет": {"en":"No bookings in the next 30 days","ru":"Записей на ближайшие 30 дней нет","uz":"Keyingi 30 kunda yozuvlar yo'q"},   // REPEAT_VISIT_V1
   "Повторный": {"en":"Follow-up","ru":"Повторный","uz":"Takroriy"},   // REPEAT_VISIT_V1 — метка визита в «Записях вперёд»
+  "Исполнитель — не врач: повторный визит запишется без услуги.": {"en":"The performer is not a doctor: the follow-up visit will be booked without a service.","ru":"Исполнитель — не врач: повторный визит запишется без услуги.","uz":"Ijrochi shifokor emas: takroriy tashrif xizmatsiz yoziladi."},   // REPEAT_VISIT_V1 (ревью, minor-7) — окно «Повторный визит»
   // /REPEAT_VISIT_V1
 };
