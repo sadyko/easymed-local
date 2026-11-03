@@ -154,6 +154,14 @@ globalThis.fetch = async (url, opts) => {
       if (codesGate) await codesGate;
       return { ok: true, json: async () => ({ data: SENT_CODES }) };
     }
+    // LAB_PANEL_DEDUP_V1 — панель сохраняется ОДНИМ вызовом lab_panel_save
+    // (сервер пишет её одной транзакцией). Стенд записывает, что этот вызов
+    // кладёт в таблицы, — проверки «что ушло в базу» читаются как прежде.
+    if (name === 'lab_panel_save') {
+      writes.push({ table: 'lab_panels', op: body.panel.id ? 'update' : 'insert', values: body.panel, via: name });
+      writes.push({ table: 'lab_panel_analytes', op: 'insert', values: body.analytes, via: name });
+      return { ok: true, json: async () => ({ data: { id: body.panel.id || 'p-new', analytes: body.analytes.length } }) };
+    }
     return { ok: true, json: async () => ({ data: null }) };
   }
   return { ok: true, json: async () => ({ data: null }) };

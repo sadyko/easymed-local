@@ -161,6 +161,14 @@ globalThis.fetch = async (url, opts) => {
     if (name === 'lis_profiles' && PROFILES_FAIL) return { ok: false, status: 500, json: async () => ({ error: { message: 'boom' } }) };   // ревью R4
     if (name === 'lis_profiles') return { ok: true, json: async () => ({ data: PROFILES }) };
     if (name === 'lis_device_codes') return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(SENT_CODES)) }) };
+    // LAB_PANEL_DEDUP_V1 — панель сохраняется ОДНИМ вызовом lab_panel_save
+    // (сервер пишет её одной транзакцией). Стенд записывает, что этот вызов
+    // кладёт в таблицы, — проверки «что ушло в базу» читаются как прежде.
+    if (name === 'lab_panel_save') {
+      writes.push({ table: 'lab_panels', op: body.panel.id ? 'update' : 'insert', values: body.panel, via: name });
+      writes.push({ table: 'lab_panel_analytes', op: 'insert', values: body.analytes, via: name });
+      return { ok: true, json: async () => ({ data: { id: body.panel.id || 'p-new', analytes: body.analytes.length } }) };
+    }
     return { ok: true, json: async () => ({ data: null }) };
   }
   return { ok: true, json: async () => ({ data: null }) };

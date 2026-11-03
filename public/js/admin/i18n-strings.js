@@ -3,6 +3,11 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // LAB_PANEL_DEDUP_V1 — панель лаборатории одним вызовом (views/lab-panels.js, rpc/lab-panels.js)
+  "Панель ещё сохраняется — подождите.": {"en":"The panel is still being saved — please wait.","ru":"Панель ещё сохраняется — подождите.","uz":"Panel hali saqlanmoqda — kuting."},   // LAB_PANEL_DEDUP_V1
+  "Панель не найдена — обновите страницу.": {"en":"Panel not found — reload the page.","ru":"Панель не найдена — обновите страницу.","uz":"Panel topilmadi — sahifani yangilang."},   // LAB_PANEL_DEDUP_V1
+  "Анализатор указан неверно.": {"en":"Invalid analyzer.","ru":"Анализатор указан неверно.","uz":"Analizator noto‘g‘ri ko‘rsatilgan."},   // LAB_PANEL_DEDUP_V1
+  "Показатель «{name}» записан в панели дважды — оставьте одну строку и сохраните снова.": {"en":"The indicator “{name}” appears twice in the panel — keep one row and save again.","ru":"Показатель «{name}» записан в панели дважды — оставьте одну строку и сохраните снова.","uz":"«{name}» ko‘rsatkichi panelda ikki marta yozilgan — bitta qatorni qoldiring va qayta saqlang."},   // LAB_PANEL_DEDUP_V1
   // PASTE_SOURCES_V1 — «Вставить результаты» кабинета врача: окно документов пациента (views/paste-sources.js, rpc patient_doc_sources)
   "Файлы": {"en":"Files","ru":"Файлы","uz":"Fayllar"},   // PASTE_SOURCES_V1
   "отметьте разделы и нажмите «Вставить выбранное»": {"en":"tick the sections and press “Insert selected”","ru":"отметьте разделы и нажмите «Вставить выбранное»","uz":"bo‘limlarni belgilang va «Tanlanganini qo‘yish» tugmasini bosing"},   // PASTE_SOURCES_V1

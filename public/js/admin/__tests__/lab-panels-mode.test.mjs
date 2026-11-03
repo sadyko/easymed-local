@@ -196,6 +196,10 @@ globalThis.fetch = async (url, opts) => {
     if (name === 'lab_usage_stats') {
       return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(STATS)) }) };
     }
+    // LAB_PANEL_DEDUP_V1 — панель сохраняется одним вызовом (сервер пишет её одной транзакцией).
+    if (name === 'lab_panel_save') {
+      return { ok: true, json: async () => ({ data: { id: body.panel.id || 'p-new', analytes: body.analytes.length } }) };
+    }
     return { ok: true, json: async () => ({ data: null }) };
   }
   return { ok: true, json: async () => ({ data: null }) };
@@ -295,13 +299,16 @@ test('приёмочный случай владельца: голый лабо�
   await tick();
 
   assert.strictEqual(toastMsg, 'Панель сохранена', 'сохранение дошло до конца');
+  // LAB_PANEL_DEDUP_V1 — панель, вставка новых строк и удаление остальных —
+  // ОДИН вызов lab_panel_save (одна транзакция на сервере), а не три записи
+  // через /api/db, из-за которых сохранения подряд оставляли копии строк.
+  const saves = rpcCalls.filter((c) => c.name === 'lab_panel_save');
+  assert.strictEqual(saves.length, 1, 'одно сохранение: ' + JSON.stringify(rpcCalls.map((c) => c.name)));
+  assert.strictEqual(saves[0].args.panel.id, 'p-1', 'правка выбранной панели');
+  assert.deepStrictEqual(saves[0].args.analytes.map((a) => a.name), ['Гемоглобин'], 'показатели панели — в том же вызове');
   const writes = dbCalls.filter((c) => c.op !== 'select');
-  assert.ok(writes.some((c) => c.table === 'lab_panels' && c.op === 'update'),
-    'панель записана в lab_panels: ' + JSON.stringify(writes));
-  assert.ok(writes.some((c) => c.table === 'lab_panel_analytes' && c.op === 'insert'),
-    'показатели перезаписаны (insert новых): ' + JSON.stringify(writes));
-  assert.ok(writes.some((c) => c.table === 'lab_panel_analytes' && c.op === 'delete'),
-    'reconcile добрал удаление старых строк: ' + JSON.stringify(writes));
+  assert.deepStrictEqual(writes.filter((c) => c.table === 'lab_panels' || c.table === 'lab_panel_analytes'), [],
+    'мимо транзакции в таблицы панелей не пишется ничего: ' + JSON.stringify(writes));
 });
 
 test('роль без раздела Лаборатория: ни переключателя, ни редактора — даже по прямой ссылке', async () => {

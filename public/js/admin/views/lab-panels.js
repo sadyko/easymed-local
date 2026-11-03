@@ -50,7 +50,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v23';   // v23 — первый адрес строки без адреса сохранению не мешает (LIS_REAL_ANALYZERS_V1, ревью R7) · v22 — эпоха кодов прибора: подтверждение до смены адреса BS-200 — «подтвердите заново», окно, открытое до смены, не сохраняет (LIS_REAL_ANALYZERS_V1, ревью R6) · v21 — подтверждение без отметки прибора сохраняется «ни для какого», модель и по имени прибора (LIS_REAL_ANALYZERS_V1, ревью R5) · v20 — подтверждение помнит прибор: «подтверждено для другого прибора — подтвердите заново» (LIS_REAL_ANALYZERS_V1, ревью R4) · v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
+export const LAB_BUILD = 'lab-v24';   // v24 — панель сохраняется и удаляется одним вызовом сервера, кнопки гаснут на всё время записи (LAB_PANEL_DEDUP_V1) · v23 — первый адрес строки без адреса сохранению не мешает (LIS_REAL_ANALYZERS_V1, ревью R7) · v22 — эпоха кодов прибора: подтверждение до смены адреса BS-200 — «подтвердите заново», окно, открытое до смены, не сохраняет (LIS_REAL_ANALYZERS_V1, ревью R6) · v21 — подтверждение без отметки прибора сохраняется «ни для какого», модель и по имени прибора (LIS_REAL_ANALYZERS_V1, ревью R5) · v20 — подтверждение помнит прибор: «подтверждено для другого прибора — подтвердите заново» (LIS_REAL_ANALYZERS_V1, ревью R4) · v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
 
 // LIS_REAL_ANALYZERS_V1 — у модели нет типового списка (BS-200, A1000), а прибор ещё ничего не присылал.
 const NO_DEVICE_CODES_HINT = 'Коды появятся, когда анализатор пришлёт первую пробу; номер теста — как в настройках тестов прибора. Пока код можно вписать руками.';
@@ -79,6 +79,36 @@ function deviceFieldKeys(sent) {
         if (ra !== rb) up.set(ra, rb);
     }
     return (code) => root(K(code));
+}
+
+// LAB_PANEL_DEDUP_V1 — одна запись панели за раз на всей странице.
+//
+// Флаг — на модуль, а не на редактор: экран «Панели», открытый заново, пока
+// сохранение ещё идёт (ушли в другой раздел и вернулись), — новый редактор, и
+// свой флаг у него был бы пустым. Кнопки «Сохранить панель» и «Удалить»
+// каждой перерисовки запоминаются и гаснут/загораются вместе с флагом.
+// Повторный вызов во время записи не пишет ничего (и говорит об этом) — даже
+// если до обработчика дошёл клик, который браузер обычно глотает у неактивной
+// кнопки. Сервер (lab_panel_save) и сам оставляет одну копию при любом числе
+// сохранений; это — чтобы их не было.
+let panelWriteBusy = false;
+const panelWriteButtons = new Set();
+function syncPanelWriteButtons() {
+    for (const b of panelWriteButtons) {
+        if (b.isConnected === false) { panelWriteButtons.delete(b); continue; }   // перерисованная кнопка
+        b.disabled = panelWriteBusy;
+    }
+}
+function panelWriteButton(btn) {
+    btn.disabled = panelWriteBusy;
+    panelWriteButtons.add(btn);
+    return btn;
+}
+async function panelWrite(fn) {
+    if (panelWriteBusy) { toast('Панель ещё сохраняется — подождите.', 'warn'); return; }
+    panelWriteBusy = true;
+    syncPanelWriteButtons();
+    try { await fn(); } finally { panelWriteBusy = false; syncPanelWriteButtons(); }
 }
 
 // Mounts the editor into `container` and resolves once the first load has
@@ -538,7 +568,7 @@ export async function mountLabPanels(container) {
 
         editorEl.appendChild(h('div', { class: 'card-header' },
             h('h3', null, Icon('Flask', { size: 16 }), ' ', p.id ? 'Редактирование панели' : 'Новая панель'),
-            p.id ? h('button', { class: 'btn btn-ghost btn-sm', style: { marginLeft: 'auto', color: 'var(--crit-700)' }, onclick: () => removePanel(p) }, Icon('Trash', { size: 13 }), ' Удалить') : null));
+            p.id ? panelWriteButton(h('button', { class: 'btn btn-ghost btn-sm', style: { marginLeft: 'auto', color: 'var(--crit-700)' }, onclick: () => removePanel(p) }, Icon('Trash', { size: 13 }), ' Удалить')) : null));
 
         // LAB_PANELS_V2 (2026-09-15) — owner: «make a little redesign so its more
         // understandable». The editor is three groups a laborant reads top to
@@ -636,15 +666,15 @@ export async function mountLabPanels(container) {
         body.appendChild(tblWrap);
 
         body.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '16px', justifyContent: 'flex-end' } },
-            h('button', { class: 'btn btn-primary', onclick: async (ev) => {
-                // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
-                // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
-                const btn = ev.currentTarget;
-                btn.disabled = true;
-                try {
-                    await savePanel({ name: nameInp.value.trim(), modality: modSel.value, has_narrative: narrChk.checked, service_id: svcSel.value || null, active: activeChk.checked, device_id: Number(devSel.value) || null });
-                } finally { if (btn?.isConnected) btn.disabled = false; }
-            } }, Icon('Check', { size: 14 }), ' Сохранить панель')));
+            // LAB_PANEL_DEDUP_V1 — кнопка неактивна, ПОКА ИДЁТ ЛЮБАЯ запись панели
+            // на этой странице, и такой же рождается при каждой перерисовке
+            // редактора (panelWriteButton). Прежде гасилась только нажатая
+            // кнопка: выбор панели в списке, «Пустой», «Нормы по полу» во время
+            // сохранения рисовали новую, живую, и второе нажатие запускало
+            // второе сохранение поверх первого.
+            panelWriteButton(h('button', { class: 'btn btn-primary', onclick: () => panelWrite(() =>
+                savePanel({ name: nameInp.value.trim(), modality: modSel.value, has_narrative: narrChk.checked, service_id: svcSel.value || null, active: activeChk.checked, device_id: Number(devSel.value) || null })),
+            }, Icon('Check', { size: 14 }), ' Сохранить панель'))));
         editorEl.appendChild(body);
     }
 
@@ -1170,37 +1200,36 @@ export async function mountLabPanels(container) {
             if (!freshErr && seen && now && changed(seen, now)) { toast(tr(ADDRESS_CHANGED), 'fail'); return; }
         }
         const p = state.selected;
+        // LAB_PANEL_SAFE_SAVE_V1 — страховка от записи чужих показателей.
+        //
+        // Если в редакторе лежат показатели ДРУГОЙ панели (гонка выше или
+        // любой будущий её вариант), сохранение уничтожило бы нормы этой
+        // панели молча. Лучше отказать и попросить открыть панель заново.
+        // LAB_PANEL_DEDUP_V1 — проверка стоит ДО записи: раньше она шла после
+        // правки lab_panels, и отказ оставлял шапку панели уже переписанной.
+        if (p.id && state.rowsPanelId != null && state.rowsPanelId !== p.id) {
+            toast('Показатели в редакторе принадлежат другой панели — откройте панель заново.', 'fail');
+            return;
+        }
         try {
-            let panelId = p.id;
             const row = { name: fields.name, modality: fields.modality, has_narrative: fields.has_narrative, service_id: fields.service_id, active: fields.active, device_id: fields.device_id };   // LIS_INGEST_V1 — device_id
-            if (panelId) {
-                const { error } = await supabase.from('lab_panels').update(row).eq('id', panelId);
-                if (error) throw error;
-            } else {
-                row.company_id = cid; row.core_panel_id = p.core_panel_id || null; row.code = p.code || null;
-                const { data, error } = await supabase.from('lab_panels').insert(row).select('id').single();
-                if (error) throw error; panelId = data.id;
-            }
-            // LAB_PANEL_SAFE_SAVE_V1 — страховка от записи чужих показателей.
-            //
-            // Если в редакторе лежат показатели ДРУГОЙ панели (гонка выше или
-            // любой будущий её вариант), сохранение уничтожило бы нормы этой
-            // панели молча. Лучше отказать и попросить открыть панель заново.
-            if (p.id && state.rowsPanelId != null && state.rowsPanelId !== p.id) {
-                toast('Показатели в редакторе принадлежат другой панели — откройте панель заново.', 'fail');
-                return;
-            }
-            // Старые показатели удаляем ПОСЛЕ успешной вставки новых: раньше
-            // сначала шло удаление, и любая ошибка вставки оставляла панель
-            // вообще без показателей — вместе со всеми нормами.
-            const oldIds = (await supabase.from('lab_panel_analytes').select('id').eq('panel_id', panelId))
-                .data?.map(x => x.id) || [];
-            const ins = state.rows.filter(r => (r.name || '').trim()).map((r, i) => ({
-                panel_id: panelId, company_id: cid, code: r.code || null, name: r.name.trim(), unit: r.unit || null,
+            // LAB_PANEL_DEDUP_V1 — панель и показатели уходят ОДНИМ вызовом, и
+            // сервер пишет их одной транзакцией (rpc/lab-panels.js): правка или
+            // новая панель, вставка строк, удаление ВСЕХ остальных строк этой
+            // панели. Прежние три запроса через /api/db (прочитать старые id,
+            // вставить, удалить прочитанные) при двух сохранениях подряд, пока
+            // сервер отвечал на первое, оставляли строки обоих — так панель
+            // получала каждый показатель дважды и трижды. Вставка по-прежнему
+            // идёт раньше удаления (триггер мигр. 233), а ошибка любого шага
+            // откатывает всё — прежние нормы целы.
+            const panel = { id: p.id || null, ...row };
+            if (!p.id) { panel.core_panel_id = p.core_panel_id || null; panel.code = p.code || null; }
+            const ins = state.rows.filter(r => (r.name || '').trim()).map((r) => ({
+                code: r.code || null, name: r.name.trim(), unit: r.unit || null,
                 value_type: r.value_type || 'numeric', value_options: (r.value_options || '').trim() || null, decimals: Number(r.decimals) || 0,
                 ref_low: r.ref_low, ref_high: r.ref_high, ref_text: r.ref_text || null,
                 ref_low_m: r.ref_low_m, ref_high_m: r.ref_high_m, ref_low_f: r.ref_low_f, ref_high_f: r.ref_high_f,
-                group_label: (r.group_label || '').trim() || null, sort_order: i,
+                group_label: (r.group_label || '').trim() || null,   // порядок строк = sort_order (ставит сервер)
                 ref_ranges: normRanges(r).length ? normRanges(r) : null,   // LAB_MULTI_REF_V1
                 // LIS_INGEST_V1 — сопоставление с полем анализатора. Приём
                 // применяет ТОЛЬКО подтверждённые строки, поэтому флаг едет в
@@ -1219,28 +1248,13 @@ export async function mountLabPanels(container) {
                 device_code_confirmed_epoch: r.device_code_confirmed && r.device_code_confirmed_device_id != null && r.device_code_confirmed_epoch != null
                     ? Number(r.device_code_confirmed_epoch) : null,
             }));
-            if (ins.length) {
-                let { error } = await supabase.from('lab_panel_analytes').insert(ins);
-                // LAB_MULTI_REF_V1 — if migration 121 hasn't been applied yet the
-                // ref_ranges column doesn't exist and the whole insert would fail,
-                // taking the panel's analytes with it (they were just deleted).
-                // Retry without the column so saving a panel NEVER breaks, and say
-                // plainly what to do to enable the feature.
-                if (error && /ref_ranges/i.test(error.message || '')) {
-                    console.warn('[lab-settings] ref_ranges column missing — apply supabase/migrations/121_lab_multi_ref_ranges.sql');
-                    const legacy = ins.map(({ ref_ranges, ...rest }) => rest);
-                    ({ error } = await supabase.from('lab_panel_analytes').insert(legacy));
-                    if (!error) toast('Панель сохранена, но доп. диапазоны не записаны — примените миграцию 121_lab_multi_ref_ranges.sql', 'warn');
-                }
-                if (error) throw error;
-            }
-            // Вставка прошла — теперь можно убрать прежние строки.
-            if (oldIds.length) {
-                const { error: delErr } = await supabase.from('lab_panel_analytes').delete().in('id', oldIds);
-                if (delErr) throw delErr;
-            }
+            // ref_ranges — колонка из самой первой схемы (мигр. 025), поэтому
+            // прежний повтор вставки «без ref_ranges» (LAB_MULTI_REF_V1, база
+            // без мигр. 121 облачной сборки) здесь не нужен.
+            const { data, error } = await supabase.rpc('lab_panel_save', { panel, analytes: ins });
+            if (error) throw error;
             toast('Панель сохранена');
-            state.selected = { ...p, id: panelId, ...row };
+            state.selected = { ...p, id: data.id, ...row };
             await reload();
         } catch (e) { toast(trf('Не удалось сохранить: {msg}', { msg: savePanelReason(e, fields) }), 'fail'); }
     }
@@ -1259,16 +1273,25 @@ export async function mountLabPanels(container) {
             const svc = state.services.find(s => String(s.id) === String(svcId));
             return trf('услуга{svc} уже привязана к панели{owner}. Одна услуга может принадлежать только одной панели — отвяжите её там или выберите другую услугу.', { svc: svc ? ' «' + svc.name + '»' : '', owner: owner ? ' «' + owner.name + '»' : '' });
         }
-        return msg;
+        // LAB_PANEL_DEDUP_V1 — отказ сервера (lab_panel_save) — на языке экрана:
+        // слой запросов запомнил его шаблон, tr() его переводит.
+        return tr(msg);
     }
 
+    // LAB_PANEL_DEDUP_V1 — «Удалить» удаляет панель ВМЕСТЕ с показателями одной
+    // транзакцией на сервере (lab_panel_delete). Прежде удалялась только строка
+    // lab_panels, внешний ключ показателей отказывал всегда («Связанная запись…»),
+    // и сломанную панель нельзя было ни убрать, ни заменить новой на ту же услугу.
+    // Результаты анализов на панель не ссылаются и остаются как были.
     async function removePanel(p) {
         if (!p.id || !window.confirm(trf('Удалить панель «{name}» и её показатели?', { name: p.name }))) return;
-        try {
-            const { error } = await supabase.from('lab_panels').delete().eq('id', p.id);
-            if (error) throw error;
-            toast('Панель удалена'); state.selected = null; await reload();
-        } catch (e) { toast(trf('Не удалось удалить: {msg}', { msg: e.message || e }), 'fail'); }
+        await panelWrite(async () => {
+            try {
+                const { error } = await supabase.rpc('lab_panel_delete', { id: p.id });
+                if (error) throw error;
+                toast('Панель удалена'); state.selected = null; await reload();
+            } catch (e) { toast(trf('Не удалось удалить: {msg}', { msg: tr((e && e.message) || String(e)) }), 'fail'); }
+        });
     }
 
     // Paint the loading state BEFORE the first read: an empty list beside an

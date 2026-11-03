@@ -78,6 +78,7 @@ import { serviceSave } from './service-save.js';   // SERVICE_EDITOR_V1
 import { servicePriceQuote } from './service-price-quote.js';   // VISIT_TIER_PRICING_V1
 import { holdingsList, dispenseFromHolding, voidHoldingDispense, outpatientsToday, visitItems, holdingReturn } from './holdings.js';   // HOLDINGS_V1
 import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
+import { labPanelSave, labPanelDelete } from './lab-panels.js';   // LAB_PANEL_DEDUP_V1
 import { labUsageStats } from './lab-stats.js';   // LAB_STATS_V1
 import { roomAssignDoctors } from './rooms.js';   // ROOMS_SETUP_V1
 import { updateMyDoctorProfile } from './doctor-profile.js';   // RPC_PORT_V1
@@ -637,6 +638,11 @@ export const RPC = {
   // превращались в секунду ожидания, а обрыв связи посередине оставлял
   // половину бланка сохранённой.
   save_lab_results:               (db, args, user) => saveLabResults(db, args, user),
+  // LAB_PANEL_DEDUP_V1 — панель лаборатории одной транзакцией: сохранение
+  // (панель + вставка показателей + удаление остальных строк панели) и
+  // удаление вместе с показателями. Записи — в READ_ONLY_RPCS их нет.
+  lab_panel_save:                 (db, args, user) => labPanelSave(db, args, user),
+  lab_panel_delete:               (db, args, user) => labPanelDelete(db, args, user),
 
   // LAB_STATS_V1 — «Лаборатория → Статистика»: сколько раз заказаны панели и
   // безпанельные лабораторные услуги за период и сколько выдано. Только

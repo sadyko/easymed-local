@@ -38,7 +38,7 @@ import { printBarcodeLabel, printBarcodeLabels } from './lab-barcode.js';   // L
 import { tubeGroups, tubeDeviceMap, tubeLabelStamp, shortTestName, BARE_ID_MAX_AGE_DAYS } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 — этикетка на пробирку (чистые правила); срок голого номера — ревью U11, L6
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels, hasActorRole } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
-import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=panelsv14';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now · LIS_REAL_ANALYZERS_V1 — штамп
+import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=panelsv15';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now · LIS_REAL_ANALYZERS_V1 — штамп · LAB_PANEL_DEDUP_V1 — v15
 import { mountLabDevices, stopLabDevicesLive } from './lab-devices.js?v=lisfields10';   // LIS_INGEST_V1 — «Анализаторы»: приборы клиники, живая лента и лоток непринятых сообщений · LIS_REAL_ANALYZERS_V1 — штамп
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
