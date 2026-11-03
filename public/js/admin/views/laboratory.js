@@ -1358,20 +1358,24 @@ async function verifyGroup(g) {
 // -----------------------------------------------------------------------------
 // Modal chrome (local pattern — .modal / .modal-card, no shared helper in ui.js)
 // -----------------------------------------------------------------------------
-function labModal(title, subtitle, bodyEls, footEls, width = 520) {
+// LAB_PANEL_DEDUP_V1 — opts.unsaved(): есть несохранённый ввод — «Отмена», × и
+// щелчок мимо окна сначала спрашивают. close() из ответа — без вопроса (после
+// сохранения).
+function labModal(title, subtitle, bodyEls, footEls, width = 520, opts = {}) {
     const overlay = h('div', { class: 'modal' });
     const close = () => overlay.remove();
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
+    const tryClose = () => { if (!(opts.unsaved && opts.unsaved()) || askUser(tr(UNSAVED_RESULTS_ASK))) close(); };
+    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: tryClose }));
     overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: width + 'px', maxWidth: 'calc(100vw - 32px)' } },
         h('header', { class: 'modal-head' },
             h('div', null,
                 h('h2', null, Icon('Flask', { size: 16 }), ' ', title),
                 subtitle ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, subtitle) : null,
             ),
-            h('button', { class: 'modal-close', onclick: close }, '×')),
+            h('button', { class: 'modal-close', onclick: tryClose }, '×')),
         h('div', { class: 'modal-body' }, ...bodyEls),
         h('footer', { class: 'modal-foot' },
-            h('button', { class: 'btn', type: 'button', onclick: close }, 'Отмена'),
+            h('button', { class: 'btn', type: 'button', onclick: tryClose }, 'Отмена'),
             h('span', { class: 'grow' }),
             ...footEls),
     ));
@@ -1546,6 +1550,37 @@ async function analyteDictLookup(name) {
     return found;
 }
 
+// LAB_PANEL_DEDUP_V1 — показатели панели без копий: ключ — «Раздел бланка» и
+// имя без пробелов по краям (то же сравнение, что у lab_panel_save и мигр. 271:
+// trim, не регистр). Строка стоит на месте ПЕРВОЙ копии (порядок бланка), а
+// настройку берёт у САМОЙ НОВОЙ (больший id): в филиале именно её обновляет
+// главное здание, у прежних копий единицы и нормы могли устареть.
+function uniqueAnalytes(list) {
+    const at = new Map();
+    const out = [];
+    for (const a of list || []) {
+        const key = String(a.group_label == null ? '' : a.group_label).trim() + '\u0000' + String(a.name == null ? '' : a.name).trim();
+        if (!at.has(key)) { at.set(key, out.length); out.push(a); continue; }
+        const i = at.get(key);
+        if (Number(a.id) > Number(out[i].id)) out[i] = a;
+    }
+    return out;
+}
+
+// LAB_PANEL_DEDUP_V1 — одна строка бланка на показатель, свежая (больший id)
+// побеждает: правило карты пациента и «Документов» (LAB_DOC_ALL_ANALYTES_V1).
+// Пока панель держала копии, показатель записывался по разу на каждую — и
+// бланк печатал его дважды и трижды.
+function latestPerParameter(results) {
+    const byParam = new Map();
+    for (const x of results || []) {
+        const k = String(x.parameter || '');
+        const prev = byParam.get(k);
+        if (!prev || Number(x.id) > Number(prev.id)) byParam.set(k, x);
+    }
+    return [...byParam.values()].sort((a, b) => Number(a.id) - Number(b.id));
+}
+
 async function resolveAnalyteRows(r, patient) {
     const svc = r.services || {};
     const panel = state.panelByService[r.service_id] || null;
@@ -1557,8 +1592,13 @@ async function resolveAnalyteRows(r, patient) {
     let analytes = [];
     if (panel) {
         const { data } = await supabase.from('lab_panel_analytes')
-            .select('*').eq('panel_id', panel.id).order('sort_order').limit(200);
-        analytes = (data || []).filter(a => a.active !== 0);
+            .select('*').eq('panel_id', panel.id).order('sort_order').order('id').limit(200);
+        // LAB_PANEL_DEDUP_V1 — одна строка листа на показатель, даже если панель
+        // ещё хранит его копии (до мигр. 271 и исправления сохранения панели).
+        // Сохранённый результат ищется по имени показателя, поэтому все копии
+        // получали ОДНУ строку результата: значение вставало в каждую, а правка
+        // любой копии, кроме последней, молча терялась.
+        analytes = uniqueAnalytes((data || []).filter(a => a.active !== 0));
     }
     if (!analytes.length) {
         // LAB_SVC_ANALYTE_FALLBACK_V1 — у услуги нет панели: собираем показатель
@@ -1694,7 +1734,8 @@ async function openResultsModal(r, patient) {
         (patient.full_name || '—') + (patient.mrn ? ' · ' + patient.mrn : '') + (gender ? ' · ' + (gender === 'male' ? 'муж' : gender === 'female' ? 'жен' : gender) : ''),
         // EXTERNAL_LAB_V1 — подпись над бланком: результат пришёл из другой клиники.
         [externalLabTag(svc), grid, field('Комментарий', notesTa)],
-        [saveBtn], 640);
+        // LAB_PANEL_DEDUP_V1 — закрыть с набранным, но не сохранённым — после вопроса.
+        [saveBtn], 640, { unsaved: () => lines.some((L) => entryUnsaved(L)) });
 
     saveBtn.addEventListener('click', async () => {
         const filled = lines.filter(L => String(L.input.value || '').trim() !== '');
@@ -1752,6 +1793,21 @@ async function wsCollect(p, repaint) {
     repaint();
 }
 
+// LAB_PANEL_DEDUP_V1 — вопрос перед закрытием окна с несохранённым вводом.
+const UNSAVED_RESULTS_ASK = 'Внесённые результаты не сохранены. Закрыть без сохранения?';
+// Нет окна вопроса (встроенный браузер без confirm) — не держать человека в окне.
+const askUser = (q) => (typeof window !== 'undefined' && window && typeof window.confirm === 'function' ? window.confirm(q) : true);
+// Набрано и не сохранено: значение строки отличается от сохранённого, или
+// написано заключение по панели. Очищенное сохранённое значение — не ввод:
+// «Сохранить всё» пустые строки и так не пишет.
+function entryUnsaved(e) {
+    const cur = String((e.input && e.input.value) || '').trim();
+    return cur !== '' && cur !== String((e.prev && e.prev.value) || '').trim();
+}
+function worksheetUnsaved(sections) {
+    return (sections || []).some((s) => (s.interpEl && String(s.interpEl.value || '').trim() !== '') || (s.entries || []).some(entryUnsaved));
+}
+
 function wsRowPayload(e) {
     const raw = String((e.input && e.input.value) || '').trim();
     const n = parseFloat(raw.replace(',', '.'));
@@ -1793,13 +1849,18 @@ function wsAnalyteLine(e, onRemove) {
     // own answers (Прозрачная / Мутная, Rh+ / Rh-), not a free-text box. Typed
     // free text for a coded answer is a data-quality problem on the printed
     // report, so this branch is not cosmetic.
-    const savedVal = e.prev ? (e.prev.value || '') : '';
+    // LAB_PANEL_DEDUP_V1 — набранное живёт на самой строке (e.draft), а не только
+    // в поле ввода. Корзина у строки и «Добавить свой показатель» перерисовывают
+    // весь раздел (renderRows), и поле заполнялось заново только сохранённым
+    // значением: всё набранное, но ещё не сохранённое, молча пропадало — и на
+    // бланк не попадало.
+    const savedVal = e.draft != null ? e.draft : (e.prev ? (e.prev.value || '') : '');
     const valInp = e.a.value_type === 'select'
         ? h('select', {
             class: 'le-val le-val-sel',
             // 'change' rather than 'input': the flag hook only reacts to numbers
             // anyway, but a select's committed value is what the payload reads.
-            onchange: () => maybeAutoFlag(),
+            onchange: () => { e.draft = valInp.value; maybeAutoFlag(); },
         },
             h('option', { value: '' }, '—'),
             ...selectOptionsFor(e.a, e.prev).map(o => h('option', { value: o, selected: savedVal === o }, o)))
@@ -1807,7 +1868,7 @@ function wsAnalyteLine(e, onRemove) {
             class: 'le-val', type: 'text',
             inputmode: (e.a.value_type === 'text' ? 'text' : 'decimal'),
             value: savedVal, placeholder: '—',
-            oninput: () => maybeAutoFlag(),
+            oninput: () => { e.draft = valInp.value; maybeAutoFlag(); },
         });
 
     function maybeAutoFlag() {
@@ -1873,6 +1934,9 @@ function wsSection(section) {
     const svc = p.services || {};
     const listEl = h('div', { class: 'le-list' });
     function renderRows() {
+        // LAB_PANEL_DEDUP_V1 — перед перерисовкой забрать набранное из полей:
+        // новая строка возьмёт его (e.draft), а не только сохранённое значение.
+        for (const e of section.entries) if (e.input) e.draft = e.input.value;
         clear(listEl);
         section.entries.forEach((e, i) => listEl.appendChild(wsAnalyteLine(e, () => { section.entries.splice(i, 1); renderRows(); })));
     }
@@ -1931,9 +1995,16 @@ async function openPatientWorksheet(g, patient, tubes = []) {   // tubes: LAB_TU
         sections.push({ panel: p, entries, interpEl: null });
     }
 
+    // LAB_PANEL_DEDUP_V1 — закрыть окно с несохранённым вводом можно только
+    // после вопроса: «Закрыть», ×, щелчок мимо окна и Escape. Прежде все пути
+    // закрывали молча, и набранное, но не сохранённое пропадало — а бланк
+    // печатает ровно сохранённое. После «Сохранить всё» окно закрывается сразу.
     const overlay = h('div', { class: 'modal' });
-    const close = () => overlay.remove();
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+    const askClose = () => { if (!worksheetUnsaved(sections) || askUser(tr(UNSAVED_RESULTS_ASK))) close(); };
+    const onKey = (ev) => { if (ev && ev.key === 'Escape') askClose(); };
+    document.addEventListener('keydown', onKey);
+    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: askClose }));
 
     const body = h('div', { class: 'modal-body' });
     body.appendChild(h('div', { class: 'lw-patient' },
@@ -2017,11 +2088,11 @@ async function openPatientWorksheet(g, patient, tubes = []) {   // tubes: LAB_TU
     overlay.appendChild(h('div', { class: 'modal-card lw-modal', style: { width: '1040px', maxWidth: 'calc(100vw - 32px)' } },
         h('header', { class: 'modal-head' },
             h('h2', null, Icon('Flask', { size: 16 }), ' ', tr('Результаты анализов'), ' · ', g.patientName),
-            h('button', { class: 'modal-close', onclick: close }, '×')),
+            h('button', { class: 'modal-close', onclick: askClose }, '×')),
         body,
         h('footer', { class: 'modal-foot' },
             h('span', { class: 'muted lw-hint' }, tr('Enter или ↓ — к следующему показателю. Оценка ставится сама по норме; её можно поправить.')),
-            h('button', { class: 'btn', type: 'button', onclick: close }, 'Закрыть'),
+            h('button', { class: 'btn', type: 'button', onclick: askClose }, 'Закрыть'),
             h('span', { class: 'grow' }),
             h('button', {
                 class: 'btn btn-primary', type: 'button',
@@ -2144,8 +2215,8 @@ async function labPanelHints(r) {
     if (panel) {
         try {
             const { data } = await supabase.from('lab_panel_analytes')
-                .select('*').eq('panel_id', panel.id).order('sort_order').limit(200);
-            panelList = data || [];
+                .select('*').eq('panel_id', panel.id).order('sort_order').order('id').limit(200);
+            panelList = uniqueAnalytes(data || []);   // LAB_PANEL_DEDUP_V1 — копии не сдвигают сопоставление «по порядку»
             for (const a of panelList) {
                 if (a.name && a.code) codeByName.set(nk(a.name), a.code);
                 if (a.name) local.set(nk(a.name), a);
@@ -2156,7 +2227,9 @@ async function labPanelHints(r) {
     return { codeByName, local, panelList, idx: await analyteIndex() };
 }
 
-async function labGroupFor(r, patient, results) {
+async function labGroupFor(r, patient, allResults) {
+    // LAB_PANEL_DEDUP_V1 — одна строка бланка на показатель, свежая побеждает.
+    const results = latestPerParameter(allResults);
     const svc = r.services || {};
     const { codeByName, local, panelList, idx } = await labPanelHints(r);
     const gender = (patient.gender || '').toLowerCase();

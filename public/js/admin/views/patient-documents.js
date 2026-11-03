@@ -40,6 +40,7 @@ import { printableSheet } from './doc-settings.js?v=noqr1';
 import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, matchResultsToAnalytes,
          namedRangeCell, ageYears, labAccession, labIssueDates, labMaxDate } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';
+import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_PANEL_DEDUP_V1 — одно правило «лабораторная услуга» с очередью лаборатории
 
 const refs = { container: null, onNavigate: null, bodyEl: null, docsWrap: null };
 
@@ -479,16 +480,35 @@ async function fetchPatientDocs(patientId) {
 // DOCS_ROW_PRINT_V1 — вынесено из fetchPatientDocs без изменений, потому что
 // печать из строки ленты обязана собирать данные ТЕМ ЖЕ кодом, что и архив
 // пациента: две сборки одного документа неизбежно разошлись бы.
-async function fetchLabByVisit(visitIds) {
+// LAB_PANEL_DEDUP_V1 — экспорт для теста (lab-worksheet-dedup.test.mjs).
+export async function fetchLabByVisit(visitIds) {
     const labByVisit = {};
     {
-        const { data: vsData, error: vsErr } = await supabase.from('visit_services')
-            .select('id,visit_id,services(name,result_unit,ref_low,ref_high,ref_text,is_lab)')
-            .in('visit_id', visitIds);
+        // LAB_PANEL_DEDUP_V1 — «лабораторная услуга» — по общему правилу
+        // (lab-service.js isLabService, как очередь лаборатории и редактор
+        // панелей): тип «Лаборатория» или is_lab, отделение-лаборатория, тип
+        // каталога с лабораторным именем, привязанная панель. Здесь стоял только
+        // is_lab: новая услуга, ставшая лабораторной по отделению или по панели,
+        // попадала в очередь лаборатории, а её результаты в «Документы» — нет.
+        // Справочники маленькие; не прочитались — правило работает по тому, что есть.
+        const [vsRes, deptsRes, typesRes, panelsRes] = await Promise.all([
+            supabase.from('visit_services')
+                .select('id,visit_id,service_id,services(name,result_unit,ref_low,ref_high,ref_text,is_lab,type,department_id,type_id)')
+                .in('visit_id', visitIds),
+            supabase.from('departments').select('id, kind').limit(200),
+            supabase.from('service_types').select('id, name').limit(200),
+            supabase.from('lab_panels').select('id, service_id').eq('active', true).limit(5000),
+        ]);
+        const { data: vsData, error: vsErr } = vsRes;
         if (vsErr) {
             toast(trf('Не удалось загрузить назначения анализов: {msg}', { msg: vsErr.message || vsErr }), 'fail');
         } else {
-            const labVs = (vsData || []).filter(r => r.services && r.services.is_lab);
+            const lookups = {
+                deptKindById: deptKindMap(deptsRes && !deptsRes.error ? deptsRes.data : []),
+                typeNameById: typeNameMap(typesRes && !typesRes.error ? typesRes.data : []),
+            };
+            const panelServices = new Set(((panelsRes && !panelsRes.error && panelsRes.data) || []).map((p) => p.service_id).filter((id) => id != null));
+            const labVs = (vsData || []).filter(r => r.services && isLabService(r.services, { ...lookups, hasPanel: () => panelServices.has(r.service_id) }));
             const labVsIds = labVs.map(r => r.id);
             if (labVsIds.length > 0) {
                 const { data: lrData, error: lrErr } = await supabase.from('lab_results')

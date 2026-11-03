@@ -8,6 +8,7 @@ export const STRINGS = {
   "Панель не найдена — обновите страницу.": {"en":"Panel not found — reload the page.","ru":"Панель не найдена — обновите страницу.","uz":"Panel topilmadi — sahifani yangilang."},   // LAB_PANEL_DEDUP_V1
   "Анализатор указан неверно.": {"en":"Invalid analyzer.","ru":"Анализатор указан неверно.","uz":"Analizator noto‘g‘ri ko‘rsatilgan."},   // LAB_PANEL_DEDUP_V1
   "Показатель «{name}» записан в панели дважды — оставьте одну строку и сохраните снова.": {"en":"The indicator “{name}” appears twice in the panel — keep one row and save again.","ru":"Показатель «{name}» записан в панели дважды — оставьте одну строку и сохраните снова.","uz":"«{name}» ko‘rsatkichi panelda ikki marta yozilgan — bitta qatorni qoldiring va qayta saqlang."},   // LAB_PANEL_DEDUP_V1
+  "Внесённые результаты не сохранены. Закрыть без сохранения?": {"en":"The entered results are not saved. Close without saving?","ru":"Внесённые результаты не сохранены. Закрыть без сохранения?","uz":"Kiritilgan natijalar saqlanmagan. Saqlamasdan yopilsinmi?"},   // LAB_PANEL_DEDUP_V1 — лист «Внести результаты»
   // PASTE_SOURCES_V1 — «Вставить результаты» кабинета врача: окно документов пациента (views/paste-sources.js, rpc patient_doc_sources)
   "Файлы": {"en":"Files","ru":"Файлы","uz":"Fayllar"},   // PASTE_SOURCES_V1
   "отметьте разделы и нажмите «Вставить выбранное»": {"en":"tick the sections and press “Insert selected”","ru":"отметьте разделы и нажмите «Вставить выбранное»","uz":"bo‘limlarni belgilang va «Tanlanganini qo‘yish» tugmasini bosing"},   // PASTE_SOURCES_V1
