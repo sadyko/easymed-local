@@ -72,6 +72,7 @@ import { openTemplatePickerModal } from './template-picker-modal.js?v=tpl1';   /
 import { resolveTemplate, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1; SERVICES_PACKAGES_V1 — cartPackage
 import { registerWalkIn, walkInRoleRefusal, walkInLinesRefusal } from './walk-in-booking.js?v=wib1';
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»
+import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
 import { surgeryBedRefusal, isSurgeryPick, SURGERY_NEEDS_BED_TEXT } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1   // WALK_IN_BOOKING_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        // DOCTOR_POOL_V1
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
@@ -195,6 +196,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         // которые регистратор убрал (снимутся с визита при сохранении).
         bookedVisitId: null,
         dropBooked: [],
+        doctorOrders: null,   // DOCTOR_REFERRAL_DESK_V1 — направления врача пациента (patient_referral_orders)
         addLine, applyTemplate, removeLine,
     };
     // Была ли карта заведена ЗДЕСЬ. Для найденного пациента без услуг «Пациент
@@ -304,6 +306,13 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         class: 'muted', 'data-booked-billed': '',
         style: { display: 'none', padding: '8px 14px 0', fontSize: '12.5px', overflowWrap: 'anywhere' },
     });
+    // DOCTOR_REFERRAL_DESK_V1 — группа «Направления врача» над таблицей: выставленные,
+    // оплаченные, на другой день, убранные из таблицы и ожидающие рекомендации врача
+    // (сегодняшние без счёта — строками таблицы с пометкой «от врача»).
+    const doctorOrdersEl = h('div', {
+        'data-doctor-orders': '',
+        style: { display: 'none', margin: '8px 14px', padding: '9px 12px', background: 'var(--info-50, #eef4ff)', border: '1px solid var(--info-200, #c7dcfd)', borderRadius: '10px' },
+    });
     const discountLine = h('div', {
         class: 'muted',
         style: { display: 'none', padding: '8px 14px 10px', fontSize: '12.5px', textAlign: 'right' },
@@ -316,7 +325,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             h('h3', null, Icon('Receipt', { size: 14 }), ' ', tr('Услуги'), ' ', countEl),
             h('span', { class: 'grow' }),
             printBtn, addPackagesBtn, addServicesBtn),
-        table, bookedNote, discountLine);
+        doctorOrdersEl, table, bookedNote, discountLine);   // DOCTOR_REFERRAL_DESK_V1 — группа над таблицей
 
     // ── главное действие: «Сохранить» В ШАПКЕ БЛОКА РЕКВИЗИТОВ ─────────────
     // На образце владельца «Сохранить» стоит справа в шапке карточки
@@ -534,8 +543,17 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             tbody.appendChild(h('tr', null,
                 h('td', { class: 'muted' }, String(i + 1)),
                 h('td', { class: 'cell-strong' }, row.service.name || '—',
+                    // DOCTOR_REFERRAL_DESK_V1 — строка направления врача: «от врача · ФИО», кому бонус, рекомендация врача.
+                    row.booked && row.booked.doctorOrder ? h('div', { 'data-doctor-order-row': String(row.booked.vsId), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' } },
+                        Icon('Stethoscope', { size: 12 }), orderMeta([
+                            trf('от врача · {name}', { name: row.booked.referrerName || '—' }),
+                            bonusText(row.booked.bonus) ? trf(bonusText(row.booked.bonus).template, bonusText(row.booked.bonus).params) : null,
+                            row.booked.note || null])) : null,
+                    // DOCTOR_REFERRAL_DESK_V1 — строка, добавленная из рекомендации врача.
+                    row.fromRec ? h('div', { 'data-rec-row': String(row.fromRec), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px' } },
+                        Icon('Flag', { size: 12 }), tr('рекомендация врача')) : null,
                     // CRM_LINK_ALL_V1 (R7a) — строка уже в визите записи: подпись и статус записи.
-                    row.booked ? h('div', { 'data-booked-row': String(row.booked.vsId), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' } },
+                    row.booked && !row.booked.doctorOrder ? h('div', { 'data-booked-row': String(row.booked.vsId), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' } },
                         Icon('Calendar', { size: 12 }), tr('из записи') + ' · ' + tr(bookedStatusLabel(row.booked.status))) : null,
                     // PACKAGES_V1 — из какого пакета строка и его скидка (её
                     // применит сервер в счёте; итог после записи — уже со скидкой).
@@ -639,10 +657,13 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
 
     function removeLine(i) {
         // CRM_LINK_ALL_V1 (R7a) — строка «из записи» снимется с визита при сохранении.
+        // DOCTOR_REFERRAL_DESK_V1 — строка направления врача остаётся в визите: её назначил
+        // врач, она возвращается в группу «Направления врача» (там — «Добавить»).
         const gone = state.rows[i];
-        if (gone && gone.booked) state.dropBooked.push(gone.booked.vsId);
+        if (gone && gone.booked && !gone.booked.doctorOrder) state.dropBooked.push(gone.booked.vsId);
         state.rows.splice(i, 1);
         paintTable();
+        paintDoctorOrders();
     }
 
     function applyTemplate(template) {
@@ -713,12 +734,14 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     /** Взять готовую карту (найденную поиском, созданную или выбранную в дубликатах). */
     /** CRM_LINK_ALL_V1 (R7a) — убрать строки «из записи» прежнего пациента. */
     function clearBookedRows() {
-        state.rows = state.rows.filter((r) => !r.booked);
+        state.rows = state.rows.filter((r) => !r.booked && !r.fromRec);   // DOCTOR_REFERRAL_DESK_V1 — и строки из рекомендаций прежнего пациента
         state.dropBooked = [];
         state.bookedVisitId = null;
+        state.doctorOrders = null;   // DOCTOR_REFERRAL_DESK_V1
         bookedNote.textContent = '';
         bookedNote.style.display = 'none';
         paintTable();
+        paintDoctorOrders();   // DOCTOR_REFERRAL_DESK_V1
     }
 
     /**
@@ -737,7 +760,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         if (!b || !b.visit || !state.patient || state.patient.id !== patientId) return;
         state.bookedVisitId = b.visit.id;
         const unpacked = [];   // CRM_LINK_ALL_V1 (ревью денег S3) — пакет снят со строки, ставшей строкой записи
+        const skip = orderVsIds(state.doctorOrders);   // DOCTOR_REFERRAL_DESK_V1 — направления врача — своей группой
         for (const r of b.rows) {
+            if (skip.has(Number(r.vsId))) continue;
             if (r.billed) continue;
             const service = r.consultationTypeId != null
                 ? { id: 'c|' + (r.doctorId || '') + '|' + r.consultationTypeId, __consult: true, consultation_type_id: r.consultationTypeId,
@@ -762,12 +787,130 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             row.booked = { vsId: r.vsId, status: b.visit.status, unitPrice: r.unitPrice };
         }
         if (unpacked.length) toast(trf('Уже из записи — по цене записи, без пакета: {names}', { names: unpacked.join(', ') }), 'info');
-        const billed = b.rows.filter((r) => r.billed).map((r) => r.name).filter(Boolean);
+        const billed = b.rows.filter((r) => r.billed && !skip.has(Number(r.vsId))).map((r) => r.name).filter(Boolean);   // DOCTOR_REFERRAL_DESK_V1
         if (billed.length) {
             bookedNote.textContent = trf('По записи уже в счёте: {names}', { names: billed.join(', ') });
             bookedNote.style.display = '';
         }
         paintTable();
+    }
+
+    /** DOCTOR_REFERRAL_DESK_V1 — подпись строки направления: части через « · ». */
+    function orderMeta(parts) {
+        return parts.filter(Boolean).join(' · ');
+    }
+
+    // DOCTOR_REFERRAL_DESK_V1 — НАПРАВЛЕНИЯ ВРАЧА ПАЦИЕНТА (patient_referral_orders: своё
+    // здание, сегодня и вперёд). Сегодняшние без счёта — готовые строки таблицы тем же
+    // путём, что строки «из записи» (R7a): второй строки нет, счёт — на них. Остальное —
+    // группой над таблицей: выставленные «ждёт оплаты в кассе», оплаченные, на другой день
+    // (быстрая регистрация пишет только сегодняшний визит — их оформляет мастер визита),
+    // рекомендации — «Добавить».
+    async function showDoctorOrders(patientId) {
+        let o;
+        try { o = await loadDoctorOrders(patientId); }
+        catch (e) {
+            toast(trf('Направления врача не загрузились: {msg}', { msg: (e && e.message) || e }), 'warn');
+            return;
+        }
+        if (!state.patient || state.patient.id !== patientId) return;
+        state.doctorOrders = o;
+        let otherVisit = false;
+        for (const l of o.lines) {
+            if (orderKind(l, o.today) !== 'ready') continue;
+            if (addOrderRow(l) === 'other-visit') otherVisit = true;
+        }
+        if (otherVisit) toast(tr('Направления врача из другого визита — оформите их в окне визита.'), 'warn');
+        paintTable();
+        paintDoctorOrders();
+    }
+
+    /**
+     * DOCTOR_REFERRAL_DESK_V1 — сегодняшняя строка направления без счёта → строка таблицы
+     * (строка визита уже есть — в счёт идёт она). 'other-visit' — строка другого визита.
+     */
+    function addOrderRow(l) {
+        const consult = l.service_id == null && l.consultation_type_id != null;
+        if (l.service_id == null && !consult) return false;
+        if (state.bookedVisitId && Number(state.bookedVisitId) !== Number(l.visit_id)) return 'other-visit';
+        if (state.rows.some((x) => x.booked && Number(x.booked.vsId) === Number(l.visit_service_id))) return false;
+        const service = consult
+            ? { id: 'c|' + (l.doctor_id || '') + '|' + l.consultation_type_id, __consult: true, consultation_type_id: l.consultation_type_id,
+                __consultDoctorId: l.doctor_id, name: l.name, price: l.unit_price, requires_doctor: 1 }
+            : ((state.catalog || []).find((s) => Number(s.id) === Number(l.service_id))
+                || { id: Number(l.service_id), name: l.name, price: Number(l.unit_price) || 0, requires_doctor: l.doctor_id ? 1 : 0, tax_rate: 0 });
+        const bk = rowKey(service, l.doctor_id);
+        const twin = state.rows.find((x) => !x.booked && isBookedTwin(rowKey(x.service, x.doctorId), bk));
+        const row = twin || pushRow(service, l.doctor_id ? { id: l.doctor_id } : null);
+        if (twin && l.doctor_id && Number(twin.doctorId) !== Number(l.doctor_id)) { twin.doctorId = Number(l.doctor_id); twin.doctor = null; }
+        if (twin && twin.package) delete twin.package;   // строку не вставляют второй раз — пакета ей не дать
+        row.booked = { vsId: Number(l.visit_service_id), status: l.visit_status, unitPrice: Number(l.unit_price) || 0,
+            doctorOrder: true, referrerName: l.referrer_name || '', note: l.referral_note || '', bonus: l.bonus_to || [] };
+        state.bookedVisitId = Number(l.visit_id);
+        return true;
+    }
+
+    function paintDoctorOrders() {
+        clear(doctorOrdersEl);
+        const o = state.doctorOrders;
+        const inTable = new Set(state.rows.filter((r) => r.booked).map((r) => Number(r.booked.vsId)));
+        const added = new Set(state.rows.filter((r) => r.fromRec).map((r) => Number(r.fromRec)));
+        const lines = o ? o.lines.filter((l) => !inTable.has(Number(l.visit_service_id))) : [];
+        const recs = o ? o.recommendations.filter((r) => !added.has(Number(r.recommendation_id))) : [];
+        doctorOrdersEl.style.display = lines.length || recs.length ? '' : 'none';
+        if (!lines.length && !recs.length) return;
+        const rowCss = { display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '6px 0', borderTop: '1px solid var(--info-100, #dbeafe)' };
+        doctorOrdersEl.appendChild(h('div', { class: 'cell-strong', style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13.5px', marginBottom: '4px' } },
+            Icon('Stethoscope', { size: 14 }), tr('Направления врача')));
+        for (const l of lines) {
+            const st = orderStateText(l, o.today);
+            const bonus = bonusText(l.bonus_to);
+            const kind = orderKind(l, o.today);
+            doctorOrdersEl.appendChild(h('div', { 'data-doctor-order': String(l.visit_service_id), style: rowCss },
+                h('div', { style: { flex: '1 1 auto', minWidth: 0 } },
+                    h('div', { class: 'cell-strong', style: { fontSize: '13.5px' } }, l.name || '—'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, orderMeta([
+                        trf('от врача · {name}', { name: l.referrer_name || '—' }), trf(st.template, st.params),
+                        bonus ? trf(bonus.template, bonus.params) : null])),
+                    l.referral_note ? h('div', { class: 'muted', style: { fontSize: '12.5px', fontStyle: 'italic' } }, l.referral_note) : null),
+                kind === 'future'
+                    ? h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, tr('оформляется в мастере визита'))
+                    // Сегодняшняя без счёта, убранная из таблицы, — вернуть её строкой.
+                    : kind === 'ready' && !locked()
+                        ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-doctor-order-add': String(l.visit_service_id),
+                            onclick: () => {
+                                if (locked()) return;
+                                if (addOrderRow(l) === 'other-visit') toast(tr('Направления врача из другого визита — оформите их в окне визита.'), 'warn');
+                                paintTable();
+                                paintDoctorOrders();
+                            } }, Icon('Plus', { size: 12 }), ' ', tr('Добавить'))
+                        : null));
+        }
+        for (const r of recs) {
+            const bonus = bonusText(r.bonus_to);
+            doctorOrdersEl.appendChild(h('div', { 'data-doctor-rec': String(r.recommendation_id), style: rowCss },
+                h('div', { style: { flex: '1 1 auto', minWidth: 0 } },
+                    h('div', { class: 'cell-strong', style: { fontSize: '13.5px' } }, r.name || '—'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, orderMeta([
+                        trf('от врача · {name}', { name: r.referrer_name || '—' }), tr('рекомендация врача'),
+                        bonus ? trf(bonus.template, bonus.params) : null])),
+                    r.notes ? h('div', { class: 'muted', style: { fontSize: '12.5px', fontStyle: 'italic' } }, r.notes) : null),
+                r.service_id != null && !locked()
+                    ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-doctor-rec-add': String(r.recommendation_id),
+                        onclick: () => addRecRow(r) }, Icon('Plus', { size: 12 }), ' ', tr('Добавить'))
+                    : null));
+        }
+    }
+
+    /** DOCTOR_REFERRAL_DESK_V1 — «Добавить» рекомендацию: строка таблицы, помнящая рекомендацию. */
+    function addRecRow(r) {
+        if (locked()) return;
+        const service = (state.catalog || []).find((s) => Number(s.id) === Number(r.service_id));
+        if (!service) { toast(tr('Услуги рекомендации нет в каталоге — добавьте её вручную.'), 'warn'); return; }
+        const row = addLine(service, null);
+        if (row && !row.booked) row.fromRec = Number(r.recommendation_id);
+        paintTable();
+        paintDoctorOrders();
     }
 
     async function usePatient(p, { load = false } = {}) {
@@ -787,6 +930,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         pickedBar.style.display = '';
         searchResults.style.display = 'none';
         setPatientFormEnabled(false);
+        // DOCTOR_REFERRAL_DESK_V1 — сначала направления врача: их строки «из записи» не берёт.
+        // У карты, заведённой здесь же, направлений нет — сервер не спрашиваем.
+        if (!patientCreatedHere) await showDoctorOrders(chosen.id);
         await showBookedRows(chosen.id);   // CRM_LINK_ALL_V1 (R7a)
         return chosen;
     }
@@ -926,7 +1072,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 patientId: patient.id,
                 // CRM_LINK_ALL_V1 (R7a) — строки «из записи» регистрируются как есть, убранные снимаются.
                 lines: state.rows.map((r) => ({ service: r.service, doctorId: r.doctorId, packageId: r.package ? r.package.id : null,
-                    bookedVsId: r.booked ? r.booked.vsId : null, bookedUnitPrice: r.booked ? r.booked.unitPrice : null })),
+                    bookedVsId: r.booked ? r.booked.vsId : null, bookedUnitPrice: r.booked ? r.booked.unitPrice : null,
+                    recommendationId: r.fromRec || null })),   // DOCTOR_REFERRAL_DESK_V1 — строка по рекомендации врача
                 dropVsIds: state.dropBooked,
                 bookedVisitId: state.bookedVisitId,
                 referralSourceId: referralSel.value || null,
@@ -961,6 +1108,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         if (res.movedNote) toast(res.movedNote, 'info');
         if (res.quoteError) toast(trf('Тариф визита не спрошен: {msg}', { msg: res.quoteError }), 'warn');
         if (res.queueError) toast(trf('Номера очереди не выданы: {msg}', { msg: res.queueError }), 'warn');
+        if (res.attachError) toast(trf('Рекомендация врача не закрыта: {msg}', { msg: res.attachError }), 'warn');   // DOCTOR_REFERRAL_DESK_V1
         // CRM_LINKS_V1 — ЗАПИСАННЫЙ ПО ТЕЛЕФОНУ ПРИШЁЛ И ОФОРМЛЕН ЗДЕСЬ.
         //
         // Строки заявки колл-центра закрывает СЕРВЕР, в той же транзакции, где
@@ -1158,6 +1306,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         overlay, card, body, close, state,
         fields: api.fields, collect: api.collect, setGender: api.setGender,
         table, saveBtn, printBtn, addServicesBtn, addPackagesBtn, referralSel, searchInput,
+        doctorOrdersEl,   // DOCTOR_REFERRAL_DESK_V1
         // FAST_REG_LAYOUT_V1 — два блока окна: реквизиты и услуги.
         patientBlock, servicesBlock, formEl: api.formEl,
     };

@@ -13462,4 +13462,12 @@ export const STRINGS = {
   "на {day}": {"en":"for {day}","ru":"на {day}","uz":"{day} kuniga"},   // DOCTOR_REFERRAL_DESK_V1
   "сегодня — к оформлению": {"en":"today — ready to register","ru":"сегодня — к оформлению","uz":"bugun — rasmiylashtirishga tayyor"},   // DOCTOR_REFERRAL_DESK_V1
   "Бонус: {names}": {"en":"Bonus: {names}","ru":"Бонус: {names}","uz":"Bonus: {names}"},   // DOCTOR_REFERRAL_DESK_V1
+  // DOCTOR_REFERRAL_DESK_V1 — «Направления врача» в окнах регистрации (fast-registration.js, visit-wizard.js)
+  "от врача · {name}": {"en":"from doctor · {name}","ru":"от врача · {name}","uz":"shifokordan · {name}"},   // DOCTOR_REFERRAL_DESK_V1
+  "рекомендация врача": {"en":"doctor's recommendation","ru":"рекомендация врача","uz":"shifokor tavsiyasi"},   // DOCTOR_REFERRAL_DESK_V1
+  "Направления врача не загрузились: {msg}": {"en":"Doctor referrals did not load: {msg}","ru":"Направления врача не загрузились: {msg}","uz":"Shifokor yo‘llanmalari yuklanmadi: {msg}"},   // DOCTOR_REFERRAL_DESK_V1
+  "оформляется в мастере визита": {"en":"registered in the visit wizard","ru":"оформляется в мастере визита","uz":"tashrif ustasida rasmiylashtiriladi"},   // DOCTOR_REFERRAL_DESK_V1
+  "Направления врача из другого визита — оформите их в окне визита.": {"en":"Doctor referrals from another visit — register them in the visit window.","ru":"Направления врача из другого визита — оформите их в окне визита.","uz":"Boshqa tashrifdagi shifokor yo‘llanmalari — ularni tashrif oynasida rasmiylashtiring."},   // DOCTOR_REFERRAL_DESK_V1
+  "Услуги рекомендации нет в каталоге — добавьте её вручную.": {"en":"The recommended service is not in the catalogue — add it manually.","ru":"Услуги рекомендации нет в каталоге — добавьте её вручную.","uz":"Tavsiya etilgan xizmat katalogda yo‘q — uni qo‘lda qo‘shing."},   // DOCTOR_REFERRAL_DESK_V1
+  "Рекомендация врача не закрыта: {msg}": {"en":"The doctor's recommendation was not closed: {msg}","ru":"Рекомендация врача не закрыта: {msg}","uz":"Shifokor tavsiyasi yopilmadi: {msg}"},   // DOCTOR_REFERRAL_DESK_V1
 };

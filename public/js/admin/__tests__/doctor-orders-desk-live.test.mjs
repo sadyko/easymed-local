@@ -224,3 +224,109 @@ test('DOCTOR_REFERRAL_DESK_V1 (настоящий сервер): строка п
       { referred_by_source_id: srcOf(t.db, 10), referral_note: 'к 9:00' });
   } finally { t.close(); }
 });
+
+async function pickPatientOrders(dlg) {
+  dlg.searchInput.value = 'Пациент';
+  dlg.searchInput.fireInput();
+  for (let i = 0; i < 60 && !walk(dlg.card).some((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')); i++) await tick(50);
+  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  for (let i = 0; i < 60 && !dlg.state.doctorOrders; i++) await tick(50);
+  assert.ok(dlg.state.doctorOrders, 'направления врача не загрузились: ' + JSON.stringify(toasts));
+}
+const node = (dlg, attr, val) => walk(dlg.card).find((n) => n.attrs && n.attrs[attr] === String(val));
+
+test('DOCTOR_REFERRAL_DESK_V1 (настоящий сервер): сегодняшнее направление без счёта — готовая строка «от врача»; сохранение выставляет её, второй строки нет', async () => {
+  const t = await live(seedDoc);
+  try {
+    const vid = visitToday(t);
+    const a = await doctorLine(t, { visit_id: vid, service_id: 50, referral_note: 'натощак' });
+    const dlg = openFastRegistrationDialog({});
+    await waitCatalog(dlg);
+    await pickPatientOrders(dlg);
+    const row = dlg.state.rows.find((r) => r.booked && r.booked.vsId === a);
+    assert.ok(row && row.booked.doctorOrder, 'направление не встало готовой строкой: ' + JSON.stringify(dlg.state.rows.map((r) => r.booked)));
+    assert.ok(/от врача · Иванов/.test(textOf(dlg.table)), 'нет пометки «от врача»: ' + textOf(dlg.table));
+    assert.ok(/натощак/.test(textOf(dlg.table)), 'рекомендация врача не видна регистратору');
+    await save(dlg);
+    assert.deepEqual(t.db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND service_id = 50').all(vid).map((r) => r.id), [a], 'вставлена вторая строка');
+    assert.ok(t.db.prepare('SELECT invoice_item_id i FROM visit_services WHERE id = ?').get(a).i != null, 'направление не выставлено');
+    dlg.close();
+  } finally { t.close(); }
+});
+
+test('DOCTOR_REFERRAL_DESK_V1 (настоящий сервер): убранная из таблицы строка направления остаётся в визите и возвращается кнопкой «Добавить»', async () => {
+  const t = await live(seedDoc);
+  try {
+    const vid = visitToday(t);
+    const a = await doctorLine(t, { visit_id: vid, service_id: 50 });
+    const dlg = openFastRegistrationDialog({});
+    await waitCatalog(dlg);
+    await pickPatientOrders(dlg);
+    const i = dlg.state.rows.findIndex((r) => r.booked && r.booked.vsId === a);
+    assert.ok(i >= 0, 'направление не встало строкой');
+    dlg.state.removeLine(i);
+    assert.deepEqual(dlg.state.dropBooked, [], 'строку врача сняли бы с визита');
+    const add = node(dlg, 'data-doctor-order-add', a);
+    assert.ok(add, 'нет «Добавить» у убранного направления: ' + textOf(dlg.card));
+    add.click();
+    assert.ok(dlg.state.rows.some((r) => r.booked && r.booked.vsId === a), 'направление не вернулось строкой');
+    assert.ok(!node(dlg, 'data-doctor-order', a), 'вернувшаяся строка осталась и в группе');
+    dlg.close();
+  } finally { t.close(); }
+});
+
+test('DOCTOR_REFERRAL_DESK_V1 (настоящий сервер): выставленное направление — только чтение «ждёт оплаты в кассе, счёт № …», строкой не встаёт', async () => {
+  const t = await live(seedDoc);
+  try {
+    const vid = visitToday(t);
+    const b = await doctorLine(t, { visit_id: vid, service_id: 50 });
+    const inv = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: vid, visit_service_ids: [b], discount_amount: 0, payer_id: null });
+    assert.equal(inv.status, 200, inv.text);
+    const no = inv.json.data.invoice.invoice_number;
+    const dlg = openFastRegistrationDialog({});
+    await waitCatalog(dlg);
+    await pickPatientOrders(dlg);
+    assert.ok(!dlg.state.rows.some((r) => r.booked && r.booked.vsId === b), 'выставленное направление встало строкой — выставилось бы второй раз');
+    const grp = node(dlg, 'data-doctor-order', b);
+    assert.ok(grp, 'выставленного направления нет в группе «Направления врача»');
+    assert.ok(textOf(grp).includes('ждёт оплаты в кассе, счёт № ' + no), textOf(grp));
+    assert.ok(!/По записи уже в счёте/.test(textOf(dlg.card)), 'направление врача названо записью');
+    dlg.close();
+  } finally { t.close(); }
+});
+
+test('DOCTOR_REFERRAL_DESK_V1 (настоящий сервер): рекомендация врача — «Добавить»; после сохранения рекомендация закрыта, у строки направивший', async () => {
+  const t = await live(seedDoc);
+  try {
+    const rec = await recOf(t, { service_id: 60, notes: 'к 9:00' });
+    const dlg = openFastRegistrationDialog({});
+    await waitCatalog(dlg);
+    await pickPatientOrders(dlg);
+    const add = node(dlg, 'data-doctor-rec-add', rec);
+    assert.ok(add, 'нет кнопки «Добавить» у рекомендации: ' + textOf(dlg.card));
+    add.click();
+    assert.ok(dlg.state.rows.some((x) => x.fromRec === rec), 'рекомендация не встала строкой');
+    assert.ok(!node(dlg, 'data-doctor-rec', rec), 'добавленная рекомендация осталась в группе');
+    const res = await save(dlg);
+    const vs = res.lines.find((l) => Number(l.serviceId) === 60).visitServiceId;
+    assert.deepEqual(t.db.prepare('SELECT status, visit_service_id FROM recommended_services WHERE id = ?').get(rec), { status: 'done', visit_service_id: vs });
+    assert.equal(t.db.prepare('SELECT referred_by_source_id s FROM visit_services WHERE id = ?').get(vs).s, srcOf(t.db, 10));
+    dlg.close();
+  } finally { t.close(); }
+});
+
+test('DOCTOR_REFERRAL_DESK_V1 (настоящий сервер): направление на другой день — в группе с подсказкой, в сегодняшнюю регистрацию не встаёт', async () => {
+  const t = await live(seedDoc);
+  try {
+    const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(10, 0, 0, 0);
+    const vid = Number(t.db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (77, ?, 'scheduled')").run(d.toISOString()).lastInsertRowid);
+    const c = await doctorLine(t, { visit_id: vid, service_id: 50 });
+    const dlg = openFastRegistrationDialog({});
+    await waitCatalog(dlg);
+    await pickPatientOrders(dlg);
+    assert.ok(!dlg.state.rows.some((r) => r.booked && r.booked.vsId === c));
+    const grp = node(dlg, 'data-doctor-order', c);
+    assert.ok(grp && /оформляется в мастере визита/.test(textOf(grp)), grp ? textOf(grp) : 'нет в группе');
+    dlg.close();
+  } finally { t.close(); }
+});
