@@ -29,7 +29,7 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
-import { canOfferLineFix, openLineFix, openRebill, openRefundSwap, invoiceSwappable } from './cashier-line-fix.js?v=refbill4';   // REFUND_SWAP_V1 — «Заменить услугу» в окне «Платежи»; CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп) · REFBILL_REVIEW_V1 — плательщик карты перечитывается, отказ перечитывает строки
+import { canOfferLineFix, openLineFix, openRebill, openRefundSwap, invoiceSwappable, openLabTubeLine } from './cashier-line-fix.js?v=refbill4';   // REFUND_SWAP_V1 — «Заменить услугу» в окне «Платежи»; CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп) · REFBILL_REVIEW_V1 — плательщик карты перечитывается, отказ перечитывает строки
 import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт по счёту плательщику, та же сборка, что у мастера визита
 import { canCloseOtherShifts, canSwapPaidLines } from '../permissions.js';   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
@@ -2327,8 +2327,10 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
     // визита читаются по позициям счёта; начата ли работа — из
     // invoice_line_work выше (performed), экран её сам не выводит.
     const swapOk = items.length > 0 && !inv.admission_id && canOfferLineFix(inv) && invoiceSwappable(inv) && canSwapPaidLines();
+    // LAB_TUBE_LABEL_V1 (ревью U11, M3) — строки визита читаются и без права замены:
+    // «Вернуть услугу» открытого анализа напоминает перепечатать этикетку пробирки.
     let lineByItem = new Map();
-    if (swapOk) {
+    if (items.length) {
         try {
             const { data } = await supabase.from('visit_services')
                 .select('id, service_id, status, total, invoice_item_id, clinic_item_id, consultation_type_id, services(name, is_lab, type), doctor_id(id, full_name)')
@@ -2337,6 +2339,7 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
         } catch (e) { /* без строк визита остаётся «Вернуть услугу» */ }
     }
     const swapBtn = (it) => {
+        if (!swapOk) return null;   // LAB_TUBE_LABEL_V1 (ревью U11, M3) — строки теперь читаются и без права замены
         const line = lineByItem.get(it.id);
         const work = workById.get(it.id) || null;
         if (!line || line.clinic_item_id != null) return null;   // товар не меняют — его возвращают
@@ -2356,7 +2359,7 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
             h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button',
                 style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
-                onclick: () => openLineRefundConfirm({ ...it, work: workById.get(it.id) || null }, info, root, opts),   // REFUND_ANY_V1 — с тем, что сделано
+                onclick: () => openLineRefundConfirm({ ...it, work: workById.get(it.id) || null, line: lineByItem.get(it.id) || null }, info, root, opts),   // REFUND_ANY_V1 — с тем, что сделано · line: LAB_TUBE_LABEL_V1 (ревью U11, M3)
             }, 'Вернуть услугу')),
     ));
 
@@ -2529,9 +2532,14 @@ function openLineRefundConfirm(item, info, root, opts = {}) {   // REFUND_ANY_V1
             // (работа началась, пока окно было открыто): касса это слышит. Одна
             // строка уведомления — вместе с суммой, чтобы сумма не пропала.
             const keptNote = r && r.line_kept && !keepAsked ? ' · ' + tr('Сделанная работа осталась в визите') : '';
+            // LAB_TUBE_LABEL_V1 (ревью U11, M3) — вернули открытый анализ (ждёт забора …
+            // результаты внесены): на пробирке может быть этикетка с его номером, а
+            // номер пробирки теперь у следующей строки (возвращённая строка — не
+            // пробирка, К4) или пробирки нет. Те же слова, что у замены.
+            const reprint = openLabTubeLine(item.line) ? ' · ' + tr('Перепечатайте этикетку пробирки.') : '';
             toast((sum > 0
                 ? trf('Возвращено {sum} сум', { sum: fmtPrice(sum) })
-                : tr('Счёт уменьшен — переплаты нет, деньги не выдаются.')) + keptNote, 'ok');
+                : tr('Счёт уменьшен — переплаты нет, деньги не выдаются.')) + keptNote + reprint, 'ok');
             if (r && r.voided) toast(tr('Счёт отменён'), 'ok');
             if (r && r.void_note) toast(r.void_note, 'info');
             closeRefundModals(opts);   // REFUND_ANY_V1 (ревью I-4) — окно визита остаётся

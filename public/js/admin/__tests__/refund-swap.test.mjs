@@ -742,3 +742,99 @@ test('К4 (поправка): «Исправить услуги» — замен
     assert.equal(await swap(() => world({ lab: true }), doctor), 'Пациенту возвращено 70 000 сум.', TOASTS.join(' | '));
     closeAll();
 });
+
+// LAB_TUBE_LABEL_V1 — ревью U11, M3 (проба P2d). Простой «Вернуть услугу» (без
+// замены) открытого анализа: номер пробирки уходит к следующей строке (К4 —
+// возвращённая строка не пробирка) или пробирки больше нет, а на пробирке уже
+// наклеена прежняя этикетка — BC-780 с ней кладёт кровь в лоток «по заказу
+// возврат». Касса напоминает перепечатать — теми же словами, что у замены. Окно
+// визита открывает те же «Платежи» (openInvoiceRefundById) — та же дверь.
+test('ревью U11, M3: «Вернуть услугу» открытого анализа — «Перепечатайте этикетку пробирки.»; не анализ и выданный анализ — без напоминания', async () => {
+    const refund = async (world_, { ack = false, open = () => desk.__test_openInvoiceRefund(PAID, mkEl('div')) } = {}) => {
+        world_();
+        rpcAnswers.refund_invoice_line = { refunded: 150000, invoice: { ...PAID, total_amount: 5000, paid_amount: 5000 }, line_kept: ack };
+        closeAll();
+        await open();
+        await tick();
+        buttons(lastModal()).filter((b) => textOf(b).trim() === 'Вернуть услугу')[0].click();
+        await tick();
+        const dlg = lastModal();
+        if (ack) byAttr(dlg, 'data-work-ack', '1').checked = true;   // «Понимаю: работа остаётся в карте»
+        buttonByText(dlg, 'Вернуть услугу').click();
+        await tick(150);
+        assert.equal(rpcCalls('refund_invoice_line').length, 1, 'возврат не ушёл: ' + TOASTS.join(' | '));
+        return TOASTS.find((t) => t.startsWith('Возвращено')) || '(нет уведомления: ' + TOASTS.join(' | ') + ')';
+    };
+    // Кассир без права замены: строки визита читаются всё равно — напоминание не зависит от права.
+    asRole('cashier', {});
+    // Анализ ждёт забора (этикетку могли напечатать заранее): строка уходит с визита.
+    assert.ok((await refund(() => world({ lab: true }))).endsWith(REPRINT), TOASTS.join(' | '));
+    // Снимок P2d: проба взята — строка остаётся невыставленной, номер пробирки — у следующей.
+    assert.ok((await refund(() => world({ lab: true, lineStatus: 'collected', performed: true }), { ack: true })).endsWith(REPRINT), TOASTS.join(' | '));
+    // Не анализ — без напоминания.
+    assert.equal(await refund(() => world()), 'Возвращено 150 000 сум');
+    // Анализ уже выдан — пробирки у него нет, этикетка ни к чему не ведёт: без напоминания.
+    assert.equal(await refund(() => world({ lab: true, lineStatus: 'completed', performed: true }), { ack: true }), 'Возвращено 150 000 сум · Сделанная работа осталась в визите');
+    // С правом замены — то же.
+    asRole('cashier');
+    assert.ok((await refund(() => world({ lab: true, lineStatus: 'in_progress', performed: true }), { ack: true })).endsWith(REPRINT), TOASTS.join(' | '));
+    // Окно визита → «Платежи» → «Вернуть услугу».
+    assert.ok((await refund(() => world({ lab: true }), { open: () => fromVisitWindow(() => {}) })).endsWith(REPRINT), TOASTS.join(' | '));
+    closeAll();
+});
+
+// LAB_TUBE_LABEL_V1 — ревью U11, L5: две другие двери замены услуги без денег —
+// «Исправить услуги», пока по счёту не принято денег (cashier_line_change_service;
+// счёт на ноль уже отпустил строку в лабораторию), и «Выставить заново» (строка, за
+// которую вернули деньги, — у неё могла быть этикетка). Та же строка, другой
+// анализ — то же напоминание. Строка, которая в лабораторию не уходила (ждёт
+// оплаты, ни разу не оплачена), — без него: этикетки у неё быть не могло.
+test('ревью U11, L5: «Исправить услуги» до денег и «Выставить заново» — замена анализа тоже напоминает перепечатать этикетку', async () => {
+    asRole('cashier');
+    const ZERO = { ...PAID, status: 'paid', subtotal: 0, total_amount: 0, paid_amount: 0 };
+    const pick = async (row) => {
+        buttonByText(row, 'Заменить услугу').click();
+        await tick();
+        byAttr(lastModal(), 'data-service-id', '5').click();
+        await tick(150);
+        assert.equal(rpcCalls('cashier_line_change_service').length, 1, 'замена не ушла: ' + TOASTS.join(' | '));
+        return TOASTS.find((t) => t.startsWith('Услуга заменена.')) || '(нет уведомления: ' + TOASTS.join(' | ') + ')';
+    };
+    const lineFix = async (world_, inv) => {
+        world_();
+        tables.invoices = [inv];
+        rpcAnswers.cashier_line_change_service = { changed: true };
+        closeAll();
+        await fix.openLineFix(inv);
+        const row = byAttr(lastModal(), 'data-line', '101');
+        assert.ok(row, 'строки 101 нет в «Исправить услуги»');
+        assert.equal(byAttr(row, 'data-swap', 'service'), undefined, 'это дверь без денег, не замена в оплаченном счёте');
+        return pick(row);
+    };
+    // Счёт на ноль: анализ уже ждёт забора — та же строка, другой анализ.
+    assert.equal(await lineFix(() => world({ lab: true }), ZERO), 'Услуга заменена. · Перепечатайте этикетку пробирки.');
+    // Приём → анализ в строке, уже отпущенной в лабораторию: новый анализ встаёт в пробирку.
+    assert.equal(await lineFix(() => world(), ZERO), 'Услуга заменена. · Перепечатайте этикетку пробирки.');
+    // Неоплаченный счёт: анализ ждёт оплаты — в лабораторию не уходил.
+    assert.equal(await lineFix(() => world({ lab: true, lineStatus: 'added' }), { ...ZERO, status: 'unpaid' }), 'Услуга заменена.');
+
+    const rebill = async (refundedIds) => {
+        world({ lab: true, lineStatus: 'added' });
+        tables.visit_services = tables.visit_services.map((l) => ({ ...l, visit_id: 40, invoice_item_id: null }));
+        rpcAnswers.visit_refunded_lines = { line_ids: refundedIds };
+        rpcAnswers.cashier_line_change_service = { changed: true };
+        closeAll();
+        await fix.openRebill({ invoice_id: 5, invoice_number: 'INV-A-26-00005', visit_id: 40 });
+        const row = byAttr(lastModal(), 'data-rebill-line', '101');
+        assert.ok(row, 'строки 101 нет в «Выставить заново»');
+        return pick(row);
+    };
+    // Возвращённый анализ, оставленный в визите: этикетка с его номером могла остаться на пробирке.
+    assert.equal(await rebill([101]), 'Услуга заменена. · Перепечатайте этикетку пробирки.');
+    // Строка, за которую денег не брали (ждёт счёта), — без напоминания.
+    assert.equal(await rebill([]), 'Услуга заменена.');
+    // Окно «Выставить заново» знает, анализ ли строка: services(is_lab, type) в чтении.
+    assert.ok(calls.some(([n, b]) => n === 'db:visit_services' && /services\([^)]*is_lab[^)]*\)/.test(String(b.columns || '')) && (b.filters || []).some((f) => f.col === 'visit_id')),
+        '«Выставить заново» читает строки без services(is_lab)');
+    closeAll();
+});

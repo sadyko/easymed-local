@@ -35,6 +35,7 @@ import { h, Icon, clear, toast, fmtDate } from '../ui.js';   // fmtDate: REFERRA
 import { tr, trf } from '../i18n.js';
 import { canFixCashierLines, canSwapPaidLines } from '../permissions.js';
 import { localYmd } from '../discount-rules.js';   // REFERRAL_BILL_V1 — местный день, как у остальной кассы
+import { TUBE_STATUSES } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 (ревью U11, M3/L5) — статусы строк, у которых есть пробирка
 
 // Работа по строке начата или сделана — сервер её не меняет (PERFORMED_LINE_STATUSES).
 const PERFORMED = ['collected', 'in_progress', 'resulted', 'completed'];
@@ -348,6 +349,22 @@ export async function openSwapConfirm(args, { onDone = null } = {}) {
 // меняет (busy). `onDone(r)` получает ответ сервера (`rebill: true` — второй путь).
 const isLabService = (s) => !!s && (Number(s.is_lab) === 1 || s.type === 'lab');
 
+// LAB_TUBE_LABEL_V1 (ревью U11, M3) — строка анализа в работе лаборатории (ждёт
+// забора … результаты внесены — статусы пробирки, lab-tube.js): её номер мог уйти
+// на этикетку пробирки. «Вернуть услугу» такой строки напоминает перепечатать
+// этикетку (cashier-desk.js openLineRefundConfirm).
+export const openLabTubeLine = (line) => !!line && isLabService(line.services) && TUBE_STATUSES.includes(line.status);
+
+// LAB_TUBE_LABEL_V1 (ревью U11, L5) — двери замены без денег («Исправить услуги»
+// до оплаты, «Выставить заново»): та же строка, другая услуга. Если строка могла
+// стоять в пробирке (`could`: отпущена в лабораторию — или за неё вернули деньги) и
+// прежняя или новая услуга — анализ, этикетка устарела: напоминание — те же слова,
+// что у замены в «Платежах» (К4). Строка, которая в лабораторию не уходила, —
+// без напоминания: этикетки у неё не было.
+function reprintNote(line, svc, could) {
+    return could && (isLabService(line && line.services) || isLabService(svc)) ? ' · ' + tr('Перепечатайте этикетку пробирки.') : '';
+}
+
 export async function openRefundSwap(inv, item, line, { work = null, onDone = null } = {}) {
     let svc = null;            // новая услуга { id, name, price, is_lab, type }
     let who = null;            // исполнитель { id, full_name } или { id: null } — «Без врача»
@@ -616,7 +633,9 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
                     const svc = await pickService(tr('Заменить услугу'), { visitId: st.invoice.visit_id, exceptLineId: line.id, doctorId: lineDoctorId(line) });   // DUP_STOP_V1 · ревью m5
                     if (!svc) return;
-                    if (await runRpc('cashier_line_change_service', { visit_service_id: line.id, new_service_id: svc.id }, tr('Услуга заменена.'))) { await paint(); await changed(); }
+                    // LAB_TUBE_LABEL_V1 (ревью U11, L5) — счёт на ноль уже отпустил строку в лабораторию.
+                    const note = reprintNote(line, svc, TUBE_STATUSES.includes(line.status));
+                    if (await runRpc('cashier_line_change_service', { visit_service_id: line.id, new_service_id: svc.id }, tr('Услуга заменена.') + note)) { await paint(); await changed(); }
                 } }, 'Заменить услугу'));
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
                     const who = await pickPerformer(tr('Сменить врача'), { visit_service_id: line.id });
@@ -818,7 +837,7 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
         let lines = [];
         try {
             const { data } = await supabase.from('visit_services')
-                .select('id, service_id, status, quantity, unit_price, total, invoice_item_id, clinic_item_id, consultation_type_id, services(name), products(name), doctor_id(id, full_name)')
+                .select('id, service_id, status, quantity, unit_price, total, invoice_item_id, clinic_item_id, consultation_type_id, services(name, is_lab, type), products(name), doctor_id(id, full_name)')   // is_lab, type: LAB_TUBE_LABEL_V1 (ревью U11, L5) — строка — анализ?
                 .eq('visit_id', row.visit_id).is('invoice_item_id', null).order('id', { ascending: true });
             lines = (data || []).filter((l) => l.status !== 'cancelled' && l.invoice_item_id == null);
         } catch (e) { lines = []; }
@@ -848,7 +867,10 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
                     const svc = await pickService(tr('Заменить услугу'), { visitId: row.visit_id, exceptLineId: id, doctorId: lineDoctorId(l) });   // DUP_STOP_V1 · ревью m5
                     if (!svc) return;
-                    if (await runRpc('cashier_line_change_service', { visit_service_id: id, new_service_id: svc.id }, tr('Услуга заменена.'))) await paint();
+                    // LAB_TUBE_LABEL_V1 (ревью U11, L5) — за строку вернули деньги: она была в
+                    // лаборатории, и этикетка с её номером могла остаться на пробирке.
+                    const note = reprintNote(l, svc, refunded.has(id) || TUBE_STATUSES.includes(l.status));
+                    if (await runRpc('cashier_line_change_service', { visit_service_id: id, new_service_id: svc.id }, tr('Услуга заменена.') + note)) await paint();
                 } }, 'Заменить услугу'));
                 actions.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
                     const who = await pickPerformer(tr('Сменить врача'), { visit_service_id: id });
