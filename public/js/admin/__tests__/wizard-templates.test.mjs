@@ -67,7 +67,11 @@ const strip = (s) => s.replace(/\/\/[^\n]*/g, '');
 test('в счёт уходит только скидка на строки без пакета, и переносится по rest_discount', () => {
   const code = strip(wizard);
   // REFERRAL_BILL_V1 — у врача без денежной роли ручной скидки нет: в счёт уходит 0.
-  assert.match(code, /let discountLeft = doctorBill \? 0 : restDiscount\(\)/, 'в счёт — скидка без пакетов (сервер считает пакет сам); у врача — 0');
+  // INVOICE_APPEND_V1 (ревью, остаток 6) — в счёт — oneDayDiscountSend (прежний расчёт restDiscount);
+  // restDiscount теперь — показ: что даст счёт с полом группы.
+  assert.match(code, /let discountLeft = doctorBill \? 0 : oneDayDiscountSend\(\)/, 'в счёт — скидка без пакетов (сервер считает пакет сам); у врача — 0');
+  const send = code.slice(code.indexOf('function oneDayDiscountSend('), code.indexOf('function oneDayDiscountShown('));
+  assert.match(send, /restTotal\(\)/, 'в счёт — скидка только по строкам без своей скидки');
   assert.match(code, /iRes\.rest_discount/, 'перенос по тому, что сервер применил БЕЗ скидок пакета');
   const loyalty = code.slice(code.indexOf('function loyaltyDiscount('), code.indexOf('function promoLines('));
   assert.match(loyalty, /restTotal\(\)/, 'лояльность — только по строкам без своей скидки');

@@ -2278,17 +2278,37 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const k = sub > 0 ? Math.max(0, 1 - loyalty / sub) : 1;
         return restCart().map((c) => ({ service_id: c.svc.id, total: cartLinePrice(c) * c.qty * k }));
     }
-    // Скидка на строки без своей — это и только это уходит в счёт
-    // (discount_amount): скидку пакета сервер считает сам.
+    // Скидка на строки без своей — для показа и печати: что дадут счета.
+    // Скидку пакета сервер считает сам.
     // INVOICE_APPEND_V1 (ревью-2) — смета на несколько дней: сумма того, что
     // дадут счета дней (dayDiscountPlan), а не скидка со всей сметы.
+    // INVOICE_APPEND_V1 (ревью, остаток 6) — смета на один день — тоже то, что даст
+    // счёт (oneDayDiscountShown: пол группы сервера), а не присланное: VIP 10 % и
+    // −5 000 суммой показывали 135 000, а счёт брал 126 000.
     function restDiscount() {
         const plan = dayDiscountPlan();
         if (plan) return plan.total;
+        return oneDayDiscountShown(doctorBill ? 0 : oneDayDiscountSend());
+    }
+    // Смета на один день: это и только это уходит в счёт (discount_amount) —
+    // прежний расчёт, не тронут (ревью, остаток 6).
+    function oneDayDiscountSend() {
         const sub = restTotal();
         let d = loyaltyDiscount();
         if (wiz.promo) d += discountValue(wiz.promo, promoLines());
         return Math.min(sub, Math.round(d));
+    }
+    // INVOICE_APPEND_V1 (ревью, остаток 6) — что даст счёт пациента одного дня на
+    // присланное `send`: тот же расчёт, что у дня в dayDiscountPlan (и у сервера,
+    // billing.js): max(присланное, пол группы) в пределах базы — строк счёта пациента
+    // без своей скидки; счёта пациента нет (всё покрыл плательщик) — 0.
+    function oneDayDiscountShown(send) {
+        const r2 = (n) => Math.round(n * 100) / 100;   // как round2 в billing.js
+        const room = restCart().filter((c) => !isCovered(c)).reduce((s, c) => s + cartLinePrice(c) * c.qty, 0);
+        const job = visibleCart().some((c) => !isCovered(c));
+        if (!job) return 0;
+        const cat = Math.min(100, Math.max(0, Number(wiz.categoryPct) || 0));
+        return r2(Math.min(Math.max(send, r2(room * cat / 100)), room));
     }
     // INVOICE_APPEND_V1 (ревью-2) — СМЕТА НА НЕСКОЛЬКО ДНЕЙ — ЭТО НЕСКОЛЬКО
     // СЧЕТОВ, И СКИДКА СЧИТАЕТСЯ ПО НИМ.
@@ -3017,7 +3037,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // своей (restDiscount): скидку пакета сервер считает по строкам сам.
             // REFERRAL_BILL_V1 — врач ручной скидки не даёт: в счёт уходит 0
             // (скидку группы пациента и пакета сервер даст сам).
-            let discountLeft = doctorBill ? 0 : restDiscount();
+            let discountLeft = doctorBill ? 0 : oneDayDiscountSend();   // ревью, остаток 6 — в счёт — прежнее, не показанное
             // INVOICE_APPEND_V1 (ревью-2) — смета на несколько дней: процент —
             // каждому дню свой, переносится только сумма (dayDiscountPlan).
             const dayPlan = doctorBill ? null : dayDiscountPlan();

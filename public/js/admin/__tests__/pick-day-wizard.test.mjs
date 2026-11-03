@@ -539,4 +539,58 @@ test('ревью, остаток 5: три дня, VIP 10 % и 22 000 суммо
   await failedDay({ fail: 2, estimate: 198000, act: async () => { vipPatient(10); await threeDayCart(); await amountDiscount(22000); } });
 });
 
+// INVOICE_APPEND_V1 (ревью, остаток 6) — СМЕТА НА ОДИН ДЕНЬ ПОКАЗЫВАЕТ ТО, ЧТО ДАСТ СЧЁТ.
+// Сервер даёт счёту пациента max(присланное, пол группы); смета на один день пол группы не
+// знала: VIP 10 % и −5 000 суммой показывали 135 000, а счёт брал 126 000. Отправляемое в
+// счёт не меняется — меняется только показ.
+async function oneDayCart() {
+  await twoDayCart();
+  byAttr(overlay(), 'data-one-day').click();
+  await flush(20);
+  assert.ok(!byAttr(overlay(), 'data-many-days'), 'смета не свелась к одному дню');
+}
+async function pickPromo(name) {
+  const sel = walk(overlay()).find((n) => n.tagName === 'SELECT' && n.children.some((o) => textOf(o).includes(name)));
+  assert.ok(sel, 'нет выбора промокода ' + name);
+  const opt = sel.children.find((o) => textOf(o).includes(name));
+  sel.value = opt.attrs.value || opt.value;
+  sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+  await flush(5);
+}
+
+test('ревью, остаток 6: один день, VIP 10 % и −5 000 суммой — смета показывает 126 000 (пол группы), счёт — те же 126 000; в счёт ушло прежнее 5 000', async () => {
+  seed();
+  vipPatient(10);
+  await oneDayCart();
+  await amountDiscount(5000);
+  assert.equal(estimateTotal(), 126000, 'смета не знает пола группы');
+  assert.ok(textOf(overlay()).includes('−14 000 сум'), 'скидка в смете — не та, что даст счёт');
+  await pressUntilCreate();
+  assert.deepEqual(sentDiscounts(), [5000], 'в счёт уходит не прежнее');
+  assert.deepEqual(invoiceMoney(), [[140000, 14000, 126000]]);
+});
+
+test('ревью, остаток 6: один день, VIP 10 % снижен до 5 % + промокод 3 000 — смета 126 000, как счёт; в счёт ушло прежнее 10 000', async () => {
+  seed();
+  vipPatient(10);
+  DB.prepare("INSERT INTO patient_discounts (name, kind, percent, amount, active) VALUES ('ПРОБА', 'promo', 0, 3000, 1)").run();
+  await oneDayCart();
+  await pctDiscount(5);
+  await pickPromo('ПРОБА');
+  assert.equal(estimateTotal(), 126000, 'смета не знает пола группы');
+  await pressUntilCreate();
+  assert.deepEqual(sentDiscounts(), [10000], 'в счёт уходит не прежнее');
+  assert.deepEqual(invoiceMoney(), [[140000, 14000, 126000]]);
+});
+
+test('ревью, остаток 6: один день, без группы, −5 000 суммой — как прежде: смета 135 000 и счёт 135 000', async () => {
+  seed();
+  await oneDayCart();
+  await amountDiscount(5000);
+  assert.equal(estimateTotal(), 135000);
+  await pressUntilCreate();
+  assert.deepEqual(sentDiscounts(), [5000]);
+  assert.deepEqual(invoiceMoney(), [[140000, 5000, 135000]]);
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });
