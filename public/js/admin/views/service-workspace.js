@@ -662,6 +662,28 @@ function resetSaveBtn(ctx) {
 // (lab / diagnostic / intervention) should be inserted into, instead of a fixed
 // target. Highlights the type-appropriate default; choosing enables that section
 // and inserts. Used by every «Вставить в документ» on a fetched result.
+// PASTE_SOURCES_V1 (ревью L8) — ПОЛЯ ОТКРЫТОГО БЛАНКА. Выбор предлагал только
+// разделы бланка «Приём» (DOC_SECTIONS): на бланке «Диагностика» вставить прошлое
+// исследование в «Описание» было нельзя, а поля по умолчанию вкладок «Анализы»
+// (labs_text) и «Диагностика» (instrumental_text) не подсвечивались никогда.
+// Теперь: «Диагностика» — её «Описание» и «Заключение» (DIAG_FIELDS); «Приём» —
+// его разделы и «Лабораторные / Инструментальные исследования» (поля под бланком:
+// buildBlankData показывает их разделами листа после «Осмотра», как только в них
+// есть текст). Поле вкладки подсвечено, если оно на этом бланке есть.
+function pasteTargets() {
+    if (wsState.docType === 'diag') {
+        return [
+            { field: 'instrumental_text', label: 'Описание', sec: null },
+            { field: 'primary_diagnosis', label: 'Заключение', sec: 'diagnosis' },
+        ];
+    }
+    const out = DOC_SECTIONS.map((sd) => ({ field: sd.field, label: sd.label, sec: sd.sec }));
+    const exam = out.findIndex((t) => t.field === 'physical_exam');
+    out.splice(exam < 0 ? out.length : exam + 1, 0,
+        { field: 'labs_text', label: 'Лабораторные исследования', sec: null },
+        { field: 'instrumental_text', label: 'Инструментальные исследования', sec: null });
+    return out;
+}
 function _pastePickField(ctx, html, defaultField, okMsg) {
     if (!ctx) { toast('Откройте документ пациента, затем вставьте результат.', 'fail'); return; }
     if (refuseWhileLoading(ctx)) return;   // CABINET_FIX_V1_R4 (п. 3) — незагруженный лист вставок не принимает
@@ -670,12 +692,12 @@ function _pastePickField(ctx, html, defaultField, okMsg) {
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
     const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
-    DOC_SECTIONS.forEach(sd => {
+    pasteTargets().forEach((sd) => {   // PASTE_SOURCES_V1 (ревью L8)
         const isDef = sd.field === defaultField;
         list.appendChild(h('button', {
             class: 'btn btn-outline', type: 'button',
             style: { justifyContent: 'flex-start', ...(isDef ? { borderColor: 'var(--primary-500)', color: 'var(--primary-700)', fontWeight: 700 } : {}) },
-            onclick: () => { try { wsAddSection(ctx, sd.sec); } catch (e) {} a4InsertHtml(ctx, html, sd.field, okMsg || 'Вставлено в документ'); close(); },
+            onclick: () => { try { if (sd.sec) wsAddSection(ctx, sd.sec); } catch (e) {} a4InsertHtml(ctx, html, sd.field, okMsg || 'Вставлено в документ'); close(); },
         }, sd.label, isDef ? h('span', { class: 'muted', style: { marginLeft: 'auto', fontSize: '12.5px', fontWeight: 400 } }, 'рекомендуется') : null));
     });
     overlay.appendChild(h('div', { class: 'modal-card', style: { width: '400px', maxWidth: 'calc(100vw - 32px)' } },
@@ -924,9 +946,6 @@ export function soapForm(ctx) {
     // AURORA_CONSULT_TEMPLATES_V1 — open the «Шаблоны заключений» library.
     const tplBtn = h('button', { class: 'btn btn-outline', type: 'button', 'data-ws-needs-load': '', onclick: () => openTemplateLibraryModal(ctx) },   // CABINET_FIX_V1_R4 — заперта, пока лист грузится
         Icon('Doc', { size: 13 }), ' Шаблоны');
-
-    // PASTE_SOURCES_V1 — здесь создавалась кнопка «Вставить результаты» (emrBtn), но ни в одну
-    // панель не попадала; живая кнопка — на листе (_ic.results, openEmrModal).
 
     // WS_DOCPHONE_V1 — optional doctor-phone line in the document footer.
     const phoneBtn = h('button', { class: 'btn btn-outline', type: 'button', onclick: () => {

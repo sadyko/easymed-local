@@ -105,3 +105,67 @@ test('страж: прежней «Карты приёмов» и мёртвог
     const css = fs.readFileSync(path.join(HERE, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
     assert.ok(!/\.st-(body|list|item|prev|tbl)\b/.test(css), 'стили удалённого окна истории остались');
 });
+
+// ---------------------------------------------------------------------------
+// PASTE_SOURCES_V1 — РЕВЬЮ U3 (2026-11-03).
+// ---------------------------------------------------------------------------
+const isPicker = (n) => String(n && n.textContent).includes('Куда вставить?');
+const pickerButtons = (pick) => pick.querySelectorAll('button').filter((b) => String(b.className).includes('btn-outline'));
+
+// L4 — оба окна слушают keydown на document: Escape в «Куда вставить?» закрывал
+// и окно с галочками. Стенд записывает обработчики, как браузер.
+test('ревью L4: Escape в «Куда вставить?» закрывает только его; окно документов с галочками остаётся; второй Escape закрывает окно', async () => {
+    const KEY = [];
+    const add0 = document.addEventListener, rm0 = document.removeEventListener;
+    document.addEventListener = (t, fn) => { if (t === 'keydown') KEY.push(fn); };
+    document.removeEventListener = (t, fn) => { const i = KEY.indexOf(fn); if (t === 'keydown' && i > -1) KEY.splice(i, 1); };
+    const escape = () => { for (const fn of KEY.slice()) fn({ key: 'Escape' }); };
+    try {
+        SOURCES = FIXTURE();
+        const ctx = cabinet(8);
+        await WS.hydrateLine(ctx);
+        iframeBar(ctx).find((b) => String(b.textContent).includes('Вставить результаты')).dispatch('click');
+        await tick(10);
+        const modal = document.body.children.find((c) => c.hasAttribute && c.hasAttribute('data-paste-sources'));
+        modal.querySelector('[data-paste-insert="line:61"]').dispatch('click');
+        assert.ok(isPicker(document.body.children.at(-1)), 'нет выбора раздела');
+        escape();
+        assert.ok(!document.body.children.some(isPicker), '«Куда вставить?» не закрылось');
+        assert.ok(document.body.children.includes(modal), 'Escape в «Куда вставить?» закрыл и окно документов');
+        escape();
+        assert.ok(!document.body.children.includes(modal), 'второй Escape не закрыл окно документов');
+    } finally {
+        document.addEventListener = add0; document.removeEventListener = rm0;
+    }
+});
+
+// L8 — «Куда вставить?» предлагал только разделы бланка «Приём»: на бланке
+// «Диагностика» в «Описание» не вставить, а поля по умолчанию вкладок «Анализы»
+// (labs_text) и «Диагностика» (instrumental_text) не подсвечивались никогда.
+test('ревью L8: «Куда вставить?» — поля открытого бланка; на «Приёме» есть «Лабораторные/Инструментальные исследования», поле вкладки подсвечено; на «Диагностике» — «Описание» и «Заключение»', async () => {
+    const ctx = cabinet(9);
+    await WS.hydrateLine(ctx);
+    WS.pastePickField(ctx, '<b>HGB 96</b>', 'labs_text', 'ok');
+    let pick = document.body.children.at(-1);
+    assert.ok(isPicker(pick));
+    const labels = pickerButtons(pick).map((b) => String(b.textContent).replace('рекомендуется', '').trim());
+    for (const l of ['Жалобы', 'Осмотр', 'Заключение', 'Лабораторные исследования', 'Инструментальные исследования']) assert.ok(labels.includes(l), l + ' нет в выборе: ' + labels.join(' | '));
+    const rec = pickerButtons(pick).filter((b) => String(b.textContent).includes('рекомендуется')).map((b) => String(b.textContent));
+    assert.deepEqual(rec.length, 1);
+    assert.ok(rec[0].startsWith('Лабораторные исследования'), 'подсвечено не поле вкладки «Анализы»: ' + rec[0]);
+    buttonByText(pick, 'Лабораторные исследования').dispatch('click');
+    assert.ok(field(ctx, 'labs_text').innerHTML.includes('<b>HGB 96</b>'), 'вставка не в «Лабораторные исследования»');
+
+    WS.setDocType(ctx, 'diag');
+    WS.pastePickField(ctx, '<p>Прошлое УЗИ</p>', 'instrumental_text', 'ok');
+    pick = document.body.children.at(-1);
+    assert.deepEqual(pickerButtons(pick).map((b) => String(b.textContent).replace('рекомендуется', '').trim()), ['Описание', 'Заключение'], 'на бланке «Диагностика» — не его поля');
+    assert.ok(String(buttonByText(pick, 'Описание').textContent).includes('рекомендуется'), '«Описание» не подсвечено для вкладки «Диагностика»');
+    buttonByText(pick, 'Описание').dispatch('click');
+    assert.ok(field(ctx, 'instrumental_text').innerHTML.includes('<p>Прошлое УЗИ</p>'), 'вставка не в «Описание»');
+    WS.pastePickField(ctx, '<p>x</p>', 'physical_exam', 'ok');
+    pick = document.body.children.at(-1);
+    assert.ok(!pickerButtons(pick).some((b) => String(b.textContent).includes('рекомендуется')), 'подсвечено поле, которого на бланке нет');
+    pick.remove();
+    WS.setDocType(ctx, 'conclusion');
+});
