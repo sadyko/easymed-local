@@ -20,8 +20,8 @@
 //   каталоги гасят услуги («уже назначено»).
 // DUP_STOP_V1 (ревью M2) — ЧЬИ ЭТО ДАННЫЕ. Строки визита и счета — данные пациента: тем, кому
 // /api/db их не отдаёт (patientDataRefusal('visit_services') — разделы и вкладки роли;
-// колл-центр), ordered пуст, а повтор назван без «кем, когда, счёт № …» и без номера строки
-// (DUP_TEMPLATE_PLAIN): название — той услуги, которую выбрал сам. Визит по номеру — только
+// колл-центр), ordered пуст и duplicates пуст (ревью, остаток 1: прежде повтор назывался без
+// «кем, когда, счёт № …», но и сама пометка выдавала, что из присланного есть в визите). Визит по номеру — только
 // своего здания (как у дверей записи); визит дня и так свой (dayVisitOf).
 import { hasAnyRole } from '../roles.js';
 import { patientDataRefusal } from '../../db/patient-data-gate.js';   // DUP_STOP_V1 (ревью M2)
@@ -72,8 +72,11 @@ export function visitDupCheck(db, args, user) {
     consultation_type_id: pos(l && l.consultation_type_id),
     doctor_id: pos(l && l.doctor_id),
   }));
-  const hits = duplicateHits(db, lines, { excludeIds: exclude, spare });
   const hidden = patientDataRefusal('visit_services', user, db) != null;   // DUP_STOP_V1 (ревью M2)
+  // DUP_STOP_V1 (ревью, остаток 1) — тем, кому строки визита не отдают, и повторов не называем:
+  // пачка до 50 услуг иначе — оракул «что из этого уже есть в визите здания». Ничего не теряется:
+  // booking_lines_add колл-центра назначенное и так пропускает, а двери записи откажут сами.
+  const hits = hidden ? [] : duplicateHits(db, lines, { excludeIds: exclude, spare });
   const ordered = hidden ? [] : liveOrders(db, visitId)
     .filter((r) => !exclude.includes(Number(r.id)))
     .filter((r) => !spare({ visit_id: visitId, service_id: r.service_id, consultation_type_id: r.service_id == null ? r.consultation_type_id : null, doctor_id: r.doctor_id }).includes(Number(r.id)))
@@ -84,8 +87,8 @@ export function visitDupCheck(db, args, user) {
       who: r.creator_name || '', when: r.created_local || '', invoice_number: r.invoice_number || null,
     }));
   const duplicates = hits.map((h) => {
-    const e = refusalOf(db, h, { plain: hidden });   // DUP_STOP_V1 (ревью M2)
-    return { index: h.index, message: e.message, template: e.template, params: e.params, line_id: !hidden && h.existing ? h.existing.id : null };
+    const e = refusalOf(db, h);
+    return { index: h.index, message: e.message, template: e.template, params: e.params, line_id: h.existing ? h.existing.id : null };
   });
   return { visit_id: visitId, ordered, duplicates, can_override: canOverride };
 }

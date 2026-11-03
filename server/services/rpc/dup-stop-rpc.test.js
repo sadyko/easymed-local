@@ -179,17 +179,31 @@ test('DUP_STOP_V1 (ревью M2): visit_dup_check — роли без стро�
     const out = call('visit_dup_check', db, { ...args, lines: [{ service_id: 40 }, { service_id: 50 }] }, callcenter);
     assert.equal(out.visit_id, vid);
     assert.deepEqual(out.ordered, [], 'колл-центру — строки визита, которые /api/db ему не отдаёт');
-    assert.equal(out.duplicates.length, 1);
-    const d = out.duplicates[0];
-    assert.equal(d.message, 'Эта услуга уже назначена в этом визите: «Анализ крови».');
-    assert.deepEqual(d.params, { service: 'Анализ крови' }, 'кем, когда и номер счёта — данные пациента');
-    assert.equal(d.line_id, null);
-    assert.ok(!/Врач Первый|INV-/.test(JSON.stringify(out)), JSON.stringify(out));
+    // DUP_STOP_V1 (ревью, остаток 1) — и повторов не называет: иначе пачка из 50 услуг —
+    // оракул «что из этого есть в визите»; booking_lines_add и так пропустит назначенное.
+    assert.deepEqual(out.duplicates, [], 'колл-центру — ни одной пометки, какие из присланных услуг есть в визите');
+    assert.ok(!/Врач Первый|INV-|Анализ крови/.test(JSON.stringify(out)), JSON.stringify(out));
   }
   // регистратуре — как прежде, с подробностями
   const reg = call('visit_dup_check', db, { visit_id: vid, lines: [{ service_id: 40 }] }, registrar);
   assert.equal(reg.ordered.length, 1);
   assert.match(reg.duplicates[0].message, /«Анализ крови» — Врач Первый, .+, счёт № INV-A-26-00001\.$/);
+});
+
+test('DUP_STOP_V1 (ревью, остаток 1): visit_dup_check колл-центра — 50 услуг на прошлый визит «пришёл» с тремя строками — ни назначенного, ни повторов', () => {
+  const { db, pid } = clinic();
+  const past = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, ?, 'arrived')").run(pid, '2026-09-01T05:00:00Z').lastInsertRowid);
+  line(db, past, { service_id: 30 });
+  line(db, past, { service_id: 40 });
+  line(db, past, { service_id: 50 });
+  const lines = Array.from({ length: 50 }, (_, i) => ({ service_id: i + 11 }));   // 11…60: 30, 40, 50 среди них
+  const out = call('visit_dup_check', db, { visit_id: past, lines }, callcenter);
+  assert.equal(out.visit_id, past);
+  assert.deepEqual(out.ordered, []);
+  assert.deepEqual(out.duplicates, [], 'какие из 50 услуг уже в визите — данные пациента');
+  // регистратуре — по-прежнему все три
+  const reg = call('visit_dup_check', db, { visit_id: past, lines }, registrar);
+  assert.deepEqual(reg.duplicates.map((d) => d.index), [19, 29, 39]);
 });
 
 test('DUP_STOP_V1 (ревью M2): visit_dup_check — визит соседнего здания по номеру — отказ, как у дверей записи', () => {
