@@ -6,6 +6,7 @@
 // backend, never hand-managed by the client.
 
 import { hasAnyRole } from '../roles.js';
+import { canNameVisitSource } from '../domain/line-referral.js';   // REFERRAL_LINE_V1 (ревью полировки L-1) — источник визита: стойка и колл-центр
 // VISITS_ONE_DOOR_V1 — «свободно ли» и «записать» спрашиваются у тех же двух
 // обработчиков, что и у календаря. Своей арифметики расписания здесь нет ни
 // строки: calendar_slots — единственный источник занятости на весь продукт,
@@ -161,7 +162,7 @@ export function dayVisitOf(db, patientId, day) {
 }
 
 // args: { patient_id, date (ISO datetime or YYYY-MM-DD), doctor_id?,
-//         visit_type?, referral_source_id?, branch_id?, notes?,
+//         visit_type?, referral_source_id? (только стойка и колл-центр), branch_id?, notes?,
 //         desk?: true (CRM_UNIFY_V1 — регистрация на стойке; CRM_LINK_ALL_V1 (R3) — с book
 //                      верится, только если слот начинается не позже чем через 30 минут),
 //         book?: { doctor_id, start, duration_minutes?, service_id?, room_id?,
@@ -209,7 +210,10 @@ export async function ensureVisit(db, args, user, internal = {}) {
   };
   const doctorId = optInt(args.doctor_id, 'doctor_id');
   const branchId = optInt(args.branch_id, 'branch_id');
-  const sourceId = optInt(args.referral_source_id, 'referral_source_id');
+  // REFERRAL_LINE_V1 · DOCTOR_REFERRAL_DESK_V1 (ревью полировки L-1) — направившего ВИЗИТА
+  // называют только стойка и колл-центр (domain/line-referral.js canNameVisitSource). От врача
+  // присланное не читается: «Направить на услуги» делало его направившим всего нового визита.
+  const sourceId = canNameVisitSource(user) ? optInt(args.referral_source_id, 'referral_source_id') : null;
   const visitType = typeof args.visit_type === 'string' && args.visit_type ? args.visit_type : 'outpatient';
   const notes = typeof args.notes === 'string' ? args.notes.slice(0, 1000) : '';
   // CRM_UNIFY_V1 (Р1) — «пациент у стойки»: быстрая регистрация и «пришёл

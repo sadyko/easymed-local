@@ -1,6 +1,7 @@
 // REFERRAL_LINE_V1 · DOCTOR_REFERRAL_DESK_V1 — полировка 3.21.0 (остатки повторного ревью U10).
 //   п. 7  visit_set_doctor_referrer — только стойка и только по своей строке услуги рекомендации
-//         (проба R1e: врач писал рекомендацию задним числом и получал 10 % чужого визита);
+//         (проба R1e: врач писал рекомендацию задним числом и получал 10 % чужого визита); с ревью
+//         полировки N1 вызов снят и ничего не пишет;
 //   п. 8  два разных врача на одной строке — вариант «б»: врач строки ЗАМЕНЯЕТ врача визита
 //         (проба R3b); «Рефералы», подробно, кабинет врача и «Зарплаты врачей» — одни суммы;
 //   п. 9  рекомендация, уже привязанная к строке, ко второй не привязывается (проба R1d);
@@ -92,7 +93,9 @@ async function replayRecommendationRpcs(t, who, names, { recId, lineId, recommen
   }
 }
 
-test('полировка п. 7 (проба R1e): врач не делает себя направившим визита стойки задним числом — 403; стойке без своей строки — 409; бонуса нет', async () => {
+// Ревью полировки N1 — visit_set_doctor_referrer снят (rpc/referral-autofill.js): ничего не пишет
+// ни врачу, ни стойке (подробно — referral-visit-source.test.js).
+test('полировка п. 7 (проба R1e): врач не делает себя направившим визита стойки задним числом — вызов снят, бонуса нет', async () => {
   const t = await startCrmApp(seed);
   try {
     await t.dbq('reg', { table: 'visit_services', op: 'insert', values: { visit_id: 500, service_id: 50, doctor_id: 12, quantity: 1, unit_price: 80000, total: 80000, status: 'added' } });
@@ -100,10 +103,11 @@ test('полировка п. 7 (проба R1e): врач не делает се
     // Иванов (10) пациента не видел: рекомендация на другую услугу — после всего
     const rec = await t.dbq('doc', { table: 'recommended_services', op: 'insert', values: { patient_id: 77, service_id: 40, service_name: 'Анализ крови', status: 'pending' } });
     assert.equal(rec.status, 200, rec.text);
-    const byDoctor = await t.rpc('visit_set_doctor_referrer', 'doc', { visit_id: 500, doctor_id: 10 });
-    assert.equal(byDoctor.status, 403, byDoctor.text);
-    const byDesk = await t.rpc('visit_set_doctor_referrer', 'reg', { visit_id: 500, doctor_id: 10 });
-    assert.equal(byDesk.status, 409, 'строки «Анализ крови», заведённой стойкой, в визите нет: ' + byDesk.text);
+    for (const who of ['doc', 'reg']) {
+      const r = await t.rpc('visit_set_doctor_referrer', who, { visit_id: 500, doctor_id: 10 });
+      assert.equal(r.status, 200, who + ': ' + r.text);
+      assert.deepEqual(r.json.data, { set: false, retired: true }, who);
+    }
     assert.equal(t.db.prepare('SELECT referral_source_id r FROM visits WHERE id = 500').get().r, null);
     await payVisit(t, 500, [X]);
     assert.deepEqual(detailRows(t.db), [], 'Иванов получил бонус за визит стойки');

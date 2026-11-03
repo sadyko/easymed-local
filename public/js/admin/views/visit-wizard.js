@@ -103,26 +103,15 @@ const ORDER_CHIP_CSS = { flexShrink: 0, display: 'inline-flex', alignItems: 'cen
 // уже выбранное направление. Пустая строка означает «без категории».
 const refCatOf = (s) => (s && s.category_id != null ? String(s.category_id) : '');
 
-// REPORTS_V2 — «Направить на услуги» из кабинета врача (DOCTOR_REFER_WIZARD_V1):
-// направившим сразу ставится сам врач — его внутренний источник направления
-// (referral_sources.doctor_id, мигр. 122), если он у врача есть. Без этого
-// отчёт «Рефералы» не видел ни одного направления из кабинета: регистратор
-// должен был вспомнить поставить врача руками. Шаг «Направление» при этом
-// включён и показывает выбор — регистратор может поменять его или снять
-// галочку. Источника нет (не врач, источник выключен) — ничего не ставится.
-// Ревью I3 (владелец: внешний партнёр сохраняет своё): у пациента уже есть
-// направивший (patients.referral_source_id) — врач не подставляется, и отчёты
-// продолжают засчитывать пациента его партнёру.
-export function presetReferrer(wiz, doctorId, patientSourceId = null) {
-    if (doctorId === undefined || doctorId === null || doctorId === '') return false;
-    if (patientSourceId !== undefined && patientSourceId !== null && patientSourceId !== '') return false;
-    const src = (wiz.sources || []).find(s => s && s.doctor_id != null && String(s.doctor_id) === String(doctorId));
-    if (!src) return false;
-    wiz.hasReferral = true;
-    wiz.sourceId = String(src.id);
-    wiz.sourceCat = refCatOf(src) || REF_UNCAT;
-    return true;
-}
+// REPORTS_V2 → REFERRAL_LINE_V1 · DOCTOR_REFERRAL_DESK_V1 (ревью полировки 3.21.0, L-1) —
+// «Направить на услуги» из кабинета врача (DOCTOR_REFER_WIZARD_V1) НЕ ставит врача «Кто
+// направил» ВИЗИТА. До 3.21.0 мастер подставлял его внутренний источник (presetReferrer) и слал
+// его в ensure_visit: на новый день визит его сохранял, и врач получал процент со ВСЕХ строк
+// визита — и со своей услуги, и с услуг, которые стойка добавила позже (проба RF1f: 26 000
+// вместо 8 000). Правило владельца — врач получает бонус за услугу, которую направил: источник
+// ложится в каждую новую СТРОКУ направления (lineReferralSource ниже; врачу его ставит сервер
+// сам — domain/line-referral.js lineReferralStamp). Направившего всего визита выбирает только
+// стойка («Кто направил» шага «Направление»); от врача сервер его не читает (ensure_visit).
 const refSourcesIn = (sources, cat) => (sources || []).filter(s => (cat === REF_UNCAT ? !refCatOf(s) : refCatOf(s) === cat));
 
 // INVOICE_ROLE_HONEST_V1 (2026-09-16) — ЗЕРКАЛО CREATE_INVOICE_ROLES
@@ -661,11 +650,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         try {
             const [dRes, pRes] = await Promise.all([
                 supabase.from('patient_discounts').select('id, name, kind, percent, amount, remaining, active, valid_from, valid_until, category_id, service_ids').eq('active', 1).order('name'),
-                supabase.from('patients').select('id, category_id, referral_source_id, payer_id, patient_categories(id, name, discount_percent, active)').eq('id', patient.id).maybeSingle(),   // referral_source_id: REPORTS_V2 ревью I3; payer_id: REFERRAL_BILL_V1 — плательщик в карте
+                supabase.from('patients').select('id, category_id, payer_id, patient_categories(id, name, discount_percent, active)').eq('id', patient.id).maybeSingle(),   // payer_id: REFERRAL_BILL_V1 — плательщик в карте
             ]);
             wiz.discounts = (!dRes.error && Array.isArray(dRes.data)) ? dRes.data : [];
             const cat = pRes && !pRes.error && pRes.data ? pRes.data.patient_categories : null;
-            wiz.patientReferralSourceId = pRes && !pRes.error && pRes.data ? (pRes.data.referral_source_id ?? null) : null;
             wiz.cardPayerId = pRes && !pRes.error && pRes.data ? (pRes.data.payer_id ?? null) : null;   // REFERRAL_BILL_V1 (дополнение 29.09)
             wiz.categoryId = pRes && !pRes.error && pRes.data && pRes.data.category_id != null ? Number(pRes.data.category_id) : null;
             if (cat && cat.active !== 0 && cat.active !== false && Number(cat.discount_percent) > 0) {
@@ -683,7 +671,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         wiz.doctors  = docRes.data || [];
         wiz.sources  = srcRes.data || [];
         wiz.refCats  = refCatRes.data || [];
-        presetReferrer(wiz, opts.referrerDoctorId, wiz.patientReferralSourceId);   // REPORTS_V2 — врач из кабинета направляет сам (у партнёра не отнимает)
+        // REFERRAL_LINE_V1 (ревью полировки L-1) — в мастере направления врач «Кто направил»
+        // визита не ставится (см. комментарий над refSourcesIn): его источник — у строк (lineReferralSource).
         // PAYER_LOAD_V2 — ошибка загрузки и «не заведены» — РАЗНЫЕ факты (тот же
         // урок, что CATALOG_DIAG_V4 ниже): раньше ошибка превращалась в пустой
         // массив, и мастер уверенно сообщал «Плательщики не заведены», когда они
@@ -2694,34 +2683,39 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
         // ---- REFERRAL_TICK_V1 — «пациент по направлению»: галочка управляет
         // шагом «Направление» (снята по умолчанию — шаг пропускается) ----
-        const refChk = h('input', {
-            type: 'checkbox', checked: wiz.hasReferral,
-            style: { width: '19px', height: '19px', accentColor: 'var(--primary-600)', cursor: 'pointer', flex: '0 0 auto' },
-        });
-        refChk.addEventListener('change', () => {
-            wiz.hasReferral = refChk.checked;
-            if (!wiz.hasReferral) {
-                wiz.sourceId = '';                       // направление снято — источник сбрасываем
-                wiz.sourceCat = '';                      // REFERRAL_TWO_STEP_V1 — и категорию вместе с ним
-                // PAY_DMS_V1 — вперёд на следующий шаг МАРШРУТА (3 только при ДМС)
-                if (wiz.step === 2) wiz.step = stepSeq().find(s => s > 2) || 4;
-            }
-            paint();
-        });
-        railEl.appendChild(h('label', {
-            style: {
-                display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
-                padding: '11px 13px', borderRadius: '12px',
-                border: wiz.hasReferral ? '2px solid var(--primary-400, #4bb39a)' : '1px dashed var(--ink-200)',
-                background: wiz.hasReferral ? 'var(--primary-25, #f2faf8)' : 'var(--white, #fff)',
+        // REFERRAL_LINE_V1 (ревью полировки L-1) — в мастере направления из кабинета галочки
+        // нет: направившего ВИЗИТА (процент со всех строк визита) выбирает только стойка в своих
+        // окнах, а источник направляющего врача ложится в строки (lineReferralSource).
+        if (!referralMode) {
+            const refChk = h('input', {
+                type: 'checkbox', checked: wiz.hasReferral,
+                style: { width: '19px', height: '19px', accentColor: 'var(--primary-600)', cursor: 'pointer', flex: '0 0 auto' },
+            });
+            refChk.addEventListener('change', () => {
+                wiz.hasReferral = refChk.checked;
+                if (!wiz.hasReferral) {
+                    wiz.sourceId = '';                       // направление снято — источник сбрасываем
+                    wiz.sourceCat = '';                      // REFERRAL_TWO_STEP_V1 — и категорию вместе с ним
+                    // PAY_DMS_V1 — вперёд на следующий шаг МАРШРУТА (3 только при ДМС)
+                    if (wiz.step === 2) wiz.step = stepSeq().find(s => s > 2) || 4;
+                }
+                paint();
+            });
+            railEl.appendChild(h('label', {
+                style: {
+                    display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
+                    padding: '11px 13px', borderRadius: '12px',
+                    border: wiz.hasReferral ? '2px solid var(--primary-400, #4bb39a)' : '1px dashed var(--ink-200)',
+                    background: wiz.hasReferral ? 'var(--primary-25, #f2faf8)' : 'var(--white, #fff)',
+                },
             },
-        },
-            refChk,
-            h('span', { style: { minWidth: 0 } },
-                h('span', { style: { display: 'block', fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Пациент по направлению'),
-                h('span', { class: 'muted', style: { display: 'block', fontSize: '12.5px', marginTop: '1px' } },
-                    wiz.hasReferral ? 'шаг «Направление» включён' : 'без направления — шаг пропускается')),
-        ));
+                refChk,
+                h('span', { style: { minWidth: 0 } },
+                    h('span', { style: { display: 'block', fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Пациент по направлению'),
+                    h('span', { class: 'muted', style: { display: 'block', fontSize: '12.5px', marginTop: '1px' } },
+                        wiz.hasReferral ? 'шаг «Направление» включён' : 'без направления — шаг пропускается')),
+            ));
+        }
 
         // ---- «Кто платит» + скидка + промокод (WIZARD_RAIL_PARITY_V1, как в easymed) ----
         // PAYER_TYPE_THEN_COMPANY_V1 — верхний ряд: ТИП плательщика; под ним, при
@@ -3248,7 +3242,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     patient_id: patient.id, date: earliest,
                     doctor_id: dayDoc ? Number(dayDoc) : null,
                     visit_type: wiz.visitType,
-                    referral_source_id: wiz.sourceId ? Number(wiz.sourceId) : null,
+                    // REFERRAL_LINE_V1 (ревью полировки L-1) — только «Кто направил», выбранный
+                    // стойкой руками; мастер направления врача его не шлёт, от врача сервер не читает.
+                    referral_source_id: !referralMode && wiz.sourceId ? Number(wiz.sourceId) : null,
                     branch_id: branchId,
                     notes: wiz.notes.trim() || null,
                 };

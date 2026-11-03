@@ -122,6 +122,7 @@ let DB = null;
 // день) при настоящей базе за всем остальным; RPC — журнал вызовов.
 let ENSURE_OVERRIDE = null;
 const RPC = [];
+const DB_INSERTS = [];   // REFERRAL_LINE_V1 (ревью полировки L-1) — что экран прислал во вставку /api/db (до штампов сервера)
 
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -137,6 +138,7 @@ globalThis.fetch = async (url, opts) => {
     catch (e) { return { ok: false, status: e.status || 500, json: async () => ({ error: { code: e.code, message: e.message, params: e.params } }) }; }
   }
   if (u === '/api/db') {
+    if (body && body.op === 'insert') DB_INSERTS.push(JSON.parse(JSON.stringify(body)));
     stampWriteBody(DB, body);   // SERVICES_PACKAGES_V1 — как настоящая дверь (routes/db.js): цена пакета на строке
     let compiled;
     try { compiled = compile(body, USER); }
@@ -602,25 +604,32 @@ test('МАСТЕР: пустой визит дня перенесён — ска
   } finally { ENSURE_OVERRIDE = null; }
 });
 
-// REPORTS_V2 — «Направить на услуги» из кабинета врача: направившим сразу
-// стоит сам врач (его внутренний источник, мигр. 122). Без этого отчёт
-// «Рефералы» не видел ни одного направления из кабинета.
-test('МАСТЕР из кабинета: направившим стоит сам врач, и визит уходит с его источником', async () => {
+/// REPORTS_V2 → REFERRAL_LINE_V1 · DOCTOR_REFERRAL_DESK_V1 (ревью полировки 3.21.0, L-1; проба RF1f) —
+// «Направить на услуги» из кабинета врача. До 3.21.0 мастер ставил врачу его внутренний источник
+// «Кто направил» ВИЗИТА: на новый день визит его сохранял, и врач получал процент со всех строк
+// визита (26 000 вместо 8 000). Правило владельца — врач получает бонус за услугу, которую
+// направил: источник врача — у каждой новой СТРОКИ направления, визит уходит без направившего
+// (его выбирает только стойка руками; галочки «Пациент по направлению» в мастере направления нет).
+test('МАСТЕР из кабинета (ревью полировки L-1): визит уходит БЕЗ направившего, строки — с источником врача', async () => {
+  DB_INSERTS.length = 0;
   const w = await openWizardReady({ referrerDoctorId: 7 });
   const src = DB.prepare('SELECT id FROM referral_sources WHERE doctor_id = 7').get();
   assert.ok(src, 'у врача нет внутреннего источника — посев не тот');
+  assert.ok(!textOf(w.overlay()).includes('Пациент по направлению'), 'в мастере направления врача снова выбирают «Кто направил» визита');
   await pressUntilCreate();
   const ev = RPC.find((c) => c.name === 'ensure_visit');
   assert.ok(ev, 'мастер не дошёл до записи');
-  assert.equal(ev.body.referral_source_id, src.id, 'направивший не подставлен: ' + JSON.stringify(ev.body));
+  assert.equal(ev.body.referral_source_id, null, 'врач подставлен «Кто направил» всего визита: ' + JSON.stringify(ev.body));
   const v = DB.prepare('SELECT referral_source_id FROM visits WHERE patient_id = 3 ORDER BY id DESC LIMIT 1').get();
-  assert.equal(v && v.referral_source_id, src.id, 'визит записан без направившего');
+  assert.equal(v && v.referral_source_id, null, 'визит записан с направившим-врачом');
+  const lines = DB_INSERTS.filter((d) => d.table === 'visit_services').map((d) => (Array.isArray(d.values) ? d.values[0] : d.values));
+  assert.ok(lines.length >= 1, 'строк направления нет');
+  for (const row of lines) assert.equal(row.referred_by_source_id, src.id, 'строка направления без источника врача: ' + JSON.stringify(row));
   assert.equal(w.saved(), 1);
 });
 
-// Ревью I3 (владелец: внешний партнёр сохраняет своё) — у пациента уже есть
-// направивший: врач из кабинета не подставляется, визит уходит без
-// направившего, и отчёты засчитывают пациента партнёру (COALESCE визит → пациент).
+// Ревью I3 (владелец: внешний партнёр сохраняет своё) — у пациента уже есть направивший:
+// визит уходит без направившего, и отчёты засчитывают пациента партнёру (COALESCE визит → пациент).
 test('МАСТЕР из кабинета: пациент партнёра остаётся пациентом партнёра', async () => {
   const w = await openWizardReadyWith((db) => {
     const pid = db.prepare("INSERT INTO referral_sources (name) VALUES ('Клиника Х')").run().lastInsertRowid;
@@ -633,30 +642,23 @@ test('МАСТЕР из кабинета: пациент партнёра ост
   assert.equal(w.saved(), 1);
 });
 
-test('МАСТЕР у стойки (без врача-направителя) направившего не подставляет', async () => {
-  await openWizardReady();
+test('МАСТЕР у стойки (без врача-направителя) направившего не подставляет; «Пациент по направлению» — на месте', async () => {
+  const w = await openWizardReady();
+  assert.ok(textOf(w.overlay()).includes('Пациент по направлению'), 'стойка потеряла «Кто направил» визита');
   await pressUntilCreate();
   const ev = RPC.find((c) => c.name === 'ensure_visit');
   assert.ok(ev, 'мастер не дошёл до записи');
   assert.equal(ev.body.referral_source_id, null);
 });
 
-test('presetReferrer: источник врача ставится, чужого или отсутствующего — нет', async () => {
-  const { presetReferrer } = await import('../views/visit-wizard.js');
-  const wiz = { sources: [{ id: 5, doctor_id: 7, category_id: 2 }, { id: 6, doctor_id: null, category_id: 3 }], hasReferral: false, sourceId: '', sourceCat: '' };
-  assert.equal(presetReferrer(wiz, 7), true);
-  assert.deepEqual([wiz.hasReferral, wiz.sourceId, wiz.sourceCat], [true, '5', '2']);
-  // У пациента свой направивший (партнёр) — врач не подставляется.
-  const partner = { sources: wiz.sources, hasReferral: false, sourceId: '', sourceCat: '' };
-  assert.equal(presetReferrer(partner, 7, 6), false);
-  assert.deepEqual([partner.hasReferral, partner.sourceId], [false, '']);
-  const none = { sources: wiz.sources, hasReferral: false, sourceId: '', sourceCat: '' };
-  assert.equal(presetReferrer(none, 8), false);
-  assert.equal(presetReferrer(none, null), false);
-  assert.deepEqual([none.hasReferral, none.sourceId], [false, '']);
+test('ревью полировки L-1: подстановки врача «Кто направил» визита в мастере больше нет', async () => {
+  const mod = await import('../views/visit-wizard.js');
+  assert.equal(mod.presetReferrer, undefined, 'presetReferrer вернулся — врач снова станет направившим всего визита');
+  const src = fs.readFileSync(path.join(VIEWS, 'visit-wizard.js'), 'utf8').replace(/\/\/.*$/gm, '');
+  assert.doesNotMatch(src, /presetReferrer\s*\(/, 'мастер снова подставляет врача направившим визита');
 });
 
-test('кабинет врача открывает мастер с направившим — самим врачом', () => {
+test('кабинет врача открывает мастер направления с врачом-направителем (его источник — у строк)', () => {
   const sw = fs.readFileSync(path.join(VIEWS, 'service-workspace.js'), 'utf8');
   assert.match(sw, /title: 'Направить на услуги', referrerDoctorId: referringDoctorId\(ctx\)/,
     '«Направить на услуги» не передаёт мастеру врача-направителя');

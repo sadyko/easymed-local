@@ -161,7 +161,7 @@ import { onVisitLinesAdded } from '../crm/one-way.js';   // REPEAT_VISIT_V1 — 
 import { rpcT } from '../server-message.js';   // REPEAT_VISIT_V1 — отказы визита дня шаблоном
 // REPEAT_VISIT_V1 (поправка 3) — новая строка записи проходит проверку повтора U9, как другие двери.
 import { assertOrders, logRepeatOrders, repeatReasonArg } from '../domain/dup-order.js';
-import { lineReferralStamp } from '../domain/line-referral.js';   // REFERRAL_LINE_V1 (поправка 3) — направивший строки повторного визита
+import { lineReferralStamp, canNameVisitSource } from '../domain/line-referral.js';   // REFERRAL_LINE_V1 (поправка 3) — направивший строки повторного визита; ревью полировки L-1 — источник визита
 import { crmLinkVisit, crmBookingMoved } from '../crm/visit-link.js';   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 — crmBookingMoved (дата карточки при переносе)
 // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
 import { localDate } from '../domain/day.js';
@@ -1098,7 +1098,10 @@ export async function calendarBook(db, args, user, deps = {}) {
   // терялся (строке услуги его тоже не написать — колонки там нет). Ставится
   // только при создании, как у ensure_visit; у существующей записи источник
   // правит вкладка «Детали» (visit_set_referral_source).
-  const referralSourceId = existing ? null : optId(a.referral_source_id, 'referral_source_id');
+  // REFERRAL_LINE_V1 · DOCTOR_REFERRAL_DESK_V1 (ревью полировки L-1) — как у ensure_visit: источник
+  // визита называют только стойка и колл-центр (canNameVisitSource); от врача, главного врача и
+  // медсестры присланное не читается — направление врача платится строке (lineReferralStamp ниже).
+  const referralSourceId = existing || !canNameVisitSource(user) ? null : optId(a.referral_source_id, 'referral_source_id');
   if (referralSourceId && !db.prepare('SELECT 1 FROM referral_sources WHERE id = ?').get(referralSourceId)) {
     throw new RpcError('Источник направления не найден.', 400);   // FINAL_ROLES_SYNC_FIX_V1 (M5) — по-русски
   }

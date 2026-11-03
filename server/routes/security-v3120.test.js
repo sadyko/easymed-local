@@ -243,48 +243,27 @@ test('M2: patient_card_set_doctor — оплаченная строка, зак�
 
 // ---------------------------------------------------------------------------
 // M3 — «направивший врач» только по настоящей рекомендации.
+// REFERRAL_LINE_V1 (ревью полировки N1, 3.21.0) — вызов снят: направившего ВИЗИТА по
+// рекомендации он больше не ставит никому (врач получает бонус за услугу рекомендации —
+// привязкой к строке). Голый doctor_id, коллега, сам врач, медсестра, кассир, колл-центр и
+// стойка по своей строке — ответ один, { set: false, retired: true }, и визит без направившего.
 // ---------------------------------------------------------------------------
-test('M3: без открытой рекомендации врача направивший не ставится; кассир и колл-центр — не вправе', async (t) => {
+const deskLine = (ctx, v) => ctx.db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, created_by) VALUES (?,?,1,100000,100000,'added',?)")
+  .run(v.vid, v.sid, ctx.ids.registrar);
+test('M3 · ревью полировки N1: visit_set_doctor_referrer снят — никто не ставит направившего визита, даже по открытой рекомендации и своей строке', async (t) => {
   const ctx = await withServer(t);
   const v = seedVisit(ctx.db, { doctorId: ctx.ids.doctor2 });
   const bare = await rpc(ctx, ctx.cookie.registrar, 'visit_set_doctor_referrer', { visit_id: v.vid, doctor_id: ctx.ids.doctor });
-  assert.equal(bare.status, 409, JSON.stringify(bare.json));
-  assert.equal(ctx.db.prepare('SELECT referral_source_id FROM visits WHERE id = ?').get(v.vid).referral_source_id, null);
-  for (const who of ['cashier', 'callcenter']) {
-    const r = await rpc(ctx, ctx.cookie[who], 'visit_set_doctor_referrer', { visit_id: v.vid, doctor_id: ctx.ids.doctor });
-    assert.equal(r.status, 403, who);
-  }
-});
-
-// REFERRAL_LINE_V1 (полировка, п. 7) — ставит только стойка, и только по строке услуги
-// рекомендации, которую она сама завела в визит после рекомендации.
-const deskLine = (ctx, v) => ctx.db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, created_by) VALUES (?,?,1,100000,100000,'added',?)")
-  .run(v.vid, v.sid, ctx.ids.registrar);
-test('M3: по открытой рекомендации — ставится стойкой по своей строке; врач — ни коллегу, ни себя; оплаченный визит не трогается', async (t) => {
-  const ctx = await withServer(t);
-  const v = seedVisit(ctx.db, { doctorId: ctx.ids.doctor2 });
+  assert.equal(bare.status, 200, JSON.stringify(bare.json));
   ctx.db.prepare("INSERT INTO recommended_services (patient_id, service_id, recommended_by, status) VALUES (?,?,?,'pending')")
     .run(v.pid, v.sid, ctx.ids.doctor);
-  const other = await rpc(ctx, ctx.cookie.doctor2, 'visit_set_doctor_referrer', { visit_id: v.vid, doctor_id: ctx.ids.doctor });
-  assert.equal(other.status, 403, 'врач не называет направившим коллегу');
-  const self = await rpc(ctx, ctx.cookie.doctor, 'visit_set_doctor_referrer', { visit_id: v.vid, doctor_id: ctx.ids.doctor });
-  assert.equal(self.status, 403, 'врач не называет направившим визита и себя (полировка, п. 7)');
-  const nurse = await rpc(ctx, ctx.cookie.nurse, 'visit_set_doctor_referrer', { visit_id: v.vid, doctor_id: ctx.ids.doctor });
-  assert.equal(nurse.status, 403, 'медсестра — не стойка (полировка, п. 7)');
-  const noLine = await rpc(ctx, ctx.cookie.registrar, 'visit_set_doctor_referrer', { visit_id: v.vid, doctor_id: ctx.ids.doctor });
-  assert.equal(noLine.status, 409, 'без своей строки услуги рекомендации — отказ: ' + JSON.stringify(noLine.json));
   deskLine(ctx, v);
-  const ok = await rpc(ctx, ctx.cookie.registrar, 'visit_set_doctor_referrer', { visit_id: v.vid, doctor_id: ctx.ids.doctor });
-  assert.equal(ok.status, 200, JSON.stringify(ok.json));
-  assert.equal(ok.json.data ? ok.json.data.set : ok.json.set, true);
-
-  const paid = seedVisit(ctx.db, { doctorId: ctx.ids.doctor2, invoiced: true });
-  ctx.db.prepare("INSERT INTO recommended_services (patient_id, service_id, recommended_by, status) VALUES (?,?,?,'pending')")
-    .run(paid.pid, paid.sid, ctx.ids.doctor);
-  deskLine(ctx, paid);
-  const r = await rpc(ctx, ctx.cookie.registrar, 'visit_set_doctor_referrer', { visit_id: paid.vid, doctor_id: ctx.ids.doctor });
-  assert.equal(r.status, 409, JSON.stringify(r.json));
-  assert.match(r.json.error.message, /уже есть оплата/);
+  for (const who of ['registrar', 'doctor', 'doctor2', 'nurse', 'cashier', 'callcenter']) {
+    const r = await rpc(ctx, ctx.cookie[who], 'visit_set_doctor_referrer', { visit_id: v.vid, doctor_id: ctx.ids.doctor });
+    assert.equal(r.status, 200, who + ': ' + JSON.stringify(r.json));
+    assert.deepEqual(r.json.data ? r.json.data : r.json, { set: false, retired: true }, who);
+  }
+  assert.equal(ctx.db.prepare('SELECT referral_source_id FROM visits WHERE id = ?').get(v.vid).referral_source_id, null);
 });
 
 // ---------------------------------------------------------------------------

@@ -84,10 +84,11 @@ export function removeOwnVisitLine(db, args, user) {
 // Вкладка «Детали» окна визита сохраняла источник направления обычным UPDATE
 // через /api/db, а visits.referral_source_id там не пишется (реестр,
 // VISITS_ONE_DOOR_V1): поле молча выбрасывалось, и окно говорило «Visit saved».
-// Ставится источник визита при записи (ensure_visit) и автоматически
-// (visit_set_doctor_referrer); поправить его руками — работа стойки: те же
-// роли, что правят источник в карте пациента (patients.update — admin,
-// registrar). null — «никто не направлял».
+// Ставится источник визита при записи (ensure_visit, calendar_book — только от
+// стойки и колл-центра, REFERRAL_LINE_V1, ревью полировки L-1); сам по себе он
+// больше не ставится (visit_set_doctor_referrer снят — ревью полировки N1).
+// Поправить его руками — работа стойки: те же роли, что правят источник в карте
+// пациента (patients.update — admin, registrar). null — «никто не направлял».
 const REFERRAL_ROLES = ['admin', 'registrar'];
 
 export function visitSetReferralSource(db, args, user) {

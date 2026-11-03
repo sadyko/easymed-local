@@ -5629,11 +5629,12 @@ async function printRouteSheet(ctx, res) {
 }
 
 async function sendReferral(ctx, target, service, doctor) {
-    // REPORTS_V2, ревью I5 — визита рекомендации здесь ещё нет: направившего
-    // врача ставит на визит добавление рекомендации в визит (visit-modal.js
-    // attachRecommendation, правило — на сервере), и только если у визита
-    // и пациента направившего нет. Текущий визит (приём самого врача) не
-    // помечается: его собственный приём стал бы «направлением».
+    // REPORTS_V2, ревью I5 → REFERRAL_LINE_V1 (ревью полировки M1, N3) — визита рекомендации
+    // здесь ещё нет, и текущий визит (приём самого врача) не помечается: его собственный приём
+    // стал бы «направлением». Когда стойка добавит рекомендацию в визит (окно визита
+    // attachRecommendation, мастер, быстрая регистрация), сервер привязывает её к строке
+    // (referral_recommendation_attach): направивший ставится этой СТРОКЕ, и врач получает бонус
+    // за неё. Направившим всего визита рекомендация врача не делает.
     // Referrals live in `recommended_services` only — they do NOT get pushed
     // into the visit's notes-history payload. The patient card's Recommended
     // tab and the visit modal's Services tab are the single source of truth.

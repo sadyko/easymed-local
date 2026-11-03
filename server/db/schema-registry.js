@@ -971,8 +971,8 @@ export const REGISTRY = {
              'visit_service_id'] },   // DOCTOR_REFERRAL_DESK_V1 (мигр. 270) — строка, которой закрыта рекомендация; пишет только referral_recommendation_attach
     // REFERRAL_LINE_V1 · ревью U10 (HIGH-1) — КТО РЕКОМЕНДОВАЛ ставит СЕРВЕР (штамп ниже,
     // domain/line-referral.js recommendationAuthorStamp): врачу — он сам, остальным — никто.
-    // Присланный браузером recommended_by не читается: по рекомендации ставят направившего
-    // (referral_recommendation_attach, visit_set_doctor_referrer), и медсестра или стойка
+    // Присланный браузером recommended_by не читается: по рекомендации ставят направившего строке
+    // (referral_recommendation_attach; visit_set_doctor_referrer снят — ревью полировки N1), и медсестра или стойка
     // записывали её «от врача №12». В списках записи колонки нет — правкой её не меняет никто.
     stamps: { recommended_by: { on: 'insert', resolve: 'recommendation_author' } },
     write: { insert: { roles: ['admin','registrar','doctor','nurse'], columns: ['patient_id','service_id','service_name',
