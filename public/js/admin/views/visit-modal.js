@@ -856,15 +856,20 @@ function recommendationRow(rec, state, onReload) {
 // recommendation context (who recommended it, when, original notes, price)
 // and lets the registrar pick the performing doctor — defaults to the doctor
 // who recommended it.
-function openAttachRecommendationModal(state, rec, onReload) {
+async function openAttachRecommendationModal(state, rec, onReload) {
     if (isVisitEnded(state.visit)) { toast(VISIT_ENDED_MSG, 'fail'); return; }
     if (!rec.service_id) {
         toast('Recommendation has no linked service — cannot attach.', 'fail');
         return;
     }
     // Duplicate guard up-front so the user doesn't waste time in the modal.
-    if ((state.services || []).some(s => s.service_id === rec.service_id)) {
-        toast(`"${rec.__service_name}" is already in this visit.`, 'fail');
+    // DUP_STOP_V1 · DOCTOR_REFERRAL_DESK_V1 — по правилу сервера (visit_dup_check), как каталог
+    // окна (attachExcludeIds): отменённая и возвращённая строка той же услуги не мешают;
+    // администратору и главному врачу — ничего (повтор с причиной спросит attachRecommendation);
+    // услугу, у которой повтор решает врач строки, проверит attachRecommendation с выбранным врачом.
+    const blocked = await attachExcludeIds(state.visit.id);
+    if (blocked.includes(Number(rec.service_id))) {
+        toast(trf('«{name}» уже назначена в этом визите — повторно её не назначают.', { name: rec.__service_name || '' }), 'fail');
         return;
     }
 
@@ -975,19 +980,25 @@ async function attachRecommendation(state, rec, chosenDoctorId, onReload) {
         return;
     }
     // Defensive duplicate check (the popup also guards before opening).
-    if ((state.services || []).some(s => s.service_id === rec.service_id)) {
-        toast(`"${rec.__service_name}" is already in this visit.`, 'fail');
-        return;
-    }
+    // DUP_STOP_V1 · DOCTOR_REFERRAL_DESK_V1 — правило сервера (visit_dup_check) с врачом этой
+    // строки: отменённая и возвращённая строка не мешают, администратор и главный врач называют
+    // причину повтора — она уходит в строку (__repeat_reason) и в журнал счёта.
+    const lineDoctor = chosenDoctorId || rec.recommended_by || null;
+    const pre = await precheckOrders({ visitId: state.visit.id, lines: [
+        { service_id: rec.service_id, doctor_id: lineDoctor ? Number(lineDoctor) : null },
+    ] });
+    if (!pre.ok) { toast(pre.text || tr('Повторное назначение отменено — ничего не записано.'), pre.text ? 'fail' : 'info'); return; }
     const price = Number(rec.__service_price || 0);
-    const { error: insErr } = await insertVisitServiceRow({
+    // DOCTOR_REFERRAL_DESK_V1 — номер строки нужен серверу, чтобы привязать к ней рекомендацию
+    // (referral_recommendation_attach ниже); created_by ставит сервер (реестр, stamps).
+    const { data: insRow, error: insErr } = await supabase.from('visit_services').insert(withRepeatReason({
         visit_id:   state.visit.id,
         service_id: rec.service_id,
-        doctor_id:  chosenDoctorId || rec.recommended_by || null,
+        doctor_id:  lineDoctor,
         quantity:   1,
         unit_price: price,
         total:      price,
-    });
+    }, pre.reason)).select().single();
     if (insErr) { toast(trf('Не удалось добавить: {msg}', { msg: insErr.message }), 'fail'); return; }
     // REPORTS_V2, ревью I3/I5 — рекомендация врача пришла в визит: его
     // внутренний источник становится направившим, если направившего нет ни у
@@ -1000,10 +1011,20 @@ async function attachRecommendation(state, rec, chosenDoctorId, onReload) {
     }
     await activateVisitIfPending(state);
 
-    const { error: upErr } = await supabase.from('recommended_services')
-        .update({ status: 'done', closed_at: new Date().toISOString() })
-        .eq('id', rec.id);
-    if (upErr) console.warn('[recommendation status]', upErr.message);
+    // DOCTOR_REFERRAL_DESK_V1 — рекомендацию закрывает СЕРВЕР: связывает её со строкой
+    // (recommended_services.visit_service_id) и ставит строке направившего — включённый
+    // внутренний источник рекомендовавшего врача (REFERRAL_LINE_V1), если строка не его.
+    // Отказ — прежняя правка статуса, чтобы рекомендация не осталась «ожидающей» и её не
+    // добавили второй раз.
+    const { error: attErr } = await supabase.rpc('referral_recommendation_attach',
+        { recommendation_id: rec.id, visit_service_id: insRow && insRow.id });
+    if (attErr) {
+        console.warn('[recommendation attach]', attErr.message || attErr);
+        const { error: upErr } = await supabase.from('recommended_services')
+            .update({ status: 'done', closed_at: new Date().toISOString() })
+            .eq('id', rec.id);
+        if (upErr) console.warn('[recommendation status]', upErr.message);
+    }
 
     toast('Added to visit.');
     onReload();

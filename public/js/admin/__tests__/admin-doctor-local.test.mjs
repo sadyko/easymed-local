@@ -123,7 +123,15 @@ globalThis.fetch = async (url, opts) => {
     let compiled;
     try { compiled = compile(body, USER, { db: DB }); } catch (e) { return fail(400, e.message); }
     const { sql, params, meta } = compiled;
-    if (meta.op !== 'select') { DB.prepare(sql).run(...params); return ok(null); }
+    if (meta.op !== 'select') {
+      const info = DB.prepare(sql).run(...params);
+      // DOCTOR_REFERRAL_DESK_V1 — вставка с .select() возвращает строку, как routes/db.js.
+      if (meta.op === 'insert' && meta.returning) {
+        const row = DB.prepare(`SELECT * FROM "${meta.table}" WHERE rowid = ?`).get(info.lastInsertRowid);
+        return ok(meta.single ? row : [row]);
+      }
+      return ok(null);
+    }
     // Как routes/db.js respondRows: связи — вложенными, JSON-колонки — объектами.
     const rows = reshape(DB.prepare(sql).all(...params), meta);
     for (const r of rows) for (const c of meta.json || []) if (typeof r[c] === 'string') { try { r[c] = JSON.parse(r[c]); } catch { r[c] = null; } }
@@ -238,4 +246,27 @@ test('окно визита → рекомендация: выбор врача 
   assert.ok(mine, 'администратора-врача нет в выборе врача: ' + JSON.stringify(opts.map((o) => o.attrs.value)));
   assert.ok('selected' in mine.attrs, 'рекомендовавший врач не выбран по умолчанию');
   assert.ok(!opts.some((o) => o.attrs.value === String(KASSA)), 'кассир в выборе врача');
+});
+
+// DOCTOR_REFERRAL_DESK_V1 · DUP_STOP_V1 — «Add to visit» рекомендации: отменённая строка той же
+// услуги в визите больше не мешает (правило сервера visit_dup_check, а не «та же услуга где-то
+// в окне»), а рекомендацию закрывает сервер — привязкой к вставленной строке.
+test('окно визита → рекомендация: отменённая строка той же услуги не мешает; сервер закрывает рекомендацию этой строкой', async () => {
+  signInAs('admdoc', ADMIN_DOC, 'admin');
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (40, 22, 1, 150000, 150000, 'cancelled')").run();
+  const rec = DB.prepare("SELECT id FROM recommended_services WHERE patient_id = 3 AND service_id = 22 AND status = 'pending'").get().id;
+  document.body.children.length = 0;
+  VM.openVisitModal({ visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3, full_name: 'Иванов Иван' } });
+  await flush();
+  const addLabel = tr('Add to visit');
+  walk(document.body).find((n) => n.tagName === 'BUTTON' && textOf(n).includes(addLabel)).click();
+  await flush();
+  const dialog = document.body.children[document.body.children.length - 1];
+  const confirmBtn = walk(dialog).find((n) => n.tagName === 'BUTTON' && textOf(n).includes(addLabel));
+  assert.ok(confirmBtn, 'окно рекомендации не открылось — отменённая строка той же услуги его погасила');
+  confirmBtn.click();
+  await flush(80);
+  const line = DB.prepare("SELECT id FROM visit_services WHERE visit_id = 40 AND service_id = 22 AND status <> 'cancelled'").get();
+  assert.ok(line, 'услуга рекомендации не легла в визит');
+  assert.deepEqual(DB.prepare('SELECT status, visit_service_id FROM recommended_services WHERE id = ?').get(rec), { status: 'done', visit_service_id: line.id });
 });

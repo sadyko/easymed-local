@@ -47,3 +47,25 @@ test('строки направления врача и рекомендации
   assert.match(wiz, /'data-rec-line'/);
   assert.match(wiz, /'data-doctor-orders'/);
 });
+
+const modal = fs.readFileSync(path.join(HERE, 'visit-modal.js'), 'utf8');
+
+test('окно визита: рекомендацию закрывает сервер (referral_recommendation_attach) по номеру вставленной строки', () => {
+  const body = slice(modal, 'async function attachRecommendation(', 4500);
+  // DUP_STOP_V1 — строка уходит с причиной обхода (withRepeatReason), если её назвал администратор.
+  assert.match(body, /from\('visit_services'\)\.insert\(withRepeatReason\(\{[\s\S]*?\}, pre\.reason\)\)\.select\(\)\.single\(\)/);
+  assert.match(body, /referral_recommendation_attach/);
+  assert.match(body, /visit_set_doctor_referrer[\s\S]*referral_recommendation_attach/, 'направивший визита — до закрытия рекомендации (он требует открытую)');
+});
+
+// DUP_STOP_V1 — «Add to visit» из рекомендации — та же проверка повтора, что у каталога окна:
+// правило сервера (visit_dup_check), а не «та же услуга где-то в окне»: отменённая и
+// возвращённая строка не мешают, администратор и главный врач назначают повтор с причиной.
+test('окно визита: повтор рекомендации — правило сервера (visit_dup_check), а не список строк окна', () => {
+  const open = slice(modal, 'async function openAttachRecommendationModal(', 1500);
+  assert.match(open, /await attachExcludeIds\(state\.visit\.id\)/);
+  assert.ok(!/state\.services \|\| \[\]\)\.some\(s => s\.service_id === rec\.service_id\)/.test(open), 'окно гасит по любой строке той же услуги');
+  const att = slice(modal, 'async function attachRecommendation(', 2500);
+  assert.match(att, /const pre = await precheckOrders\(\{ visitId: state\.visit\.id, lines: \[/);
+  assert.ok(!/state\.services \|\| \[\]\)\.some\(s => s\.service_id === rec\.service_id\)/.test(att), 'вставка гасит по любой строке той же услуги');
+});
