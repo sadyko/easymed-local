@@ -13470,4 +13470,9 @@ export const STRINGS = {
   "Направления врача из другого визита — оформите их в окне визита.": {"en":"Doctor referrals from another visit — register them in the visit window.","ru":"Направления врача из другого визита — оформите их в окне визита.","uz":"Boshqa tashrifdagi shifokor yo‘llanmalari — ularni tashrif oynasida rasmiylashtiring."},   // DOCTOR_REFERRAL_DESK_V1
   "Услуги рекомендации нет в каталоге — добавьте её вручную.": {"en":"The recommended service is not in the catalogue — add it manually.","ru":"Услуги рекомендации нет в каталоге — добавьте её вручную.","uz":"Tavsiya etilgan xizmat katalogda yo‘q — uni qo‘lda qo‘shing."},   // DOCTOR_REFERRAL_DESK_V1
   "Рекомендация врача не закрыта: {msg}": {"en":"The doctor's recommendation was not closed: {msg}","ru":"Рекомендация врача не закрыта: {msg}","uz":"Shifokor tavsiyasi yopilmadi: {msg}"},   // DOCTOR_REFERRAL_DESK_V1
+  // DOCTOR_REFERRAL_DESK_V1 — мастер визита (views/visit-wizard.js)
+  "Из направлений врача: {names}": {"en":"From doctor referrals: {names}","ru":"Из направлений врача: {names}","uz":"Shifokor yo‘llanmalaridan: {names}"},   // DOCTOR_REFERRAL_DESK_V1
+  "Услуги направления нет в каталоге — оформите её в окне визита.": {"en":"The referred service is not in the catalogue — register it in the visit window.","ru":"Услуги направления нет в каталоге — оформите её в окне визита.","uz":"Yo‘llanmadagi xizmat katalogda yo‘q — uni tashrif oynasida rasmiylashtiring."},   // DOCTOR_REFERRAL_DESK_V1
+  "Рекомендация для регистратуры": {"en":"Note for the front desk","ru":"Рекомендация для регистратуры","uz":"Registratura uchun tavsiya"},   // DOCTOR_REFERRAL_DESK_V1
+  "Например: натощак, к 9:00": {"en":"For example: on an empty stomach, by 9:00","ru":"Например: натощак, к 9:00","uz":"Masalan: och qoringa, soat 9:00 gacha"},   // DOCTOR_REFERRAL_DESK_V1
 };

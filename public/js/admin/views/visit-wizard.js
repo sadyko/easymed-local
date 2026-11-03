@@ -53,7 +53,8 @@ import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../s
 // доказывает событие (отметка, платёж, начатая работа), и видит его сервер.
 import { pendingCrmLines } from '../crm-lines.js';
 import { isDeskNow } from './wizard-desk.js';   // CRM_LINK_ALL_V1 (R3) — «сейчас» у стойки: одно правило с сервером
-import { loadTodayBooking, bookedStatusLabel, isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»
+import { loadTodayBooking, bookedStatusLabel, isBookedTwin, localSlot } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»; localSlot — DOCTOR_REFERRAL_DESK_V1
+import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
 // CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на три двери:
 // у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
 import { readEnsureVisit } from '../ensure-visit-answer.js';
@@ -86,6 +87,10 @@ const PAGE_SIZE = 50;
 // без него выбрать их было бы негде. Значение служит ключом «корзины», а не
 // категорией — в базу оно не попадает.
 const REF_UNCAT = '—  без категории';
+// DOCTOR_REFERRAL_DESK_V1 — пометки строк сметы «от врача» и «рекомендация врача» — той же
+// формы, что «из записи».
+const ORDER_CHIP_CSS = { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12.5px', fontWeight: 700,
+    color: 'var(--info-700, #1d4ed8)', background: 'var(--info-50, #eef4ff)', borderRadius: '999px', padding: '1px 7px', whiteSpace: 'nowrap' };
 // REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — категория приходит из СПРАВОЧНИКА
 // по ссылке category_id, а не из свободного текста в `category`. Текст
 // выбирали потому, что мастер группирует источники по этой строке и список
@@ -187,6 +192,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // выставляет, но плательщику — нет (сервер откажет).
     const canPickPayer = moneyRole || hasActorRole(PATIENT_PAYER_ROLES);
     const canSavePatientPayer = hasActorRole(PATIENT_PAYER_ROLES);
+    // DOCTOR_REFERRAL_DESK_V1 — мастер открыт из кабинета («Направить на услуги»): направляет врач.
+    const referralMode = opts.referrerDoctorId != null && opts.referrerDoctorId !== '';
 
     const wiz = {
         step: 1,
@@ -204,6 +211,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         cardPayerId: null,   // REFERRAL_BILL_V1 (дополнение 29.09) — плательщик в карте пациента (patients.payer_id)
         cart: [],            // [{ svc, qty }]
         dropBooked: [],      // CRM_LINK_ALL_V1 (R7a) — visit_service_id строк «из записи», которые убрали
+        doctorOrders: null,       // DOCTOR_REFERRAL_DESK_V1 — «Направления врача» пациента (patient_referral_orders)
+        doctorOrderVsIds: null,   // DOCTOR_REFERRAL_DESK_V1 — их строки «из записи» второй раз не подставляются
+        referralNote: '',         // DOCTOR_REFERRAL_DESK_V1 — «Рекомендация для регистратуры» (мастер направления врача)
         bookedTodaySvc: null, // CRM_LINK_ALL_V1 (ред. 2) — услуги, уже стоящие в визите записи на сегодня
         ordered: [],         // DUP_STOP_V1 — уже назначенное в визите дня (visit_dup_check): каталог и смета помечают
         orderedDay: null,    // DUP_STOP_V1 (ревью M1) — день этого визита ('YYYY-MM-DD'): мешает только строкам на него
@@ -760,6 +770,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // Совпадение по дате — обязательное: услуга, записанная на пятницу, не
     // должна подставиться пациенту, который зашёл во вторник. В любой другой
     // день смета открывается пустой, как и раньше.
+    if (!referralMode) await prefillFromDoctorOrders();   // DOCTOR_REFERRAL_DESK_V1 — сначала направления врача: их строки «из записи» не подставляются
     await prefillFromBooking();   // CRM_LINK_ALL_V1 (R7a) — сначала то, что уже в визите записи
     await prefillFromCrm();
 
@@ -818,6 +829,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         wiz.bookedTodaySvc = new Set(b.rows.filter((r) => r.serviceId != null).map((r) => Number(r.serviceId)));
         const names = [];
         for (const r of b.rows) {
+            if (wiz.doctorOrderVsIds && wiz.doctorOrderVsIds.has(Number(r.vsId))) continue;   // DOCTOR_REFERRAL_DESK_V1 — это направление врача
             if (r.billed || r.serviceId == null) continue;
             const svc = wiz.services.find(sv => Number(sv.id) === r.serviceId);
             if (!svc) continue;
@@ -852,8 +864,86 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
     /** CRM_LINK_ALL_V1 (R7a) — убрать строку сметы; строка «из записи» снимется с визита при записи. */
     function removeCartLine(c) {
-        if (c && c.booked) wiz.dropBooked.push(c.booked.vsId);
+        // DOCTOR_REFERRAL_DESK_V1 — строка направления врача остаётся в визите: регистратор её
+        // сейчас не оформил, но врач её назначил — она вернётся в группу «Направления врача».
+        if (c && c.booked && !c.booked.doctorOrder) wiz.dropBooked.push(c.booked.vsId);
         wiz.cart = wiz.cart.filter(x => x !== c);
+    }
+
+    // REFERRAL_LINE_V1 — направивший НОВЫХ строк этой записи: «Кто направил» шага
+    // «Направление», а в мастере направления из кабинета — внутренний источник направляющего
+    // врача. Сервер берёт его только у стойки (врачу ставит его источник сам) и проверяет, что
+    // источник включён (domain/line-referral.js).
+    function lineReferralSource() {
+        if (wiz.hasReferral && wiz.sourceId) return Number(wiz.sourceId);
+        if (!referralMode) return null;
+        const s = (wiz.sources || []).find(x => x && x.doctor_id != null && String(x.doctor_id) === String(opts.referrerDoctorId));
+        return s ? Number(s.id) : null;
+    }
+
+    // DOCTOR_REFERRAL_DESK_V1 — НАПРАВЛЕНИЯ ВРАЧА У СТОЙКИ (patient_referral_orders: своё
+    // здание, сегодня и вперёд). Сегодняшние без счёта встают в смету сами — строками «от
+    // врача» тем же путём, что строки «из записи» (R7a): второй строки нет, счёт — на них;
+    // так — только когда мастер открыт на сегодня (как prefillFromBooking). Остальное —
+    // группой над сметой (doctorOrdersRail). В мастере направления из кабинета группы нет:
+    // врач направляет, а не оформляет чужие направления.
+    async function prefillFromDoctorOrders() {
+        if (!patient.id) return;
+        let o;
+        try { o = await loadDoctorOrders(patient.id); }
+        catch (e) {
+            toast(trf('Направления врача не загрузились: {msg}', { msg: (e && e.message) || e }), 'warn');
+            return;
+        }
+        wiz.doctorOrders = o;
+        wiz.doctorOrderVsIds = orderVsIds(o);
+        const names = [];
+        const today = String(wiz.when || '').slice(0, 10) === isoDay(Date.now());
+        for (const l of o.lines) {
+            if (!today || orderKind(l, o.today) !== 'ready' || l.service_id == null) continue;
+            if (addOrderLine(l)) names.push(l.name);
+        }
+        if (names.length) {
+            refreshTiers();
+            toast(trf('Из направлений врача: {names}', { names: names.join(', ') }), 'ok');
+        }
+        paint();
+    }
+
+    /** DOCTOR_REFERRAL_DESK_V1 — строка направления врача → строка сметы со своим днём, врачом и временем. */
+    function addOrderLine(l) {
+        const svc = wiz.services.find(sv => Number(sv.id) === Number(l.service_id));
+        if (!svc) { toast(tr('Услуги направления нет в каталоге — оформите её в окне визита.'), 'warn'); return false; }
+        const inCart = wiz.cart.find(c => String(c.svc.id) === String(svc.id));
+        if (inCart && inCart.booked) return false;
+        if (inCart && inCart.doctorId && l.doctor_id && Number(inCart.doctorId) !== Number(l.doctor_id)) return false;   // другой врач — другая строка
+        const d0 = new Date(String(l.day) + 'T00:00'); d0.setHours(0, 0, 0, 0);
+        const line = inCart || { svc, qty: 1, doctorId: null, when: null, ui: { day: d0.getTime(), pickDoc: false } };
+        line.booked = { vsId: Number(l.visit_service_id), visitId: Number(l.visit_id), status: l.visit_status, when: null,
+            doctorOrder: true, referrerName: l.referrer_name || '', note: l.referral_note || '' };
+        line.qty = Number(l.quantity) || 1;
+        if (l.doctor_id != null) line.doctorId = Number(l.doctor_id);
+        line.ui = { ...(line.ui || {}), day: d0.getTime(), noToday: false };
+        if (!svc.requires_doctor) { line.dateOnly = true; line.when = String(l.day) + 'T00:00'; }
+        else line.when = l.scheduled_at ? localSlot(l.scheduled_at) : String(l.day) + 'T00:00';
+        line.booked.when = line.when;   // bookedKeepsSlot: время строки уже её — слот заново не занимается
+        if (!inCart) wiz.cart.push(line);
+        return true;
+    }
+
+    /** DOCTOR_REFERRAL_DESK_V1 — «Добавить» рекомендацию врача: услуга в смету, помнящая рекомендацию. */
+    function addRecToCart(r) {
+        const svc = wiz.services.find(sv => Number(sv.id) === Number(r.service_id));
+        if (!svc) { toast(tr('Услуги рекомендации нет в каталоге — добавьте её вручную.'), 'warn'); return; }
+        if (wiz.cart.some(c => String(c.svc.id) === String(svc.id))) {
+            toast(trf('«{name}» уже в смете — эту услугу можно добавить только один раз за визит.', { name: svc.name }), 'info');
+            return;
+        }
+        addToCart(svc);
+        const line = wiz.cart.find(c => c.svc.id === svc.id);
+        if (line) line.fromRec = { id: Number(r.recommendation_id), referrerId: r.referrer_id ?? null };
+        repaintRail();
+        if (wiz.step === 1) paint();
     }
 
     async function prefillFromCrm() {
@@ -2412,6 +2502,50 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             chk, trf('Баланс: использовать (доступно {sum})', { sum: fmtPrice(bal) }));
     }
 
+    // DOCTOR_REFERRAL_DESK_V1 — группа «Направления врача» над сметой: выставленные (ждут кассу)
+    // и оплаченные — только чтение; без счёта — «Добавить» (строка встаёт в смету со своим
+    // днём и врачом, второй строки не будет); ожидающие рекомендации — «Добавить».
+    // Сегодняшние без счёта уже в смете (пометка «от врача»), здесь их нет.
+    function doctorOrdersRail() {
+        const o = wiz.doctorOrders;
+        if (!o || wiz.creating) return null;
+        const inCartVs = new Set(wiz.cart.filter(c => c.booked).map(c => Number(c.booked.vsId)));
+        const inCartRec = new Set(wiz.cart.filter(c => c.fromRec).map(c => Number(c.fromRec.id)));
+        const lines = (o.lines || []).filter(l => !inCartVs.has(Number(l.visit_service_id)));
+        const recs = (o.recommendations || []).filter(r => !inCartRec.has(Number(r.recommendation_id)));
+        if (!lines.length && !recs.length) return null;
+        const box = h('div', { 'data-doctor-orders': '', style: { display: 'flex', flexDirection: 'column', gap: '6px', padding: '9px 10px', background: 'var(--info-50, #eef4ff)', border: '1px solid var(--info-200, #c7dcfd)', borderRadius: '10px' } },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 700, color: 'var(--info-700, #1d4ed8)' } },
+                Icon('Stethoscope', { size: 13 }), tr('Направления врача')));
+        const sub = (parts) => h('div', { class: 'muted', style: { fontSize: '12.5px' } }, parts.filter(Boolean).join(' · '));
+        const rowCss = { display: 'flex', alignItems: 'flex-start', gap: '8px' };
+        for (const l of lines) {
+            const st = orderStateText(l, o.today);
+            const bonus = bonusText(l.bonus_to);
+            const kind = orderKind(l, o.today);
+            const canAdd = (kind === 'future' || kind === 'ready') && l.service_id != null;
+            box.appendChild(h('div', { 'data-doctor-order': String(l.visit_service_id), style: rowCss },
+                h('div', { style: { flex: '1 1 auto', minWidth: 0 } },
+                    h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, l.name || '—'),
+                    sub([trf('от врача · {name}', { name: l.referrer_name || '—' }), trf(st.template, st.params), bonus ? trf(bonus.template, bonus.params) : null]),
+                    l.referral_note ? h('div', { class: 'muted', style: { fontSize: '12.5px', fontStyle: 'italic' } }, l.referral_note) : null),
+                canAdd ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-doctor-order-add': String(l.visit_service_id),
+                    onclick: () => { if (addOrderLine(l)) { refreshTiers(); repaintRail(); if (wiz.step === 1) paint(); } } },
+                    Icon('Plus', { size: 12 }), ' ', tr('Добавить')) : null));
+        }
+        for (const r of recs) {
+            const bonus = bonusText(r.bonus_to);
+            box.appendChild(h('div', { 'data-doctor-rec': String(r.recommendation_id), style: rowCss },
+                h('div', { style: { flex: '1 1 auto', minWidth: 0 } },
+                    h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, r.name || '—'),
+                    sub([trf('от врача · {name}', { name: r.referrer_name || '—' }), tr('рекомендация врача'), bonus ? trf(bonus.template, bonus.params) : null]),
+                    r.notes ? h('div', { class: 'muted', style: { fontSize: '12.5px', fontStyle: 'italic' } }, r.notes) : null),
+                r.service_id != null ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-doctor-rec-add': String(r.recommendation_id),
+                    onclick: () => addRecToCart(r) }, Icon('Plus', { size: 12 }), ' ', tr('Добавить')) : null));
+        }
+        return box;
+    }
+
     function repaintRail() {
         if (!railEl) return;
         refreshTiers();   // VISIT_TIER_PRICING_V1 — no-op unless services or days changed
@@ -2438,6 +2572,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             ),
         ));
 
+        const ordersBox = doctorOrdersRail();   // DOCTOR_REFERRAL_DESK_V1
+        if (ordersBox) railEl.appendChild(ordersBox);
         const shownCart = visibleCart();
         const pendingDoc = wiz.cart.length - shownCart.length;
         if (wiz.cart.length === 0) {
@@ -2462,7 +2598,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 list.appendChild(h('div', { class: 'row', style: { gap: '8px', padding: '9px 0', borderBottom: '1px solid var(--ink-50)' } },
                     h('span', { style: { flex: 1, minWidth: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, c.svc.name),
                     // CRM_LINK_ALL_V1 (R7a) — строка уже в визите записи: подпись и статус записи.
-                    c.booked ? h('span', { 'data-booked-line': String(c.booked.vsId), style: { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12.5px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-50, #e8f3f2)', borderRadius: '999px', padding: '1px 7px', whiteSpace: 'nowrap' } },
+                    // DOCTOR_REFERRAL_DESK_V1 — строка из рекомендации врача и строка направления врача.
+                    c.fromRec ? h('span', { 'data-rec-line': String(c.fromRec.id), style: ORDER_CHIP_CSS },
+                        Icon('Flag', { size: 12 }), tr('рекомендация врача')) : null,
+                    c.booked && c.booked.doctorOrder ? h('span', { 'data-doctor-order-line': String(c.booked.vsId), title: c.booked.note || null, style: ORDER_CHIP_CSS },
+                        Icon('Stethoscope', { size: 12 }), trf('от врача · {name}', { name: c.booked.referrerName || '—' })) : null,
+                    c.booked && !c.booked.doctorOrder ? h('span', { 'data-booked-line': String(c.booked.vsId), style: { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12.5px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-50, #e8f3f2)', borderRadius: '999px', padding: '1px 7px', whiteSpace: 'nowrap' } },
                         Icon('Calendar', { size: 12 }), tr('из записи') + ' · ' + tr(bookedStatusLabel(c.booked.status))) : null,
                     // DUP_STOP_V1 (ревью M1) — повтор в визите этого дня: выберите другой день или уберите
                     // строку (администратору и главному врачу запись спросит причину).
@@ -2895,6 +3036,20 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 onclick: () => { const s = stepSeq(); const i = s.indexOf(wiz.step); wiz.step = i > 0 ? s[i - 1] : 1; paint(); },
             }, '‹ Назад'));
         }
+        // DOCTOR_REFERRAL_DESK_V1 — «Рекомендация для регистратуры»: что врач передаёт стойке
+        // (натощак, к какому часу, что принести). Ложится в каждую новую строку направления
+        // (visit_services.referral_note) и видна регистратору в группе «Направления врача».
+        if (referralMode) {
+            const note = h('textarea', {
+                rows: '2', maxlength: '500', 'data-referral-note': '',
+                placeholder: tr('Например: натощак, к 9:00'),
+                style: { width: '100%', resize: 'vertical', fontSize: '13.5px', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit' },
+            });
+            note.value = wiz.referralNote;
+            note.addEventListener('input', () => { wiz.referralNote = note.value; });
+            railEl.appendChild(h('label', { style: { display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '10px', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-600)' } },
+                tr('Рекомендация для регистратуры'), note));
+        }
         railEl.appendChild(footer);
     }
 
@@ -3031,6 +3186,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // каком врач их выбрал. Вызовы, которые аргумент не принимают
             // (карта пациента, CRM), ничего не замечают.
             const booked = [];
+            const attachFail = [];   // DOCTOR_REFERRAL_DESK_V1 — рекомендации, которые сервер не закрыл
             // DISCOUNT_CARRY_V1 — скидка идёт на счета пациента по порядку дней:
             // сколько влезло в первый, остаток — в следующий (см. ниже).
             // PACKAGES_V1 (ревью I-1) — переносится только скидка на строки без
@@ -3215,12 +3371,27 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     if (lineDoc) row.doctor_id = Number(lineDoc);
                     if (c.when) row.scheduled_at = new Date(c.when).toISOString();
                     if (uid != null) row.created_by = uid;
+                    // REFERRAL_LINE_V1 — направивший строки (сервер примет его только от стойки и
+                    // проверит, что источник включён; врачу ставит его источник сам). Строке из
+                    // рекомендации направившего ставит сервер по самой рекомендации — ниже.
+                    const lineSrc = lineReferralSource();
+                    if (lineSrc && !c.fromRec) row.referred_by_source_id = lineSrc;
+                    // DOCTOR_REFERRAL_DESK_V1 — «Рекомендация для регистратуры» мастера направления врача.
+                    const refNote = String(wiz.referralNote || '').trim();
+                    if (refNote) row.referral_note = refNote.slice(0, 500);
                     withRepeatReason(row, repeatByDay.get(day));   // DUP_STOP_V1 — обход с причиной (сервер снимет поле)
                     const res = await supabase.from('visit_services').insert(row).select().single();
                     if (res.error) throw new Error(trf('Услуга «{name}»: {msg}', { name: c.svc.name, msg: res.error.message || 'insert failed' }));
                     vsIds.push(res.data.id);
                     visitsWithLines.add(visit.id);   // LIVE_AUDIT_FIX_V1
                     lineByVsId.set(res.data.id, c);
+                    // DOCTOR_REFERRAL_DESK_V1 — строка по рекомендации врача: сервер закрывает
+                    // рекомендацию и ставит строке направившего (доказательство — сама рекомендация).
+                    if (c.fromRec) {
+                        const { error: aErr } = await supabase.rpc('referral_recommendation_attach',
+                            { recommendation_id: Number(c.fromRec.id), visit_service_id: Number(res.data.id) });
+                        if (aErr) attachFail.push(c.svc.name + ': ' + (aErr.message || aErr));
+                    }
                     const bDoc = lineDoc ? wiz.doctors.find(x => String(x.id) === String(lineDoc)) : null;
                     booked.push({
                         visit_service_id: res.data.id,
@@ -3325,6 +3496,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // per-врач (консультации), одна на пациента (лаборатория), врач/кабинет
             // (процедуры), per-аппарат (диагностика). Идемпотентно; сбой не
             // блокирует счёт (как в easymed).
+            if (attachFail.length) toast(trf('Рекомендация врача не закрыта: {msg}', { msg: attachFail.join('; ') }), 'warn');   // DOCTOR_REFERRAL_DESK_V1
             let queueRows = [];
             try {
                 const qIds = [...lineByVsId.keys()];
