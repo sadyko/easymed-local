@@ -1,38 +1,64 @@
-// lab-barcode.js — self-contained Code128-B generator + printer-agnostic label printer.
+// lab-barcode.js — self-contained Code128 generator + printer-agnostic label printer.
 // (единственный import — локальный модуль шрифтов печати; CDN по-прежнему нет.)
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1
 // No external deps / no CDN (CSP-safe). Pattern table + checksum validated byte-for-byte
-// against python-barcode 0.16.1 (pure-B vectors "ABCDEF", "LAB-9").
+// against python-barcode 0.16.1 (pure-B vectors "ABCDEF", "LAB-9"; set-C vectors
+// "00000028", "00000032", "12345678", "17874421" — __tests__/lab-barcode.test.mjs).
 const C128 = "11011001100,11001101100,11001100110,10010011000,10010001100,10001001100,10011001000,10011000100,10001100100,11001001000,11001000100,11000100100,10110011100,10011011100,10011001110,10111001100,10011101100,10011100110,11001110010,11001011100,11001001110,11011100100,11001110100,11101101110,11101001100,11100101100,11100100110,11101100100,11100110100,11100110010,11011011000,11011000110,11000110110,10100011000,10001011000,10001000110,10110001000,10001101000,10001100010,11010001000,11000101000,11000100010,10110111000,10110001110,10001101110,10111011000,10111000110,10001110110,11101110110,11010001110,11000101110,11011101000,11011100010,11011101110,11101011000,11101000110,11100010110,11101101000,11101100010,11100011010,11101111010,11001000010,11110001010,10100110000,10100001100,10010110000,10010000110,10000101100,10000100110,10110010000,10110000100,10011010000,10011000010,10000110100,10000110010,11000010010,11001010000,11110111010,11000010100,10001111010,10100111100,10010111100,10010011110,10111100100,10011110100,10011110010,11110100100,11110010100,11110010010,11011011110,11011110110,11110110110,10101111000,10100011110,10001011110,10111101000,10111100010,11110101000,11110100010,10111011110,10111101110,11101011110,11110101110,11010000100,11010010000,11010011100".split(",");
 const STOP = "1100011101011";  // stop symbol + 2-module termination bar
 
-// Code128-B module string ("1"=bar, "0"=space). Encodes printable ASCII 32..126.
+// LAB_TUBE_LABEL_V1 — номер этикетки (8 цифр, LAB_BARCODE_DIGITS_V1) кодируется
+// НАБОРОМ C: пара цифр — один знак. Символ короче, чем в наборе B (79 модулей
+// против 123), и на той же этикетке 58 мм каждая полоска в 1,45 раза шире:
+// термопринтер 203 dpi рисует узкую полоску 4 точками, а не 3, и сканер
+// анализатора читает увереннее. Сканер отдаёт те же цифры — Code128 один, A/B/C —
+// его наборы; напечатанные раньше этикетки (набор B) читаются, как прежде.
+// Набор C — только для чётного числа одних цифр; всё прочее — набор B, как было.
+// Эталоны набора C сверены с python-barcode 0.16.1, КРОМЕ ведущей пары «99»: он
+// её теряет (99999999 → 999999); она сверена по стандарту (ISO/IEC 15417).
+const DIGIT_PAIRS = /^(?:\d\d)+$/;
+
+// Code128 module string ("1"=bar, "0"=space). Set B encodes printable ASCII 32..126.
 export function code128Modules(text) {
     const s = String(text == null ? "" : text);
-    const vals = [104];                 // Start B
-    let sum = 104;
-    for (let i = 0; i < s.length; i++) {
-        let v = s.charCodeAt(i) - 32;
-        if (v < 0 || v > 94) v = 0;     // out-of-range -> space (safe)
-        vals.push(v);
-        sum += (i + 1) * v;             // weighted, 1-based
+    const vals = [];
+    if (DIGIT_PAIRS.test(s)) {          // LAB_TUBE_LABEL_V1 — Start C, затем пары цифр
+        vals.push(105);
+        for (let i = 0; i < s.length; i += 2) vals.push(Number(s.slice(i, i + 2)));
+    } else {
+        vals.push(104);                 // Start B
+        for (let i = 0; i < s.length; i++) {
+            let v = s.charCodeAt(i) - 32;
+            if (v < 0 || v > 94) v = 0; // out-of-range -> space (safe)
+            vals.push(v);
+        }
     }
+    let sum = vals[0];
+    for (let i = 1; i < vals.length; i++) sum += i * vals[i];   // weighted, 1-based
     vals.push(sum % 103);               // checksum
     let out = "";
     for (const v of vals) out += C128[v];
     return out + STOP;
 }
 
+// LAB_TUBE_LABEL_V1 — ТИХАЯ ЗОНА: 10 модулей пустоты с каждой стороны (ISO/IEC
+// 15417 — не меньше 10X). Раньше полоски шли от края до края картинки, а её
+// растягивают на всю ширину этикетки: сканер не видел, где символ начинается, а
+// сдвиг этикетки в принтере на миллиметр съедал крайнюю полоску. Зона — часть
+// картинки, поэтому растягивается вместе с полосками и всегда равна 10 модулям.
+export const QUIET_MODULES = 10;
+
 // Render the code as crisp SVG bars (runs of "1" merged into single rects).
 export function barcodeSVG(text, opts) {
-    const { height = 42, moduleW = 1.5, color = "#000" } = opts || {};
+    const { height = 42, moduleW = 1.5, color = "#000", quiet = QUIET_MODULES } = opts || {};
     const mods = code128Modules(text);
-    const w = mods.length * moduleW;
+    const q = Math.max(0, Math.floor(Number(quiet) || 0));
+    const w = (mods.length + 2 * q) * moduleW;
     let rects = "", i = 0;
     while (i < mods.length) {
         if (mods[i] === "1") {
             let j = i; while (j < mods.length && mods[j] === "1") j++;
-            rects += `<rect x="${(i * moduleW).toFixed(2)}" y="0" width="${((j - i) * moduleW).toFixed(2)}" height="${height}" fill="${color}"/>`;
+            rects += `<rect x="${((i + q) * moduleW).toFixed(2)}" y="0" width="${((j - i) * moduleW).toFixed(2)}" height="${height}" fill="${color}"/>`;
             i = j;
         } else i++;
     }
