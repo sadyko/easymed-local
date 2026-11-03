@@ -25,6 +25,12 @@ export async function logPatientActivity({
     detail       = null,
 } = {}) {
     if (!patientId) return;            // nothing to attach the row to
+    // REPEAT_VISIT_V1 (ревью, остаток 9) — detail — колонка текста: объект /api/db не
+    // принимает (400 «unsupported value type»), и запись журнала пропадала молча. Объект —
+    // JSON-строкой здесь, для всех вызовов; строка и null — как есть.
+    if (detail != null && typeof detail !== 'string') {
+        try { detail = JSON.stringify(detail); } catch (_) { detail = null; }
+    }
     const actor = currentActor();
     const row = {
         patient_id:    patientId,

@@ -1653,7 +1653,8 @@ async function openRevisitModal(ctx) {
                     summary: `Повторный визит: ${isoDate} ${state.slot}`,   // i18n-exempt: запись в журнал действий (БД) — хранимая запись
                     // REPEAT_VISIT_V1 (поправка 2) — detail СТРОКОЙ JSON: объект /api/db
                     // не принимает (400 «unsupported value type»), и запись журнала терялась.
-                    detail: JSON.stringify({ reason, comment, consultation_type_id: ct ? ct.id : null, service_id: svc ? svc.id : null }),
+                    // REPEAT_VISIT_V1 (ревью, остаток 9) — строкой его делает сам logPatientActivity.
+                    detail: { reason, comment, consultation_type_id: ct ? ct.id : null, service_id: svc ? svc.id : null },
                 });
             } catch (_) {}
 
