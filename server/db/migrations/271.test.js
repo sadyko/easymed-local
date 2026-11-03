@@ -104,3 +104,41 @@ test('мигр. 271: повторный запуск ничего не меня�
   db.exec(SQL);
   assert.deepEqual(snapshot(db), once);
 });
+
+// Ревью L1 (проба r5): trim() SQLite без набора снимает только пробелы, а лист ввода и
+// lab_panel_save сравнивают String.prototype.trim(). Копия с табуляцией или NBSP в конце имени
+// переживала миграцию, а «Сохранить панель» потом отказывал «записан в панели дважды».
+test('мигр. 271: копии с табуляцией, переводом строки и неразрывным пробелом по краям — тоже копии', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare("INSERT INTO lab_panels (id, name, modality, active) VALUES (950, 'Мазок', 'lab', 1)").run();
+  const a = db.prepare("INSERT INTO lab_panel_analytes (panel_id, name, value_type, sort_order, group_label, unit) VALUES (950, ?, 'numeric', ?, ?, 'г/л')");
+  a.run('Лейкоциты', 0, null);
+  a.run('Лейкоциты ', 1, null);
+  a.run('\tЛейкоциты', 2, ' ');
+  a.run('Лейкоциты\r\n', 3, ' \t');
+  a.run('　Лейкоциты﻿', 4, null);
+  a.run('Лейко циты', 5, null);   // пробел ВНУТРИ — другое имя
+  db.exec(SQL);
+  const left = db.prepare('SELECT name FROM lab_panel_analytes WHERE panel_id = 950 ORDER BY id').all().map((x) => x.name);
+  assert.deepEqual(left, ['　Лейкоциты﻿', 'Лейко циты'], 'одна строка на показатель (самая новая)');
+  // …и для сравнения листа ввода и lab_panel_save повторов больше нет.
+  assert.equal(new Set(left.map((n) => n.trim())).size, left.length);
+  db.close();
+});
+
+test('мигр. 271: набор пробельных символов trim — ровно тот, что у String.prototype.trim()', () => {
+  const sets = SQL.match(/char\(9, [^)]*\)/g) || [];
+  assert.equal(sets.length, 4, 'раздел и имя, с обеих сторон');
+  assert.equal(new Set(sets).size, 1, 'один и тот же набор');
+  const db = openDb(':memory:');
+  const q = db.prepare(`SELECT trim('x' || char(?) || 'x' || char(?), ${sets[0]}) AS t`);
+  for (let cp = 1; cp <= 0xffff; cp++) {
+    if (cp >= 0xd800 && cp <= 0xdfff) continue;   // половинки суррогатной пары — не символ
+    const ch = String.fromCharCode(cp);
+    const js = ('x' + ch + 'x' + ch).trim() === 'x' + ch + 'x';
+    const sql = q.get(cp, cp).t === 'x' + ch + 'x';
+    if (js !== sql) assert.fail(`U+${cp.toString(16).padStart(4, '0')}: JS trim ${js ? 'снимает' : 'не снимает'}, SQL — ${sql ? 'снимает' : 'нет'}`);
+  }
+  db.close();
+});
