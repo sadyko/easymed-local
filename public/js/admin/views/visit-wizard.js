@@ -31,7 +31,7 @@ import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDa
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageSplit, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';   // PACKAGES_V1 — «скидка 20 % · до 30.09.2026»
-import { doctorPoolFor, needsPerformer, performerCandidates } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
+import { doctorPoolFor, needsPerformer, performerCandidates, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';   // OWN_PRICE_REPEAT_V1 — одно правило с сервером
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
@@ -628,7 +628,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // ---- data ----
     try {
         const [svcRes, docRes, srcRes, refCatRes, payerRes] = await Promise.all([
-            supabase.from('services').select('id, name, price, duration_minutes, requires_doctor, is_lab, type').eq('active', true).order('name').limit(1000),
+            supabase.from('services').select('id, name, price, duration_minutes, requires_doctor, ' + ROUTE_SELECT).eq('active', true).order('name').limit(1000),   // ROUTE_SELECT: DIAG_ROUTE_V1 — маршрут группы «Консультации»
             // SVC_DOCTORS_V1 — назначения услуг. DIAG_ROUTE_V1 (D1) — исполнители — врачи по
             // is_doctor (не по роли: администратор-врач, главный врач) и все, кому отмечена
             // услуга (медсестра на УЗИ) — performerCandidates; прежде только role = 'doctor'.

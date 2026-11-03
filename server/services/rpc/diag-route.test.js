@@ -31,31 +31,40 @@ function seed() {
   S.run(103, 'УЗИ (A09)', 'imaging', null, labType);
   S.run(104, 'Капельница', 'procedure', null, null);
   S.run(105, 'ОАК', 'lab', null, null);
+  // Группа «Консультации» — умолчание колонки (мигр. 023): у неё решают отделение и тип каталога,
+  // как у строки без группы (поправка ревью DIAG_ROUTE_V1).
+  S.run(106, 'Массаж (Консультации, отделение «Процедурный»)', 'consultation', proc, null);
+  S.run(107, 'Ферритин (Консультации, отделение «Лаборатория»)', 'consultation', lab, null);
+  S.run(108, 'ПЦР (Консультации, «лабораторный» тип)', 'consultation', null, labType);
+  S.run(109, 'Приём терапевта', 'consultation', null, null);
   db.prepare("INSERT INTO patients (id, full_name) VALUES (1, 'Тест-A')").run();
   const v = Number(db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (1, 12, datetime('now'), 'arrived')").run().lastInsertRowid);
   const L = db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (?, ?, 12, 1, 100000, 100000, 'queued')");
-  for (const sid of [101, 102, 103, 104, 105]) L.run(v, sid);
+  for (const sid of [101, 102, 103, 104, 105, 106, 107, 108, 109]) L.run(v, sid);
   return db;
 }
 
 test('procedures_list: ЭКГ группы «Диагностика» из отделения видом «Процедурный» — не процедура; капельница — процедура', () => {
   const db = seed();
   try {
-    const names = proceduresList(db, {}, admin).rows.map((r) => r.service);
-    assert.deepEqual(names, ['Капельница']);
+    const names = proceduresList(db, {}, admin).rows.map((r) => r.service).sort();
+    assert.deepEqual(names, ['Капельница', 'Массаж (Консультации, отделение «Процедурный»)'],
+      'группа «Консультации» из отделения «Процедурный» — процедура (умолчание колонки)');
   } finally { db.close(); }
 });
 
-test('lab_usage_stats: УЗИ группы «Диагностика» из отделения «Лаборатория» и с «лабораторным» типом — не анализ', () => {
+test('lab_usage_stats: УЗИ группы «Диагностика» из отделения «Лаборатория» и с «лабораторным» типом — не анализ; группа «Консультации» — анализ', () => {
   const db = seed();
   try {
     const out = labUsageStats(db, { period: 'all' }, admin);
-    assert.deepEqual(out.services.map((s) => s.name), ['ОАК']);
+    assert.deepEqual(out.services.map((s) => s.name).sort(),
+      ['ОАК', 'ПЦР (Консультации, «лабораторный» тип)', 'Ферритин (Консультации, отделение «Лаборатория»)']);
   } finally { db.close(); }
 });
 
-test('«Вставить результаты» (lineKind): анализ решает группа; отдел — только у строки без группы', () => {
-  assert.equal(lineKind({ type: 'consultation', dept_kind: 'laboratory' }), 'consult', 'группа «Консультации» решает сама');
+test('«Вставить результаты» (lineKind): анализ решает группа; отдел — только у строки без группы и группы «Консультации»', () => {
+  assert.equal(lineKind({ type: 'consultation', dept_kind: 'laboratory' }), 'labs', 'группа «Консультации» — отдел решает (умолчание колонки)');
+  assert.equal(lineKind({ type: 'consultation', dept_kind: 'clinical' }), 'consult');
   assert.equal(lineKind({ type: 'other', dept_kind: 'laboratory' }), 'consult');
   assert.equal(lineKind({ type: 'imaging', dept_kind: 'laboratory' }), 'diag');
   assert.equal(lineKind({ type: '', dept_kind: 'laboratory' }), 'labs', 'без группы — прежнее правило');

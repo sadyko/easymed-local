@@ -31,7 +31,7 @@ import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOI
 import { bookVisit, setVisitStatus as bookStatus } from './visit-booking.js';
 import { lineIdentity, linePerformer, isConsultPick } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога, исполнитель
 import { loadVisitOrders, blockedPickIds, precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 (ревью M3) — повтор услуги в визите — правило сервера
-import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D3) — исполнитель рекомендации — по услуге, не рекомендовавший
+import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D3) — исполнитель рекомендации — по услуге, не рекомендовавший
 import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B5) — «Услуга возвращена» в журнале счёта
 
 // BILLING_AUDIT_FIX_V1 (A1) — 'YYYY-MM-DD' местного дня для visit_date.
@@ -895,7 +895,7 @@ async function openAttachRecommendationModal(state, rec, onReload) {
                 .select('id, full_name, specialty, role, is_doctor, service_rates')
                 .eq('active', true)
                 .order('full_name'),
-            supabase.from('services').select('id, name, requires_doctor, type, is_lab').eq('id', rec.service_id).maybeSingle(),
+            supabase.from('services').select('id, name, requires_doctor, ' + ROUTE_SELECT).eq('id', rec.service_id).maybeSingle(),   // ROUTE_SELECT: DIAG_ROUTE_V1 — маршрут группы «Консультации»
         ]);
         if (error) { console.warn('[attach-rec] doctor load failed:', error.message); }
         if (svcRes && !svcRes.error && svcRes.data) attachSvc = svcRes.data;

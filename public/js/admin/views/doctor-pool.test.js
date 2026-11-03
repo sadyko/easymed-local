@@ -52,6 +52,21 @@ test('needsPerformer: всем, кроме «Лаборатории» и «Пр�
   assert.equal(needsPerformer(null), false);
 });
 
+// DIAG_ROUTE_V1 (поправка ревью) — группа «Консультации» (умолчание колонки) идёт в лабораторию
+// отделением или типом каталога; исполнитель ей тогда не нужен, а пул кандидатов — пуст.
+test('needsPerformer / doctorPoolFor: анализ группы «Консультации» из отделения «Лаборатория» — без исполнителя', () => {
+  const docs = [{ id: 1, is_doctor: 1, service_rates: [] }];
+  const labByDept = { id: 9, type: 'consultation', requires_doctor: 0, departments: { kind: 'laboratory' }, service_types: null };
+  const labByType = { id: 10, type: 'consultation', requires_doctor: 0, departments: null, service_types: { name: 'Лабораторные исследования' } };
+  const consult = { id: 11, type: 'consultation', requires_doctor: 0, departments: { kind: 'clinical' }, service_types: { name: 'Консультация' } };
+  assert.equal(needsPerformer(labByDept), false);
+  assert.equal(needsPerformer(labByType), false);
+  assert.equal(needsPerformer(consult), true);
+  assert.deepEqual(doctorPoolFor(docs, labByDept), []);
+  assert.deepEqual(doctorPoolFor(docs, consult).map((d) => d.id), [1]);
+  assert.equal(needsPerformer({ type: 'imaging', requires_doctor: 0, departments: { kind: 'laboratory' } }), true, 'УЗИ группы «Диагностика» — врачу всегда');
+});
+
 test('фолбэк «все врачи» — по is_doctor, не по роли; отмеченный исполнитель — при любой роли', () => {
   const staff = [
     { id: 1, full_name: 'Врач', role: 'doctor', is_doctor: 1, service_rates: [] },

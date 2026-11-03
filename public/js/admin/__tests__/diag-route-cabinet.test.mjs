@@ -208,6 +208,32 @@ test('«Мои приёмы»: группа «Диагностика» видн�
   } finally { s.close(); }
 });
 
+// DIAG_ROUTE_V1 (поправка ревью) — группа «Консультации» — УМОЛЧАНИЕ колонки services.type
+// (мигр. 023): клиники держат под ней и анализы, которые приходят в лабораторию только
+// отделением «Лаборатория» или «лабораторным» типом. У неё — прежнее правило (как без группы):
+// такие строки уходят из кабинета; обычный приём остаётся. Группа «Диагностика» — см. выше.
+test('«Мои приёмы»: группа «Консультации» с отделением «Лаборатория»/«Процедурный» или «лабораторным» типом — не в кабинете; обычный приём — в кабинете (C01–C07)', async () => {
+  const s = await stand((db, add) => {
+    const typ = (name) => Number(db.prepare('INSERT INTO service_types (name) VALUES (?)').run(name).lastInsertRowid);
+    const dep = (name, kind) => Number(db.prepare('INSERT INTO departments (name, kind) VALUES (?, ?)').run(name, kind).lastInsertRowid);
+    const diagT = db.prepare("SELECT id FROM service_types WHERE name = 'Диагностика'").get().id;
+    const labT = db.prepare("SELECT id FROM service_types WHERE name = 'Лаборатория'").get().id;
+    const labD = db.prepare("SELECT id FROM departments WHERE kind = 'laboratory' LIMIT 1").get().id;
+    add('C01', { type: 'consultation', department_id: labD });
+    add('C02', { type: 'consultation', type_id: labT });
+    add('C03', { type: 'consultation', type_id: typ('Laboratoriya va diagnostika') });
+    add('C04', { type: 'consultation', department_id: dep('Процедурный кабинет', 'procedure') });
+    add('C05', { type: 'consultation' });
+    add('C06', { type: 'consultation', type_id: diagT, department_id: dep('Терапия', 'clinical') });
+    add('C07', { type: 'consultation', department_id: labD, req: 1 });   // «нужен врач» маршрута не меняет — это анализ
+  });
+  try {
+    const got = await myServices(s.codes);
+    assert.deepEqual(got.active, ['C05', 'C06'], '«Активные»');
+    assert.deepEqual(got.all, ['C05', 'C06'], '«Все статусы»');
+  } finally { s.close(); }
+});
+
 // ═══ DIAG_ROUTE_V1 (D6, решение владельца 2026-11-03) — СПИСОК ВРАЧА ОБНОВЛЯЕТСЯ САМ ═══
 // Пациент, записанный после открытия кабинета, появлялся только после F5 или «Обновить».
 // Теперь «Мои приёмы» перечитываются при каждом открытии вкладки (щелчок, показ панели

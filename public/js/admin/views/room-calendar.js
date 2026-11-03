@@ -78,7 +78,7 @@ import { hasActorRole } from '../permissions.js';
 import { pastelFor } from '../pastel.js?v=pastel1';
 import { openServicePickerModal, forgetSlots } from './service-picker-modal.js?v=ownrep4';   // RESCAL_WIRE_V1 — same URL as other importers (one instance) · REPEAT_VISIT_V1 (ревью) — forgetSlots
 import { registrarHeader } from './registrar-header.js?v=aurora5';   // NO_GREETING_V1 — same URL as patients.js (one instance)
-import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D1) — исполнитель строки «Добавить»
+import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D1) — исполнитель строки «Добавить»
 // RCAL_REFERENCE_LAYOUT_V1 — счётная часть новой раскладки (мини-месяц, сколько
 // дней помещается, загрузка колонки, рабочий набор оператора). Отдельным
 // файлом: этот в node не загружается, а те правила надо проверять числами.
@@ -270,7 +270,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             supabase.from('floors').select('id, name, level').eq('active', true),
             supabase.from('rooms').select('id, name, code, room_type, floor_id').eq('active', true).order('code', { ascending: true }),
             supabase.from('users').select('id, full_name, specialty, role, branch_id, is_doctor, scheduling_mode, service_rates').eq('active', true).order('full_name', { ascending: true }),   // service_rates: DIAG_ROUTE_V1 (D1)
-            supabase.from('services').select('id, name, duration_minutes, requires_doctor, type, is_lab').eq('active', true).order('name', { ascending: true }),   // type, is_lab: DIAG_ROUTE_V1 (D1) — нужен ли строке исполнитель
+            supabase.from('services').select('id, name, duration_minutes, requires_doctor, ' + ROUTE_SELECT).eq('active', true).order('name', { ascending: true }),   // ROUTE_SELECT: DIAG_ROUTE_V1 (D1) — нужен ли строке исполнитель (маршрут группы «Консультации»)
         ]);
         const branchName = {}, floorName = {};
         for (const b of take(brs, tr('филиалы'))) branchName[b.id] = b.name || '';
@@ -310,7 +310,8 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 liveQueue: (u.scheduling_mode || '') === 'live_queue',
             }));
         state.servicesList = take(svcs, tr('услуги')).map(s => ({ id: s.id, name: s.name || '—', dur: s.duration_minutes, needsDoctor: !!Number(s.requires_doctor),
-            requires_doctor: s.requires_doctor, type: s.type, is_lab: s.is_lab }));   // DIAG_ROUTE_V1 (D1) — needsPerformer
+            requires_doctor: s.requires_doctor, type: s.type, is_lab: s.is_lab,
+            departments: s.departments || null, service_types: s.service_types || null }));   // DIAG_ROUTE_V1 (D1) — needsPerformer (отделение и тип — маршрут «Консультаций»)
     }
 
     async function loadAppts() {

@@ -74,7 +74,7 @@ import { registerWalkIn, walkInRoleRefusal, walkInLinesRefusal } from './walk-in
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»
 import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
 import { surgeryBedRefusal, isSurgeryPick, SURGERY_NEEDS_BED_TEXT } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1   // WALK_IN_BOOKING_V1
-import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
+import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    // REFERRAL_SOURCE_CODE_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';                    // WIZ_INVOICE_PRINT_V1 — тот же бланк «Счёт»
@@ -1288,7 +1288,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     (async () => {
         try {
             const [svcRes, docRes, srcRes] = await Promise.all([
-                supabase.from('services').select('id, name, price, tax_rate, requires_doctor, type, active').eq('active', true).order('name').limit(1000),
+                supabase.from('services').select('id, name, price, tax_rate, requires_doctor, active, ' + ROUTE_SELECT).eq('active', true).order('name').limit(1000),   // ROUTE_SELECT: DIAG_ROUTE_V1 — маршрут группы «Консультации»
                 // EASYMED_DOCTOR_DETECTION — список врачей проверяет is_doctor, а
                 // не role: у администратора-врача роли 'doctor' нет вовсе.
                 // DIAG_ROUTE_V1 (D1) — и все, кому услуга отмечена в «Услугах и ставках» (медсестра на УЗИ):

@@ -44,7 +44,7 @@ import { localRangeWhere, today } from '../domain/day.js';
 // Pure browser-shared module (no DOM) — same cross-import precedent as
 // reports.js taking formatMethods from public/js/shared/payment-methods.js.
 import { LAB_NAME_RE } from '../../../public/js/admin/views/lab-service.js';
-import { noGroupSql } from '../../../public/js/shared/service-route.js';   // DIAG_ROUTE_V1 — маршрут решает группа
+import { hintedSql } from '../../../public/js/shared/service-route.js';   // DIAG_ROUTE_V1 — маршрут решает группа (кроме «Консультаций»)
 // LAB_ONE_CLINIC_V1 / BUILDING_REPORTS_V1 — граница «чьи это заказы».
 //
 // У этого экрана фильтра не было ВООБЩЕ: он считал заказы всей клиники по
@@ -119,9 +119,10 @@ export function labUsageStats(db, args, user) {
     : '';
   // DIAG_ROUTE_V1 — правило очереди лаборатории (lab-service.js isLabService →
   // shared/service-route.js): группа «Лаборатория» / is_lab; отделение-лаборатория
-  // и «лабораторный» тип — только у услуги без группы.
+  // и «лабораторный» тип — только у услуги без группы и группы «Консультации»
+  // (умолчание колонки, под которым клиники держат анализы).
   const LAB_SVC_SQL = `(s.type = 'lab' OR s.is_lab = 1
-            OR (${noGroupSql('s')} AND (s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory')
+            OR (${hintedSql('s')} AND (s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory')
             ${typeClause})))`;
 
   // Блок «Панели»: заказы услуг, к которым привязана активная панель.

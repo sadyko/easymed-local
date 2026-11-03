@@ -20,7 +20,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
 import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 import { linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — исполнитель строки
-import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D4) — исполнитель строки «Добавить» — по услуге
+import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D4) — исполнитель строки «Добавить» — по услуге
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 // BRANCH_BILL_GUARD_V1 — тот же предикат, на котором стоят рабочие списки
 // (visits.js:91, procedures.js:50 — там он же, но в SQL: .is('sync_origin', null)).
@@ -241,7 +241,7 @@ export function openVisitBillModal(visit, onChanged) {
         try {
             const [{ data, error }, staff] = await Promise.all([
                 supabase.from('services')
-                    .select('id,name,price,requires_doctor,type,is_lab').eq('active', 1).order('name'),
+                    .select('id,name,price,requires_doctor, ' + ROUTE_SELECT).eq('active', 1).order('name'),   // ROUTE_SELECT: DIAG_ROUTE_V1 — маршрут группы «Консультации»
                 supabase.from('users').select('id, full_name, specialty, role, is_doctor, service_rates').eq('active', true).order('full_name'),   // DIAG_ROUTE_V1 (D4)
             ]);
             if (error) throw error;

@@ -4,7 +4,7 @@
 // «Процедурный»/«Лаборатория» уходила из кабинета врача.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { serviceRoute, serviceGroup, goesToCabinet, procedureSql, noGroupSql, SERVICE_GROUPS, LAB_NAME_RE } from './service-route.js';
+import { serviceRoute, serviceGroup, goesToCabinet, procedureSql, noGroupSql, hintedSql, groupDecides, needsPerformer, SERVICE_GROUPS, HINTED_GROUPS, LAB_NAME_RE } from './service-route.js';
 import { openDb } from '../../../server/db/connection.js';
 import { migrate } from '../../../server/db/migrate.js';
 
@@ -29,7 +29,45 @@ test('A09–A13: тип каталога и вид отделения НЕ ув�
   // встроенные ответы /api/db (services(service_types(name), departments(kind))) — то же правило
   assert.equal(serviceRoute({ type: 'imaging', service_types: { name: 'Лабораторная диагностика' }, departments: { kind: 'procedure' } }), 'cabinet');
   assert.equal(serviceRoute({ type: 'procedure', service_types: { name: 'Диагностика' } }), 'procedure', 'A14 ЭКГ группы «Процедуры» — процедура');
-  assert.equal(serviceRoute({ type: 'consultation', department_id: 5, type_id: 2 }, L), 'cabinet', 'группа «Консультации» тоже решает сама');
+});
+
+// Поправка ревью (2026-11-03): 'consultation' — УМОЛЧАНИЕ колонки services.type (мигр. 023);
+// клиники держат под ним и анализы, которые приходят в лабораторию только отделением
+// «Лаборатория» или «лабораторным» типом. У группы «Консультации» — прежнее правило.
+test('группа «Консультации» — как строка без группы: отделение и тип каталога ведут в лабораторию / процедуры', () => {
+  assert.deepEqual([...HINTED_GROUPS], ['consultation']);
+  assert.equal(serviceRoute({ type: 'consultation', department_id: 5 }, L), 'lab', 'отделение «Лаборатория»');
+  assert.equal(serviceRoute({ type: 'consultation', type_id: 2 }, L), 'lab', 'тип «Лаборатория»');
+  assert.equal(serviceRoute({ type: 'consultation', type_id: 9 }, L), 'lab', 'тип «Лабораторная диагностика»');
+  assert.equal(serviceRoute({ type: 'consultation', department_id: 3 }, L), 'procedure', 'отделение «Процедурный»');
+  assert.equal(serviceRoute({ type: 'consultation', departments: { kind: 'laboratory' } }), 'lab', 'встроенный ответ /api/db');
+  assert.equal(serviceRoute({ type: 'consultation', service_types: { name: 'Laboratoriya va diagnostika' } }), 'lab');
+  assert.equal(serviceRoute({ type: 'consultation', department_id: 2, type_id: 4 }, L), 'cabinet', 'обычный приём');
+  assert.equal(serviceRoute({ type: 'consultation' }), 'cabinet');
+  assert.equal(serviceRoute({ type: ' Consultation ', department_id: 5 }, L), 'lab', 'регистр и пробелы');
+  assert.equal(groupDecides({ type: 'consultation' }), false);
+  for (const g of ['lab', 'procedure', 'imaging', 'radiology', 'other']) assert.equal(groupDecides({ type: g }), true, g);
+  assert.equal(groupDecides({}), false);
+  // УЗИ / ЭКГ группы «Диагностика» — по-прежнему всегда кабинет, при любых подсказках
+  for (const g of ['imaging', 'radiology', 'other']) {
+    for (const hint of [{ department_id: 5 }, { department_id: 3 }, { type_id: 2 }, { type_id: 9 }, { type_id: 10 }, { department_id: 5, type_id: 2 }]) {
+      assert.equal(serviceRoute({ type: g, ...hint }, L), 'cabinet', g + ' ' + JSON.stringify(hint));
+    }
+  }
+});
+
+test('needsPerformer идёт тем же маршрутом: анализ группы «Консультации» из отделения «Лаборатория» исполнителя не требует', () => {
+  assert.equal(needsPerformer({ type: 'consultation', departments: { kind: 'laboratory' } }), false);
+  assert.equal(needsPerformer({ type: 'consultation', service_types: { name: 'Лаборатория' } }), false);
+  assert.equal(needsPerformer({ type: 'consultation', departments: { kind: 'procedure' } }), false);
+  assert.equal(needsPerformer({ type: 'consultation', department_id: 5 }, L), false, 'по справочнику');
+  assert.equal(needsPerformer({ type: 'consultation', departments: { kind: 'laboratory' }, requires_doctor: 1 }), true, '«нужен врач» — всегда');
+  assert.equal(needsPerformer({ type: 'consultation', departments: { kind: 'clinical' } }), true);
+  assert.equal(needsPerformer({ type: 'consultation' }), true);
+  assert.equal(needsPerformer({ type: 'imaging', departments: { kind: 'laboratory' }, service_types: { name: 'Лаборатория' } }), true, 'УЗИ группы «Диагностика» — врачу');
+  for (const svc of [{ type: 'consultation', departments: { kind: 'laboratory' } }, { type: 'imaging', departments: { kind: 'procedure' } }, { type: 'consultation' }]) {
+    assert.equal(needsPerformer(svc), serviceRoute(svc) === 'cabinet', JSON.stringify(svc));
+  }
 });
 
 test('строка без группы — прежнее правило: отделение и тип каталога', () => {
@@ -55,10 +93,20 @@ test('SQL сервера — то же правило: группа «Диагн
     S.run(1, 'ЭКГ', 'imaging', dep);       // A12
     S.run(2, 'Капельница', 'procedure', null);
     S.run(3, 'Перевязка', 'procedure', dep);
-    S.run(4, 'Приём', 'consultation', dep);
+    S.run(4, 'Массаж (группа по умолчанию)', 'consultation', dep);   // «Консультации» — отделение решает
+    S.run(5, 'Приём', 'consultation', null);
+    S.run(6, 'Рентген', 'radiology', dep);
     const ids = db.prepare(`SELECT s.id FROM services s LEFT JOIN departments d ON d.id = s.department_id
-                             WHERE s.id IN (1,2,3,4) AND ${procedureSql('s', 'd')} ORDER BY s.id`).all().map((r) => r.id);
-    assert.deepEqual(ids, [2, 3]);
+                             WHERE s.id IN (1,2,3,4,5,6) AND ${procedureSql('s', 'd')} ORDER BY s.id`).all().map((r) => r.id);
+    assert.deepEqual(ids, [2, 3, 4]);
+    // клиент и сервер — одно правило: SQL совпадает с serviceRoute на каждой строке
+    const rows = db.prepare(`SELECT s.id, s.type, d.kind AS dept_kind, ${procedureSql('s', 'd')} AS isProc
+                               FROM services s LEFT JOIN departments d ON d.id = s.department_id WHERE s.id IN (1,2,3,4,5,6)`).all();
+    for (const r of rows) assert.equal(r.isProc === 1, serviceRoute({ type: r.type, dept_kind: r.dept_kind || '' }) === 'procedure', 'строка ' + r.id);
+    const hinted = (type) => db.prepare(`SELECT ${hintedSql('s')} AS h FROM (SELECT ? AS type) s`).get(type).h === 1;
+    for (const g of [null, '', 'xray', 'consultation', 'lab', 'procedure', 'imaging', 'radiology', 'other']) {
+      assert.equal(hinted(g), !groupDecides({ type: g }), 'hintedSql = !groupDecides для ' + g);
+    }
     // Колонка services.type NOT NULL (мигр. 023): у сохранённой услуги группа есть ВСЕГДА — ветка «без группы»
     // в SQL срабатывает только у строки без услуги.
     assert.equal(db.prepare(`SELECT ${noGroupSql('s')} AS ng FROM (SELECT NULL AS type) s`).get().ng, 1);

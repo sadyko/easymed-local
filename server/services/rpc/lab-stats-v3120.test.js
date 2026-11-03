@@ -38,8 +38,9 @@ function reference(db, period) {
     .filter((t) => LAB_NAME_RE.test(t.name || '')).map((t) => Number(t.id)).filter(Number.isInteger);
   const typeClause = labTypeIds.length ? `OR s.type_id IN (${labTypeIds.map(() => '?').join(',')})` : '';
   // DIAG_ROUTE_V1 — правило «что такое лабораторная услуга» сменилось (маршрут решает группа):
-  // отдел-лаборатория и «лабораторный» тип — только у услуги без группы. Опорные запросы — с ним же.
-  const noGroup = "COALESCE(s.type, '') NOT IN ('consultation','lab','procedure','imaging','radiology','other')";
+  // отдел-лаборатория и «лабораторный» тип — только у услуги без группы и группы «Консультации»
+  // (умолчание колонки). Опорные запросы — с ним же.
+  const noGroup = "(COALESCE(s.type, '') NOT IN ('consultation','lab','procedure','imaging','radiology','other') OR s.type IN ('consultation'))";
   const panels = db.prepare(`
     WITH ${PMAP_CTE}
     SELECT lp.id AS panel_id, lp.name AS name, lp.code AS code, lp.service_id AS service_id, s.name AS service_name,

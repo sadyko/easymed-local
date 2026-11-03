@@ -21,7 +21,9 @@ test('the older is_lab flag still counts', () => {
 // DIAG_ROUTE_V1 (решение владельца 2026-11-03) — «маршрут решает ГРУППА, а не
 // название». Отделение-лаборатория и «лабораторный» тип каталога делают услугу
 // анализом ТОЛЬКО у строки без группы; у услуги с группой они маршрут не меняют.
-test('a service in a laboratory DEPARTMENT is lab work only when it has no group', () => {
+// Поправка ревью: группа «Консультации» (умолчание колонки с миграции 023, под ним
+// клиники держат и анализы) спрашивает отделение и тип так же, как строка без группы.
+test('a service in a laboratory DEPARTMENT is lab work only when it has no group (or group «Консультации»)', () => {
   const deptKindById = deptKindMap([
     { id: 1, name: 'Стационар', kind: 'inpatient' },
     { id: 5, name: 'Лаборатория', kind: 'laboratory' },
@@ -31,12 +33,14 @@ test('a service in a laboratory DEPARTMENT is lab work only when it has no group
   assert.equal(isLabService({ department_id: 1 }, { deptKindById }), false);
   assert.equal(isLabService({ department_id: 99 }, { deptKindById }), false, 'unknown department is not lab');
   assert.equal(isLabService({ department_id: null }, { deptKindById }), false);
-  for (const type of ['consultation', 'imaging', 'radiology', 'other', 'procedure']) {
+  for (const type of ['imaging', 'radiology', 'other', 'procedure']) {
     assert.equal(isLabService({ type, department_id: 5 }, { deptKindById }), false, 'group ' + type + ' decides, not the department');
   }
+  assert.equal(isLabService({ type: 'consultation', department_id: 5 }, { deptKindById }), true, 'group «Консультации» — the department decides');
+  assert.equal(isLabService({ type: 'consultation', department_id: 1 }, { deptKindById }), false);
 });
 
-test('a service whose catalogue TYPE is named like a laboratory is lab work only when it has no group', () => {
+test('a service whose catalogue TYPE is named like a laboratory is lab work only when it has no group (or group «Консультации»)', () => {
   const typeNameById = typeNameMap([
     { id: 1, name: 'Консультация' },
     { id: 2, name: 'Лаборатория' },
@@ -47,9 +51,10 @@ test('a service whose catalogue TYPE is named like a laboratory is lab work only
   for (const id of [2, 3, 4, 5]) {
     assert.equal(isLabService({ type_id: id }, { typeNameById }), true, 'no group, type ' + id);
     assert.equal(isLabService({ type: 'imaging', type_id: id }, { typeNameById }), false, 'group «Диагностика», type ' + id);
-    assert.equal(isLabService({ type: 'consultation', type_id: id }, { typeNameById }), false, 'group «Консультации», type ' + id);
+    assert.equal(isLabService({ type: 'consultation', type_id: id }, { typeNameById }), true, 'group «Консультации», type ' + id);
   }
   assert.equal(isLabService({ type_id: 1 }, { typeNameById }), false);
+  assert.equal(isLabService({ type: 'consultation', type_id: 1 }, { typeNameById }), false);
 });
 
 test('the name rule matches the three spellings and nothing accidental', () => {

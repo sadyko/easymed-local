@@ -9,7 +9,10 @@
 //
 //   'lab'                                  → Лаборатория
 //   'procedure'                            → Процедуры
-//   'consultation' / 'imaging' / 'radiology' / 'other' → кабинет врача
+//   'imaging' / 'radiology' / 'other'      → кабинет врача
+//   'consultation'                         → кабинет врача, если отделение и тип
+//                                            каталога не ведут в лабораторию /
+//                                            процедуры (см. ИСКЛЮЧЕНИЕ ниже)
 //
 // Прежде у «группы» было два соперника, и оба побеждали её молча:
 //   • ТИП каталога (service_types.name), похожий на лабораторию
@@ -21,6 +24,15 @@
 //     уходило в «Процедуры».
 // Теперь тип и отделение маршрут НЕ меняют. Они спрашиваются только у строки
 // без группы (старые данные, ответ без колонки type) — прежним правилом.
+//
+// ИСКЛЮЧЕНИЕ — группа «Консультации» (поправка ревью 2026-11-03). 'consultation'
+// — УМОЛЧАНИЕ колонки services.type с миграции 023: многие клиники так и
+// оставили в ней настоящие анализы и процедуры, а в лабораторию (в процедуры)
+// они приходят только отделением «Лаборатория» («Процедурный») или «лабораторным»
+// типом каталога. У группы «Консультации» эти подсказки спрашиваются ТАК ЖЕ, как
+// у строки без группы (groupDecides); «Диагностика», «Лаборатория», «Процедуры»
+// и «Хирургия»/«Прочее» решают сами — УЗИ и ЭКГ группы «Диагностика» всегда
+// остаются в кабинете врача.
 //
 // is_lab — зеркало группы 'lab' (миграция 048, триггеры в обе стороны): им
 // пользуются лаборатория и приём результатов анализаторов (server/lis/ingest.js
@@ -43,6 +55,19 @@ export function serviceGroup(svc) {
     return SERVICE_GROUPS.includes(g) ? g : '';
 }
 
+/**
+ * Группы, которые маршрут НЕ решают: у них, как у строки без группы, решают
+ * вид отделения и имя типа каталога. Только «Консультации» — умолчание колонки
+ * (миграция 023), под которым клиники держат и анализы.
+ */
+export const HINTED_GROUPS = Object.freeze(['consultation']);
+
+/** Группа решает маршрут сама (есть и не из HINTED_GROUPS). */
+export function groupDecides(svc) {
+    const g = serviceGroup(svc);
+    return !!g && !HINTED_GROUPS.includes(g);
+}
+
 const isOne = (v) => v === true || v === 1 || v === '1';
 
 /** Вид отделения строки: встроенный (services.departments.kind / dept_kind) или из справочника. */
@@ -62,9 +87,11 @@ function typeNameOf(svc, lookups) {
 
 /**
  * Маршрут строки: 'lab' | 'procedure' | 'cabinet'.
- * @param svc      строка services (type, is_lab; для строки без группы —
- *                 department_id / type_id или встроенные departments / service_types)
- * @param lookups  { deptKindById, typeNameById } — нужны только строке без группы
+ * @param svc      строка services (type, is_lab; для строки без группы и группы
+ *                 «Консультации» — department_id / type_id или встроенные
+ *                 departments / service_types)
+ * @param lookups  { deptKindById, typeNameById } — нужны только строке без
+ *                 группы и группе «Консультации»
  */
 export function serviceRoute(svc, lookups = {}) {
     if (!svc) return 'cabinet';
@@ -72,8 +99,9 @@ export function serviceRoute(svc, lookups = {}) {
     const g = serviceGroup(svc);
     if (g === 'lab') return 'lab';
     if (g === 'procedure') return 'procedure';
-    if (g) return 'cabinet';
-    // Строка без группы — прежнее правило (SERVICE_ROUTING_V3 · LAB_SERVICE_ROUTING_V1).
+    if (groupDecides(svc)) return 'cabinet';
+    // Строка без группы и группа «Консультации» — прежнее правило
+    // (SERVICE_ROUTING_V3 · LAB_SERVICE_ROUTING_V1).
     const kind = deptKindOf(svc, lookups);
     if (kind === 'laboratory' || LAB_NAME_RE.test(typeNameOf(svc, lookups))) return 'lab';
     if (kind === 'procedure') return 'procedure';
@@ -89,19 +117,36 @@ export const goesToCabinet = (svc, lookups) => serviceRoute(svc, lookups) === 'c
  * показывает только назначенное), поэтому регистратура выбирает исполнителя
  * у КАЖДОЙ услуги, кроме групп «Лаборатория» и «Процедуры». Галочка «Услугу
  * оказывает специалист» (requires_doctor) требует исполнителя всегда.
+ * Маршрут — тот же serviceRoute: анализ группы «Консультации» из отделения
+ * «Лаборатория» исполнителя не требует (строке нужны встроенные departments(kind)
+ * / service_types(name) или lookups — экраны записи грузят их вместе с услугой,
+ * ROUTE_SELECT).
  */
-export function needsPerformer(svc) {
+export function needsPerformer(svc, lookups = {}) {
     if (!svc) return false;
     if (isOne(svc.requires_doctor)) return true;
-    return serviceRoute(svc) === 'cabinet';
+    return serviceRoute(svc, lookups) === 'cabinet';
 }
+
+/**
+ * Колонки услуги для маршрута на экранах записи (select /api/db): группа,
+ * зеркало is_lab и подсказки для группы «Консультации» — одним ответом.
+ */
+export const ROUTE_SELECT = 'type, is_lab, department_id, type_id, service_types(name), departments(kind)';
 
 // ─── то же правило для SQL сервера ──────────────────────────────────────────
 const GROUPS_SQL = "('" + SERVICE_GROUPS.join("','") + "')";
+const HINTED_SQL = "('" + HINTED_GROUPS.join("','") + "')";
 /** Строка без группы (SQL): колонка пуста или значение неизвестно. */
 export const noGroupSql = (s = 's') => `COALESCE(${s}.type, '') NOT IN ${GROUPS_SQL}`;
 /**
- * «Это процедура» (SQL) — группа 'procedure'; вид отделения — только у строки
- * без группы. s — псевдоним services, d — псевдоним departments (LEFT JOIN).
+ * Группа маршрут НЕ решает (SQL) — строка без группы или группа «Консультации»:
+ * у неё решают вид отделения и имя типа каталога (то же, что !groupDecides).
  */
-export const procedureSql = (s = 's', d = 'd') => `(${s}.type = 'procedure' OR (${noGroupSql(s)} AND ${d}.kind = 'procedure'))`;
+export const hintedSql = (s = 's') => `(${noGroupSql(s)} OR ${s}.type IN ${HINTED_SQL})`;
+/**
+ * «Это процедура» (SQL) — группа 'procedure'; вид отделения — только у строки
+ * без группы и у группы «Консультации». s — псевдоним services, d — псевдоним
+ * departments (LEFT JOIN).
+ */
+export const procedureSql = (s = 's', d = 'd') => `(${s}.type = 'procedure' OR (${hintedSql(s)} AND ${d}.kind = 'procedure'))`;
