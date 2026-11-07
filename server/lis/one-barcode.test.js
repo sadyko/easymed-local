@@ -349,3 +349,36 @@ test('ревью M-2: общий код у ЗАКРЫТОЙ второй стр�
   assert.equal(lastRow(db).status, 'applied', lastRow(db).detail);
   db.close();
 });
+
+// ═══ Ревью S3, M-3 — LIS PROXY БЕЗ МАТЕРИАЛА: СЫВОРОТКА И МОЧА НА ОДНОМ BS-200 ═══
+// LIS Proxy не передаёт материал пробы (OBR-15), и по номеру дня приём не отличит
+// пробирку мочи от сыворотки: обе — «неоднозначно», и рабочий список тоже. Карточка
+// печатает всем пробиркам такого прибора в такой день свои этикетки 3.21 (номер
+// пробирки по материалу) — их приём ведёт точно; BC-780 — номер дня.
+// Номера — из НАСТОЯЩЕГО клиента (lab-tube.js dayLabels).
+test('ревью M-3: карточка — у пробирок BS-200 (сыворотка + моча) свои этикетки; без OBR-15 обе ложатся, рабочий список отдаётся; ОАК — номером дня', async () => {
+  const { dayLabels, tubeDeviceMap } = await import('../../public/js/admin/views/lab-tube.js');
+  const { buildOru } = await import('./lisproxy-form.js');
+  const db = clinic([[101, 42], [102, 41], [103, 43]]);
+  const rows = db.prepare(`SELECT vs.id, vs.status, vs.service_id, vs.created_at, vs.scheduled_at, vs.sample_collected_at, s.name, s.specimen, s.is_lab
+                             FROM visit_services vs JOIN services s ON s.id = vs.service_id WHERE vs.visit_id = 20 ORDER BY vs.id`).all()
+    .map((r) => ({ ...r, services: { name: r.name, specimen: r.specimen, is_lab: r.is_lab } }));
+  const [d] = dayLabels(rows, { deviceByService: tubeDeviceMap(db.prepare('SELECT id, service_id, device_id, active FROM lab_panels').all()),
+    visitDate: db.prepare('SELECT visit_date FROM visits WHERE id = 20').get().visit_date });
+  assert.equal(d.copies, 1, 'одна пробирка с номером дня — кровь BC-780');
+  const own = Object.fromEntries(d.own.map((o) => [o.rowIds[0], o.code]));
+  assert.deepEqual(own, { 101: '00000101', 103: '00000103' });
+
+  bc(db, d.code);
+  assert.deepEqual(blank(db, 102), { 'Лейкоциты': '7.25' });
+  ingestMessage(db, buildOru({ code: 'GLU', res: '5.1', barcode: own[101] }), '10.0.0.40', 1);
+  ingestMessage(db, buildOru({ code: 'UPRO', res: '0.1', barcode: own[103] }), '10.0.0.40', 1);
+  assert.deepEqual(blank(db, 101), { 'Глюкоза': '5.1' });
+  assert.deepEqual(blank(db, 103), { 'Белок мочи': '0.1' });
+  assert.deepEqual(worklistLines(db, { deviceId: 1, orderId: 101, bare: true, shown: own[101] }).codes, ['GLU', 'CREA']);
+  assert.deepEqual(worklistLines(db, { deviceId: 1, orderId: 103, bare: true, shown: own[103] }).codes, ['UPRO']);
+  // Номер дня на таком приборе по-прежнему «неоднозначно» — поэтому карточка его этим пробиркам и не печатает.
+  ingestMessage(db, buildOru({ code: 'CREA', res: '80', barcode: d.code }), '10.0.0.40', 1);
+  assert.match(lastRow(db).detail, /^неоднозначно/);
+  db.close();
+});

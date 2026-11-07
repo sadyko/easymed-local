@@ -449,3 +449,16 @@ test('ревью M-2: повторный забор — номер дня утр
   assert.match(String(toastMsg), /Повторный забор/);
   assert.ok(String(toastMsg).includes('00000031'), String(toastMsg));
 });
+
+// Ревью S3, M-3 — один анализатор кормит и кровь, и мочу (панели обеих услуг — на
+// приборе 3): через LIS Proxy материал пробы не приходит, и номер дня не разделил бы
+// пробирки. У обеих — свои этикетки пробирок (номер — самая старая строка пробирки).
+test('ревью M-3: моча и кровь на одном анализаторе — у его пробирок свои этикетки, номера дня нет; сказано почему', async () => {
+  const URINE_M = { ...URINE, specimen: 'Моча' };
+  const panels = [...PANELS, { id: 8, name: 'Моча', code: '', service_id: 41, has_narrative: 0, device_id: 3 }];
+  const c = await mount([line(29, URINE_M, 'queued'), line(28, BLOOD, 'queued')], { panels });
+  barcodeBtn(c).click();
+  await tick();
+  assert.deepStrictEqual(labelsOf(printed[0]).map((l) => [l.code, l.tests]), [['00000028', 'Анализ крови'], ['00000029', 'Анализ мочи']]);
+  assert.match(String(toastMsg), /Моча и другой материал на одном анализаторе/);
+});

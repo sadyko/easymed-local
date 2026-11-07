@@ -207,9 +207,16 @@ export function tubeGroups(rows, opts = {}) {
  * пробирке (оба ждут забора) — это одна пробирка, отдельной этикетки нет (приём
  * скажет «неоднозначно», лишний заказ снимает человек). Строки без прибора приём
  * не заполняет — им номер дня, как был.
+ *
+ * Ревью S3, M-3 — МОЧА И ДРУГОЙ МАТЕРИАЛ НА ОДНОМ ПРИБОРЕ. LIS Proxy материал пробы
+ * (OBR-15) не передаёт, и по номеру дня приём не отличит пробирку мочи от сыворотки
+ * на одном BS-200: обе — «неоднозначно», и рабочий список тоже. В такой день ВСЕ
+ * пробирки этого прибора (и мочи, и прочего материала, и без материала) — со своими
+ * этикетками 3.21 (номер пробирки по материалу, t.code): их приём ведёт точно, по
+ * материалу заказа номера. Остальным приборам — номер дня.
  * @returns {Array<{day:string, lineId:number, code:string, copies:number, tests:string[],
  *                  rowIds:number[], collectedAt:string|null, recent:boolean, tubes:object[],
- *                  own:Array<{code:string, why:'repeat', tests:string[], rowIds:number[], collectedAt:string|null}>}>}
+ *                  own:Array<{code:string, why:'repeat'|'material', tests:string[], rowIds:number[], collectedAt:string|null}>}>}
  *          по возрастанию дня; code '' — номер строки не помещается в номер дня
  *          (тогда печатаются прежние этикетки пробирок этого дня: tubes);
  *          own — пробирки со своей этикеткой строки (ревью S3, M-2), copies — без них
@@ -236,11 +243,16 @@ export function dayLabels(rows, opts = {}) {
         d.code = dayLabelValue(d.lineId);
         d.own = [];
         const repeats = repeatTubes(d, rowById);   // ревью S3, M-2
+        const split = urineSplitDevices(d);        // ревью S3, M-3
         for (const t of d.tubes) {
             const ids = repeats.get(t);
-            if (!ids) continue;
-            d.copies -= 1;
-            d.own.push({ code: labBarcodeValue(Math.min(...ids)), why: 'repeat', tests: t.tests.slice(), rowIds: t.rowIds.slice(), collectedAt: t.collectedAt });
+            if (ids) {
+                d.copies -= 1;
+                d.own.push({ code: labBarcodeValue(Math.min(...ids)), why: 'repeat', tests: t.tests.slice(), rowIds: t.rowIds.slice(), collectedAt: t.collectedAt });
+            } else if (t.deviceId != null && split.has(String(t.deviceId))) {
+                d.copies -= 1;
+                d.own.push({ code: t.code, why: 'material', tests: t.tests.slice(), rowIds: t.rowIds.slice(), collectedAt: t.collectedAt });
+            }
         }
     }
     return out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.lineId - b.lineId));
@@ -268,6 +280,23 @@ function repeatTubes(d, rowById) {
         out.get(t).push(id);
     }
     return out;
+}
+
+/**
+ * Ревью S3, M-3 — приборы, которые в этот день кормят и пробирку мочи, и пробирку
+ * другого материала (или без материала): у таких пробирок свои этикетки.
+ * @returns {Set<string>}
+ */
+function urineSplitDevices(d) {
+    const seen = new Map();   // прибор → { urine, other }
+    for (const t of d.tubes) {
+        if (t.deviceId == null) continue;
+        const k = String(t.deviceId);
+        const m = seen.get(k) || { urine: false, other: false };
+        if (t.material === 'urine') m.urine = true; else m.other = true;
+        seen.set(k, m);
+    }
+    return new Set([...seen].filter(([, m]) => m.urine && m.other).map(([k]) => k));
 }
 
 /**

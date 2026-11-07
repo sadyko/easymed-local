@@ -295,3 +295,25 @@ test('ревью M-2: два одинаковых анализа в ОДНОЙ �
     const noDevice = dayLabels([line(100, 40, BLOOD, 'collected'), line(106, 40, BLOOD)], { deviceByService: {}, today: TODAY })[0];
     assert.deepEqual([noDevice.copies, noDevice.own], [2, []], 'анализ без прибора приём не заполняет — номер дня, как был');
 });
+
+// Ревью S3, M-3 — LIS Proxy материал пробы (OBR-15) не передаёт: у BS-200 в один
+// день «Биохимия» (сыворотка) и «Белок мочи» — по номеру дня приём не разделит
+// пробирки и откажет обе. Все пробирки ЭТОГО прибора в такой день — со своими
+// этикетками 3.21 (номер пробирки — по материалу); остальным — номер дня.
+const SERUM = { name: 'Биохимия', is_lab: 1, specimen: 'Сыворотка' };
+const URINE_M = { name: 'Белок мочи', is_lab: 1, specimen: 'Моча' };
+const CBC_M = { name: 'ОАК', is_lab: 1, specimen: 'Кровь' };
+const NOMAT = { name: 'Креатинин', is_lab: 1, specimen: '' };
+test('ревью M-3: моча и другой материал на одном приборе в один день — у пробирок этого прибора свои этикетки, у прочих — номер дня', () => {
+    const devices = { 41: 3, 42: 1, 43: 1, 44: 1 };
+    const [d] = dayLabels([line(101, 42, SERUM), line(102, 41, CBC_M), line(103, 43, URINE_M)], { deviceByService: devices, today: TODAY });
+    assert.equal(d.code, '90000101');
+    assert.equal(d.copies, 1, 'ОАК (BC-780) — номер дня');
+    assert.deepEqual(d.own.map((o) => [o.code, o.why, o.rowIds]), [['00000101', 'material', [101]], ['00000103', 'material', [103]]]);
+    // Материал не указан — тоже «не моча»: строка без материала и моча на одном приборе — разделяются.
+    const [n] = dayLabels([line(104, 44, NOMAT), line(103, 43, URINE_M)], { deviceByService: devices, today: TODAY });
+    assert.deepEqual([n.copies, n.own.map((o) => o.code)], [0, ['00000103', '00000104']]);
+    // Мочи нет — как было: номер дня на всех.
+    const [o] = dayLabels([line(101, 42, SERUM), line(102, 41, CBC_M)], { deviceByService: devices, today: TODAY });
+    assert.deepEqual([o.copies, o.own], [2, []]);
+});
