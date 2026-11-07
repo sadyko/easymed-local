@@ -290,11 +290,13 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         // ADMIN_DOCTOR_LIST_V1 — администратор клиники может быть и врачом; у
         // такой учётки role='admin', поэтому проверять надо is_doctor.
         // DIAG_ROUTE_V1 (D1) — кандидаты в исполнители строки записи: врачи (is_doctor) и все,
-        // кому услуга отмечена в «Услугах и ставках», — но только врачи: строку записи сервер
-        // принимает лишь с врачом (booking_lines_add, ревью M2: is_doctor или роль «Врач»).
+        // кому услуга отмечена в «Услугах и ставках».
+        // DIAG_ROUTE_V1 (3.22.0, ревью L-4) — медсестра, отмеченная услуге, — тоже: сервер
+        // (booking_lines_add, bookingPerformerOk) принимает тот же круг, что мастер записи. Прежде
+        // здесь оставались только врачи, и ЭКГ, отмеченное одной медсестре, календарь отдавал
+        // любому врачу — строка уходила не в тот кабинет.
         const staff = take(docs, tr('сотрудники'));
-        state.performers = performerCandidates(staff)
-            .filter(u => u.is_doctor === true || u.is_doctor === 1 || (u.role || '').toLowerCase() === 'doctor');
+        state.performers = performerCandidates(staff);
         state.doctors = staff
             .filter(u => u.is_doctor === true || u.is_doctor === 1 || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').trim())
             .map(u => ({

@@ -13554,5 +13554,6 @@ export const STRINGS = {
   "«Мои направления» — у врача.": {"en":"“My referrals” are available to doctors.","ru":"«Мои направления» — у врача.","uz":"«Mening yo‘llanmalarim» — shifokor uchun."},   // MY_REFERRALS_V1
   "Период указан неверно.": {"en":"Invalid period.","ru":"Период указан неверно.","uz":"Davr noto‘g‘ri ko‘rsatilgan."},   // MY_REFERRALS_V1
   "Период — не длиннее года.": {"en":"The period must not exceed one year.","ru":"Период — не длиннее года.","uz":"Davr — bir yildan oshmasin."},   // MY_REFERRALS_V1
+  "Исполнитель строки — не врач и не отмечен на эту услугу («Сотрудники» → «Услуги и ставки»).": {"en":"The line's performer is not a doctor and is not assigned to this service (“Employees” → “Services & rates”).","ru":"Исполнитель строки — не врач и не отмечен на эту услугу («Сотрудники» → «Услуги и ставки»).","uz":"Qator ijrochisi shifokor emas va bu xizmatga belgilanmagan («Xodimlar» → «Xizmatlar va tariflar»)."},   // DIAG_ROUTE_V1
   // /S4 · 3.22.0
 };

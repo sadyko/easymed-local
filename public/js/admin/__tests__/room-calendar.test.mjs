@@ -252,8 +252,10 @@ function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, 
     db.prepare("INSERT INTO services (id, name, price, type, requires_doctor) VALUES (24,'УЗИ брюшной полости',150000,'imaging',0)").run();
     const rates = JSON.stringify([{ service_id: 24, percentage: 0 }]);
     const U = db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours, service_rates) VALUES (?,?,'x',?,?,1,'УЗИ',?,?)");
-    U.run(9, 'uzi1', 'Сонолог Первый', 'doctor', JSON.stringify(wh), rates);
-    if (diag > 1) U.run(12, 'uzi2', 'Сонолог Второй', 'head_doctor', JSON.stringify(wh), rates);
+    // DIAG_ROUTE_V1 (3.22.0, ревью L-4) — diag 3: услуга отмечена одной медсестре (не врачу).
+    if (diag === 3) db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours, service_rates) VALUES (13,'ecg','x','Медсестра ЭКГ','nurse',0,'',?,?)").run(JSON.stringify(wh), rates);
+    else U.run(9, 'uzi1', 'Сонолог Первый', 'doctor', JSON.stringify(wh), rates);
+    if (diag === 2) U.run(12, 'uzi2', 'Сонолог Второй', 'head_doctor', JSON.stringify(wh), rates);
   }
   // Разбор ревью (M4): строки, которые уже не «в смете», — выставленная,
   // начатая и выданный товар.
@@ -1195,6 +1197,34 @@ test('ОКНО ПРИЁМА: «Добавить» УЗИ — исполните�
     }
   } finally {
     document.getElementById = prevGet;
+    USER.role = prevRole;
+    delete window.easymed;
+  }
+});
+
+// DIAG_ROUTE_V1 (3.22.0, ревью L-4) — услуга кабинета, отмеченная ОДНОЙ медсестре: календарь
+// предлагает её (а не всех врачей), ставит сам, и сервер строку принимает.
+test('ОКНО ПРИЁМА: «Добавить» услугу, отмеченную медсестре, — исполнитель она, а не любой врач (ревью L-4)', async () => {
+  window.easymed = { state: { user: { id: 1, role: 'registrar', extra_roles: [] } } };
+  const prevRole = USER.role;
+  USER.role = 'registrar';
+  try {
+    document.body.children.length = 0;
+    const { box } = await render({ lines: true, diag: 3 });
+    const modal = await openAppt(box);
+    const sel = walk(modal).find((n) => n.attrs && 'data-booking-add' in n.attrs);
+    const perf = walk(modal).find((n) => n.attrs && 'data-booking-performer' in n.attrs);
+    sel.value = 's:24';
+    sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+    const ids = perf.children.filter((o) => o.tagName === 'OPTION').map((o) => o.attrs.value).filter(Boolean).map(Number);
+    assert.deepEqual(ids, [13], 'кандидат — отмеченная медсестра, а не все врачи');
+    assert.equal(perf.value, '13', 'единственная отмеченная не выбрана сама');
+    const add = walk(sel.parentNode || modal).find((n) => n.tagName === 'BUTTON' && /Добавить/.test(textOf(n)));
+    add.click();
+    await flush(20);
+    assert.equal(DB.prepare('SELECT doctor_id FROM visit_services WHERE visit_id = 55 AND service_id = 24').get().doctor_id, 13,
+      'сервер не принял медсестру исполнителем строки записи');
+  } finally {
     USER.role = prevRole;
     delete window.easymed;
   }
