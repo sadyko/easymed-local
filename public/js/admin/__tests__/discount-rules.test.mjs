@@ -97,7 +97,8 @@ test('калькулятор: офлайн-скидка любого вида �
     // INVOICE_APPEND_V1 (ревью M1) — и append: новый счёт, когда сразу платят балансом/картой.
     // DISCOUNT_V2 (3.22.0) — одна скидка по выбору: смета и счёт берут её из calcDiscountArgs(), сервер — discount_choice.
     assert.match(spm, /const d = pickerDiscount\(previewBillLines\(\), calcDiscountArgs\(\)\)/, 'смета — по выбору скидки');
-    assert.match(spm, /invoicePickerLines\(\{ visitId: visit\.id, lines: patientRows\.map\(billLineOf\), pct: da\.pct, promo: da\.promo \? promoRow : null, categoryPct: da\.categoryPct, append: !spendStored, choice: calcChoice\(\) \}\)/, 'сумма скидки в счёте — тем же правилом, что в смете');
+    // DISCOUNT_RATES_V1 — и группа со ставками по услугам (group).
+    assert.match(spm, /invoicePickerLines\(\{ visitId: visit\.id, lines: patientRows\.map\(billLineOf\), pct: da\.pct, promo: da\.promo \? promoRow : null, categoryPct: da\.categoryPct, group: da\.group, append: !spendStored, choice: calcChoice\(\) \}\)/, 'сумма скидки в счёте — тем же правилом, что в смете');
 });
 
 // DISCOUNT_V2 (ревью S1 L-3) — калькулятор услуг: группа пациента не прочиталась (wiz.categoryFailed) —
@@ -105,7 +106,7 @@ test('калькулятор: офлайн-скидка любого вида �
 // при choice); сбой чтения группы отмечается в обоих местах, где она читается.
 test('ревью S1 L-3: калькулятор — сбой чтения группы — выбор по умолчанию не шлётся', () => {
     const spm = read('views/service-picker-modal.js');
-    assert.ok(spm.includes('fallbackChoiceKey({ promoId: promo ? promo.id : null, manualPct: wizDiscountPct(), groupPct: wiz.categoryPct, groupKnown: !wiz.categoryFailed })'), 'calcChoice не знает, что группа не прочиталась');
+    assert.ok(spm.includes('fallbackChoiceKey({ promoId: promo ? promo.id : null, manualPct: wizDiscountPct(), groupPct: wiz.categoryPct, groupHasRates: !!(group && group.rates), groupKnown: !wiz.categoryFailed })'), 'calcChoice не знает, что группа не прочиталась');
     assert.equal(spm.split('wiz.categoryFailed = true').length - 1, 2, 'сбой чтения группы отмечен не везде');
     assert.ok(spm.includes("const curKey = calcChoice() || 'none';"), 'экран падает на null');
     assert.ok(spm.includes("...(choice && (promo || !String(choice).startsWith('promo:')) ? choiceArgs(choice) : {})"), 'null-выбор уходит в счёт');

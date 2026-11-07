@@ -16,11 +16,25 @@
 // Чистые функции: без DOM и сети, без текста интерфейса — подписи отдаются
 // шаблоном и значениями ({ text, params }); окно переводит их через trf().
 import { eligibleDiscounts, isStoredValueCard, serviceScope } from './discount-rules.js';
+import { hasRates } from './discount-rates.js';   // DISCOUNT_RATES_V1
 
-/** Группа пациента со скидкой: { name, pct } или null. */
-export function groupOf(name, pct) {
+/**
+ * Группа пациента со скидкой: { name, pct } или null.
+ * DISCOUNT_RATES_V1 — rates: ставки группы по услугам (мигр. 274); группа со ставками —
+ * скидка и при 0 % по умолчанию; у такой группы в ответе есть rates.
+ */
+export function groupOf(name, pct, rates = null) {
     const p = Math.min(100, Math.max(0, Number(pct) || 0));
-    return p > 0 ? { name: String(name || ''), pct: p } : null;
+    const rated = hasRates(rates);
+    if (!(p > 0) && !rated) return null;
+    return rated ? { name: String(name || ''), pct: p, rates } : { name: String(name || ''), pct: p };
+}
+
+// DISCOUNT_RATES_V1 — подпись группы: со ставками — «по услугам», процент — по умолчанию.
+function groupLabel(group) {
+    return group.rates
+        ? { text: 'Скидка группы «{name}» — по услугам (по умолчанию {pct}%)', params: { name: group.name, pct: pctText(group.pct) } }
+        : { text: 'Скидка группы «{name}» — {pct}%', params: { name: group.name, pct: pctText(group.pct) } };
 }
 
 const pctText = (p) => String(Math.round(Number(p) * 100) / 100);
@@ -31,6 +45,8 @@ export function promoLabel(row, fmtMoney) {
     const amount = Number(row && row.amount) || 0;
     const value = pct > 0 ? pctText(pct) : (typeof fmtMoney === 'function' ? fmtMoney(amount) : String(amount));
     const scoped = serviceScope(row).length > 0;
+    // DISCOUNT_RATES_V1 — промокод со ставками по услугам: процент — по умолчанию.
+    if (pct > 0 && hasRates(row && row.discount_rates)) return { text: 'Промокод «{name}» — по услугам (по умолчанию {value}%)', params: { name: (row && row.name) || '', value } };
     const text = pct > 0
         ? (scoped ? 'Промокод «{name}» — −{value}% · на выбранные услуги' : 'Промокод «{name}» — −{value}%')
         : (scoped ? 'Промокод «{name}» — −{value} сум · на выбранные услуги' : 'Промокод «{name}» — −{value} сум');
@@ -45,7 +61,7 @@ export function promoLabel(row, fmtMoney) {
  */
 export function discountChoiceOptions({ group = null, discounts = [], ctx = {}, fmtMoney = null, manual = true } = {}) {
     const out = [{ key: 'none', kind: 'none', label: { text: 'Без скидки', params: {} } }];
-    if (group) out.push({ key: 'group', kind: 'group', label: { text: 'Скидка группы «{name}» — {pct}%', params: { name: group.name, pct: pctText(group.pct) } } });
+    if (group) out.push({ key: 'group', kind: 'group', label: groupLabel(group) });   // DISCOUNT_RATES_V1
     for (const row of eligibleDiscounts((discounts || []).filter((d) => !isStoredValueCard(d)), ctx)) {
         out.push({ key: 'promo:' + row.id, kind: 'promo', row, label: promoLabel(row, fmtMoney) });
     }
@@ -85,10 +101,10 @@ export function choiceToSend(key, { groupKnown = true, picked = false } = {}) {
  * Выбор калькулятора услуг, когда регистратор не выбирал явно: применённый промокод, своя скидка,
  * скидка группы, иначе «Без скидки»; группа пациента не прочиталась — null (ревью S1 L-3).
  */
-export function fallbackChoiceKey({ promoId = null, manualPct = 0, groupPct = 0, groupKnown = true } = {}) {
+export function fallbackChoiceKey({ promoId = null, manualPct = 0, groupPct = 0, groupHasRates = false, groupKnown = true } = {}) {   // groupHasRates: DISCOUNT_RATES_V1
     if (promoId != null) return 'promo:' + promoId;
     if (Number(manualPct) > 0) return 'manual';
-    if (Number(groupPct) > 0) return 'group';
+    if (Number(groupPct) > 0 || groupHasRates) return 'group';   // DISCOUNT_RATES_V1 — группа со ставками и при 0 %
     return groupKnown ? 'none' : null;
 }
 
@@ -105,8 +121,8 @@ export function choiceFloorPct(key, group) {
  */
 export function choiceReason(key, { group = null, promo = null, applied = 0, floor = 0, fmtMoney = null } = {}) {
     if (!(applied > 0)) return null;
-    if (key === 'group' && group) return { text: 'Скидка группы «{name}» — {pct}%', params: { name: group.name, pct: pctText(group.pct) } };
+    if (key === 'group' && group) return groupLabel(group);   // DISCOUNT_RATES_V1
     if (String(key).startsWith('promo:') && promo) return promoLabel(promo, fmtMoney);
-    if (group && floor > 0 && applied <= floor + 0.5) return { text: 'Скидка группы «{name}» — {pct}%', params: { name: group.name, pct: pctText(group.pct) } };
+    if (group && floor > 0 && applied <= floor + 0.5) return groupLabel(group);   // DISCOUNT_RATES_V1
     return { text: 'Своя скидка (вручную)', params: {} };
 }

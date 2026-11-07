@@ -70,4 +70,7 @@ test('ревью S1 L-3: группа не известна — выбор по 
   assert.equal(fallbackChoiceKey({ groupPct: 0 }), 'none');
   assert.equal(fallbackChoiceKey({ groupPct: 0, groupKnown: false }), null);
   assert.equal(fallbackChoiceKey({ manualPct: 5, groupKnown: false }), 'manual');
+  // DISCOUNT_RATES_V1 — группа со ставками по услугам при 0 % по умолчанию — тоже скидка группы.
+  assert.equal(fallbackChoiceKey({ groupPct: 0, groupHasRates: true }), 'group');
+  assert.equal(fallbackChoiceKey({ groupPct: 0, groupHasRates: true, groupKnown: false }), 'group');
 });

@@ -82,6 +82,7 @@ import { packageItemName, packageLabel, printInvoiceSheetById } from './receipt-
 import { invoiceAppendNote } from '../invoice-append.js';
 import { groupOf, discountChoiceOptions, defaultChoiceKey, keepChoice, choiceArgs, choiceReason, choiceToSend } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
 import { discountValue, localYmd } from '../discount-rules.js';   // DISCOUNT_V2 — стоимость промокода на смете                      // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
+import { ratedOutcome } from '../discount-rates.js';   // DISCOUNT_RATES_V1 — скидка по ставкам услуг, как посчитает счёт
 
 /** Разряды тысяч пробелом — так цену читают во всех экранах продукта. */
 function fmtPrice(n) {
@@ -471,7 +472,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     /** DISCOUNT_V2 — строки сметы без своей скидки пакета: на них ложится скидка счёта. */
     function restLinesBefore() {
         return state.rows.map((r, i) => ({ r, i })).filter(({ r }) => !(r.package && r.package.full != null && r.package.price != null && Number(r.package.price) < Number(r.package.full)))
-            .map(({ r, i }) => ({ service_id: Number(r.service && r.service.id), total: rowPrice(i) }));
+            .map(({ r, i }) => ({ service_id: Number(r.service && r.service.id), service: r.service && r.service.__consult ? { consultation: true } : (r.service || null), total: rowPrice(i) }));   // service: DISCOUNT_RATES_V1 (консультация по виду приёма — группа «Консультации»)
     }
     /** DISCOUNT_V2 — варианты выбора скидки на эту смету. */
     function discountOptionsNow() {
@@ -483,6 +484,10 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         const lines = restLinesBefore();
         const base = lines.reduce((a, l) => a + l.total, 0);
         const key = state.discountChoice;
+        // DISCOUNT_RATES_V1 — у группы или промокода ставки по услугам: каждая строка — своим процентом.
+        const promoRow = String(key).startsWith('promo:') ? (state.discounts || []).find((d) => 'promo:' + d.id === key) : null;
+        const rated = ratedOutcome({ key, group: state.group, promo: promoRow, lines });
+        if (rated && rated.rated) return rated.off;
         if (key === 'group' && state.group) return Math.round(base * state.group.pct / 100);
         if (String(key).startsWith('promo:')) {
             const row = (state.discounts || []).find((d) => 'promo:' + d.id === key);
@@ -509,13 +514,13 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         state.groupKnown = false; state.discountPicked = false;   // ревью S1 L-3
         try {
             const [pRes, dRes] = await Promise.all([
-                supabase.from('patients').select('id, category_id, patient_categories(id, name, discount_percent, active)').eq('id', patientId).maybeSingle(),
-                supabase.from('patient_discounts').select('id, name, kind, percent, amount, remaining, active, valid_from, valid_until, category_id, service_ids').eq('active', 1).order('name'),
+                supabase.from('patients').select('id, category_id, patient_categories(id, name, discount_percent, active, discount_rates)').eq('id', patientId).maybeSingle(),   // discount_rates: DISCOUNT_RATES_V1
+                supabase.from('patient_discounts').select('id, name, kind, percent, amount, remaining, active, valid_from, valid_until, category_id, service_ids, discount_rates').eq('active', 1).order('name'),
             ]);
             if (!state.patient || state.patient.id !== patientId) return;
             const cat = pRes && !pRes.error && pRes.data ? pRes.data.patient_categories : null;
             state.patientCategoryId = pRes && pRes.data && pRes.data.category_id != null ? Number(pRes.data.category_id) : null;
-            state.group = cat && cat.active !== 0 && cat.active !== false ? groupOf(cat.name, cat.discount_percent) : null;
+            state.group = cat && cat.active !== 0 && cat.active !== false ? groupOf(cat.name, cat.discount_percent, cat.discount_rates) : null;   // DISCOUNT_RATES_V1 — со ставками
             state.discounts = dRes && !dRes.error && Array.isArray(dRes.data) ? dRes.data : [];
             state.discountChoice = defaultChoiceKey(state.group);
             state.groupKnown = !!(pRes && !pRes.error);   // ревью S1 L-3 — сбой чтения: группа не известна
@@ -1385,7 +1390,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     (async () => {
         try {
             const [svcRes, docRes, srcRes] = await Promise.all([
-                supabase.from('services').select('id, name, price, tax_rate, requires_doctor, active, ' + ROUTE_SELECT).eq('active', true).order('name').limit(1000),   // ROUTE_SELECT: DIAG_ROUTE_V1 — маршрут группы «Консультации»
+                supabase.from('services').select('id, name, price, tax_rate, requires_doctor, active, category_id, ' + ROUTE_SELECT).eq('active', true).order('name').limit(1000),   // ROUTE_SELECT: DIAG_ROUTE_V1 — маршрут группы «Консультации»
                 // EASYMED_DOCTOR_DETECTION — список врачей проверяет is_doctor, а
                 // не role: у администратора-врача роли 'doctor' нет вовсе.
                 // DIAG_ROUTE_V1 (D1) — и все, кому услуга отмечена в «Услугах и ставках» (медсестра на УЗИ):

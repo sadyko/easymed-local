@@ -25,6 +25,7 @@
 // клиника берёт скидку на себя, врач получает от цены до скидки).
 import { discountBlockReason, discountValue, isStoredValueCard } from '../../../public/js/admin/discount-rules.js';
 import { withTemplate } from '../server-message.js';   // собранная фраза переводится на экране
+import { hasRates } from '../../../public/js/admin/discount-rates.js';   // DISCOUNT_RATES_V1
 
 const round2 = (n) => Math.round(n * 100) / 100;
 const pctText = (p) => String(Math.round(Number(p) * 100) / 100).replace('.', ',') + '%';
@@ -40,13 +41,17 @@ export const DISCOUNT_CHOICES = Object.freeze(['group', 'manual', 'none', 'promo
 export function patientGroupDiscount(db, patientId) {
   const id = Number(patientId);
   if (!Number.isInteger(id) || id <= 0) return null;
-  const row = db.prepare(`SELECT c.id, c.name, c.discount_percent AS pct, c.reduces_doctor_share AS reduces
+  const row = db.prepare(`SELECT c.id, c.name, c.discount_percent AS pct, c.reduces_doctor_share AS reduces, c.discount_rates AS rates
                             FROM patients p JOIN patient_categories c ON c.id = p.category_id AND c.active = 1
                            WHERE p.id = ?`).get(id);
   if (!row) return null;
   const pct = Number(row.pct);
-  if (!Number.isFinite(pct) || pct <= 0) return null;
-  return { id: row.id, name: row.name || '', pct: Math.min(pct, 100), reduces: Number(row.reduces) === 0 ? 0 : 1 };
+  // DISCOUNT_RATES_V1 — группа со ставками по услугам скидку даёт и при 0 % «по умолчанию»
+  // («Консультации — 100 %, остальное — без скидки»).
+  const rated = hasRates(row.rates);
+  if ((!Number.isFinite(pct) || pct <= 0) && !rated) return null;
+  return { id: row.id, name: row.name || '', pct: Number.isFinite(pct) ? Math.min(Math.max(pct, 0), 100) : 0, reduces: Number(row.reduces) === 0 ? 0 : 1,
+    rates: rated ? row.rates : null };
 }
 
 /** Причина скидки группы словами: «Скидка группы «VIP» — 10%». */

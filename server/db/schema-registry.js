@@ -239,7 +239,7 @@ export const REGISTRY = {
                created_by: { table:'users', fk:'created_by', columns:['id','full_name'] },
                // CATEGORY_DISCOUNT_V1 / DISCOUNT_RULES_V1 — the wizard reads the patient's
                // group and its discount in the same request as the patient row.
-               patient_categories: { table:'patient_categories', fk:'category_id', columns:['id','name','discount_percent','active'] } },
+               patient_categories: { table:'patient_categories', fk:'category_id', columns:['id','name','discount_percent','active','discount_rates'] } },   // discount_rates: DISCOUNT_RATES_V1 — ставки группы по услугам
   },
   // ═══ VISITS_ONE_DOOR_V1 (2026-09-05) — РАСПИСАНИЕ НЕ ПИШЕТСЯ ЧЕРЕЗ /api/db ═══
   //
@@ -444,7 +444,7 @@ export const REGISTRY = {
   },
   invoice_items: {
     // discount_amount: PACKAGES_V1 (mig 154) — the line's OWN discount (package), 0 = none.
-    read:  { roles: ALL_STAFF, columns: ['id','invoice_id','service_id','description','quantity','unit_price','total','created_at','discount_amount'] },
+    read:  { roles: ALL_STAFF, columns: ['id','invoice_id','service_id','description','quantity','unit_price','total','created_at','discount_amount','discount_rate'] },   // DISCOUNT_RATES_V1 (мигр. 274) — процент строки по ставкам скидки
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // written only by billing RPCs
     filters: ['id','invoice_id','service_id'],
     // INVOICE_PARENT_V1 — строка счёта тянет ШАПКУ счёта: без неё ни экспорт
@@ -734,9 +734,9 @@ export const REGISTRY = {
   // CATEGORY_DISCOUNT_V1 (миграция 107) — discount_percent: скидка группы.
   // Читают все (карта пациента показывает её рядом с категорией), пишет только
   // администратор — это деньги клиники, а не оформление.
-  patient_categories: { read:{roles:ALL_STAFF,columns:['id','name','tier','discount_percent','active','created_at','reduces_doctor_share']},   // DISCOUNT_V2 (мигр. 273) — «Скидка уменьшает долю врача»
-    write:{ grant:'settings.patient_categories',insert:{roles:['admin'],columns:['name','tier','discount_percent','active','reduces_doctor_share']},update:{roles:['admin'],columns:['name','tier','discount_percent','active','reduces_doctor_share']},delete:{roles:[]}},
-    filters:['id','active','name'], embed:{} },
+  patient_categories: { read:{roles:ALL_STAFF,columns:['id','name','tier','discount_percent','active','created_at','reduces_doctor_share','discount_rates']},   // DISCOUNT_V2 (мигр. 273) — «Скидка уменьшает долю врача»; DISCOUNT_RATES_V1 (мигр. 274) — ставки по услугам
+    write:{ grant:'settings.patient_categories',insert:{roles:['admin'],columns:['name','tier','discount_percent','active','reduces_doctor_share','discount_rates']},update:{roles:['admin'],columns:['name','tier','discount_percent','active','reduces_doctor_share','discount_rates']},delete:{roles:[]}},
+    filters:['id','active','name'], json:['discount_rates'], embed:{} },   // DISCOUNT_RATES_V1
   floors: { read:{roles:ALL_STAFF,columns:['id','name','level','active','created_at']},
     write:{ grant:'settings.rooms',insert:{roles:['admin'],columns:['name','level','active']},update:{roles:['admin'],columns:['name','level','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
@@ -880,10 +880,10 @@ export const REGISTRY = {
   // чтение: пишет его сервер (domain/cards.js) и триггеры миграции 158.
   // CARD_SALE_V1 (mig 166) — sale_invoice_id / sale_number: счёт продажи карты
   // в кассе (NULL — выдана без оплаты). Только чтение: пишет rpc/card-sales.js.
-  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note','remaining','sale_invoice_id','sale_number','reduces_doctor_share']},   // DISCOUNT_V2 (мигр. 273)
-    write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note','reduces_doctor_share']},
-      update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note','reduces_doctor_share']},delete:{roles:[]}},
-    filters:['id','active','kind','category_id'], json:['service_ids'],
+  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note','remaining','sale_invoice_id','sale_number','reduces_doctor_share','discount_rates']},   // DISCOUNT_V2 (мигр. 273); DISCOUNT_RATES_V1 (мигр. 274)
+    write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note','reduces_doctor_share','discount_rates']},
+      update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note','reduces_doctor_share','discount_rates']},delete:{roles:[]}},
+    filters:['id','active','kind','category_id'], json:['service_ids','discount_rates'],
     embed:{ patient_categories:{table:'patient_categories',fk:'category_id',columns:['id','name']} } },
   // CHRONIC_REF_V1 (mig 129) — the clinic's list of chronic conditions the
   // patient form picks from.

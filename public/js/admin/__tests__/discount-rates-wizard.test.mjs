@@ -1,0 +1,256 @@
+// DISCOUNT_RATES_V1 (3.22.0) — СКИДКА ПО УСЛУГАМ В МАСТЕРЕ ВИЗИТА: смета = счёт.
+//
+// Группа «Сотрудники»: по умолчанию 20 %, консультация — 100 %. Смета показывает то, что
+// выставит сервер (каждая строка — своим процентом), и на один день, и на несколько.
+// Стенд — тот же, что у discount-choice-wizard.test.mjs (настоящая база и реестр RPC).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+// ─── крошечный DOM (как в wizard-booking.test.mjs) ─────────────────────────
+class F {
+  constructor(t) {
+    this.tagName = String(t).toUpperCase(); this.style = {}; this.children = []; this.attrs = {};
+    this.className = ''; this._t = ''; this._l = {}; this.dataset = {};
+    this.value = ''; this.checked = false; this.disabled = false;
+  }
+  appendChild(c) { this.children.push(c); c.parentElement = this; return c; }
+  append(...cs) { for (const c of cs) if (c) this.appendChild(c); }
+  removeChild(c) { const i = this.children.indexOf(c); if (i > -1) this.children.splice(i, 1); return c; }
+  get firstChild() { return this.children[0] || null; }
+  replaceChildren() { this.children.length = 0; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  removeAttribute(k) { delete this.attrs[k]; }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  hasAttribute(k) { return k in this.attrs; }
+  addEventListener(t, fn) { (this._l[t] || (this._l[t] = [])).push(fn); }
+  removeEventListener() {}
+  dispatchEvent(e) { for (const fn of this._l[e.type] || []) fn(e); return true; }
+  click() { this.dispatchEvent({ type: 'click', currentTarget: this, target: this, preventDefault() {}, stopPropagation() {} }); }
+  focus() {} blur() {} select() {} scrollTo() {} scrollIntoView() {}
+  contains() { return false; }
+  remove() { if (this.parentElement) this.parentElement.removeChild(this); }
+  getBoundingClientRect() { return { top: 0, left: 0, right: 200, bottom: 60, width: 200, height: 60 }; }
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+  get textContent() { return this._t; }
+  set textContent(v) { this._t = String(v); this.children.length = 0; }
+  get classList() {
+    const s = this;
+    return {
+      contains: (c) => String(s.className).split(/\s+/).includes(c),
+      add(c) { if (!String(s.className).split(/\s+/).includes(c)) s.className = (s.className + ' ' + c).trim(); },
+      remove(c) { s.className = String(s.className).split(/\s+/).filter((x) => x && x !== c).join(' '); },
+      toggle() {},
+    };
+  }
+  get isConnected() { return true; }
+}
+class TX extends F { constructor(t) { super('#text'); this.nodeType = 3; this._t = String(t); } }
+const mk = (t) => { const e = new F(t); if (String(t).toLowerCase() === 'template') e.content = new F('#fragment'); return e; };
+globalThis.Node = F;
+globalThis.Event = class { constructor(t, o) { this.type = t; Object.assign(this, o || {}); } };
+const TOASTS = [];
+const TOAST_EL = mk('div');
+Object.defineProperty(TOAST_EL, 'textContent', { get() { return ''; }, set(v) { TOASTS.push(String(v)); }, configurable: true });
+globalThis.document = {
+  createElement: mk, createElementNS: (_n, t) => mk(t), createTextNode: (t) => new TX(t),
+  head: mk('head'), body: mk('body'), documentElement: mk('html'),
+  addEventListener() {}, removeEventListener() {}, getElementById(id) { return id === 'toast' ? TOAST_EL : null; },
+};
+// I18N_LOCALE_PIN_V1 — русский ДО импорта видов (CI на en-US).
+globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
+globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, innerWidth: 1440, innerHeight: 900, addEventListener() {}, open: () => null };
+globalThis.MutationObserver = class { observe() {} disconnect() {} };
+globalThis.requestAnimationFrame = (fn) => fn();
+globalThis.confirm = () => true;
+
+function walk(e, o = []) { for (const c of e.children || []) { o.push(c); walk(c, o); } return o; }
+const textOf = (el) => [el, ...walk(el)].map((n) => n._t || '').join(' ');
+
+// ─── настоящая база + настоящий реестр RPC за фальшивым fetch ───────────────
+const { openDb } = await import('../../../../server/db/connection.js');
+const { migrate } = await import('../../../../server/db/migrate.js');
+const { compile } = await import('../../../../server/db/query-compiler.js');
+const { getRpc } = await import('../../../../server/services/rpc/index.js');
+const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');
+const { readableColumns } = await import('../../../../server/db/schema-registry.js');
+const { reshape } = await import('../../../../server/routes/db.js');   // ревью-2 — связи (patient_categories) вложенными, как настоящий маршрут
+
+let USER = { id: 1, role: 'registrar', extra_roles: [] };   // INVOICE_APPEND_V1 (ревью M1) — тест баланса идёт администратором
+let DB = null;
+const RPC = [];
+
+globalThis.fetch = async (url, opts) => {
+  const u = String(url);
+  const body = JSON.parse((opts && opts.body) || '{}');
+  const ok = (data) => ({ ok: true, status: 200, json: async () => ({ data }) });
+  if (u.startsWith('/api/rpc/')) {
+    const name = decodeURIComponent(u.slice('/api/rpc/'.length));
+    RPC.push({ name, body });
+    const handler = getRpc(name);
+    if (!handler) return { ok: false, status: 501, json: async () => ({ error: { message: 'no rpc ' + name } }) };
+    try { return ok(await handler(DB, body, USER)); }
+    catch (e) { return { ok: false, status: e.status || 500, json: async () => ({ error: { code: e.code, message: e.message, params: e.params } }) }; }
+  }
+  if (u === '/api/db') {
+    stampWriteBody(DB, body);
+    let compiled;
+    try { compiled = compile(body, USER); }
+    catch (e) { return { ok: false, status: 400, json: async () => ({ error: { code: 'bad_request', message: e.message } }) }; }
+    const { sql, params, meta } = compiled;
+    try {
+      if (meta.op === 'select') {
+        const rows = reshape(DB.prepare(sql).all(...params), meta);
+        // ревью S1 M-1 — JSON-колонки (service_ids промокода) — массивом, как отдаёт настоящий маршрут.
+        for (const r of rows) for (const c of meta.json || []) if (r && typeof r[c] === 'string') { try { r[c] = JSON.parse(r[c]); } catch { /* как есть */ } }
+        if (meta.single === 'single') return ok(rows[0]);
+        if (meta.single === 'maybe') return ok(rows[0] ?? null);
+        return ok(rows);
+      }
+      if (meta.op === 'insert') {
+        const info = DB.prepare(sql).run(...params);
+        if (!meta.returning) return ok(null);
+        const row = DB.prepare(
+          `SELECT ${readableColumns(meta.table).map((c) => `"${c}"`).join(', ')} FROM "${meta.table}" WHERE rowid = ?`
+        ).get(info.lastInsertRowid);
+        if (meta.single === 'single') return ok(row);
+        if (meta.single === 'maybe') return ok(row ?? null);
+        return ok([row]);
+      }
+      DB.prepare(sql).run(...params);
+      return ok(null);
+    } catch (e) {
+      return { ok: false, status: 500, json: async () => ({ error: { code: 'internal', message: e.message } }) };
+    }
+  }
+  return { ok: false, status: 404, json: async () => ({ error: { message: 'no route ' + u } }) };
+};
+
+const { forgetSlots } = await import('../views/service-picker-modal.js?v=ownrep4');
+const { nearestButtonText, manyDaysWarning } = await import('../views/pick-day.js');
+
+// ─── посев ──────────────────────────────────────────────────────────────────
+const WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const dayOffset = (n) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + n); return d; };
+const localDayOfIso = (iso) => isoOf(new Date(iso));
+
+/**
+ * todayOff — врач не работает в сегодняшний день недели (окон сегодня нет при
+ * любом часе запуска); иначе — работает каждый день с from до to.
+ * 21 — консультация (нужен врач), 22 — анализ (без врача), 23 — ЭКГ без врача,
+ * но с единственным назначенным исполнителем (врач 7, «Услуги и ставки»).
+ */
+function seed({ todayOff = true, from = '10:00', to = '16:00' } = {}) {
+  const db = openDb(':memory:');
+  migrate(db);
+  const todayKey = WD[new Date().getDay()];
+  const wh = {};
+  for (const k of WD) wh[k] = { enabled: !(todayOff && k === todayKey), from, to };
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, working_hours) VALUES (1,'reg','x','Регистратор','registrar',0,'')").run();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours, service_rates) VALUES (7,'doc','x','Петров Пётр','doctor',1,'терапевт',?,?)")
+    .run(JSON.stringify(wh), JSON.stringify([{ service_id: 23, pct: 10 }]));
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Иванов Иван')").run();
+  db.prepare("INSERT INTO services (id, name, price, duration_minutes, requires_doctor) VALUES (21,'Консультация терапевта',100000,30,1)").run();
+  db.prepare("INSERT INTO services (id, name, price, type, is_lab, requires_doctor) VALUES (22,'Анализ крови',40000,'lab',1,0)").run();
+  db.prepare("INSERT INTO services (id, name, price, requires_doctor) VALUES (23,'ЭКГ',50000,0)").run();
+  if (DB) DB.close();
+  DB = db;
+  forgetSlots();
+  return db;
+}
+
+const isWizard = (n) => !!(n && n.style && n.style.position === 'fixed');
+const overlay = () => document.body.children.find(isWizard);
+const flush = async (n = 12) => { for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0)); };
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const byAttr = (root, k, v) => walk(root).find((n) => n.attrs && n.attrs[k] !== undefined && (v === undefined || n.attrs[k] === String(v)));
+
+async function openWizard(presetServiceIds) {
+  document.body.children.length = 0;
+  TOASTS.length = 0; RPC.length = 0;
+  const { openVisitWizard } = await import('../views/visit-wizard.js');
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, { presetServiceIds });
+  await flush(20); await wait(80); await flush(20);   // autoPickSlot → calendar_slots (настоящий)
+  assert.ok(overlay(), 'мастер визита не открылся');
+}
+
+/** «Далее / Сформировать счёт» — как человек: выключенную кнопку браузер не нажимает. */
+async function pressUntilCreate() {
+  for (let i = 0; i < 6; i++) {
+    const ov = overlay();
+    if (!ov) break;
+    const btn = walk(ov).filter((n) => n.tagName === 'BUTTON' && !('disabled' in n.attrs))
+      .find((n) => /^\s*(Далее|Сформировать счёт|Записать услуги)/.test(textOf(n).replace(/\s+/g, ' ').trim()));
+    if (!btn) break;
+    btn.click();
+    await wait(60); await flush(30);
+    if (RPC.some((c) => c.name === 'ensure_visit')) break;
+  }
+  await wait(80); await flush(30);
+}
+
+const vipPatient = (pct = 10) => {
+  const cat = DB.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('VIP', ?, 1)").run(pct).lastInsertRowid;
+  DB.prepare('UPDATE patients SET category_id = ? WHERE id = 3').run(cat);
+};
+const choiceSel = () => walk(overlay()).find((n) => n.tagName === 'SELECT' && n.attrs['data-discount-choice'] !== undefined);
+const optionTexts = (sel) => sel.children.filter((o) => o.tagName === 'OPTION').map((o) => textOf(o).replace(/\s+/g, ' ').trim());
+async function choose(text) {
+  const sel = choiceSel();
+  const opt = sel.children.find((o) => textOf(o).includes(text));
+  assert.ok(opt, 'нет варианта ' + text + ': ' + JSON.stringify(optionTexts(sel)));
+  sel.value = opt.attrs.value;
+  sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+  await flush(5);
+}
+const reason = () => { const el = byAttr(overlay(), 'data-discount-reason'); return el && el.style.display !== 'none' ? el._t : ''; };
+const invoiceCall = () => RPC.find((c) => c.name === 'create_invoice_for_visit');
+const money = () => DB.prepare('SELECT subtotal, discount_amount, total_amount, discount_source, discount_note FROM invoices ORDER BY id').all();
+
+
+const staffPatient = (rates = { s: { 21: 100 } }, pct = 20) => {
+  const cat = DB.prepare("INSERT INTO patient_categories (name, discount_percent, active, discount_rates) VALUES ('Сотрудники', ?, 1, ?)").run(pct, JSON.stringify(rates)).lastInsertRowid;
+  DB.prepare('UPDATE patients SET category_id = ? WHERE id = 3').run(cat);
+};
+
+test('«Сотрудники» 20 %, консультация 100 %: выбор «по услугам», смета 32 000 = счёт 32 000 (консультация 0, анализ 32 000)', async () => {
+  seed({ todayOff: false, from: '00:00', to: '23:59' });
+  staffPatient();
+  await openWizard([21, 22]);
+  const sel = choiceSel();
+  assert.deepEqual(optionTexts(sel), ['Без скидки', 'Скидка группы «Сотрудники» — по услугам (по умолчанию 20%)', 'Своя скидка (вручную)']);
+  assert.equal(sel.value, 'group');
+  assert.equal(reason(), 'Скидка группы «Сотрудники» — по услугам (по умолчанию 20%)');
+  assert.ok(textOf(overlay()).includes('32 000 сум'), 'смета — не 32 000 к оплате');
+  await pressUntilCreate();
+  assert.equal(invoiceCall().body.discount_choice, 'group');
+  const [inv] = money();
+  assert.deepEqual([inv.subtotal, inv.discount_amount, inv.total_amount], [140000, 108000, 32000]);
+  assert.deepEqual(DB.prepare('SELECT service_id, discount_amount, discount_rate FROM invoice_items ORDER BY service_id').all().map((r) => [r.service_id, r.discount_amount, r.discount_rate]),
+    [[21, 100000, 100], [22, 8000, 20]]);
+});
+
+test('смета на два дня по ставкам: анализ сегодня 32 000, консультация завтра 0 — смета 32 000, оба счёта по ставкам', async () => {
+  seed();   // врач сегодня не работает: консультация — на завтра
+  staffPatient();
+  await openWizard([21, 22]);
+  byAttr(overlay(), 'data-pick-nearest', 21).click();
+  await flush(20);
+  assert.ok(byAttr(overlay(), 'data-many-days', 2), 'смета не на два дня');
+  assert.ok(textOf(overlay()).includes('32 000 сум'), 'смета — не 32 000 к оплате');
+  await pressUntilCreate();
+  assert.ok(!TOASTS.some((t) => /не выставлен/.test(t)), 'счёт дня не выставлен: ' + JSON.stringify(TOASTS));
+  assert.deepEqual(money().map((m) => [m.subtotal, m.discount_amount, m.total_amount]), [[40000, 8000, 32000], [100000, 100000, 0]]);
+});
+
+test('«Без скидки» у группы со ставками — полная цена', async () => {
+  seed({ todayOff: false, from: '00:00', to: '23:59' });
+  staffPatient();
+  await openWizard([21, 22]);
+  await choose('Без скидки');
+  await pressUntilCreate();
+  assert.deepEqual(money().map((m) => [m.discount_amount, m.total_amount]), [[0, 140000]]);
+});
+
+test.after(() => { if (DB) DB.close(); DB = null; });
