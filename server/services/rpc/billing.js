@@ -24,7 +24,7 @@ import { localDate, localMonth, today } from '../domain/day.js';   // INVOICE_AP
 import { grantAllowsAdminOr, grantAllowsOr, isAdminUser } from '../grants.js';
 import { cashierDiscountByRole } from '../gate-fallbacks.js';   // CASHIER_DISCOUNT_V1 — прежнее правило строки «Кассир может давать скидку»
 import { floorApplies, groupNote, patientGroupDiscount, resolveDiscountChoice, restDiscountOf } from '../domain/discount-choice.js';   // DISCOUNT_V2
-import { ratedChoice, invoiceRateSource, rateInvoiceItems, invoiceFloorBase } from '../domain/discount-rates.js';   // DISCOUNT_RATES_V1
+import { ratedChoice, invoiceRateSource, rateInvoiceItems, invoiceFloorBase, deskPartOf, rerateChangedLine } from '../domain/discount-rates.js';   // DISCOUNT_RATES_V1; ревью S5 H-1
 import { requireServicesEdit, requireServicesDelete } from './patient-card.js';   // CASHIER_HEAD_V1 (ревью I2) — вкладка «Услуги» у регистратуры/администратора
 import { surgeryWithoutBedRefusal } from '../domain/surgery-bed.js';   // CASHIER_HEAD_V1 (ревью I4)
 // BILLING_AUDIT_FIX_V1 (B3) — тариф заменённой услуги спрашивается заново.
@@ -1571,10 +1571,13 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
     if (item) {
       const oldOwn = invoiceOwnDiscount(db, inv.id);   // PACKAGES_V1 — ДО правки строки
       const oldBase = invoiceRestBase(db, inv.id);      // V3120_FIX (FATAL-1) — тоже ДО
+      const group = patientGroupDiscount(db, inv.patient_id);
+      const desk = deskPartOf(db, inv, group, item);   // ревью S5 H-1 — часть кассы на строке, ДО сброса
       db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = 0, discount_rate = NULL, discount_doctor_share = NULL WHERE id = ?')
         .run(newServiceId, svc.name || '', unit, lineTotal, item.id);
-      // DISCOUNT_RATES_V1 — ставка группы по НОВОЙ услуге (Консультации 100 % → УЗИ 20 %).
-      rateInvoiceItems(db, invoiceRateSource(db, inv, patientGroupDiscount(db, inv.patient_id)), [item.id]);
+      // DISCOUNT_RATES_V1 — ставка группы по НОВОЙ услуге (Консультации 100 % → УЗИ 20 %);
+      // ревью S5 H-1 — и та же доля скидки кассы от нового остатка строки.
+      rerateChangedLine(db, inv, group, item.id, desk);
       invoice = repriceUnpaidInvoice(db, inv, oldOwn, { oldBase, absolute: true });   // V3120_FIX (FATAL-1); CASHIER_HEAD_V1 (I3)
       lineAudit(db, {
         inv: invoice, number: inv.invoice_number, visitId: vs.visit_id, action: 'line_change_service',
@@ -2243,12 +2246,16 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
   const description = serviceChanges ? (svc.name || '') : ((consult && consult.name) || item.description);
   const own = !serviceChanges && Number(item.discount_amount) > 0 && Number(item.total) > 0
     ? Math.min(round2(Number(item.discount_amount) * lineTotal / Number(item.total)), lineTotal) : 0;
+  // Ревью S5 H-1 — часть скидки кассы на строке по ставкам, ДО сброса строки.
+  const group = serviceChanges ? patientGroupDiscount(db, inv.patient_id) : null;
+  const desk = serviceChanges ? deskPartOf(db, inv, group, item) : null;
   db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = ? WHERE id = ?')
     .run(serviceChanges ? newServiceId : item.service_id, description, unit, lineTotal, own, item.id);
-  // DISCOUNT_RATES_V1 — другая услуга — и ставка группы другая (своя скидка строки снята выше).
+  // DISCOUNT_RATES_V1 — другая услуга — и ставка группы другая (своя скидка строки снята выше);
+  // ревью S5 H-1 — часть кассы — той же долей от нового остатка (возврат 36 000, не 24 000).
   if (serviceChanges) {
     db.prepare('UPDATE invoice_items SET discount_rate = NULL, discount_doctor_share = NULL WHERE id = ?').run(item.id);
-    rateInvoiceItems(db, invoiceRateSource(db, inv, patientGroupDiscount(db, inv.patient_id)), [item.id]);
+    rerateChangedLine(db, inv, group, item.id, desk);
   }
 
   // 2. Сумма счёта: без скидки после продажи, потом она ложится в той же доле

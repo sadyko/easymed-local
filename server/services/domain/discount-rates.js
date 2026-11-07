@@ -28,6 +28,7 @@
 //   • «Без скидки» и счёт плательщику (B5) — без скидки группы, как прежде.
 import { hasRates, lineDiscountPct } from '../../../public/js/admin/discount-rates.js';
 import { isStoredValueCard } from '../../../public/js/admin/discount-rules.js';
+import { floorApplies } from './discount-choice.js';   // ревью S5 H-1
 
 const round2 = (n) => Math.round(n * 100) / 100;
 const pctText = (p) => String(Math.round(Number(p) * 100) / 100).replace('.', ',') + '%';
@@ -142,6 +143,77 @@ export function rateInvoiceItems(db, src, itemIds) {
     const total = Math.max(0, Number(it.total) || 0);
     upd.run(round2(total * pct / 100), pct, src.reduces, id);
   }
+}
+
+// Ревью S5 H-1 (3.22.0) — СКИДКА КАССЫ НА СТРОКЕ ПО СТАВКАМ ПЕРЕЖИВАЕТ ЗАМЕНУ УСЛУГИ.
+//
+// cashier_invoice_discount кладёт часть своей скидки на строки по ставкам их СВОЕЙ
+// скидкой — сверх ставки (billing.js). Замена услуги (change_unpaid_service, замена
+// в оплаченном счёте и «вернуть и выставить новую») сбрасывала строку и ставила только
+// ставку новой услуги: часть кассы пропадала молча. «Сотрудники» 20 %, Консультации
+// 100 %: 160 000 − 10 % кассы = 144 000; УЗИ → УЗИ почек — 120 000 вместо 108 000, а
+// в оплаченном счёте возврат 24 000 вместо 36 000. Без ставок скидка кассы лежит в
+// manual_discount и переживает замену в той же доле.
+//
+// Правило: часть кассы — ДОЛЯ остатка строки после ставки (16 000 из 160 000 = 10 %);
+// после новой ставки строка получает ту же долю нового остатка (10 % от 120 000 =
+// 12 000) с той же долей врача. Обратная замена возвращает прежние деньги. Строка,
+// которую новая ставка делает бесплатной (100 %), части кассы не получает — платить
+// за неё нечего. Строки без части кассы — ровно как прежде.
+const shareOf = (v) => (v == null ? 1 : Math.min(1, Math.max(0, Number(v))));
+
+/** Переключатель «уменьшает долю врача» скидки, чьей ставкой посчитана строка счёта. */
+function rateReducesOf(db, inv, group) {
+  const s = String((inv && inv.discount_source) || '');
+  if (s.startsWith('promo:')) {
+    const row = db.prepare('SELECT reduces_doctor_share r FROM patient_discounts WHERE id = ?').get(Number(s.slice(6)));
+    return row && Number(row.r) === 0 ? 0 : 1;
+  }
+  return group && Number(group.reduces) === 0 ? 0 : 1;
+}
+
+/**
+ * Часть кассы на строке по ставкам — читать ДО правки строки.
+ * @returns {null | {frac:number, share:number}}  frac — доля остатка строки после
+ *   ставки; share — доля этой части, уменьшающая долю врача. null — строка не по
+ *   ставкам или части кассы на ней нет.
+ */
+export function deskPartOf(db, inv, group, item) {
+  if (!item || item.discount_rate == null) return null;
+  const total = Math.max(0, Number(item.total) || 0);
+  const byRate = round2(total * Number(item.discount_rate) / 100);
+  const disc = Number(item.discount_amount) || 0;
+  const desk = round2(disc - byRate);
+  const room = round2(total - byRate);
+  if (!(desk > 0.005) || !(room > 0)) return null;
+  const share = Math.min(1, Math.max(0, (disc * shareOf(item.discount_doctor_share) - byRate * rateReducesOf(db, inv, group)) / desk));
+  return { frac: Math.min(1, desk / room), share };
+}
+
+/**
+ * Ставка строки после замены услуги (строка уже сброшена: discount_amount 0,
+ * discount_rate NULL) и часть кассы обратно (deskPartOf). Ставки группы на счёт не
+ * ложатся (промокод, «Без скидки», ставки у группы сняли), а часть кассы была — строка
+ * получает процент, который лёг бы на неё полом группы (0 % там, где пола нет), и
+ * часть кассы: иначе она пропала бы, а пол группы лёг бы на строку дважды.
+ */
+export function rerateChangedLine(db, inv, group, itemId, desk) {
+  let src = invoiceRateSource(db, inv, group);
+  if (!src && desk) {
+    src = { kind: 'flat', pct: floorApplies(inv) && group ? Number(group.pct) || 0 : 0, rates: null,
+      reduces: group && Number(group.reduces) === 0 ? 0 : 1, scope: [] };
+  }
+  rateInvoiceItems(db, src, [itemId]);
+  if (!desk) return;
+  const it = db.prepare('SELECT total, discount_amount, discount_rate, discount_doctor_share FROM invoice_items WHERE id = ?').get(itemId);
+  if (!it || it.discount_rate == null) return;
+  const own = Number(it.discount_amount) || 0;
+  const room = round2(Math.max(0, Number(it.total) || 0) - own);
+  const part = round2(Math.min(desk.frac * room, room));
+  if (!(part > 0)) return;
+  const nd = round2(own + part);
+  db.prepare('UPDATE invoice_items SET discount_amount = ?, discount_doctor_share = ? WHERE id = ?')
+    .run(nd, Math.min(1, Math.max(0, (own * shareOf(it.discount_doctor_share) + part * desk.share) / nd)), itemId);
 }
 
 /**

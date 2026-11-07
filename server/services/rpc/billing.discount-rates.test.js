@@ -203,3 +203,89 @@ test('счёт только из консультации (100 %) — на 0, о
   assert.equal(row.discount_note, 'Скидка группы «Сотрудники» — по услугам (по умолчанию 20%)');
   assert.equal(db.prepare("SELECT status FROM visit_services WHERE id = ?").get(ids[0]).status, 'queued', 'бесплатная консультация — сразу в очередь');
 });
+
+// ─── Ревью S5 H-1 — СКИДКА КАССЫ НА СТРОКЕ ПО СТАВКАМ ПЕРЕЖИВАЕТ ЗАМЕНУ УСЛУГИ ─────────
+//
+// «Сотрудники» 20 %, Консультации 100 %: консультация + УЗИ = 160 000, касса −10 %
+// «постоянный пациент» → 144 000 (16 000 легли на УЗИ своей скидкой строки сверх ставки).
+// Замена УЗИ → УЗИ почек сбрасывала строку и ставила только ставку группы: 120 000 —
+// 16 000 кассы пропадали молча (без ставок — 216 000 → 180 000, скидка в той же доле).
+// Теперь доля кассы на строке — та же доля от остатка строки после новой ставки:
+// УЗИ почек 150 000 − 20 % = 120 000, касса 10 % = 12 000 → к оплате 108 000.
+
+function staffWithDesk(db, { reduces = false } = {}) {
+  const pid = patient(db, group(db, { rates: STAFF }));
+  const { vid, ids } = visitWith(db, pid, [30, 31]);
+  const inv = call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: ids, discount_amount: 0 }).invoice;
+  const r = call('cashier_invoice_discount', db, { invoice_id: inv.id, mode: 'pct', value: 10, reason: 'постоянный пациент', reduces_doctor_share: reduces }, cashier);
+  assert.equal(r.discount, 16000);
+  assert.deepEqual(money(invOf(db, inv.id)), [300000, 156000, 144000]);
+  return { pid, vid, ids, inv };
+}
+const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} ≠ ${b}`);
+
+test('ревью S5 H-1: замена услуги в неоплаченном счёте — 10 % кассы остаются: 144 000 → УЗИ почек 108 000 → обратно 144 000', () => {
+  const db = seed();
+  const { ids, inv } = staffWithDesk(db);
+  call('cashier_line_change_service', db, { visit_service_id: ids[1], new_service_id: 32 });
+  // УЗИ почек 150 000: ставка 20 % = 30 000, касса 10 % от 120 000 = 12 000
+  assert.deepEqual(money(invOf(db, inv.id)), [250000, 142000, 108000], 'скидка кассы пропала при замене услуги');
+  const uzk = items(db, inv.id)[1];
+  assert.deepEqual(uzk.slice(0, 4), [32, 150000, 42000, 20]);
+  near(uzk[4], 30000 / 42000, 'доля врача: ставка группы уменьшает 30 000, касса (переключатель выкл.) — нет 12 000');
+  call('cashier_line_change_service', db, { visit_service_id: ids[1], new_service_id: 31 });
+  assert.deepEqual(money(invOf(db, inv.id)), [300000, 156000, 144000], 'обратно — снова 144 000');
+  near(items(db, inv.id)[1][4], 40000 / 56000, 'доля врача вернулась');
+  // замена консультации (своей скидки кассы на ней нет: 100 %) — касса на УЗИ не тронута
+  call('change_unpaid_service', db, { visit_service_id: ids[0], new_service_id: 40 });
+  // ОАК 40 000 − 20 % = 32 000; УЗИ 144 000 → 176 000
+  assert.deepEqual(money(invOf(db, inv.id)), [240000, 64000, 176000]);
+});
+
+test('ревью S5 H-1: замена в ОПЛАЧЕННОМ счёте — возврат 36 000 (как без ставок), а не 24 000', () => {
+  const db = seed();
+  call('open_cash_shift', db, { opening_float: 0 }, cashier);
+  const { ids, inv } = staffWithDesk(db);
+  call('record_payment', db, { invoice_id: inv.id, amount: 144000, method: 'cash' }, cashier);
+  const r = call('cashier_line_swap_paid', db, { visit_service_id: ids[1], new_service_id: 32 });
+  assert.equal(r.refunded, 36000, 'пациент недополучил возврат части скидки кассы');
+  const after = invOf(db, inv.id);
+  assert.deepEqual([...money(after), after.paid_amount, after.status], [250000, 142000, 108000, 108000, 'paid']);
+});
+
+test('ревью S5 H-1: «Вернуть услугу и выставить новую» (работа начата) — скидка кассы переходит на новую строку', () => {
+  const db = seed();
+  call('open_cash_shift', db, { opening_float: 0 }, cashier);
+  const { ids, inv } = staffWithDesk(db);
+  call('record_payment', db, { invoice_id: inv.id, amount: 144000, method: 'cash' }, cashier);
+  db.prepare("UPDATE visit_services SET status = 'in_progress' WHERE id = ?").run(ids[1]);
+  const r = call('cashier_line_rebill_paid', db, { visit_service_id: ids[1], new_service_id: 32 });
+  assert.equal(r.refunded, 36000);
+  assert.deepEqual(money(invOf(db, inv.id)), [250000, 142000, 108000]);
+});
+
+test('ревью S5 H-1: ставки у группы сняли, пока счёт открыт — замена берёт процент группы, и 10 % кассы остаются', () => {
+  const db = seed();
+  const { pid, ids, inv } = staffWithDesk(db);
+  db.prepare("UPDATE patient_categories SET discount_rates = '{}' WHERE id = (SELECT category_id FROM patients WHERE id = ?)").run(pid);
+  call('cashier_line_change_service', db, { visit_service_id: ids[1], new_service_id: 32 });
+  // УЗИ почек: 20 % группы = 30 000 (тот же пол), касса 10 % от 120 000 = 12 000
+  assert.deepEqual(money(invOf(db, inv.id)), [250000, 142000, 108000]);
+});
+
+test('ревью S5 H-1: промокод по ставкам — замена услуги снимает ставку промокода (правило S5), но не скидку кассы', () => {
+  const db = seed();
+  const pid = patient(db);
+  const promo = Number(db.prepare(`INSERT INTO patient_discounts (name, kind, percent, active, discount_rates)
+    VALUES ('ЛЕТО', 'promo', 10, 1, '{"g":{"consultation":50}}')`).run().lastInsertRowid);
+  const { vid, ids } = visitWith(db, pid, [30, 31]);
+  const inv = call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: ids, discount_amount: 0, discount_choice: 'promo', discount_id: promo }).invoice;
+  assert.deepEqual(money(inv), [300000, 70000, 230000]);
+  call('cashier_invoice_discount', db, { invoice_id: inv.id, mode: 'pct', value: 10, reason: 'акция', reduces_doctor_share: true }, cashier);
+  // 23 000 кассы: консультация 5 000 (из остатка 50 000), УЗИ 18 000 (из 180 000)
+  assert.deepEqual(money(invOf(db, inv.id)), [300000, 93000, 207000]);
+  call('cashier_line_change_service', db, { visit_service_id: ids[1], new_service_id: 32 });
+  // УЗИ почек 150 000: промокод на заменённую строку не ложится; касса — 10 % = 15 000
+  assert.deepEqual(money(invOf(db, inv.id)), [250000, 70000, 180000]);
+  assert.deepEqual(items(db, inv.id)[1].slice(0, 4), [32, 150000, 15000, 0]);
+});
