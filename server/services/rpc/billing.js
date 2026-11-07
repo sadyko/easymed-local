@@ -24,6 +24,7 @@ import { localDate, localMonth, today } from '../domain/day.js';   // INVOICE_AP
 import { grantAllowsAdminOr, grantAllowsOr, isAdminUser } from '../grants.js';
 import { cashierDiscountByRole } from '../gate-fallbacks.js';   // CASHIER_DISCOUNT_V1 — прежнее правило строки «Кассир может давать скидку»
 import { floorApplies, groupNote, patientGroupDiscount, resolveDiscountChoice, restDiscountOf } from '../domain/discount-choice.js';   // DISCOUNT_V2
+import { ratedChoice, invoiceRateSource, rateInvoiceItems, invoiceFloorBase } from '../domain/discount-rates.js';   // DISCOUNT_RATES_V1
 import { requireServicesEdit, requireServicesDelete } from './patient-card.js';   // CASHIER_HEAD_V1 (ревью I2) — вкладка «Услуги» у регистратуры/администратора
 import { surgeryWithoutBedRefusal } from '../domain/surgery-bed.js';   // CASHIER_HEAD_V1 (ревью I4)
 // BILLING_AUDIT_FIX_V1 (B3) — тариф заменённой услуги спрашивается заново.
@@ -616,8 +617,8 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
       p.ownDiscount = legacy != null ? legacy
         : (p.pm && p.pm.discount > 0 ? round2(Math.min(p.pm.discount, p.line)) : 0);
     }
-    const lineDiscounts = round2(priced.reduce((sum, p) => sum + p.ownDiscount, 0));
-    const restSubtotal = round2(priced.reduce((sum, p) => sum + (p.ownDiscount > 0 ? 0 : p.line), 0));
+    let lineDiscounts = round2(priced.reduce((sum, p) => sum + p.ownDiscount, 0));
+    let restSubtotal = round2(priced.reduce((sum, p) => sum + (p.ownDiscount > 0 ? 0 : p.line), 0));
     // DISCOUNT_V2 (решение владельца 2026-11-07, п. 4) — ОДНА СКИДКА, ВЫБРАННАЯ У СТОЙКИ.
     // discount_choice — что выбрал регистратор ('group' | 'manual' | 'none' | 'promo' +
     // discount_id); без него — правило 3.21 (пол группы, присланное — не меньше).
@@ -629,9 +630,28 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
       patientId: visit.patient_id, payerSet, today: today(db),
       restLines: priced.filter((p) => !(p.ownDiscount > 0)).map((p) => ({ service_id: p.row.service_id, total: p.line })),
     });
+    // DISCOUNT_RATES_V1 — скидка со ставками по услугам (domain/discount-rates.js): каждая
+    // строка без своей скидки пакета получает СВОЮ скидку своим процентом; скидки счёта
+    // на остаток нет. Своя скидка «вручную» больше скидки по ставкам — прежнее правило
+    // без пола группы (пол и так меньше присланного).
+    const rated = ratedChoice(db, choice, {
+      sent: discountRaw, discountId: args && args.discount_id,
+      lines: priced.filter((p) => !(p.ownDiscount > 0)),
+    });
+    let appendPct = null;
+    if (rated && rated.manualOver) choice.floorPct = 0;
+    else if (rated) {
+      for (const x of rated.per) { x.p.ownDiscount = x.off; x.p.rate = x.pct; x.p.rateShare = rated.src.reduces; }
+      lineDiscounts = round2(priced.reduce((sum, p) => sum + p.ownDiscount, 0));
+      restSubtotal = round2(priced.reduce((sum, p) => sum + (p.ownDiscount > 0 ? 0 : p.line), 0));
+      appendPct = rated.src.pct;   // пол прежних строк счёта без ставок — процент группы
+      choice.floorPct = 0;         // строки остатка — со ставкой 0 %: пола на них нет
+    }
     categoryPercent = choice.floorPct;
     const categoryDiscount = round2(restSubtotal * categoryPercent / 100);
-    const chosen = restDiscountOf(choice, discountRaw, restSubtotal);
+    const chosen = rated && !rated.manualOver
+      ? { rest: 0, floor: 0, given: 0, share: 1, note: rated.note }
+      : restDiscountOf(choice, discountRaw, restSubtotal);
     const restDiscount = chosen.rest;
     const discount = round2(lineDiscounts + restDiscount);
     const total = round2(subtotal - discount);
@@ -688,11 +708,12 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
     //     пола на 0,05, допуск не пускает, и выходит новый счёт, как в 3.20.0
     //     (безопасно: деньги — как у двух отдельных счетов).
     if (append && payerRaw === null && total > 0 && restDiscount <= categoryDiscount + 0.005 && (choice.choice !== 'promo')) {
-      const target = appendTargetInvoice(db, visitId, categoryPercent);
+      const target = appendTargetInvoice(db, visitId, appendPct != null ? appendPct : categoryPercent);   // DISCOUNT_RATES_V1
       if (target) {
         return appendToVisitInvoice(db, target, {
           visitId, priced, subtotal, restSubtotal,
           discount, given: chosen.given, restDiscount, share: chosen.share, note: chosen.note,
+          ratedDiscount: rated && !rated.manualOver ? rated.total : 0,   // DISCOUNT_RATES_V1
         }, user);
       }
     }
@@ -728,15 +749,16 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
     const invoiceId = info.lastInsertRowid;
 
     const insertItem = db.prepare(`
-      INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total, discount_amount)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total, discount_amount, discount_rate, discount_doctor_share)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const linkVisitService = db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?');
     const syncVisitService = db.prepare('UPDATE visit_services SET unit_price = ?, total = ? WHERE id = ?');
 
-    for (const { row, unit, qty, line, svcName, ownDiscount } of priced) {
+    for (const { row, unit, qty, line, svcName, ownDiscount, rate, rateShare } of priced) {
       const description = svcName || '';
-      const itemInfo = insertItem.run(invoiceId, row.service_id, description, qty, unit, line, ownDiscount);
+      // DISCOUNT_RATES_V1 — строка по ставкам скидки помнит свой процент и долю врача.
+      const itemInfo = insertItem.run(invoiceId, row.service_id, description, qty, unit, line, ownDiscount, rate ?? null, rate != null ? rateShare : null);
       linkVisitService.run(itemInfo.lastInsertRowid, row.id);
       clearRefundRelease(db, 'out', [row.id]);   // FINAL_MONEY_FIX_V1 (M1) — отметка была про прежний счёт
       // Keep the visit line consistent with what was actually billed.
@@ -775,7 +797,9 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
     // без скидок пакета. Мастер переносит остаток своей скидки на счёт
     // следующего дня и вычитает именно это, а не invoice.discount_amount, в
     // котором теперь лежат и скидки пакета.
-    return { invoice, items, rest_discount: restDiscount };
+    // DISCOUNT_RATES_V1 — rated_discount: скидка по ставкам (своими скидками строк) — экраны
+    // считают «применённое» как rest_discount + rated_discount, а скидку пакета — без неё.
+    return { invoice, items, rest_discount: restDiscount, rated_discount: rated && !rated.manualOver ? rated.total : 0 };
   });
 
   const out = run();
@@ -844,7 +868,8 @@ function appendTargetInvoice(db, visitId, pct) {
   if (!target) return null;
   if (db.prepare(`SELECT ${localDate('?')} AS d`).get(target.created_at).d !== today(db)) return null;   // ревью m2
   const rest = Math.max(round2((Number(target.discount_amount) || 0) - invoiceOwnDiscount(db, target.id)), 0);
-  const floor = round2(invoiceRestBase(db, target.id) * (Number(pct) || 0) / 100);
+  // DISCOUNT_RATES_V1 — пол группы — только на строки без ставок (у строк по ставкам скидка своя).
+  const floor = round2(invoiceFloorBase(db, target.id) * (Number(pct) || 0) / 100);
   if (Math.abs(rest - floor) > 0.01 + 1e-9) return null;   // ревью C1, m1
   const known = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
   if (known(target.manual_discount) && known(target.manual_base)) {   // ревью-2 — ручная, как её дали
@@ -869,7 +894,7 @@ function appendTargetInvoice(db, visitId, pct) {
 // счёт следующего дня (DISCOUNT_CARRY_V1) и вычитает ровно её.
 // items — позиции НОВОЙ части в порядке строк вызова (BILLING_AUDIT_FIX_V1 A2:
 // быстрая регистрация сверяет их со своими строками по месту).
-function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubtotal, discount, given, restDiscount, share = 1, note = null }, user) {
+function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubtotal, discount, given, restDiscount, share = 1, note = null, ratedDiscount = 0 }, user) {
   assertOwnBuilding(db, target, 'Счёт');
   const oldBase = invoiceRestBase(db, target.id);
   const known = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
@@ -877,14 +902,14 @@ function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubto
   const oldGiven = known(target.manual_discount) && gb > 0
     ? round2(Math.max(round2(Number(target.manual_discount)), 0) * Math.min(oldBase, gb) / gb) : 0;
   const insertItem = db.prepare(`
-    INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total, discount_amount)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total, discount_amount, discount_rate, discount_doctor_share)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const linkVisitService = db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?');
   const syncVisitService = db.prepare('UPDATE visit_services SET unit_price = ?, total = ? WHERE id = ?');
   const itemIds = [];
-  for (const { row, unit, qty, line, svcName, ownDiscount } of priced) {
-    const itemInfo = insertItem.run(target.id, row.service_id, svcName || '', qty, unit, line, ownDiscount);
+  for (const { row, unit, qty, line, svcName, ownDiscount, rate, rateShare } of priced) {
+    const itemInfo = insertItem.run(target.id, row.service_id, svcName || '', qty, unit, line, ownDiscount, rate ?? null, rate != null ? rateShare : null);   // DISCOUNT_RATES_V1
     itemIds.push(Number(itemInfo.lastInsertRowid));
     linkVisitService.run(itemInfo.lastInsertRowid, row.id);
     clearRefundRelease(db, 'out', [row.id]);   // FINAL_MONEY_FIX_V1 (M1) — как при новом счёте
@@ -908,7 +933,7 @@ function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubto
     notes: 'Добавлено в счёт: ' + priced.map((p) => lineLabel(db, p.row, { description: p.svcName })).join('; ') + ' · ' + moneyWords(subtotal),
   }, user);
   const items = db.prepare(`SELECT * FROM invoice_items WHERE id IN (${itemIds.map(() => '?').join(',')}) ORDER BY id`).all(...itemIds);
-  return { invoice, items, rest_discount: restDiscount, appended: true };
+  return { invoice, items, rest_discount: restDiscount, rated_discount: ratedDiscount, appended: true };   // DISCOUNT_RATES_V1 — rated_discount
 }
 
 export function recordPayment(db, args, user) {
@@ -1256,7 +1281,9 @@ function repriceUnpaidInvoice(db, inv, oldOwn, { oldBase = null, absolute = fals
   // бы скидку оставшимся.
   // DISCOUNT_V2 — «Без скидки» и промокод пол группы не берут и при правке строк.
   const catPct = (inv.payer_id || inv.admission_id || !floorApplies(inv)) ? 0 : patientCategoryDiscount(db, inv.patient_id);
-  const floor = round2(base * catPct / 100);
+  // DISCOUNT_RATES_V1 — строки по ставкам несут скидку сами (у 0 % — нулевую): пол группы —
+  // только на строки без ставок. Счёт без ставок — та же база, что прежде.
+  const floor = round2(invoiceFloorBase(db, inv.id) * catPct / 100);
   let oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - oldOwn), 0);
   let given = null; let givenBase = null;
   if (absolute) {
@@ -1531,8 +1558,10 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
     if (item) {
       const oldOwn = invoiceOwnDiscount(db, inv.id);   // PACKAGES_V1 — ДО правки строки
       const oldBase = invoiceRestBase(db, inv.id);      // V3120_FIX (FATAL-1) — тоже ДО
-      db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = 0 WHERE id = ?')
+      db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = 0, discount_rate = NULL, discount_doctor_share = NULL WHERE id = ?')
         .run(newServiceId, svc.name || '', unit, lineTotal, item.id);
+      // DISCOUNT_RATES_V1 — ставка группы по НОВОЙ услуге (Консультации 100 % → УЗИ 20 %).
+      rateInvoiceItems(db, invoiceRateSource(db, inv, patientGroupDiscount(db, inv.patient_id)), [item.id]);
       invoice = repriceUnpaidInvoice(db, inv, oldOwn, { oldBase, absolute: true });   // V3120_FIX (FATAL-1); CASHIER_HEAD_V1 (I3)
       lineAudit(db, {
         inv: invoice, number: inv.invoice_number, visitId: vs.visit_id, action: 'line_change_service',
@@ -1881,6 +1910,8 @@ export function addServiceToVisitInvoice(db, args, user, { rpc = 'cashier_line_a
       const itemId = db.prepare(`INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total, discount_amount)
                                  VALUES (?, ?, ?, 1, ?, ?, 0)`).run(target.id, serviceId, svc.name || '', unit, unit).lastInsertRowid;
       db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?').run(itemId, vsId);
+      // DISCOUNT_RATES_V1 — у группы пациента ставки по услугам: новая строка — своей ставкой.
+      rateInvoiceItems(db, invoiceRateSource(db, target, patientGroupDiscount(db, target.patient_id)), [Number(itemId)]);
       invoice = repriceUnpaidInvoice(db, target, oldOwn, { oldBase, absolute: true });
       // Счёт так и остался на ноль (бесплатная услуга) — платить нечего,
       // строка встаёт в очередь сразу, как при выставлении (FREE_SERVICE_V1).
@@ -2181,6 +2212,11 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
     ? Math.min(round2(Number(item.discount_amount) * lineTotal / Number(item.total)), lineTotal) : 0;
   db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = ? WHERE id = ?')
     .run(serviceChanges ? newServiceId : item.service_id, description, unit, lineTotal, own, item.id);
+  // DISCOUNT_RATES_V1 — другая услуга — и ставка группы другая (своя скидка строки снята выше).
+  if (serviceChanges) {
+    db.prepare('UPDATE invoice_items SET discount_rate = NULL, discount_doctor_share = NULL WHERE id = ?').run(item.id);
+    rateInvoiceItems(db, invoiceRateSource(db, inv, patientGroupDiscount(db, inv.patient_id)), [item.id]);
+  }
 
   // 2. Сумма счёта: без скидки после продажи, потом она ложится в той же доле
   // (как у refund_invoice_line). paid_amount в базе прежний — settleZeroTotal
@@ -3178,16 +3214,41 @@ export function cashierInvoiceDiscount(db, args, user) {
     const own = invoiceOwnDiscount(db, inv.id);
     const base = invoiceRestBase(db, inv.id);
     const oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - own), 0);
-    const room = round2(Math.max(base - oldRest, 0));
+    const restRoom = round2(Math.max(base - oldRest, 0));
+    // DISCOUNT_RATES_V1 — строки по ставкам скидки (своя скидка, но не на всю строку) — тоже
+    // место для скидки кассы: её часть ложится на них СВОЕЙ скидкой строки, пропорционально
+    // остатку каждой, с долей врача по переключателю этой скидки. Без таких строк — как прежде.
+    const ratedRows = db.prepare(`SELECT id, total, discount_amount, discount_doctor_share FROM invoice_items
+                                   WHERE invoice_id = ? AND discount_rate IS NOT NULL AND discount_amount > 0 AND total > discount_amount
+                                   ORDER BY id`).all(inv.id);
+    const ratedRoom = round2(ratedRows.reduce((s, r) => s + (Number(r.total) - Number(r.discount_amount)), 0));
+    const room = round2(restRoom + ratedRoom);
     if (!(room > 0)) throw new RpcError('Скидку класть не на что: строки счёта уже со скидкой целиком (или это строки пакета со своей ценой).', 409);
     const due = round2(Number(inv.total_amount) || 0);
     const want = mode === 'pct' ? round2(due * value / 100) : round2(value);
-    const add = round2(Math.min(want, room));
+    let add = round2(Math.min(want, room));
     if (!(add > 0)) throw new RpcError('Скидка должна быть больше нуля.', 400);
-    const newRest = round2(oldRest + add);
+    const toRest = ratedRoom > 0 ? round2(add * restRoom / room) : add;
+    const toRated = round2(add - toRest);
+    if (toRated > 0) {
+      const upd = db.prepare('UPDATE invoice_items SET discount_amount = ?, discount_doctor_share = ? WHERE id = ?');
+      let left = toRated;
+      ratedRows.forEach((r, i) => {
+        const was = Number(r.discount_amount);
+        const free = round2(Number(r.total) - was);
+        const part = round2(Math.max(0, Math.min(i === ratedRows.length - 1 ? left : round2(toRated * free / ratedRoom), free, left)));
+        if (!(part > 0)) return;
+        left = round2(left - part);
+        const nd = round2(was + part);
+        const os = r.discount_doctor_share == null ? 1 : Number(r.discount_doctor_share);
+        upd.run(nd, Math.min(1, Math.max(0, (was * os + part * reduces) / nd)), r.id);
+      });
+      add = round2(add - left);
+    }
+    const newRest = round2(oldRest + toRest);
     const oldShare = Number.isFinite(Number(inv.doctor_discount_share)) ? Number(inv.doctor_discount_share) : 1;
-    const share = newRest > 0 ? Math.min(1, Math.max(0, (oldRest * oldShare + add * reduces) / newRest)) : 1;
-    const discount = Math.min(round2(own + newRest), round2(Number(inv.subtotal) || 0));
+    const share = newRest > 0 ? Math.min(1, Math.max(0, (oldRest * oldShare + toRest * reduces) / newRest)) : (Number.isFinite(oldShare) ? oldShare : 1);
+    const discount = Math.min(round2(invoiceOwnDiscount(db, inv.id) + newRest), round2(Number(inv.subtotal) || 0));
     const total = round2((Number(inv.subtotal) || 0) - discount);
     const what = (mode === 'pct' ? `${String(value).replace('.', ',')}% — ` : '') + moneyWords(add) + ' сум';
     const piece = `Касса: ${reason} — ${what}${reduces ? '' : ' (доля врача — от цены до скидки)'}`;

@@ -239,7 +239,7 @@ export const REGISTRY = {
                created_by: { table:'users', fk:'created_by', columns:['id','full_name'] },
                // CATEGORY_DISCOUNT_V1 / DISCOUNT_RULES_V1 — the wizard reads the patient's
                // group and its discount in the same request as the patient row.
-               patient_categories: { table:'patient_categories', fk:'category_id', columns:['id','name','discount_percent','active'] } },
+               patient_categories: { table:'patient_categories', fk:'category_id', columns:['id','name','discount_percent','active','discount_rates'] } },   // discount_rates: DISCOUNT_RATES_V1 — ставки группы по услугам
   },
   // ═══ VISITS_ONE_DOOR_V1 (2026-09-05) — РАСПИСАНИЕ НЕ ПИШЕТСЯ ЧЕРЕЗ /api/db ═══
   //

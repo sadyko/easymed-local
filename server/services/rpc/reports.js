@@ -98,6 +98,8 @@ import { canSeeReportKey, requireReportKind } from '../report-access.js';
 // врачу с той цены и той скидки категории, которые поставит счёт: правило
 // цены и правило скидки — у кассы, здесь только их вызов.
 import { lineUnitPrice, packageLineDiscount } from '../domain/pricing.js';   // SERVICES_PACKAGES_V1 — скидка пакета — записанная на строке
+import { hasRates, lineDiscountPct } from '../../../public/js/admin/discount-rates.js';   // DISCOUNT_RATES_V1 — ставки группы на строку без счёта
+import { makeLineService } from '../domain/discount-rates.js';   // DISCOUNT_RATES_V1
 // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям» группирует тем же правилом,
 // которым карточка сотрудника сохраняет специальность (старые имена → одно).
 import { specialtyGroupName } from '../../../public/js/shared/specialty-list.js';
@@ -979,11 +981,17 @@ const ITEM_NET_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} - ${ITEM_TAX_SQL})`;
 // идёт по ITEM_NET_SQL бит в бит — ветка выписана явно. Выручка, «скидка», «налог» и
 // «после налога» отчётов не меняются: это деньги счёта; меняется только доля врача.
 const DOC_SHARE_SQL = 'COALESCE(i.doctor_discount_share, 1)';
-const ITEM_DOC_KEEP_SQL = `(CASE WHEN COALESCE(ii.discount_amount, 0) > 0 THEN 0
+// DISCOUNT_RATES_V1 (мигр. 274) — у строки по ставкам скидки (группа «Сотрудники»:
+// консультация 100 %, УЗИ 20 %) скидка СВОЯ (ii.discount_amount), и какая её доля
+// уменьшает долю врача, строка помнит сама (ii.discount_doctor_share; NULL — 1: строки
+// пакета и все прежние строки — как всегда, скидка уменьшает). Строка с долей 1 и счёт
+// с долей 1 идут по ITEM_NET_SQL бит в бит.
+const ITEM_OWN_SHARE_SQL = 'COALESCE(ii.discount_doctor_share, 1)';
+const ITEM_DOC_KEEP_SQL = `(CASE WHEN COALESCE(ii.discount_amount, 0) > 0 THEN (1 - ${ITEM_OWN_SHARE_SQL}) * MIN(ii.discount_amount, ii.total)
   WHEN ${REST_BASE_SQL} > 0 THEN (1 - ${DOC_SHARE_SQL}) * MIN(${REST_DISCOUNT_SQL}, ${REST_BASE_SQL}) * ii.total / ${REST_BASE_SQL}
   ELSE 0 END)`;
 const ITEM_DOC_AFTER_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} + ${ITEM_DOC_KEEP_SQL})`;
-const ITEM_DOC_NET_SQL = `(CASE WHEN ${DOC_SHARE_SQL} >= 1 THEN ${ITEM_NET_SQL}
+const ITEM_DOC_NET_SQL = `(CASE WHEN ${DOC_SHARE_SQL} >= 1 AND ${ITEM_OWN_SHARE_SQL} >= 1 THEN ${ITEM_NET_SQL}
   ELSE (${ITEM_DOC_AFTER_SQL} - ${ITEM_DOC_AFTER_SQL} * ${ITEM_TAX_RATE_SQL} / ${ITEM_TAX_BASE_SQL}) END)`;
 // Примечание к отчётам, где в одной колонке «Налог» и услуги, и товары.
 const GOODS_VAT_NOTE = '«Налог» у услуг и товаров считается одинаково — он внутри цены: сумма после скидки × ставка / 100 (из 100 при 12 % — 12 налога и 88). У товаров он же — в колонке «в т.ч. НДС (товары)».';
@@ -1736,6 +1744,8 @@ function makePayPricer(db) {
   const units = new Map();
   let cats = null;   // id пациента → скидка категории, %; загружается один раз
   let catKeeps = null;   // DISCOUNT_V2 — id пациента → скидка группы НЕ уменьшает долю врача
+  let catRates = null;   // DISCOUNT_RATES_V1 — id пациента → { pct, rates } группы со ставками по услугам
+  let lineSvc = null;    // DISCOUNT_RATES_V1 — услуга строки для ставок (с кэшем)
   const pkgs = new Map();
   return {
     unit(r) {
@@ -1762,14 +1772,26 @@ function makePayPricer(db) {
       if (cats === null) {
         cats = new Map();
         catKeeps = new Set();
-        for (const r of db.prepare(`SELECT p.id AS id, c.discount_percent AS pct, c.reduces_doctor_share AS reduces FROM patients p
+        catRates = new Map();
+        for (const r of db.prepare(`SELECT p.id AS id, c.discount_percent AS pct, c.reduces_doctor_share AS reduces, c.discount_rates AS rates FROM patients p
                                       JOIN patient_categories c ON c.id = p.category_id AND c.active = 1`).all()) {
           const pct = Number(r.pct);
           if (Number.isFinite(pct) && pct > 0) cats.set(r.id, Math.min(pct, 100));
           if (Number(r.reduces) === 0) catKeeps.add(r.id);
+          if (hasRates(r.rates)) catRates.set(r.id, { pct: Number.isFinite(pct) ? Math.min(Math.max(pct, 0), 100) : 0, rates: r.rates });   // DISCOUNT_RATES_V1
         }
       }
       return cats.get(Number(patientId)) || 0;
+    },
+    // DISCOUNT_RATES_V1 — процент скидки группы на ЭТУ строку: у группы со ставками —
+    // ставка услуги / категории / группы услуги (то же правило, что счёт,
+    // domain/discount-rates.js); без ставок — процент группы, как прежде.
+    categoryLinePct(r) {
+      if (cats === null) this.categoryPct(r.patient_id);
+      const g = catRates.get(Number(r.patient_id));
+      if (!g) return this.categoryPct(r.patient_id);
+      if (!lineSvc) lineSvc = makeLineService(db);
+      return lineDiscountPct(g, lineSvc(r));
     },
     // DISCOUNT_V2 — скидка группы пациента НЕ уменьшает долю врача (переключатель группы).
     categoryKeepsDoctor(patientId) {
@@ -1807,7 +1829,8 @@ function payLineMoney(r, pricer) {
     // строке; скидка группы пациента на неё не ложится (решение владельца 1).
     // Остальные — пол скидки группы, как create_invoice_for_visit.
     const pkgOff = r.kind === 'out' ? pricer.packageDiscount(r) : 0;
-    const catPct = r.kind === 'out' && !(pkgOff > 0) ? pricer.categoryPct(r.patient_id) : 0;
+    const catPct = r.kind === 'out' && !(pkgOff > 0)
+      ? (pricer.categoryLinePct ? pricer.categoryLinePct(r) : pricer.categoryPct(r.patient_id)) : 0;   // DISCOUNT_RATES_V1 — ставка строки
     discount = pkgOff > 0 ? round2(Math.min(pkgOff, amount)) : (catPct > 0 ? round2(amount * catPct / 100) : 0);
     const after = amount - discount;
     // SUPPLIERS_VAT_V1 — налог внутри цены, одно правило у товара и услуги (lineTaxOf).
