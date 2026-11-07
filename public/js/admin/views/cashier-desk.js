@@ -30,6 +30,7 @@ import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — д�
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
 import { canOfferLineFix, openLineFix, openRebill, openRefundSwap, invoiceSwappable, openLabTubeLine } from './cashier-line-fix.js?v=refbill4';   // REFUND_SWAP_V1 — «Заменить услугу» в окне «Платежи»; CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп) · REFBILL_REVIEW_V1 — плательщик карты перечитывается, отказ перечитывает строки
+import { discountNoteText } from '../discount-note.js';   // DISCOUNT_V2 (ревью S1 L-4) — причина скидки на языке экрана
 import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт по счёту плательщику, та же сборка, что у мастера визита
 import { canCloseOtherShifts, canSwapPaidLines } from '../permissions.js';
 import { canCashierDiscount } from '../permissions.js';   // CASHIER_DISCOUNT_V1 — «Кассир может давать скидку»   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
@@ -591,7 +592,7 @@ async function historyModal(root) {
                 inv.doctor_name ? trf('врач: {name}', { name: inv.doctor_name }) : null,
                 cancelled ? tr('отменён') : (debt > 0 ? trf('долг {sum}', { sum: fmtPrice(debt) }) : tr('оплачен полностью')),
                 // DISCOUNT_V2 · CASHIER_DISCOUNT_V1 — скидка и её причина (группа, промокод, касса).
-                Number(inv.discount_amount) > 0 ? trf('скидка {sum}', { sum: fmtPrice(inv.discount_amount) }) + (inv.discount_note ? ' (' + inv.discount_note + ')' : '') : null,
+                Number(inv.discount_amount) > 0 ? trf('скидка {sum}', { sum: fmtPrice(inv.discount_amount) }) + (inv.discount_note ? ' (' + discountNoteText(inv.discount_note) + ')' : '') : null,
                 // DISCOUNT_V2 (3.22.0) — скидка 100 %: счёт на 0 со скидкой виден в истории с пометкой.
                 isFullDiscount(inv) ? tr('скидка 100%') : null,
             ].filter(Boolean).join(' · ');
@@ -1901,7 +1902,7 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
             paid > 0 ? totalRow('К оплате', money(balance), { strong: true }) : null,
             // DISCOUNT_V2 — почему у счёта скидка: группа, промокод, касса.
             inv.discount_note && disc > 0 ? h('div', { 'data-discount-note': String(inv.id), class: 'muted', style: { fontSize: '12.5px', lineHeight: 1.45, marginTop: '4px' } },
-                Icon('Coins', { size: 12 }), ' ', inv.discount_note) : null,
+                Icon('Coins', { size: 12 }), ' ', discountNoteText(inv.discount_note)) : null,   // ревью S1 L-4 — на языке экрана
             // CASHIER_DISCOUNT_V1 — «Скидка» до приёма денег (право роли «Кассир может давать скидку»).
             cashierDiscountAllowed(inv) ? h('div', { style: { marginTop: '8px' } },
                 h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-cashier-discount': String(inv.id),

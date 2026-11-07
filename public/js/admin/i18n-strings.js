@@ -13681,5 +13681,11 @@ export const STRINGS = {
   "Скидка 100 % · к оплате 0 сум": {"en":"100 % discount · 0 UZS due","ru":"Скидка 100 % · к оплате 0 сум","uz":"100 % chegirma · to‘lovga 0 so‘m"},   // CASHIER_LINE_EDIT_V1
   "Итого {total} сум · оплачено {paid} сум · к оплате {due} сум": {"en":"Total {total} UZS · paid {paid} UZS · due {due} UZS","ru":"Итого {total} сум · оплачено {paid} сум · к оплате {due} сум","uz":"Jami {total} so‘m · to‘langan {paid} so‘m · to‘lovga {due} so‘m"},   // CASHIER_LINE_EDIT_V1
   "Услуга и врач заменены.": {"en":"Service and doctor changed.","ru":"Услуга и врач заменены.","uz":"Xizmat va shifokor almashtirildi."},   // CASHIER_LINE_EDIT_V1
+  "Скидка вручную": {"en":"Manual discount","ru":"Скидка вручную","uz":"Qo‘lda chegirma"},   // DISCOUNT_V2 (ревью S1 L-4)
+  "Промокод «{name}» — {value}%": {"en":"Promo code «{name}» — {value}%","ru":"Промокод «{name}» — {value}%","uz":"«{name}» promokodi — {value}%"},   // DISCOUNT_V2 (ревью S1 L-4)
+  "Промокод «{name}» — {value} сум": {"en":"Promo code «{name}» — {value} UZS","ru":"Промокод «{name}» — {value} сум","uz":"«{name}» promokodi — {value} so‘m"},   // DISCOUNT_V2 (ревью S1 L-4)
+  "Касса: {reason} — {pct}% — {sum} сум": {"en":"Cashier: {reason} — {pct}% — {sum} UZS","ru":"Касса: {reason} — {pct}% — {sum} сум","uz":"Kassa: {reason} — {pct}% — {sum} so‘m"},   // DISCOUNT_V2 (ревью S1 L-4)
+  "Касса: {reason} — {sum} сум": {"en":"Cashier: {reason} — {sum} UZS","ru":"Касса: {reason} — {sum} сум","uz":"Kassa: {reason} — {sum} so‘m"},   // DISCOUNT_V2 (ревью S1 L-4)
+  "(доля врача — от цены до скидки)": {"en":"(doctor’s share — from the price before the discount)","ru":"(доля врача — от цены до скидки)","uz":"(shifokor ulushi — chegirmagacha bo‘lgan narxdan)"},   // DISCOUNT_V2 (ревью S1 L-4)
   // /FIX 3.22.0
 };
