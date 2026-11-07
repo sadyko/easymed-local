@@ -334,3 +334,27 @@ test('ревью S2 M1: «По услугам» + «Кассир» — услу�
   assert.deepEqual(pick(run(db, 'by_services')), [['Консультация', 1, 112000], ['Анализ крови', 2, 150000]]);
   db.close();
 });
+
+// REPORTS_TAX_PAY_V1 (ревью S2 M2) — «Рентабельность операций» под фильтром: расходники визита
+// делятся между частями пропорционально их сумме ко ВСЕЙ сумме операций визита, а не к сумме
+// видимых частей. Операция 1 000 000 (хирург 20 %), 600 000 наличными + 400 000 картой,
+// расходники 200 000: часть «Карта» — 80 000 расходников и 240 000 прибыли, с фильтром и без.
+test('ревью S2 M2: «Рентабельность операций» + «Карта» — расходники части 80 000, прибыль 240 000 (не весь визит)', () => {
+  const { db } = seed();
+  db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (3, 'Аппендэктомия', 1000000, 0, 'other')").run();
+  const v = db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (2, 3, ?, 'arrived')").run(AT).lastInsertRowid;
+  const inv = db.prepare(`INSERT INTO invoices (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
+                          VALUES ('INV-4', ?, 2, 1000000, 0, 1000000, 1000000, 'paid', ?)`).run(v, AT).lastInsertRowid;
+  const ii = db.prepare("INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total) VALUES (?, 3, 'Аппендэктомия', 1, 1000000, 1000000)").run(inv).lastInsertRowid;
+  const vs = db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, invoice_item_id) VALUES (?, 3, 3, 1, 1000000, 1000000, 'completed', ?)")
+    .run(v, ii).lastInsertRowid;
+  db.prepare("INSERT INTO payments (invoice_id, amount, method, cashier_id, paid_at) VALUES (?, 600000, 'cash', 5, ?), (?, 400000, 'card', 6, ?)").run(inv, AT, inv, AT);
+  const prod = db.prepare("INSERT INTO products (name) VALUES ('Шовный материал')").run().lastInsertRowid;
+  db.prepare("INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, created_at) VALUES (?, 'dispense', -10, 20000, 'visit', ?, ?)").run(prod, vs, AT);
+  const pick = (r) => objects(r).map((o) => [o['Способ оплаты'], o['Сумма по счёту'], o['Гонорар хирурга'], o['Расходники (товары)'], o['Прибыль клиники']]);
+  assert.deepEqual(pick(run(db, 'surgery_profit')), [['Наличные', 600000, 120000, 120000, 360000], ['Карта', 400000, 80000, 80000, 240000]]);
+  assert.deepEqual(pick(run(db, 'surgery_profit', { pay_method: 'card' })), [['Карта', 400000, 80000, 80000, 240000]]);
+  assert.deepEqual(pick(run(db, 'surgery_profit', { pay_method: 'cash' })), [['Наличные', 600000, 120000, 120000, 360000]]);
+  assert.deepEqual(pick(run(db, 'surgery_profit', { cashier_id: 6 })), [['Карта', 400000, 80000, 80000, 240000]]);
+  db.close();
+});

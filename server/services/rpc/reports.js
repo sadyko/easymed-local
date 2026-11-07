@@ -3856,7 +3856,11 @@ function surgeryProfitReport(db, args, ctx) {
   // REPORTS_TAX_PAY_V1 — операция, оплаченная несколькими способами, — строкой
   // на способ; расходники ниже делятся по суммам частей так же, как по строкам.
   const f = reportFilters(args);
-  const src = splitByPayment(db, itemRowsQuery(db, args, ctx).filter(isSurgeryLine).filter(lineFilter(db, f)), f,
+  // REPORTS_TAX_PAY_V1 (ревью S2 M2) — все операции периода ДО фильтров и деления по оплате: по ним
+  // делятся расходники визита (ниже). Прежде делитель брался из отобранных частей, и под фильтром
+  // «Карта» (врач, группа пациентов) видимая часть получала расходники всего визита.
+  const allOps = itemRowsQuery(db, args, ctx).filter(isSurgeryLine);
+  const src = splitByPayment(db, allOps.filter(lineFilter(db, f)), f,
     ['amount', 'discount', 'tax', 'doctor_fee']);
   // Ключ расходников строки: госпитализация счёта, иначе его визит.
   const keyOf = (r) => (r.admission_id != null ? 'a' + r.admission_id : r.visit_id != null ? 'v' + r.visit_id : null);
@@ -3889,9 +3893,11 @@ function surgeryProfitReport(db, args, ctx) {
        AND COALESCE(vs2.visit_id, as2.admission_id) IS NOT NULL${only}
      GROUP BY k
   `).all(...onlyParams)) consumables.set(c.k, Math.max(c.cost || 0, 0));
+  // Делитель — вся сумма операций визита (госпитализации), а не видимых частей: часть получает
+  // расходники × её сумма / вся сумма; поровну — по числу операций (не частей) визита.
   const groupSum = new Map();
   const groupN = new Map();
-  for (const r of src) {
+  for (const r of allOps) {
     const k = keyOf(r);
     if (k == null) continue;
     groupSum.set(k, (groupSum.get(k) || 0) + Math.max(r.amount - r.discount, 0));
