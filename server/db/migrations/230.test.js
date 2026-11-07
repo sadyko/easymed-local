@@ -17,6 +17,11 @@ import { createApp } from '../../app.js';
 import { licensedDataDir } from '../../services/control/licensed-fixture.js';
 import { listen } from '../../../control-plane/server/test-helpers/listen.js';
 import { GATE_FALLBACK, FALLBACK_FN_KEYS, fallbackLevel } from '../../services/gate-fallbacks.js';
+// CASHIER_DISCOUNT_V1 (3.22.0) — миграция 230 разовая: она проверяла роли, сохранённые ДО
+// неё, по ключам, которые тогда были у ворот-функций. Ключ, добавленный позже
+// (cashier.discount — строки у ролей до 3.22 быть не могло), в её таблице не нужен.
+const FN_KEYS_230 = ['custdev.list', 'custdev.rate', 'procurement', 'reports.doctor_pay', 'settings.departments'];
+const FN_KEYS = FALLBACK_FN_KEYS.filter((k) => FN_KEYS_230.includes(k));
 import { VALID_ROLES } from '../../services/roles.js';
 import { pseudoUserOfRole } from '../../services/rpc/roles-effective.js';
 import { MAIN_CLINIC_TABLES } from '../schema-registry.js';
@@ -125,11 +130,11 @@ test('230 (ревью M4): стандарт ключей FALLBACK_FN = fallbackL
     });
     const base = bases[i % bases.length];
     custom.push(['fn-probe-' + i, base], ['fn-mixed-' + i, base]);
-    rows['fn-probe-' + i] = { sections, levels, grants: Object.fromEntries(FALLBACK_FN_KEYS.map((k) => [k, 'delete'])) };
-    rows['fn-mixed-' + i] = { sections, levels, grants: Object.fromEntries(FALLBACK_FN_KEYS.map((k, j) => [k, STORED[(i + j) % STORED.length]])) };
+    rows['fn-probe-' + i] = { sections, levels, grants: Object.fromEntries(FN_KEYS.map((k) => [k, 'delete'])) };
+    rows['fn-mixed-' + i] = { sections, levels, grants: Object.fromEntries(FN_KEYS.map((k, j) => [k, STORED[(i + j) % STORED.length]])) };
   }
   custom.push(['fn-deputy', 'admin']);
-  rows['fn-deputy'] = { sections: [], levels: {}, grants: Object.fromEntries(FALLBACK_FN_KEYS.map((k) => [k, 'delete'])) };
+  rows['fn-deputy'] = { sections: [], levels: {}, grants: Object.fromEntries(FN_KEYS.map((k) => [k, 'delete'])) };
   const db = setup(rows, custom);
   try {
     db.exec(SQL);
@@ -140,7 +145,7 @@ test('230 (ревью M4): стандарт ключей FALLBACK_FN = fallbackL
     for (const role of Object.keys(rows)) {
       const pseudo = pseudoUserOfRole(db, role);
       if (pseudo.role === 'admin') continue;
-      for (const key of FALLBACK_FN_KEYS) {
+      for (const key of FN_KEYS) {
         const level = rows[role].grants[key];
         const standard = fallbackLevel(db, pseudo, key, 'all');
         if ((RANK[level] || 0) > (RANK[standard] || 0)) want.set(role + '|' + key, { role, key, level, standard });
@@ -148,7 +153,7 @@ test('230 (ревью M4): стандарт ключей FALLBACK_FN = fallbackL
     }
     assert.deepEqual(got, want, 'стандарт миграции разошёлся с воротами-функцией (gate-fallbacks.js FALLBACK_FN)');
     for (const role of Object.keys(rows).filter((r) => r.startsWith('fn-probe-'))) {
-      for (const key of FALLBACK_FN_KEYS) assert.ok(got.has(role + '|' + key), role + ' · ' + key + ': ключ с воротами-функцией не попал на проверку');
+      for (const key of FN_KEYS) assert.ok(got.has(role + '|' + key), role + ' · ' + key + ': ключ с воротами-функцией не попал на проверку');
     }
   } finally { db.close(); }
 });
