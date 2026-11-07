@@ -13566,6 +13566,7 @@ export const STRINGS = {
   "Скидка не записана.": {"en":"The discount was not saved.","ru":"Скидка не записана.","uz":"Chegirma saqlanmadi."},   // CASHIER_DISCOUNT_V1
   "Скидка {sum} сум записана.": {"en":"Discount of {sum} UZS saved.","ru":"Скидка {sum} сум записана.","uz":"{sum} so‘m chegirma saqlandi."},   // CASHIER_DISCOUNT_V1
   "скидка {sum}": {"en":"discount {sum}","ru":"скидка {sum}","uz":"chegirma {sum}"},   // CASHIER_DISCOUNT_V1 — «История операций»
+  "скидка 100%": {"en":"100% discount","ru":"скидка 100%","uz":"100% chegirma"},   // DISCOUNT_V2 — счёт на 0 со скидкой в «Истории операций»
   // DISCOUNT_V2 — сервер (domain/discount-choice.js)
   "Скидка выбрана неверно.": {"en":"The discount was chosen incorrectly.","ru":"Скидка выбрана неверно.","uz":"Chegirma noto‘g‘ri tanlangan."},   // DISCOUNT_V2
   "Промокод не выбран.": {"en":"No promo code was chosen.","ru":"Промокод не выбран.","uz":"Promokod tanlanmagan."},   // DISCOUNT_V2

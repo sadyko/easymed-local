@@ -592,6 +592,8 @@ async function historyModal(root) {
                 cancelled ? tr('отменён') : (debt > 0 ? trf('долг {sum}', { sum: fmtPrice(debt) }) : tr('оплачен полностью')),
                 // DISCOUNT_V2 · CASHIER_DISCOUNT_V1 — скидка и её причина (группа, промокод, касса).
                 Number(inv.discount_amount) > 0 ? trf('скидка {sum}', { sum: fmtPrice(inv.discount_amount) }) + (inv.discount_note ? ' (' + inv.discount_note + ')' : '') : null,
+                // DISCOUNT_V2 (3.22.0) — скидка 100 %: счёт на 0 со скидкой виден в истории с пометкой.
+                isFullDiscount(inv) ? tr('скидка 100%') : null,
             ].filter(Boolean).join(' · ');
             rows.push(line(hhmm(d),
                 trf('Счёт {no} выставлен', { no: inv.invoice_number || '#' + inv.id }),
@@ -619,6 +621,11 @@ async function historyModal(root) {
         async () => true, 760);
 }
 
+/** DISCOUNT_V2 (3.22.0) — счёт на 0, у которого сумма съедена скидкой (а не бесплатная услуга). */
+export function isFullDiscount(inv) {
+    return !!inv && Number(inv.total_amount) === 0 && Number(inv.subtotal) > 0 && Number(inv.discount_amount) > 0;
+}
+
 async function printShiftReport(withPayments) {
     const r = await loadShiftReport();
     if (r) printReportDoc(r, withPayments);
@@ -640,6 +647,7 @@ function printReportDoc(r, withPayments) {
         ${row('Перевод', fmtPrice(r.totals.transfer))}
         ${row('Эквайринг', fmtPrice(r.totals.acquiring))}
         ${row(`Всего оплат (${r.totals.count} платеж.)`, fmtPrice(r.totals.total))}
+        ${r.full_discount && r.full_discount.n > 0 ? row(`Счета со скидкой 100 % (${r.full_discount.n}) — сумма скидки, не деньги`, fmtPrice(r.full_discount.discount)) : ''}
         ${row('Внесения', fmtPrice(r.cash_in))}
         ${row('Изъятия', fmtPrice(r.cash_out))}
         ${row('Остаток наличных', fmtPrice(r.expected_drawer), true)}

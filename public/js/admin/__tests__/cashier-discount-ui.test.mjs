@@ -180,3 +180,9 @@ test('окно скидки: суммой 30 000 и «Скидка уменьш�
     const [, body] = rpcCalls('cashier_invoice_discount')[0];
     assert.deepEqual([body.mode, body.value, body.reduces_doctor_share], ['abs', 30000, false]);
 });
+
+test('DISCOUNT_V2: счёт со скидкой 100 % — «скидка 100%» (сумма 0, скидка съела платные услуги); бесплатная услуга — нет', () => {
+    assert.equal(desk.isFullDiscount({ total_amount: 0, subtotal: 100000, discount_amount: 100000 }), true);
+    assert.equal(desk.isFullDiscount({ total_amount: 0, subtotal: 0, discount_amount: 0 }), false, 'бесплатная услуга — не скидка');
+    assert.equal(desk.isFullDiscount({ total_amount: 5000, subtotal: 100000, discount_amount: 95000 }), false);
+});
