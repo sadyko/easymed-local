@@ -56,7 +56,7 @@ import { prepareConsultTypeSave } from '../../shared/consultation-price.js';   /
 // зданий карточками и страница здания) вместо общего редактора справочника;
 // карточку связи зданий он монтирует над списком, как раньше.
 import { renderBranchesEditor } from './branches-editor.js';
-import { discountServicesField } from './discount-service-picker.js';   // DISCOUNT_V2 — «Только на эти услуги»: окно выбора   // BRANCH_PROFILE_V1
+import { discountServicesField, discountRatesField, ratesSummaryText } from './discount-service-picker.js';   // DISCOUNT_V2 — «Только на эти услуги»: окно выбора   // BRANCH_PROFILE_V1 · DISCOUNT_RATES_V1 — ставки по услугам
 
 let state = { section: null, readOnly: false };   // null = hub; else one of LOOKUP_CONFIG's keys
 
@@ -697,10 +697,15 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
         // CATEGORY_DISCOUNT_V1 — скидка группы видна в списке: ради неё
         // категорию и заводят. Считается на сервере при выставлении счёта
         // (billing.js) и подставляется в смету сама.
-        columns: [{ key: 'name', label: 'Название' }, { key: 'discount_percent', label: 'Скидка, %' }, { key: 'tier', label: 'Уровень' }],
+        columns: [{ key: 'name', label: 'Название' }, { key: 'discount_percent', label: 'Скидка, %' },
+            // DISCOUNT_RATES_V1 — сводка ставок по услугам: «По умолчанию 20 %, Консультации 100 %, …».
+            { key: 'discount_rates', label: 'По услугам', format: (row) => ratesSummaryText(Number(row && row.discount_percent) || 0, row && row.discount_rates) || '—' },
+            { key: 'tier', label: 'Уровень' }],
         fields: [
             { key: 'name', label: 'Название', type: 'text', required: true },
             { key: 'discount_percent', label: 'Скидка группы, % — применяется к счетам пациентов этой категории сама', type: 'number' },
+            // DISCOUNT_RATES_V1 (владелец 2026-11-07) — своя скидка на группы, категории и услуги: «Консультации 100 %, остальное 20 %».
+            { key: 'discount_rates', label: 'Скидка по услугам (пусто — процент группы)', type: 'discount_rates', full: true },
             // DISCOUNT_V2 (решение владельца 2026-11-07, п. 5) — снята: доля врача — от цены до скидки (клиника берёт скидку на себя).
             { key: 'reduces_doctor_share', label: 'Скидка уменьшает долю врача', type: 'checkbox', checkedValue: 1, uncheckedValue: 0, default: 1, full: true },
             { key: 'tier', label: 'Уровень (необязательно)', type: 'text' },
@@ -733,6 +738,8 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
             { key: 'valid_until', label: 'Действует', format: (row) => discountValidityText(row) },
             { key: 'patient_categories', label: 'Группа', embed: true },
             { key: 'service_ids', label: 'Услуги', format: (row) => discountScopeText(row) },
+            // DISCOUNT_RATES_V1 — сводка ставок по услугам.
+            { key: 'discount_rates', label: 'По услугам', format: (row) => ratesSummaryText(Number(row && row.percent) || 0, row && row.discount_rates) || '—' },
         ],
         fields: [
             { key: 'name', label: 'Название', type: 'text', required: true },
@@ -744,7 +751,7 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
             { key: 'valid_from', label: 'Действует с (пусто — сразу)', type: 'date' },
             { key: 'valid_until', label: 'Действует по (пусто — бессрочно)', type: 'date' },
             { key: 'category_id', label: 'Только для группы пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name' },
-            { key: 'service_ids', label: 'Только на эти услуги (ничего не отмечено — на весь счёт)', type: 'services', full: true },
+            { key: 'service_ids', label: 'Только на эти услуги (ничего не отмечено — на весь счёт)', type: 'services', full: true, ratesKey: 'discount_rates' },   // ratesKey: DISCOUNT_RATES_V1 — ставки в том же окне
             // DISCOUNT_V2 (решение владельца 2026-11-07, п. 5) — снята: доля врача — от цены до скидки (клиника берёт скидку на себя).
             { key: 'reduces_doctor_share', label: 'Скидка уменьшает долю врача', type: 'checkbox', checkedValue: 1, uncheckedValue: 0, default: 1, full: true },
             { key: 'note', label: 'Примечание', type: 'text', full: true },
@@ -1395,7 +1402,12 @@ async function renderEditor(container, key) {
             } else if (f.type === 'services') {
                 // DISCOUNT_RULES_V1 — отметки по списку активных услуг с поиском;
                 // .value отдаёт массив id (колонка объявлена json в реестре).
-                control = discountServicesField(Array.isArray(row && row[f.key]) ? row[f.key] : [], f.emptyHint);   // DISCOUNT_V2 — окно выбора
+                control = discountServicesField(Array.isArray(row && row[f.key]) ? row[f.key] : [], f.emptyHint,
+                    f.ratesKey ? { rates: row ? row[f.ratesKey] : {} } : {});   // DISCOUNT_V2 — окно выбора; DISCOUNT_RATES_V1 — и ставки
+                fkFields.push({ ...f, __services: true });
+            } else if (f.type === 'discount_rates') {
+                // DISCOUNT_RATES_V1 — ставки скидки группы по услугам; .value — объект ставок (колонка JSON).
+                control = discountRatesField(row ? row[f.key] : {});
                 fkFields.push({ ...f, __services: true });
             } else if (f.type === 'phone') {
                 // PHONE_INPUT_V1 — country picker, Uzbekistan by default. Its
@@ -1549,7 +1561,12 @@ async function renderEditor(container, key) {
                 if (f.type === 'group_rates') { payload[f.key] = controls[f.key].value; continue; }
                 if (f.type === 'number') { payload[f.key] = Number(controls[f.key].value) || 0; continue; }
                 if (f.type === 'date') { const d = String(controls[f.key].value || '').slice(0, 10); if (d) payload[f.key] = d; else if (isEdit) payload[f.key] = null; continue; }
-                if (f.type === 'services') { payload[f.key] = controls[f.key].value; continue; }
+                if (f.type === 'services') {
+                    payload[f.key] = controls[f.key].value;
+                    if (f.ratesKey && controls[f.key].rates !== undefined) payload[f.ratesKey] = controls[f.key].rates;   // DISCOUNT_RATES_V1
+                    continue;
+                }
+                if (f.type === 'discount_rates') { payload[f.key] = controls[f.key].value; continue; }   // DISCOUNT_RATES_V1
                 if (f.type === 'fk') {
                     const raw = controls[f.key].value;
                     if (f.required && !raw) { toast(`Choose ${f.label.toLowerCase()}.`, 'fail'); return; }
