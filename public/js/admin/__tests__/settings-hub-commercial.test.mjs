@@ -266,3 +266,33 @@ test('COMMERCE_TOOLS_V1: «Telegram-бот: Просмотр» — пункт и
     setFullAccess('Администратор');
   }
 });
+
+// Ревью 3.22.0 M1 (проба P5) — администратор со СВОЕЙ ролью клиники
+// («Заместитель»), которой закрыли «Telegram-бот» или «Настройки». Вчера
+// оболочка не давала ему ни Telegram-канала рассылки, ни ссылок для рекламы;
+// строки commerce_* у его роли не записаны — значит, как вчера: решает бот.
+test('ревью M1: заместитель, чья роль закрыла «Telegram-бот», не получает ни рассылки в Telegram, ни ссылок', () => {
+  const CASES = [
+    // своя роль                          Push    Ссылки   маршрут ссылок
+    [{ 'settings.telegram': 'none' },     'none', 'none',  false],
+    [{ 'settings.telegram': 'view' },     'none', 'view',  true],
+    [{ settings: 'none' },                'none', 'none',  false],
+    [{ settings: 'view' },                'edit', 'edit',  true],
+    [{},                                  'edit', 'edit',  true],
+    [{ 'settings.telegram': 'none', commerce_links: 'view' }, 'none', 'view', true],
+  ];
+  try {
+    for (const [own, push, links, route] of CASES) {
+      setFullAccess('Заместитель');
+      perms.setOwnCustomGrants(own);
+      const tag = JSON.stringify(own);
+      assert.equal(perms.commerceToolLevel('commerce_push'), push, `${tag}: Push`);
+      assert.equal(perms.commerceToolLevel('commerce_links'), links, `${tag}: ссылки`);
+      assert.equal(perms.isRouteAllowed('telegram-deeplinks'), route, `${tag}: маршрут ссылок`);
+      // SMS-канал у полного доступа остаётся, как вчера: окно Push открыто.
+      assert.equal(perms.isRouteAllowed('commerce-push'), true, `${tag}: окно Push (SMS)`);
+    }
+  } finally { setFullAccess('Администратор'); }
+  assert.equal(perms.commerceToolLevel('commerce_push'), 'edit', 'штатный администратор — без своей роли');
+  assert.equal(perms.isRouteAllowed('telegram-deeplinks'), true);
+});

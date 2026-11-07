@@ -84,3 +84,115 @@ test('экран «Роли» видит то же, что ворота', () => 
     assert.ok(!('patients' in lv) && !('chat' in lv));
   } finally { db.close(); }
 });
+
+// РЕВЬЮ M1 (2026-11-08) — «НИКТО НИЧЕГО НЕ ПОЛУЧАЕТ» И У АДМИНИСТРАТОРА СО СВОЕЙ
+// РОЛЬЮ. Заместитель — своя роль клиники на основе администратора, — которому
+// закрыли «Telegram-бот» (или «Настройки» целиком), вчера не рассылал и ссылок
+// не правил. Строки commerce_* без точки, раздела у них нет, и «своё „Нет“»
+// бота до них не доходило: администратор проходил. Теперь строки идут за ботом.
+const DEPUTY = { id: 40, role: 'admin', extra_roles: [], custom_role_code: 'deputy' };
+const ADMIN_DOCTOR = { id: 41, role: 'doctor', extra_roles: ['admin'], custom_role_code: 'deputy_doc' };
+
+test('M1: заместитель, закрывший «Telegram-бот», рассылку и ссылки не получает', () => {
+  const db = seed();
+  try {
+    db.prepare('INSERT INTO custom_roles (code, name, base_role, active) VALUES (?,?,?,1)').run('deputy', 'deputy', 'admin');
+    db.prepare('INSERT INTO custom_roles (code, name, base_role, active) VALUES (?,?,?,1)').run('deputy_doc', 'deputy_doc', 'doctor');
+    for (const [label, grants, push, linksView, linksEdit] of [
+      ['бот «Нет»', { 'settings.telegram': 'none' }, false, false, false],
+      ['бот «Просмотр»', { 'settings.telegram': 'view' }, false, true, false],
+      ['«Настройки: Нет»', { settings: 'none' }, false, false, false],
+      ['ничего не записано', {}, true, true, true],
+      ['«Настройки: Просмотр», бот не записан', { settings: 'view' }, true, true, true],
+      ['бот «Нет», но Push выдан своей строкой', { 'settings.telegram': 'none', commerce_push: 'edit' }, true, false, false],
+    ]) {
+      setGrants(db, 'deputy', grants);
+      setGrants(db, 'deputy_doc', grants);
+      for (const who of [DEPUTY, ADMIN_DOCTOR]) {
+        const tag = `${who === DEPUTY ? 'заместитель' : 'администратор-врач'}, ${label}`;
+        assert.equal(canPush(db, who), push, `${tag}: рассылка`);
+        assert.equal(canAdLinks(db, who, 'view'), linksView, `${tag}: ссылки, просмотр`);
+        assert.equal(canAdLinks(db, who, 'edit'), linksEdit, `${tag}: ссылки, изменение`);
+        if (!push) denied(() => telegramBroadcastSend(db, { text_ru: 'x', confirm_count: 1 }, who));
+        if (!linksView) denied(() => telegramDeeplinksList(db, {}, who));
+        if (!linksEdit) denied(() => telegramDeeplinkSave(db, {}, who));
+      }
+      // Экран «Роли» показывает заместителю ровно то же, что дают ворота.
+      const lv = effectiveGrantsOf(db, 'deputy');
+      assert.equal(lv.commerce_push, push ? 'edit' : 'none', `${label}: экран, Push`);
+      assert.equal(lv.commerce_links, linksEdit ? 'edit' : linksView ? 'view' : 'none', `${label}: экран, ссылки`);
+    }
+  } finally { db.close(); }
+});
+
+// РЕВЬЮ M1 — ПРОБА P1 СТАЛА ТЕСТОМ. Те же синтетические роли проходят настоящие
+// ворота этого выпуска и правило 3.21.1. Правило 3.21.1 — окно «Telegram-бот»
+// (grantAllowsAdminOr по settings.telegram и reports.telegram; этот код с 3.21.1
+// не менялся): рассылка — «Изменение»; ссылки — «Просмотр»/«Изменение»; окно
+// рассылки — охват бота. Пока роль строк commerce_* не записала, ответ обязан
+// совпасть у КАЖДОЙ: никто ничего не теряет и не получает.
+test('M1: ни одна роль после обновления не получает и не теряет рассылку и ссылки (проба P1)', async () => {
+  const { grantAllowsAdminOr } = await import('./grants.js');
+  const { VALID_ROLES } = await import('./roles.js');
+  const { telegramBroadcastPreview, telegramBroadcastOptions, telegramBroadcastHistory } = await import('./rpc/telegram.js');
+  const { telegramDeeplinkDelete } = await import('./rpc/deeplinks.js');
+  const allowed = (fn) => { try { fn(); return true; } catch (e) { return !(e && e.status === 403); } };
+  const bot = (db, u, key, need) => grantAllowsAdminOr(db, u, key, need);
+  const old = (db, u) => ({
+    push_send: bot(db, u, 'settings.telegram', 'edit'),
+    push_reach: bot(db, u, 'reports.telegram', 'view') || bot(db, u, 'settings.telegram', 'view'),
+    links_view: bot(db, u, 'settings.telegram', 'view'),
+    links_edit: bot(db, u, 'settings.telegram', 'edit'),
+  });
+  const now = (db, u) => ({
+    push_send: allowed(() => telegramBroadcastSend(db, {}, u)) && canPush(db, u),
+    push_reach: allowed(() => telegramBroadcastPreview(db, { filters: {} }, u))
+      && allowed(() => telegramBroadcastOptions(db, {}, u)) && allowed(() => telegramBroadcastHistory(db, {}, u)),
+    links_view: allowed(() => telegramDeeplinksList(db, {}, u)) && canAdLinks(db, u, 'view'),
+    links_edit: allowed(() => telegramDeeplinkSave(db, {}, u)) && allowed(() => telegramDeeplinkDelete(db, {}, u)) && canAdLinks(db, u, 'edit'),
+  });
+  const db = seed();
+  try {
+    for (const base of VALID_ROLES) db.prepare('INSERT INTO custom_roles (code, name, base_role, active) VALUES (?,?,?,1)').run('cx_' + base, 'cx_' + base, base);
+    const original = new Map(db.prepare('SELECT role, permissions FROM role_permissions').all().map((r) => [r.role, r.permissions]));
+    const put = db.prepare('INSERT OR REPLACE INTO role_permissions (role, permissions) VALUES (?, ?)');
+    const restore = () => { for (const [r, p] of original) put.run(r, p); };
+    let cases = 0;
+    const diffs = [];
+    const check = (tag, u) => {
+      cases++;
+      const o = old(db, u);
+      const n = now(db, u);
+      for (const k of Object.keys(o)) if (o[k] !== n[k]) diffs.push(`${tag} :: ${k} 3.21.1=${o[k]} сейчас=${n[k]}`);
+    };
+    for (const tg of [undefined, 'none', 'view', 'edit']) for (const st of [undefined, 'none', 'view']) for (const rt of [undefined, 'view']) for (const chat of [false, true]) {
+      const g = {};
+      if (tg !== undefined) g['settings.telegram'] = tg;
+      if (st !== undefined) g.settings = st;
+      if (rt !== undefined) g['reports.telegram'] = rt;
+      const p = JSON.stringify({
+        sections: ['patients', ...(chat ? ['telegram-chat'] : [])],
+        levels: { patients: 'editor', ...(chat ? { 'telegram-chat': 'editor' } : {}) },
+        grants: g,
+      });
+      const tag = `tg=${tg ?? '-'} settings=${st ?? '-'} rep.tg=${rt ?? '-'} chat=${chat ? 'y' : 'n'}`;
+      for (const base of VALID_ROLES) {
+        restore(); put.run(base, p);
+        check(`штатная ${base} | ${tag}`, { id: 9, role: base, extra_roles: [], custom_role_code: null });
+        check(`${base}+admin | ${tag}`, { id: 9, role: base, extra_roles: ['admin'], custom_role_code: null });
+        check(`${base}+registrar | ${tag}`, { id: 9, role: base, extra_roles: ['registrar'], custom_role_code: null });
+        restore(); put.run('cx_' + base, p);
+        check(`своя на ${base} | ${tag}`, { id: 9, role: base, extra_roles: [], custom_role_code: 'cx_' + base });
+        check(`своя на ${base} + admin | ${tag}`, { id: 9, role: base, extra_roles: ['admin'], custom_role_code: 'cx_' + base });
+      }
+    }
+    restore();
+    for (const base of VALID_ROLES) {
+      db.prepare('DELETE FROM role_permissions WHERE role = ?').run(base);
+      check(`без строки ${base}`, { id: 9, role: base, extra_roles: [], custom_role_code: null });
+      restore();
+    }
+    assert.ok(cases > 2000, `проверено ${cases}`);
+    assert.deepEqual(diffs.slice(0, 20), [], `расхождений с 3.21.1: ${diffs.length}`);
+  } finally { db.close(); }
+});

@@ -94,6 +94,20 @@ function sectionOf(key) {
   return SECTION_KEYS.has(head) ? head : null;
 }
 
+// РЕВЬЮ 3.22.0 M1 — СТРОКИ, КОТОРЫЕ ИДУТ ЗА ДРУГОЙ (`follows` справочника).
+// «Push-уведомления» и «Ссылки для рекламы» (commerce_*) без точки — раздела у
+// них нет, — а их прежнее правило — окно «Telegram-бот». У своей роли на основе
+// администратора запись бота (или раздела «Настройки») — это и её «Нет» для
+// этих строк: иначе заместитель, которому вчера закрыли бота, после обновления
+// рассылал бы и правил ссылки. Тогда решает прежнее правило (бот) — как вчера.
+const FOLLOWS = new Map(CATALOG.filter((s) => Array.isArray(s.follows)).map((s) => [s.key, s.follows]));
+
+function followsOwn(own, key) {
+  const src = FOLLOWS.get(key);
+  if (!src) return false;
+  return src.some((k) => { const sec = sectionOf(k); return k in own || (sec !== null && sec in own); });
+}
+
 /** Словарь СВОЕЙ роли клиники (CUSTOM_ROLES_V1), если такая роль настроена. */
 export function ownCustomGrants(db, user) {   // export: JOURNALS_V1_RJ3 — «Журналы» администратора (report-access.js)
   const custom = user && typeof user.custom_role_code === 'string' ? user.custom_role_code.trim() : '';
@@ -134,10 +148,11 @@ export function grantAllowsOr(db, user, key, need, legacy) {
   // администратор» читается как `admin`, — и безусловный пропуск отменял бы
   // каждый запрет в матрице, которую для этой роли и заводили: экран показывал
   // бы права, которых у человека нет. Поэтому поблажка кончается там, где у
-  // СВОЕЙ роли человека есть запись по этому ключу или по его разделу.
+  // СВОЕЙ роли человека есть запись по этому ключу или по его разделу — или
+  // по строке, за которой ключ идёт (followsOwn, ревью 3.22.0 M1).
   const own = ownCustomGrants(db, user);
   const section = sectionOf(key);
-  const mine = !!own && (key in own || (section !== null && section in own));
+  const mine = !!own && (key in own || (section !== null && section in own) || followsOwn(own, key));
   if (isAdminUser(user) && !mine) return true;
 
   // ЗАКРЫТЫЙ РАЗДЕЛ ЗАКРЫВАЕТ ВСЁ, ЧТО В НЁМ. Уровни окон и действий остаются

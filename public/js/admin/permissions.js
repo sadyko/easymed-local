@@ -978,17 +978,19 @@ export function stripToGrant(table, payload) {
 // Telegram» получили свои строки в «Ролях» (блок «Коммерческие инструменты»).
 // Правило — то же, что у сервера (services/commerce-grants.js): настроенная
 // строка решает сама; не настроенная — как вчера, окно «Telegram-бот» того же
-// уровня. Администратор — полный уровень строки, если его СВОЯ роль её не
-// настроила (как grantAllowsOr на сервере).
+// уровня. Администратор — то же правило перехода: строку, которую его СВОЯ роль
+// не настроила, решает бот, а settingsTileLevel у администратора знает «своё
+// „Нет“» бота и «Настроек» (ревью 3.22.0 M1, как grants.js followsOwn на
+// сервере). Без своей роли бот у администратора открыт — строка полная.
 const COMMERCE_TOOLS = {
-    commerce_push:  { top: 'edit', legacy: () => (settingsTileAllows('settings.telegram', 'edit') ? 'edit' : 'none') },
-    commerce_links: { top: 'edit', legacy: () => { const l = settingsTileLevel('settings.telegram'); return l === 'delete' ? 'edit' : l; } },
+    commerce_push:  { legacy: () => (settingsTileAllows('settings.telegram', 'edit') ? 'edit' : 'none') },
+    commerce_links: { legacy: () => { const l = settingsTileLevel('settings.telegram'); return l === 'delete' ? 'edit' : l; } },
 };
 /** Уровень инструмента витрины: 'none' | 'view' | 'edit'. */
 export function commerceToolLevel(key) {
     const t = COMMERCE_TOOLS[key];
     if (!t) return 'none';
-    if (_effective == null || actorIsAdmin()) { const own = ownLevel(key, null); return own === null ? t.top : own; }
+    if (_effective == null || actorIsAdmin()) { const own = ownLevel(key, null); return own === null ? t.legacy() : own; }
     const lvl = grantLevel(key);
     return lvl !== null ? lvl : t.legacy();
 }
@@ -1189,6 +1191,10 @@ export function isRouteAllowed(view) {
     // кроме закрытой его собственной ролью.
     const tileKey = view ? SETTINGS_ROUTE_TILE[view] : null;
     if (tileKey && (_effective == null || actorIsAdmin())) return settingsTileLevel(tileKey) !== 'none';
+    // Ревью 3.22.0 M1 — ссылки для рекламы ушли из плиток (SETTINGS_ROUTE_TILE),
+    // и полный доступ проходил строкой ниже мимо «своего „Нет“» бота: заместитель,
+    // которому роль закрыла «Telegram-бот», открывал ссылки. Решает их строка.
+    if (view === 'telegram-deeplinks' && _effective == null) return commerceToolLevel('commerce_links') !== 'none';
     if (_effective == null) return true;
     if (!view) return true;
     if (ALWAYS_ALLOWED.has(view)) return true;

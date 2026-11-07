@@ -310,6 +310,24 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
         assert.equal(atLeast(fallbackLevel(db, u, key, 'all'), need), want, `${role}: ${k} — карта ${fallbackLevel(db, u, key, 'all')}, ворота ${want ? 'пускают' : 'не пускают'}`);
       }
     }
+    // Ревью 3.22.0 M1 — своя роль на основе администратора («Заместитель») со
+    // СВОИМИ закрытиями бота. Штатные роли выше такой не строят, поэтому сверка
+    // была зелёной, а заместитель с «Telegram-бот: Нет» рассылал. Строки
+    // commerce_* идут за ботом: карта и ворота обязаны ответить одно и то же.
+    db.prepare('INSERT INTO custom_roles (code, name, base_role, active) VALUES (?,?,?,1)').run('deputy', 'deputy', 'admin');
+    const deputy = { id: ++id, role: 'admin', extra_roles: [], custom_role_code: 'deputy' };
+    for (const own of [{}, { 'settings.telegram': 'none' }, { 'settings.telegram': 'view' }, { settings: 'none' }, { settings: 'view' }]) {
+      db.prepare('INSERT OR REPLACE INTO role_permissions (role, permissions) VALUES (?, ?)').run('deputy', JSON.stringify({ sections: [], levels: {}, grants: own }));
+      const real = {
+        'commerce_push/edit': allowed(() => telegramBroadcastSend(db, {}, deputy)),
+        'commerce_links/view': allowed(() => telegramDeeplinksList(db, {}, deputy)),
+        'commerce_links/edit': allowed(() => telegramDeeplinkDelete(db, {}, deputy)),
+      };
+      for (const [k, want] of Object.entries(real)) {
+        const [key, need] = k.split('/');
+        assert.equal(atLeast(fallbackLevel(db, deputy, key, 'all'), need), want, `заместитель ${JSON.stringify(own)}: ${k} — карта ${fallbackLevel(db, deputy, key, 'all')}, ворота ${want ? 'пускают' : 'не пускают'}`);
+      }
+    }
   } finally { db.close(); }
   assert.deepEqual([...FALLBACK_FN_KEYS].sort(), ['cashier.discount', 'commerce_links', 'commerce_push', 'custdev.list', 'custdev.rate', 'procurement', 'reports.doctor_pay', 'settings.departments'], 'в FALLBACK_FN новый ключ — добавьте его в сверку поведением');
 });

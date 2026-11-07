@@ -268,8 +268,15 @@ export const CATALOG = [
   // галочек, его называет сервер (role_effective_grants), как у окон с воротами.
   // SMS-канал рассылки остаётся за администратором (rpc/sms.js) — это деньги
   // клиники, и этой строкой он не выдаётся.
-  { key: 'commerce_push', block: 'Коммерческие инструменты', label: 'Push-уведомления', desc: 'Рассылка пациентам в Telegram-боте: текст, картинка, фильтры по визитам и услугам.', levels: ['none', 'edit'], levelDesc: { edit: 'Делает рассылку в Telegram: видит число получателей, историю и отправляет. SMS-рассылка — только администратор.' }, windows: [], actions: [], enforced: 'rpc:telegram_broadcast_send' },
-  { key: 'commerce_links', block: 'Коммерческие инструменты', label: 'Ссылки для рекламы в Telegram', desc: 'Своя ссылка на бота для каждого объявления: ответ, файл, кнопка «Оставить заявку», счётчики.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит ссылки и счётчики переходов и заявок.', edit: 'Заводит, правит и удаляет ссылки: ответ бота, файл, кнопки.' }, windows: [], actions: [], enforced: 'rpc:telegram_deeplink_save' },
+  //
+  // `follows` (ревью 3.22.0 M1/M2) — строка, ЗА КОТОРОЙ идёт ненастроенная
+  // строка: окно «Telegram-бот» (и его раздел «Настройки»). Одно место на всех:
+  // сервер (grants.js) считает запись бота у своей роли администратора его
+  // собственным «Нет» и для этих строк; экран «Роли» (roles-matrix.js)
+  // перерисовывает их вслед за ботом и пишет их такими, какими их видно, когда
+  // бот или «Настройки» сдвинули.
+  { key: 'commerce_push', block: 'Коммерческие инструменты', follows: ['settings.telegram'], label: 'Push-уведомления', desc: 'Рассылка пациентам в Telegram-боте: текст, картинка, фильтры по визитам и услугам.', levels: ['none', 'edit'], levelDesc: { edit: 'Делает рассылку в Telegram: видит число получателей, историю и отправляет. SMS-рассылка — только администратор.' }, windows: [], actions: [], enforced: 'rpc:telegram_broadcast_send' },
+  { key: 'commerce_links', block: 'Коммерческие инструменты', follows: ['settings.telegram'], label: 'Ссылки для рекламы в Telegram', desc: 'Своя ссылка на бота для каждого объявления: ответ, файл, кнопка «Оставить заявку», счётчики.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит ссылки и счётчики переходов и заявок.', edit: 'Заводит, правит и удаляет ссылки: ответ бота, файл, кнопки.' }, windows: [], actions: [], enforced: 'rpc:telegram_deeplink_save' },
   // CASHIER_HEAD_V1 (2026-09-28) — владелец: «fix in the roles for the cashier,
   // so it can change service and provider for appointed + add service, and if
   // created invoice. It should be switchable in the roles so cashier either
