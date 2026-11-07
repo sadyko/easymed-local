@@ -32,7 +32,9 @@ export function groupServicesForPicker(services, { types = [], categories = [] }
     if (!Number.isInteger(id) || id <= 0) continue;
     const cat = s.category_id != null && catName.get(String(s.category_id));
     const name = cat || serviceGroupLabel(s, types) || '—';
-    const key = (cat ? 'c:' : 'g:') + name;
+    // Ревью S5 L-4 — раздел категории — по её id: две категории с одним названием не
+    // сливаются, и ставка каждой пишется своему id.
+    const key = cat ? 'c:' + Number(s.category_id) : 'g:' + name;
     if (!groups.has(key)) groups.set(key, cat ? { key, name, items: [], categoryId: Number(s.category_id) } : { key, name, items: [] });   // categoryId: DISCOUNT_RATES_V1 — ставка категории
     groups.get(key).items.push({ id, name: String(s.name || '') });
   }

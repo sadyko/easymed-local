@@ -97,7 +97,7 @@ test('промокод: «Услуги скидки» — галочки и ст
   byAttr(el, 'data-discount-services-open').click();
   const dlg = byAttr(document.body, 'data-discount-services-picker');
   assert.equal(byAttr(dlg, 'data-rate-service', 3).value, '50');
-  byAttr(dlg, 'data-picker-group', 'c:Анализы крови').click();
+  byAttr(dlg, 'data-picker-group', 'c:10').click();   // ревью S5 L-4 — раздел категории — по id («Анализы крови»)
   const dlg2 = byAttr(document.body, 'data-discount-services-picker');
   typeInto(byAttr(dlg2, 'data-rate-service', 1), '100');
   byAttr(dlg2, 'data-picker-apply').click();
@@ -167,4 +167,29 @@ test('ревью S5 L-2: ставки — только у промокода с 
   el.setRatesShown(true);
   assert.equal(byAttr(el, 'data-rate-groups').parentNode.hidden, false);
   assert.deepEqual(el.rates, { s: { 3: 50 } }, 'ставки вернулись, когда снова промокод с процентом');
+});
+
+// Ревью S5 L-4 — разделы окна по категории ключом были по НАЗВАНИЮ: две категории с одним
+// названием сливались в один раздел, и ставка категории писалась только первой по id.
+test('ревью S5 L-4: две категории с одним названием — два раздела, у каждой своя ставка по своему id', async () => {
+  const services = [
+    { id: 1, name: 'ОАК', type: 'lab', category_id: 10 },
+    { id: 5, name: 'УЗИ почек', type: 'imaging', category_id: 11 },
+    { id: 6, name: 'УЗИ сердца', type: 'imaging', category_id: 12 },
+  ];
+  const categories = [{ id: 10, name: 'Анализы крови' }, { id: 11, name: 'УЗИ' }, { id: 12, name: 'УЗИ' }];
+  const g = groupServicesForPicker(services, { types: [], categories });
+  assert.deepEqual(g.map((x) => [x.name, x.categoryId, x.items.map((i) => i.id)]), [['Анализы крови', 10, [1]], ['УЗИ', 11, [5]], ['УЗИ', 12, [6]]]);
+  assert.equal(new Set(g.map((x) => x.key)).size, 3, 'ключи разделов совпали');
+
+  const { openDiscountServicePicker } = await import('../views/discount-service-picker.js');
+  document.body.children.length = 0;
+  let got = null;
+  openDiscountServicePicker({ selected: [], groups: g, rates: {}, withScope: false, onApply: (_ids, r) => { got = r; } });
+  const dlg = byAttr(document.body, 'data-discount-services-picker');
+  const second = walk(dlg).filter((n) => n.attrs && n.attrs['data-rate-category'] !== undefined);
+  assert.deepEqual(second.map((n) => n.attrs['data-rate-category']), ['10', '11', '12']);
+  typeInto(second[2], '50');
+  byAttr(dlg, 'data-picker-apply').click();
+  assert.deepEqual(got, { c: { 12: 50 } }, 'ставка второй «УЗИ» ушла не своей категории');
 });

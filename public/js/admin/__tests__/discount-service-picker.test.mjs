@@ -81,7 +81,7 @@ test('поле формы: фишки выбранного, крестик уб�
   const dlg = byAttr(document.body, 'data-discount-services-picker');
   assert.ok(dlg, 'окно не открылось');
   assert.ok(textOf(byAttr(dlg, 'data-picker-count')).includes('Выбрано: 1'));
-  byAttr(dlg, 'data-picker-group', 'c:Анализы крови').click();
+  byAttr(dlg, 'data-picker-group', 'c:10').click();   // ревью S5 L-4 — раздел категории — по id («Анализы крови»)
   const dlg2 = byAttr(document.body, 'data-discount-services-picker');
   assert.ok(textOf(byAttr(dlg2, 'data-picker-count')).includes('Выбрано: 3'));
   byAttr(dlg2, 'data-picker-apply').click();
