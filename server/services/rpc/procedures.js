@@ -109,8 +109,40 @@ export function canPerformProcedures(u) {
  * процедурного кабинета берёт тот, кто её делает; ждать администратора там
  * некому).
  */
+// PROC_SCOPE_V1 (3.22.0, решение владельца 2026-11-07, п. 12) — «администратор и старшая
+// медсестра видят всё»: старшая медсестра (надстройка senior_nurse, roles.js) распределяет
+// процедуры смены, и своей очереди ей мало. Главный врач — своё и ничьё, как врач.
+export const SCOPE_ALL_ROLES = Object.freeze(['admin', 'senior_nurse']);
 export function scopeOf(user) {
-  return hasAnyRole(user, ['admin']) ? 'all' : 'own';
+  return hasAnyRole(user, SCOPE_ALL_ROLES) ? 'all' : 'own';
+}
+
+// PROC_SCOPE_V1 — фильтр «Исполнитель» у того, кто видит всё: сотрудник (id) или
+// 'none' — «не назначен». Пусто — все. У остальных фильтр не читается вовсе: чужую
+// очередь он не открывает.
+function performerFilter(args) {
+  const raw = args ? args.performer : undefined;
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (raw === 'none') return 'none';
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) throw new RpcError('Исполнитель указан неверно.', 400);
+  return n;
+}
+// SQL-условие видимости строки по колонке исполнителя: своё и ничьё / фильтр / всё.
+function scopeWhere(col, scope, me, performer) {
+  if (scope !== 'all') return { sql: ` AND (${col} IS NULL OR ${col} = ?)`, params: [me == null ? -1 : me] };
+  if (performer === 'none') return { sql: ` AND ${col} IS NULL`, params: [] };
+  if (performer != null) return { sql: ` AND ${col} = ?`, params: [performer] };
+  return { sql: '', params: [] };
+}
+// Кому процедуру можно поручить (canPerformProcedures) — живые сотрудники, по имени. Для
+// фильтра «Исполнитель»; только тому, кто видит всё.
+function performerOptions(db) {
+  return db.prepare('SELECT id, full_name, role, extra_roles, is_doctor FROM users WHERE COALESCE(is_active, 1) = 1')
+    .all()
+    .filter(canPerformProcedures)
+    .map((u) => ({ id: u.id, full_name: u.full_name || '' }))
+    .sort((a, b) => String(a.full_name).localeCompare(String(b.full_name), 'ru') || a.id - b.id);
 }
 
 function requireRole(user, allowed, what) {
@@ -147,6 +179,11 @@ export function proceduresList(db, args, user) {
   const scope = scopeOf(user);
   const me = (user && user.id) || null;
   const limit = pageInt(args && args.limit, { def: 300, min: 1, max: 500 });   // V3120_FINAL — не число → 400, не 500
+  // PROC_SCOPE_V1 — правило видимости стоит в SQL ДО предела: прежде оно шло в JS после
+  // LIMIT, и 300 свежих чужих строк вытесняли у медсестры её собственную процедуру.
+  const performer = scope === 'all' ? performerFilter(args) : null;
+  const outScope = scopeWhere('vs.doctor_id', scope, me, performer);
+  const inScope = scopeWhere('asv.performer_id', scope, me, performer);
 
   // ── половина 1: АМБУЛАТОРНАЯ. Строка визита; исполнитель = doctor_id
   // (эта колонка на visit_services и есть исполнитель — см. миграцию 102).
@@ -168,10 +205,10 @@ export function proceduresList(db, args, user) {
      WHERE ${PROCEDURE_SERVICE_SQL}
        AND vs.clinic_item_id IS NULL
        AND vs.status IN (${OPEN_STATUSES.map(() => '?').join(',')})
-       ${ownBuildingOnly(db, 'visit_services', 'vs')}
+       ${ownBuildingOnly(db, 'visit_services', 'vs')}${outScope.sql}
      ORDER BY vs.created_at DESC
      LIMIT ?`;
-  const outRows = db.prepare(outSql).all(...OPEN_STATUSES, limit).map((r) => ({
+  const outRows = db.prepare(outSql).all(...OPEN_STATUSES, ...outScope.params, limit).map((r) => ({
     kind: 'outpatient',
     id: r.id,
     status: r.status,
@@ -228,10 +265,10 @@ export function proceduresList(db, args, user) {
      WHERE ${PROCEDURE_SERVICE_SQL}
        AND asv.clinic_item_id IS NULL
        AND a.status NOT IN ('discharged', 'cancelled')
-       ${ownBuildingOnly(db, 'admission_services', 'asv')}
+       ${ownBuildingOnly(db, 'admission_services', 'asv')}${inScope.sql}
      ORDER BY asv.created_at DESC
      LIMIT ?`;
-  const inRows = db.prepare(inSql).all(limit).map((r) => ({
+  const inRows = db.prepare(inSql).all(...inScope.params, limit).map((r) => ({
     kind: 'inpatient',
     id: r.id,
     // Экран показывает ОДИН словарь состояний на оба вида. У палатной строки
@@ -262,13 +299,16 @@ export function proceduresList(db, args, user) {
   }));
 
   const rows = [...outRows, ...inRows]
-    // Правило видимости — ОДНО на обе половины: администратор видит всё,
-    // остальные — своё и ничьё.
+    // Правило видимости — ОДНО на обе половины: администратор и старшая медсестра видят
+    // всё, остальные — своё и ничьё (PROC_SCOPE_V1 — уже в SQL обеих половин; здесь —
+    // запасной замок).
     .filter((r) => scope === 'all' || r.performer_id == null || r.performer_id === me)
     .sort((a, b) => String(b.when || '').localeCompare(String(a.when || '')))
     .slice(0, limit);
 
-  return { scope, me, rows };
+  // PROC_SCOPE_V1 — исполнители для фильтра — только тому, кто видит всё.
+  const performers = scope === 'all' ? performerOptions(db) : [];
+  return { scope, me, rows, performers, performer: performer == null ? null : performer };
 }
 
 // Обе половины адресуются одинаково: {kind, id}. Одна таблица на вид.

@@ -13541,4 +13541,7 @@ export const STRINGS = {
   "Направил: {name}": {"en":"Referred by: {name}","ru":"Направил: {name}","uz":"Yo‘llagan: {name}"},   // DOCTOR_REFERRAL_DESK_V1
   "направления врача": {"en":"doctor referrals","ru":"направления врача","uz":"shifokor yo‘llanmalari"},   // DOCTOR_REFERRAL_DESK_V1
   // /DOCTOR_REFERRAL_DESK_V1
+  // ── S4 · 3.22.0 — кабинет врача, процедуры, остатки 3.21.2 (MY_REFERRALS_V1 · PROC_SCOPE_V1 · DIAG_ROUTE_V1) ──
+  "Все исполнители": {"en":"All performers","ru":"Все исполнители","uz":"Barcha bajaruvchilar"},   // PROC_SCOPE_V1
+  // /S4 · 3.22.0
 };
