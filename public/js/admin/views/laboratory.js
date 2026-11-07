@@ -2001,16 +2001,25 @@ const askUser = (q) => (typeof window !== 'undefined' && window && typeof window
 // Набрано и не сохранено: значение строки отличается от сохранённого, или
 // написано заключение по панели. Очищенное сохранённое значение — не ввод:
 // «Сохранить всё» пустые строки и так не пишет.
-function entryUnsaved(e) {
+// Ревью S3, H-1 — кроме таблицы посева (matrix): там очищенная ячейка — правка
+// (снятая степень), и «Сохранить всё» её пишет пустой.
+function entryUnsaved(e, matrix = false) {
     const cur = String((e.input && e.input.value) || '').trim();
-    if (cur === '') return false;
+    if (cur === '') return matrix && clearedMatrixCell(e);
     if (cur !== String((e.prev && e.prev.value) || '').trim()) return true;
     // Ревью L5 — у сохранённого значения поправлена одна «Оценка» (флаг листа):
     // «Сохранить всё» её запишет, а закрытие без вопроса молча теряло.
     return !!e.prev && e.flag != null && String(e.flag || 'normal') !== String(e.prev.flag || 'normal');
 }
 function worksheetUnsaved(sections) {
-    return (sections || []).some((s) => (s.interpEl && String(s.interpEl.value || '').trim() !== '') || (s.entries || []).some(entryUnsaved));
+    return (sections || []).some((s) => (s.interpEl && String(s.interpEl.value || '').trim() !== '') || (s.entries || []).some((e) => entryUnsaved(e, !!s.matrix)));
+}
+// Ревью S3, H-1 — ячейка таблицы посева, у которой была сохранённая степень, а
+// сейчас пусто: лаборант степень СНЯЛ (перенёс «++» из «Резистентный» в
+// «Чувствительный»). Без записи пустого старое «++» оставалось в lab_results, и
+// бланк печатал отметку в обеих графах.
+function clearedMatrixCell(e) {
+    return String((e.input && e.input.value) || '').trim() === '' && !!e.prev && String(e.prev.value == null ? '' : e.prev.value).trim() !== '';
 }
 
 function wsRowPayload(e) {
@@ -2135,6 +2144,7 @@ function wsAnalyteLine(e, onRemove) {
 
 // LAB_MATRIX_PANEL_V1 — лист ввода панели-таблицы: по таблице на раздел.
 function wsMatrixSection(section, matrix) {
+    section.matrix = true;   // ревью S3, H-1 — «Сохранить всё» пишет и очищенные ячейки
     const p = section.panel;
     const svc = p.services || {};
     const byCell = new Map();
@@ -2321,8 +2331,10 @@ async function openPatientWorksheet(g, patient, tubes = [], days = []) {   // tu
         let saved = 0;
         try {
             for (const section of sections) {
+                // Ревью S3, H-1 — у таблицы посева и очищенная ячейка с прежней
+                // степенью: уходит value '' (сервер её принимает, бланк печатает пустую графу).
                 const rows = section.entries
-                    .filter(e => String((e.input && e.input.value) || '').trim() !== '')
+                    .filter(e => String((e.input && e.input.value) || '').trim() !== '' || (section.matrix && clearedMatrixCell(e)))
                     .map(wsRowPayload);
                 if (!rows.length) continue;
                 await saveAnalyteRows(section.panel, rows, section.interpEl ? section.interpEl.value.trim() : '');
