@@ -39,7 +39,8 @@ import { tubeGroups, tubeDeviceMap, tubeLabelStamp, shortTestName, BARE_ID_MAX_A
 import { dayLabels } from './lab-tube.js';   // LAB_ONE_BARCODE_V1 — один номер на день визита
 import { dayLabelLine } from '../../shared/lab-day-label.js';   // LAB_ONE_BARCODE_V1 — скан этикетки дня в поиске
 import { labShownValue } from '../../shared/lab-round.js';   // LAB_ROUND_V1 — значение прибора до 2 знаков
-import { loadRoundSetting as loadLabRound } from './lab-round-card.js';   // LAB_ROUND_V1 — настройка клиники (не прочиталась — включена)
+import { loadRoundSetting as loadLabRound } from './lab-round-card.js';
+import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1 — подпись бланка — подтвердивший   // LAB_ROUND_V1 — настройка клиники (не прочиталась — включена)
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels, hasActorRole } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=panelsv15';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now · LIS_REAL_ANALYZERS_V1 — штамп · LAB_PANEL_DEDUP_V1 — v15
@@ -2479,6 +2480,10 @@ async function buildLabDoc(rows, patient, opts = {}) {
         groups.push(await labGroupFor(r, patient, state.resultsByVs[r.id] || []));
     }
     const first = rows[0] || {};
+    // PRINT_PERFORMER_V1 (решение владельца п. 9) — подпись — тот, кто подтвердил анализы
+    // («Проверить и выдать» / «Подтвердить»: verified_by строки), и при перепечатке тоже;
+    // было — имя только в момент подтверждения, а «Бланк» и «Отчёт» печатали «—».
+    const signer = labSignerData(opts.verifiedBy ? [opts.verifiedBy] : await labSignerNames(rows.map((x) => x.verified_by)));
     // LAB_SHEET_HEAD_V1 — даты по общим правилам (lab-doc.js): «Приём» — забор
     // или день визита, «Выдан» — проверка или последний ввод. Раньше здесь
     // подставлялось «сегодня», и перепечатанный назавтра документ менял дату.
@@ -2499,8 +2504,7 @@ async function buildLabDoc(rows, patient, opts = {}) {
         dob: fmtDMY(patient.date_of_birth),
         sex: labSexRu(patient.gender),
         mrn: patient.mrn || '',
-        labChief: opts.verifiedBy || '',
-        labChiefSpec: opts.verifiedBy ? 'Проверил и выдал' : '',
+        ...signer,   // PRINT_PERFORMER_V1 — labChief, labChiefSpec, labChiefRole («Врач-лаборант»)
         groups,
     };
 }

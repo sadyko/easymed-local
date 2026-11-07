@@ -15,6 +15,7 @@
 // is patients.notes (edited via the «Отметки» modal). Production-only tabs
 // (Рекомендации, Назначения, Документы, Лояльность, Чат) are not ported.
 
+import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1 — подпись бланка анализов — подтвердивший
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, StatusTag, fmtDate, fmtDateTime, field, Avatar, avColor, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
@@ -433,6 +434,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 vsId:      lr.visit_service_id,
                 enteredAt: lr.entered_at || null,
                 verifiedAt: lr.verified_at || null,
+                verifiedBy: lr.verified_by || null,   // PRINT_PERFORMER_V1 — кто подтвердил
                 visitId:   vs ? vs.visit_id : null,
                 value:     lr.value,
                 unit:      lr.unit || (svc && svc.result_unit) || '',
@@ -1727,6 +1729,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     dob: fmtDMY(patient.date_of_birth),
                     sex: labSexRu(patient.gender),
                     mrn: patient.mrn || '',
+                    // PRINT_PERFORMER_V1 — подпись — тот, кто подтвердил анализы («Врач-лаборант»).
+                    ...labSignerData(await labSignerNames(doc.rows.map((r) => r.verifiedBy))),
                     groups,
                 },
             });

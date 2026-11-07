@@ -41,6 +41,7 @@ import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, mat
          namedRangeCell, ageYears, labAccession, labIssueDates, labMaxDate } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';
 import { labShownValue, labRoundOn } from '../../shared/lab-round.js';   // LAB_ROUND_V1
+import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_PANEL_DEDUP_V1 — одно правило «лабораторная услуга» с очередью лаборатории
 
 const refs = { container: null, onNavigate: null, bodyEl: null, docsWrap: null };
@@ -556,6 +557,7 @@ export async function fetchLabByVisit(visitIds) {
                             serviceId:       vs.service_id,
                             enteredAt:       result.entered_at || null,
                             verifiedAt:      result.verified_at || null,
+                            verifiedBy:      result.verified_by || null,   // PRINT_PERFORMER_V1 — кто подтвердил
                             value:           result.value,
                             unit:            result.unit || svc.result_unit || '',
                             reference_range: result.reference_range || '',
@@ -752,7 +754,9 @@ async function printLabReport(visit, results, brand, patient) {
         verifiedAt: labMaxDate(results, 'verifiedAt'),
         lastEnteredAt: labMaxDate(results, 'enteredAt'),
     });
-    const doctorName = visit.doctor_id ? (state.docs.doctorMap[visit.doctor_id] || '') : '';
+    // PRINT_PERFORMER_V1 (решение владельца п. 9) — под бланком анализов — тот, кто их
+    // ПОДТВЕРДИЛ (verified_by), с ролью «Врач-лаборант»; было — лечащий врач визита.
+    const signer = labSignerData(await labSignerNames((results || []).map((r) => r.verifiedBy)));
     printableSheet({
         type: 'lab',
         title: 'Результаты анализов',
@@ -764,8 +768,7 @@ async function printLabReport(visit, results, brand, patient) {
             dob: fmtDMY(patient && patient.date_of_birth),
             sex: labSexRu(patient && patient.gender),
             mrn: (patient && patient.mrn) || '',
-            labChief: doctorName,
-            labChiefSpec: doctorName ? 'Лечащий врач' : '',
+            ...signer,
             groups,
         },
     });

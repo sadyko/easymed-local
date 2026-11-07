@@ -892,7 +892,7 @@ table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:1
   ${(d.groups || []).map(grp).join('')}
   ${(C.flag || C.bar) ? `<div class="legend"><span><i class="dh"></i> \u2303 выше нормы</span><span><i class="dl"></i> \u2304 ниже нормы</span><span><i class="dn"></i> · в норме</span></div>` : ''}
   ${d.conclusion ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div><p>${esc(d.conclusion)}</p></div>` : ''}
-  <div class="signoff"><div class="sig"><div class="role">Заведующий лабораторией <i>· Laboratoriya boshlig‘i</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.labChief || '—')}</div><div class="spec">${esc(d.labChiefSpec || '')} · подпись</div></div>
+  <div class="signoff"><div class="sig"><div class="role">${esc(d.labChiefRole || 'Заведующий лабораторией')} <i>· ${esc(d.labChiefRoleUz || 'Laboratoriya boshlig‘i')}</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.labChief || '—')}</div><div class="spec">${esc(d.labChiefSpec || '')} · подпись</div></div>
     <div class="sign-right"></div></div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   <div class="foot"><div class="fl">${s.web ? `<b>${esc(s.web)}</b> · ` : ''}${esc(s.clinicName || '')}</div><div class="fr">${esc(s.phone || '')}</div></div>
@@ -954,7 +954,7 @@ ${ECONOMY_BW_CSS}
   })}
   ${(d.groups || []).map(grp).join('')}
   ${d.conclusion ? `<div class="concl"><div class="ch">Заключение · Xulosa</div><p>${esc(d.conclusion)}</p></div>` : ''}
-  <div class="signoff"><div class="sig"><div class="role">Заведующий лабораторией</div><div class="name">${esc(d.labChief || '—')}</div><div class="spec">${esc(d.labChiefSpec || '')} · подпись</div></div>
+  <div class="signoff"><div class="sig"><div class="role">${esc(d.labChiefRole || 'Заведующий лабораторией')}</div><div class="name">${esc(d.labChief || '—')}</div><div class="spec">${esc(d.labChiefSpec || '')} · подпись</div></div>
     <div class="sign-right"></div></div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   ${s.footerNote ? `<div class="thanks-eco">${esc(s.footerNote)}</div>` : ''}
