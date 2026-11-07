@@ -484,6 +484,14 @@ function isPatientDiag(d) {
 function diagSignerRole(d) {
     return String(d.radiologistSpec || d.doctorSpec || '').trim() || 'Врач';
 }
+// DIAG_ROUTE_V1 · 3.22.0 (решение владельца 2026-11-07, п. 9) — КТО ВЫПОЛНИЛ ИССЛЕДОВАНИЕ.
+// Имя стояло только в блоке подписи (.sig), а его печать прячет всегда (.show-signature не
+// выдаётся — NO_FAKE_MARKS_V1): врача, сделавшего УЗИ, на бумаге не было. Теперь — строка
+// «Выполнил» вне подписи. Врач строки (radiologist — diagDocData кабинета, архивное тело); у
+// старого листа без него — doctorName (заключение визита).
+function diagPerformer(d) {
+    return String(d.radiologist || d.doctorName || '').trim();
+}
 function sampleImaging() {
     return {
         docNo: 'MR-2024-005140', dateIn: '01.10.2024', dateOut: dateNumeric(new Date()),
@@ -1029,6 +1037,7 @@ ${RICH_CSS}
       { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob, opt: true },
       { label: 'Исследование', uz: 'Tekshiruv', value: st.kind, opt: true },
       { label: 'Область', uz: 'Soha', value: st.area, opt: true },
+      { label: 'Выполнил', uz: 'Bajardi', value: shortName(diagPerformer(d)), opt: true },   // DIAG_ROUTE_V1 · 3.22.0
     ]),
   })}
   ${(st.device || st.protocol) ? `<div class="cards">
@@ -1039,7 +1048,7 @@ ${RICH_CSS}
   ${(diagHasConclusion(d) || d.__editor) ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div>${diagConclusion(d)}</div>` : ''}
   ${diagRxDx(d, false)}
   ${imagingImages(d)}
-  <div class="signoff"><div class="sig"><div class="role">${esc(diagSignerRole(d))} <i>· Shifokor</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">подпись</div></div>
+  <div class="signoff"><div class="sig"><div class="role">${esc(diagSignerRole(d))} <i>· Shifokor</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(diagPerformer(d) || '—')}</div><div class="spec">подпись</div></div>
     <div class="sign-right"></div></div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   <div class="foot"><div class="fl">${s.web ? `<b>${esc(s.web)}</b> · ` : ''}${esc(s.clinicName || '')}</div><div class="fr">${esc(s.phone || '')}</div></div>
@@ -1080,14 +1089,14 @@ ${RICH_CSS}
     <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(issued)}</b></span></div></div>
   <div class="entwo">
     <div class="ent"><div class="cap">Пациент</div>${fld('ФИО', d.patientName, true)}${fld('Дата рожд.', d.dob)}${fld('Пол', sexShown(d.sex))}${fld('ID', d.mrn, true)}</div>
-    <div class="ent"><div class="cap">Исследование</div>${fld('Вид', st.kind)}${fld('Область', st.area)}${fld('Аппарат', st.device)}${fld('Протокол', st.protocol)}</div>
+    <div class="ent"><div class="cap">Исследование</div>${fld('Вид', st.kind)}${fld('Область', st.area)}${fld('Аппарат', st.device)}${fld('Протокол', st.protocol)}${fld('Выполнил', shortName(diagPerformer(d)))}</div>
   </div>
   ${(hasBody(d.description, d) || d.__editor) ? `<div class="secbar"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div>
   ${diagDescription(d)}` : ''}
   ${(diagHasConclusion(d) || d.__editor) ? `<div class="concl"><div class="ch">Заключение · Xulosa</div>${diagConclusion(d)}</div>` : ''}
   ${diagRxDx(d, true)}
   ${imagingImages(d)}
-  <div class="signoff"><div class="sig"><div class="role">${esc(diagSignerRole(d))}</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">подпись</div></div>
+  <div class="signoff"><div class="sig"><div class="role">${esc(diagSignerRole(d))}</div><div class="name">${esc(diagPerformer(d) || '—')}</div><div class="spec">подпись</div></div>
     <div class="sign-right"></div></div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   ${s.footerNote ? `<div class="thanks-eco">${esc(s.footerNote)}</div>` : ''}
