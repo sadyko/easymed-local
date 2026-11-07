@@ -163,7 +163,7 @@ test('отметили один анализ — «Подтвердить» по
   const vs = writes.filter((w) => w.table === 'visit_services');
   assert.equal(vs.length, 1, JSON.stringify(writes));
   assert.equal(vs[0].values.status, 'completed');
-  assert.ok(JSON.stringify(vs[0]).includes('28') && !JSON.stringify(vs[0]).includes('29'), JSON.stringify(vs[0]));
+  assert.deepEqual(vs[0].filters.filter((f) => f.col === 'id').map((f) => f.val), [28], JSON.stringify(vs[0]));
 });
 
 test('ничего не отмечено — «Подтвердить» подтверждает все, как прежде', async () => {
