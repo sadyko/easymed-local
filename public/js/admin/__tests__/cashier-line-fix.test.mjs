@@ -139,7 +139,7 @@ const LINES = [
 ];
 function world(inv = INV) {
     tables = { invoices: [inv], invoice_items: ITEMS, visit_services: LINES,
-        services: [{ id: 1, name: 'Приём терапевта', price: 100000, requires_doctor: 0, active: 1 }, { id: 3, name: 'ЭКГ', price: 35000, requires_doctor: 0, active: 1 }] };
+        services: [{ id: 1, name: 'Приём терапевта', price: 100000, requires_doctor: 0, active: 1 }, { id: 3, name: 'ЭКГ', price: 35000, requires_doctor: 0, active: 1, type: 'procedure' }] };   // DIAG_ROUTE_V1 (I-4, 3.22.0) — «Без врача» только у услуги, которой исполнитель не нужен (процедура); услуге кабинета — обязателен (cashier-performer-required.test.mjs)
     calls.length = 0;
     rpcAnswers = {
         cashier_line_performers: { performers: [{ id: 20, full_name: 'Врач Первый', unit_price: 150000 }, { id: 21, full_name: 'Врач Второй', specialty: 'Терапевт', unit_price: 120000 }], requires_doctor: false, catalog_price: 100000 },
