@@ -186,3 +186,21 @@ test('ревью m5: записанный ключ без строки на эк
   const legacy = collectGrants(controlsOf(shown), { explicit: perms.grants });
   for (const [k, v] of Object.entries(carried)) assert.equal(legacy[k], v, k + ': без initial ключ другой сборки стёрт');
 });
+
+// Ревью 3.22.0 M2 — строки, которые идут за другой (`follows` справочника:
+// Push и ссылки для рекламы за «Telegram-ботом» и «Настройками»). Сервер решает
+// незаписанные по боту вживую; сдвинули бота — их пишут такими, какими их видно,
+// в том числе «Нет» (у раздела без старого ключа оно — решение, а не догадка).
+test('ревью 3.22.0 M2: бот или «Настройки» сдвинуты — Push и ссылки пишутся как видно; не сдвинуты — не пишутся', () => {
+  const shown = { ...shownFor({ ...REG, grants: { ...REG.grants, settings: 'view', 'settings.telegram': 'edit' } }, TRUTH), commerce_push: 'edit', commerce_links: 'edit' };
+  const explicit = { ...REG.grants, settings: 'view', 'settings.telegram': 'edit' };
+  const off = collectGrants(controlsOf({ ...shown, 'settings.telegram': 'none', commerce_push: 'none', commerce_links: 'none' }), { explicit, initial: shown });
+  assert.equal(off.commerce_push, 'none', 'Push «Нет» не записан — сервер отдал бы своё');
+  assert.equal(off.commerce_links, 'none');
+  const view = collectGrants(controlsOf({ ...shown, 'settings.telegram': 'view', commerce_push: 'none', commerce_links: 'view' }), { explicit, initial: shown });
+  assert.deepEqual([view.commerce_push, view.commerce_links], ['none', 'view']);
+  const closed = collectGrants(controlsOf({ ...shown, settings: 'none', 'settings.telegram': 'none', commerce_push: 'none', commerce_links: 'none' }), { explicit, closed: new Set(['settings']), initial: shown });
+  assert.deepEqual([closed.commerce_push, closed.commerce_links], ['none', 'none'], '«Настройки: Нет» — строки за ботом записаны');
+  const same = collectGrants(controlsOf(shown), { explicit, initial: shown });
+  assert.ok(!('commerce_push' in same) && !('commerce_links' in same), 'бот не сдвинут — строки идут за ним по-прежнему, не пишутся');
+});

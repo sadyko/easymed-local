@@ -55,7 +55,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
-import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm9';   // ROLES_SAVE_TRUTH_V1 — сбор с «показанным при открытии»; ROLES_REVIEW_V1 — семья без ворот по списку ролей, ключи другой сборки переносятся
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm10';   // ROLES_SAVE_TRUTH_V1 — сбор с «показанным при открытии»; ROLES_REVIEW_V1 — семья без ворот по списку ролей, ключи другой сборки переносятся
 // V3121_ROLES — «Проверьте права этой роли»: «Просмотр» от старого экрана «Роли» (мигр. 215).
 import { roleReviewNotice } from './roles-review.js';
 import { CATALOG, LEVEL_LABELS } from '../../shared/permission-catalog.js';   // ROLES_CLEAR_V1 — метки сводки по строкам матрицы
@@ -690,6 +690,9 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         state.closedSections = new Set();
         state.grantControls = paintCatalog(matrixHost, grants, {
             onAnyChange: paintReach, openSections: state.openSections, closedSections: state.closedSections,
+            // Ревью 3.22.0 M2 — записанная строка за ботом (Push, ссылки) не идёт
+            // за ним; спрашивается вживую: после «Сохранить роль» записанное другое.
+            isExplicit: (k) => Object.prototype.hasOwnProperty.call(state.explicitGrants || {}, k),
         });
         // ROLES_SAVE_TRUTH_V1 — «показанное при открытии» — ровно то, что стоит
         // на переключателях: collectGrants пишет только отличное от него.

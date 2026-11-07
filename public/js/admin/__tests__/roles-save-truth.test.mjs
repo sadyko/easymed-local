@@ -500,3 +500,108 @@ test('ревью N1: своя роль на основе администрат�
   assert.deepEqual(shell(), before, 'правка уровня «Настроек» отняла у заместителя плитки и маршруты');
   assert.equal(await rename(2), 200, 'заместитель больше не переименовывает тип услуги');
 });
+
+// Ревью 3.22.0 M2 (проба P2) — «Push-уведомления» и «Ссылки для рекламы» без
+// своей записи идут за «Telegram-ботом» (и «Настройками»): сервер решает их по
+// боту вживую. Экран не перерисовывал их, когда бот двигали, а «Сохранить роль»
+// их не писал — показано «Изменение», а у роли «Нет» (P2a), показано «Нет», а
+// роль рассылает всем пациентам (P2b). Теперь незаписанные строки идут за ботом
+// и на экране, а сдвинутый бот пишет их такими, какими их видно.
+const { canPush, canAdLinks } = await import('../../../../server/services/commerce-grants.js');
+const REG_U = { id: 4, role: 'registrar', extra_roles: [], custom_role_code: null };
+const CASH_U = { id: 5, role: 'cashier', extra_roles: [], custom_role_code: null };
+function addGrants(db, role, extra) {
+  const p = permsOf(db, role);
+  p.grants = { ...(p.grants || {}), ...extra };
+  db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify(p), role);
+}
+// Показанное на экране = что даёт сервер после сохранения, по обеим строкам.
+function sameAsServer(db, role, shown, tag) {
+  const lv = effectiveGrantsOf(db, role);
+  assert.equal(lv.commerce_push, shown.push, `${tag}: Push — показано ${shown.push}, у роли ${lv.commerce_push}`);
+  assert.equal(lv.commerce_links, shown.links, `${tag}: ссылки — показано ${shown.links}, у роли ${lv.commerce_links}`);
+}
+const shownCommerce = (root) => ({ push: chosen(root, 'commerce_push'), links: chosen(root, 'commerce_links') });
+
+test('ревью 3.22.0 M2 (P2a): «Telegram-бот» → «Нет» — Push и ссылки на экране «Нет», и у роли «Нет»', async (t) => {
+  const { db } = await world(t);
+  addGrants(db, 'registrar', { settings: 'view', 'settings.telegram': 'edit' });
+  assert.equal(canPush(db, REG_U), true, 'стенд неверен');
+  const root = await render();
+  await openRole(root, 'registrar', 'Регистратор');
+  assert.deepEqual(shownCommerce(root), { push: 'edit', links: 'edit' });
+  pick(root, 'settings.telegram', 'none');
+  const shown = shownCommerce(root);
+  assert.deepEqual(shown, { push: 'none', links: 'none' }, 'строки не пошли за ботом');
+  await saveRole(root);
+  sameAsServer(db, 'registrar', shown, 'P2a');
+  assert.equal(canPush(db, REG_U), false);
+  assert.equal(canAdLinks(db, REG_U, 'view'), false);
+});
+
+test('ревью 3.22.0 M2 (P2b): «Telegram-бот» → «Изменение» — Push на экране «Изменение», и роль рассылает ровно потому, что это видно', async (t) => {
+  const { db } = await world(t);
+  addGrants(db, 'cashier', { settings: 'view' });
+  assert.equal(canPush(db, CASH_U), false, 'стенд неверен');
+  const root = await render();
+  await openRole(root, 'cashier', 'Кассир');
+  assert.deepEqual(shownCommerce(root), { push: 'none', links: 'none' });
+  pick(root, 'settings.telegram', 'view');
+  assert.deepEqual(shownCommerce(root), { push: 'none', links: 'view' }, '«Просмотр» бота — ссылки на просмотр, рассылки нет');
+  pick(root, 'settings.telegram', 'edit');
+  const shown = shownCommerce(root);
+  assert.deepEqual(shown, { push: 'edit', links: 'edit' }, 'строки не пошли за ботом');
+  await saveRole(root);
+  sameAsServer(db, 'cashier', shown, 'P2b');
+  assert.equal(canPush(db, CASH_U), true);
+  assert.equal(canAdLinks(db, CASH_U, 'edit'), true);
+});
+
+test('ревью 3.22.0 M2: «Настройки: Нет» гасит Push и ссылки; бот вернули как было — ничего не пишется', async (t) => {
+  const { db } = await world(t);
+  addGrants(db, 'registrar', { settings: 'view', 'settings.telegram': 'edit' });
+  const root = await render();
+  await openRole(root, 'registrar', 'Регистратор');
+  pick(root, 'settings', 'none');
+  assert.deepEqual(shownCommerce(root), { push: 'none', links: 'none' }, 'закрытые «Настройки» закрывают бота — и строки за ним');
+  pick(root, 'settings', 'view');
+  assert.deepEqual(shownCommerce(root), { push: 'edit', links: 'edit' }, 'открыли обратно — строки как при открытии');
+  pick(root, 'settings.telegram', 'none');
+  pick(root, 'settings.telegram', 'edit');
+  await saveRole(root);
+  const g = permsOf(db, 'registrar').grants;
+  assert.ok(!('commerce_push' in g) && !('commerce_links' in g), 'бот не сдвинулся — строки не записаны: ' + JSON.stringify(g));
+  sameAsServer(db, 'registrar', { push: 'edit', links: 'edit' }, 'вернули');
+
+  // А закрытые «Настройки» и сохранение — роль получает то же «Нет», что видно.
+  pick(root, 'settings', 'none');
+  const shown = shownCommerce(root);
+  await saveRole(root);
+  sameAsServer(db, 'registrar', shown, '«Настройки: Нет»');
+});
+
+test('ревью 3.22.0 M2: записанная своя строка и тронутая руками за ботом не идут', async (t) => {
+  const { db } = await world(t);
+  addGrants(db, 'registrar', { settings: 'view', 'settings.telegram': 'edit', commerce_push: 'edit' });
+  const root = await render();
+  await openRole(root, 'registrar', 'Регистратор');
+  pick(root, 'commerce_links', 'view');
+  pick(root, 'settings.telegram', 'none');
+  const shown = shownCommerce(root);
+  assert.deepEqual(shown, { push: 'edit', links: 'view' }, 'записанная и тронутая строки — решение администратора, бот их не двигает');
+  await saveRole(root);
+  sameAsServer(db, 'registrar', shown, 'записанные');
+  assert.equal(canPush(db, REG_U), true, 'рассылка выдана своей строкой');
+});
+
+test('ревью 3.22.0 M2: заместитель (своя роль на основе администратора) — бот «Просмотр»: экран и сервер одно и то же', async (t) => {
+  const { db } = await world(t);
+  const root = await render();
+  await openRole(root, 'deputy', 'Заместитель');
+  assert.deepEqual(shownCommerce(root), { push: 'edit', links: 'edit' });
+  pick(root, 'settings.telegram', 'view');
+  const shown = shownCommerce(root);
+  assert.deepEqual(shown, { push: 'none', links: 'view' });
+  await saveRole(root);
+  sameAsServer(db, 'deputy', shown, 'заместитель');
+});

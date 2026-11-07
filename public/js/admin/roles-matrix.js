@@ -145,7 +145,10 @@ function deriveLegacy(grants, prev = {}) {
  *   • каждый ключ, уже записанный у роли (`explicit`), с текущим значением;
  *   • каждый ключ, чьё значение сейчас ОТЛИЧАЕТСЯ от показанного при открытии;
  *   • строки разделов, чей старый ключ (`legacy`) сдвинула правка раздела, —
- *     такими, какими их видно (movedFamilyKeys ниже).
+ *     такими, какими их видно (movedFamilyKeys ниже);
+ *   • строки, идущие за сдвинутым источником (`follows`: Push и ссылки за
+ *     «Telegram-ботом»), — такими, какими их видно, и «Нет» тоже
+ *     (movedFollowerKeys, ревью 3.22.0 M2).
  * Нетронутый незаписанный ключ не пишется: решать продолжает сервер — ровно
  * так, как экран и показал. Прежние правила — частные случаи «не тронуто —
  * не пишется»: нетронутая строка «только администратор» и несвершённое «Нет»
@@ -155,6 +158,7 @@ export function collectGrants(controls, { explicit = {}, closed = null, initial 
     const cur = {};
     for (const [key, ctl] of Object.entries(controls)) cur[key] = ctl.value();
     const exp = explicit || {};
+    const followed = new Set();   // ревью 3.22.0 M2 — строки за сдвинутым ботом: их «Нет» — решение
     let out;
     if (initial) {
         out = {};
@@ -162,6 +166,7 @@ export function collectGrants(controls, { explicit = {}, closed = null, initial 
             if (key in exp || v !== (key in initial ? initial[key] : 'none')) out[key] = v;
         }
         for (const key of movedFamilyKeys(initial, cur)) out[key] = cur[key];
+        for (const key of movedFollowerKeys(initial, cur)) { out[key] = cur[key]; followed.add(key); }
     } else {
         out = { ...cur };
         // ADMIN_ROWS_GRANTABLE_V1 — строка с правилом «только администратор»,
@@ -175,7 +180,7 @@ export function collectGrants(controls, { explicit = {}, closed = null, initial 
     }
     for (const s of CATALOG) {
         if (!(s.key in out) || out[s.key] !== 'none') continue;
-        const decided = (s.key in exp) || !!(closed && closed.has(s.key));
+        const decided = (s.key in exp) || !!(closed && closed.has(s.key)) || followed.has(s.key);
         if (!decided) { delete out[s.key]; continue; }
         for (const r of [...(s.windows || []), ...(s.actions || [])]) {
             if (r.key in out) out[r.key] = 'none';
@@ -224,6 +229,50 @@ function movedFamilyKeys(initial, cur) {
         }
     }
     return keys;
+}
+
+/**
+ * РЕВЬЮ 3.22.0 M2 — СТРОКИ, КОТОРЫЕ ИДУТ ЗА ДРУГОЙ (`follows` справочника).
+ *
+ * «Push-уведомления» и «Ссылки для рекламы» (commerce_*) старого ключа не
+ * имеют, и семья раздела (movedFamilyKeys) о них не знает. Но незаписанные, они
+ * идут за окном «Telegram-бот» и его разделом «Настройки»: сервер решает их по
+ * боту ВЖИВУЮ (commerce-grants.js). Экран показывал их прежними, когда бота
+ * двигали, а сохранение их не писало: показано «Изменение» — у роли «Нет»;
+ * показано «Нет» — роль рассылает всем пациентам.
+ *
+ * Правило то же, что у семьи: сдвинули источник (бот или «Настройки») — строки
+ * за ним пишутся такими, какими их видно (paintCatalog перерисовывает
+ * незаписанные и нетронутые вслед за ботом). Не сдвинули — не пишутся и дальше
+ * идут за ботом, как и показано.
+ */
+const ROW_PARENT = new Map(catalogRows().map((r) => [r.key, r.parent]));
+const FOLLOWERS = CATALOG.filter((s) => Array.isArray(s.follows) && s.follows.length);
+
+/** Строки, за которыми идёт `s`, и их разделы. */
+function followSources(s) {
+    const out = [];
+    for (const k of s.follows) { out.push(k); const p = ROW_PARENT.get(k); if (p) out.push(p); }
+    return out;
+}
+function followMoved(s, initial, cur) {
+    return followSources(s).some((k) => k in cur && cur[k] !== (k in initial ? initial[k] : 'none'));
+}
+/** Уровень строки за ботом: закрытый раздел источника — «Нет», иначе уровень источника, срезанный до уровней строки. */
+function followLevel(s, cur) {
+    let best = 'none';
+    for (const k of s.follows) {
+        const p = ROW_PARENT.get(k);
+        if (p && cur[p] === 'none') continue;
+        const lvl = cur[k] || 'none';
+        for (const l of s.levels || ['none', 'view']) {
+            if ((RANK[l] || 0) <= (RANK[lvl] || 0) && (RANK[l] || 0) >= (RANK[best] || 0)) best = l;
+        }
+    }
+    return best;
+}
+function movedFollowerKeys(initial, cur) {
+    return FOLLOWERS.filter((s) => s.key in cur && followMoved(s, initial, cur)).map((s) => s.key);
 }
 
 // ---------------------------------------------------------------------------
@@ -352,13 +401,37 @@ function paintCount(box, s, controls) {
  * по нему collectGrants отличает решение администратора от «Нет», выведенного
  * из старых полей. Его заводят на КАЖДУЮ роль заново — решение, принятое про
  * одну роль, про соседнюю ничего не значит.
+ * `isExplicit(key)` — записан ли ключ у роли САМ (ревью 3.22.0 M2): записанная
+ * строка, идущая за другой (`follows`), за ней не перерисовывается.
  */
-export function paintCatalog(host, grants, { onAnyChange = null, openSections = new Set(), closedSections = null } = {}) {
+export function paintCatalog(host, grants, { onAnyChange = null, openSections = new Set(), closedSections = null, isExplicit = () => false } = {}) {
     const controls = {};
     const panels = [];   // [{key, open(bool)}] — для «Развернуть все / Свернуть все»
     // Уровни строк, обнулённых закрытием раздела: закрыть и тут же передумать —
     // обычное движение руки, и оно не должно стоить всей настройки раздела.
     const closedLevels = new Map();
+
+    // РЕВЬЮ 3.22.0 M2 — СТРОКИ ЗА БОТОМ ИДУТ ЗА НИМ И НА ЭКРАНЕ. Незаписанную и
+    // нетронутую здесь строку с `follows` (Push, ссылки для рекламы) сервер
+    // решает по «Telegram-боту» вживую — экран показывает ровно это: сдвинули бот
+    // или «Настройки» — строка перерисована по ним; вернули как было — строка
+    // такая, какой была при открытии. Записанную или тронутую руками не трогаем:
+    // это решение администратора. Что уходит в базу — collectGrants.
+    const touched = new Set();
+    const followView = new Map();   // ключ → перерисовать строку уровнем
+    const shownAtPaint = {};
+    const repaintFollowers = () => {
+        const cur = {};
+        for (const [k, c] of Object.entries(controls)) cur[k] = c.value();
+        let changed = false;
+        for (const s of FOLLOWERS) {
+            const paint = followView.get(s.key);
+            if (!paint || touched.has(s.key) || isExplicit(s.key)) continue;
+            const want = followMoved(s, shownAtPaint, cur) ? followLevel(s, cur) : shownAtPaint[s.key];
+            if (want && cur[s.key] !== want) { paint(want); changed = true; }
+        }
+        if (changed) paintGroupCounts();
+    };
 
     // ROLES_CLEAR_V2 (2026-11-07) — ПОИСК РАЗДЕЛА. Двадцать два раздела и сотня
     // окон — это три экрана прокрутки; «где тут касса?» решается одним словом.
@@ -435,6 +508,7 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
         const note = h('span', { class: 'rm-note' });
         paintNote(note, s, sectionLvl);
         const picker = levelPicker(s, sectionLvl, (lvl) => {
+            touched.add(s.key);   // ревью 3.22.0 M2
             paintNote(note, s, lvl);
             block.classList.toggle('is-off', lvl === 'none');
             // Раздел закрыт — окна и действия в нём ничего не значат: гасим их,
@@ -452,9 +526,20 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
             paintGroupCounts();   // ROLES_CLEAR_V2
             hint.hidden = lvl !== 'none' || !kids.length;
             setOpen(true);
+            repaintFollowers();   // ревью 3.22.0 M2 — «Настройки» закрыли или открыли
             if (onAnyChange) onAnyChange();
         });
         controls[s.key] = picker;
+        // Ревью 3.22.0 M2 — строка за ботом перерисовывается без «решения»: в
+        // closedSections не попадает и тронутой не считается.
+        if (FOLLOWERS.includes(s)) {
+            followView.set(s.key, (lvl) => {
+                picker.set(lvl);
+                paintNote(note, s, lvl);
+                block.classList.toggle('is-off', lvl === 'none');
+                paintCount(count, s, controls);
+            });
+        }
 
         const hasInner = !!((s.windows || []).length || (s.actions || []).length);
         const name = h('span', { class: 'rm-name' },
@@ -520,8 +605,12 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
                 const lvl = grants[r.key] || 'none';
                 const rnote = h('div', { class: 'rm-desc' });
                 paintNote(rnote, r, lvl);
-                const p = levelPicker(r, lvl, (l) => { paintNote(rnote, r, l); paintCount(count, s, controls); if (onAnyChange) onAnyChange(); },
-                    { disabled: sectionLvl === 'none' });
+                const p = levelPicker(r, lvl, (l) => {
+                    touched.add(r.key);
+                    paintNote(rnote, r, l); paintCount(count, s, controls);
+                    repaintFollowers();   // ревью 3.22.0 M2 — сдвинули «Telegram-бот»
+                    if (onAnyChange) onAnyChange();
+                }, { disabled: sectionLvl === 'none' });
                 controls[r.key] = p;
                 kids.push({
                     disable: (on) => p.disable(on),
@@ -566,6 +655,9 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
         blocks.push({ s, el: block, ownWord: tr(s.label || '').toLowerCase(), words, group, open: setOpen, hasInner });
     }
     paintGroupCounts();
+    // Ревью 3.22.0 M2 — «показано при открытии»: к нему строки за ботом
+    // возвращаются, когда бот и «Настройки» вернули как было.
+    for (const [k, c] of Object.entries(controls)) shownAtPaint[k] = c.value();
 
     // ROLES_CLEAR_V2 — фильтр. Ничего не меняет в правах: прячет строки и
     // заголовки групп, у которых не осталось строк. Совпало только окно —
