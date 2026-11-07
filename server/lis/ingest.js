@@ -47,6 +47,7 @@ import { specimenKey } from '../../public/js/shared/specimen-key.js';   // LAB_T
 import { BARE_ID_MAX_AGE_DAYS } from '../../public/js/shared/lab-label-age.js';   // LAB_TUBE_LABEL_V1 (ревью U11, L6) — один срок голого номера для приёма и этикетки
 import { dayLabelLine, dayLabelValue } from '../../public/js/shared/lab-day-label.js';   // LAB_ONE_BARCODE_V1 — один номер на день визита
 import { roundHalfUp2, labRoundOn } from '../../public/js/shared/lab-round.js';   // LAB_ROUND_V1 — до 2 знаков, полное — в raw_value
+import { noReadSample } from '../../public/js/shared/lab-scan.js';   // LAB_SCAN_BIND_V1 — «Inv.…»: штрихкод не прочитан (общее с лотком)
 
 /**
  * LIS_REAL_ANALYZERS_V1_SAMPLE — номер пробы БЕЗ «LAB-» (голые цифры)
@@ -232,6 +233,23 @@ function orderAge(db, orderId) {
 
 /** Строка журнала у сообщения, прогнанного «Привязать» с номером человека. */
 const MANUAL = 'привязано вручную';
+// LAB_SCAN_BIND_V1 (решение владельца 2026-11-07) — строка журнала пробы, привязанной
+// этикеткой, которую отсканировали в «Привязать»: номер — как будто его прислал прибор.
+const SCANNED = 'привязано по этикетке пробирки';
+
+/**
+ * LAB_SCAN_BIND_V1 — этикетка, отсканированная (или набранная) в «Привязать», —
+ * номер пробы так, как его прочитал бы провод прибора: 8 цифр этикетки (строки или
+ * дня визита) — голые цифры, прежняя «LAB-000123» (и «ДФИ-000123» с русской
+ * раскладки) — этикетка LAB-. Иначе null.
+ */
+export function scannedLabel(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (labelBarcodeNumber(s) != null) return { sampleId: s, value: s, field: '', lab: false, conflict: false };
+  const m = /^(?:LAB|ДФИ)-(\d{6,})$/iu.exec(s);
+  if (m && Number(m[1]) > 0) return { sampleId: 'LAB-' + m[1], value: 'LAB-' + m[1], field: '', lab: true, conflict: false };
+  return null;
+}
 
 /**
  * LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — в сообщении значения для строк
@@ -1255,13 +1273,19 @@ function closeStaleRows(db, { sides, k, deviceId, msgId, profile }) {
  */
 export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   const manual = opts.sampleIdOverride != null;
+  // LAB_SCAN_BIND_V1 — номер отсканировали с этикетки в «Привязать»: приём идёт так,
+  // как будто его прислал прибор (правило голых цифр, срок, «повтор», ворота), а
+  // строка журнала говорит, что номер — со сканера и что прислал сам прибор.
+  const scan = !manual && opts.scanLabel != null ? scannedLabel(opts.scanLabel) : null;
   // LIS_REAL_ANALYZERS_V1_SAMPLE — у привязанного вручную каждая строка
   // журнала говорит об этом: номер выбрал человек, а не прибор.
   // LIS_REAL_ANALYZERS_V1 (ревью R3, п. 7) — opts.report: чем кончился приём
   // (статус строки, её номер, сколько строк бланка записано) — привязка из
   // лотка снимает значения из прежнего заказа, только если новый их принял.
+  const scanNote = scan ? SCANNED + (opts.scanFrom ? ' (прибор прислал «' + String(opts.scanFrom) + '»)' : '') : '';   // LAB_SCAN_BIND_V1
   const record = (o) => {
-    const row = manual ? { ...o, detail: o.detail ? o.detail + '; ' + MANUAL : MANUAL } : o;
+    const note = manual ? MANUAL : scanNote;
+    const row = note ? { ...o, detail: o.detail ? o.detail + '; ' + note : note } : o;
     // LIS_PROXY_V1 — запрос LIS Proxy уже в журнале (записан до разбора): приём дописывает ту же строку.
     const id = recordMessage(db, opts.journalId != null ? { ...row, id: opts.journalId } : row);
     if (opts.report) Object.assign(opts.report, { status: o.status, rowId: id });
@@ -1315,7 +1339,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // компонентах поля; разные номера у разных OBR — номера нет; первый непустой.
   const pick = manual
     ? { sampleId: String(opts.sampleIdOverride), value: String(opts.sampleIdOverride), lab: false, conflict: false }
-    : pickMessageSample(obrs, wire);
+    : scan || pickMessageSample(obrs, wire);   // scan: LAB_SCAN_BIND_V1
 
   const base = { deviceId, peer, raw, sampleId: pick.sampleId };
   // LIS_ANALYZER_LIST_V1 — «на связи» на ЛЮБОМ разобранном сообщении известного
@@ -1365,6 +1389,14 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // Easy-Med и не голые цифры («2^15», «QC1», «lab_2», «LAB-123»): номера нет.
   // Раньше «LAB2», «lab 2», «LAB-123» сходили за этикетку и обходили правило
   // голых цифр, а у «2^15» читался компонент 1.
+  // LAB_SCAN_BIND_V1 — «Inv.…»: анализатор не прочитал штрихкод пробирки. Номер не
+  // ищется; человеку — где пробирка и что сделать.
+  const place = pick.foreign ? noReadSample(pick.sampleId) : null;
+  if (place) {
+    record({ ...base, status: 'unmatched', detail: 'анализатор не прочитал штрихкод пробирки (штатив ' + place.rack + ', место ' + place.pos
+      + ') — нажмите «Привязать» и отсканируйте этикетку этой пробирки сканером (или наберите 8 цифр под штрихкодом)' });
+    return 'AA';
+  }
   if (pick.foreign) {
     record({ ...base, status: 'unmatched', detail: 'номер пробы «' + pick.sampleId + '» — не этикетка Easy-Med и не номер из одних цифр'
       + ' (этикетка — «LAB-» и не меньше 6 цифр) — проверьте настройку штрихкода на приборе; если проба вашего заказа — нажмите «Привязать»' });
