@@ -27,7 +27,9 @@ import { INFLOW_SQL, METHOD_RU as SHARED_METHOD_RU } from '../../../public/js/sh
 // REPORTS_AUDIT_FIX_V1 — период проверяется тем же правилом, что у остальных
 // отчётов (мусор и «с» позже «по» — отказ по-русски, а не пустая касса), а
 // пустой филиал счёта — своё здание (счёт госпитализации пишется без него).
-import { resolveRange, OWN_BRANCH_OR } from './reports.js';
+import { resolveRange, OWN_BRANCH_OR, invoiceVatMap, vatShareOf } from './reports.js';
+// REPORTS_TAX_PAY_V1 — три ячейки НДС (без НДС / НДС / с НДС), как во всех отчётах.
+import { vatCells, VAT_COLUMNS } from '../domain/pay-parts.js';
 
 // V3120_FIX — способы оплаты называются ОДНИМ словарём с кассой и «Счетами»
 // (shared/payment-methods.js): прежде здесь «Перечисление», там «Перевод», а
@@ -122,7 +124,7 @@ export function cashierReport(db, args, user) {
   // секунды (прежде — порядок чтения таблицы, тот же по возрастанию id).
   const payRange = localRangeWhere('p.paid_at', from, to);
   const income = db.prepare(`
-    SELECT p.id, p.amount, p.method, ${payOrigin} AS origin, ${localDate('p.paid_at')} AS day,
+    SELECT p.id, p.amount, p.method, p.invoice_id, ${payOrigin} AS origin, ${localDate('p.paid_at')} AS day,
            strftime('%H:%M', p.paid_at, 'localtime') AS at,
            COALESCE(i.invoice_number, '') AS invoice_no,
            COALESCE(pat.full_name, '—')   AS patient,
@@ -169,7 +171,11 @@ export function cashierReport(db, args, user) {
   // читались бы как поломка.
   const multiBuilding = ctx.options.length > 1;
 
-  const incomeColumns = ['Здание', 'Дата', 'Услуга', 'Врач', 'Пациент', 'Способ оплаты', 'Сумма', 'Счёт', 'Кассир'];
+  // REPORTS_TAX_PAY_V1 — НДС платежа: платёж в доле НДС своего счёта (НДС
+  // строк счёта / итог строк). Платёж без строк (депозит, продажа карты) — 0.
+  const vatMap = invoiceVatMap(db, income.map((r) => r.invoice_id));
+  const vatOf = (r) => vatCells(num(r.amount), vatShareOf(vatMap.get(r.invoice_id), num(r.amount)));
+  const incomeColumns = ['Здание', 'Дата', 'Услуга', 'Врач', 'Пациент', 'Способ оплаты', 'Сумма', ...VAT_COLUMNS, 'Счёт', 'Кассир'];
   // REPORTS_AUDIT_FIX_V1 — ВОЗВРАТ — НЕ ПОСТУПЛЕНИЕ. Возврат хранится
   // отрицательным платежом (CASHIER_REFUND_V1) и стоял в списке строкой
   // «Поступление · Наличные» с минусом — кассир читал его как приход. Теперь
@@ -180,7 +186,7 @@ export function cashierReport(db, args, user) {
   const methodRu = (r) => METHOD_RU[r.method] || r.method || '—';
   const incomeRows = income.map((r) => [
     ctx.label(r.origin), r.day + ' ' + (r.at || ''), r.services || '—', r.doctors || '—', r.patient,
-    isRefund(r) ? 'Возврат · ' + methodRu(r) : methodRu(r), num(r.amount), r.invoice_no || '—', cashierCell(ctx, r),
+    isRefund(r) ? 'Возврат · ' + methodRu(r) : methodRu(r), num(r.amount), ...vatOf(r), r.invoice_no || '—', cashierCell(ctx, r),
   ]);
   const refundTotal = income.reduce((n, r) => n + (isRefund(r) ? -num(r.amount) : 0), 0);
   const refundCount = income.filter(isRefund).length;
@@ -202,13 +208,15 @@ export function cashierReport(db, args, user) {
   // и приход, и расход — иначе владельцу пришлось бы качать два файла и
   // сводить их руками. Расход пишется со знаком минус: в одном столбце «Сумма»
   // приход и расход обязаны складываться в итог, а не спорить друг с другом.
-  const columns = ['Здание', 'Тип', 'Дата', 'Назначение', 'Врач / тип', 'Пациент', 'Способ оплаты', 'Сумма', 'Счёт', 'Провёл'];
+  // REPORTS_TAX_PAY_V1 — НДС только у поступлений: у расхода кассы ставки нет
+  // (инкассация, закупка на месте), его ячейки пусты и в «Итого» НДС не входят.
+  const columns = ['Здание', 'Тип', 'Дата', 'Назначение', 'Врач / тип', 'Пациент', 'Способ оплаты', 'Сумма', ...VAT_COLUMNS, 'Счёт', 'Провёл'];
   const rows = [
     ...income.map((r) => [ctx.label(r.origin), isRefund(r) ? 'Возврат' : 'Поступление', r.day + ' ' + (r.at || ''), r.services || '—',
-      r.doctors || '—', r.patient, methodRu(r), num(r.amount),
+      r.doctors || '—', r.patient, methodRu(r), num(r.amount), ...vatOf(r),
       r.invoice_no || '—', cashierCell(ctx, r)]),
     ...expense.map((r) => [ctx.label(r.origin), 'Расход', r.day + ' ' + (r.at || ''), r.note || r.article || '—',
-      MOVE_RU[r.article] || r.article || '—', '', '', -num(r.amount), '', r.author]),
+      MOVE_RU[r.article] || r.article || '—', '', '', -num(r.amount), null, null, null, '', r.author]),
   ];
 
   // Разрез по зданиям: приход, расход и итог у каждого — и итог по клинике

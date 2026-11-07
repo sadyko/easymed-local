@@ -90,7 +90,7 @@ test('сервер знает оба вида и отвечает колонка
     assert.ok(j.columns.includes('Ич. рақам (Пор. № пациента)') && j.columns.includes('Заключение'));
     const reg = runReport(db, { kind: 'inpatient_register', from: '2026-01-01', to: '2026-01-31' }, admin);
     assert.equal(reg.columns[0], 'ИБ №');
-    assert.deepEqual(reg.summable_columns, ['Сумма оплаты']);
+    assert.deepEqual(reg.summable_columns, ['Сумма оплаты', 'Сумма без НДС', 'НДС', 'Сумма с НДС']);   // REPORTS_TAX_PAY_V1
   } finally { db.close(); }
 });
 

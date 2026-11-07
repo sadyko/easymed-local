@@ -1258,6 +1258,10 @@ function renderOwnerCharts(el, d) {
     obs.observe(document.body, { childList: true, subtree: true });
     el.appendChild(h('div', { style: { display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' } },
         ownerKpiTile('Общая выручка', d.kpis.revenue.toLocaleString('ru-RU') + ' ' + tr('сум'), 'за выбранный период'),
+        // REPORTS_TAX_PAY_V1 — выручка без НДС и сам НДС рядом с общей выручкой
+        // (цены — с НДС, налог внутри цены по ставкам услуг и товаров).
+        d.kpis.vat != null ? ownerKpiTile('Выручка без НДС', Number(d.kpis.revenue_net || 0).toLocaleString('ru-RU') + ' ' + tr('сум'), 'выручка за вычетом НДС') : null,
+        d.kpis.vat != null ? ownerKpiTile('НДС', Number(d.kpis.vat || 0).toLocaleString('ru-RU') + ' ' + tr('сум'), 'внутри цены, по ставкам услуг') : null,
         ownerKpiTile('Услуг оказано', d.kpis.count.toLocaleString('ru-RU'), 'без отменённых'),
         ownerKpiTile('Средний чек', d.kpis.avg.toLocaleString('ru-RU') + ' ' + tr('сум'), 'выручка / услуги')));
     el.appendChild(h('div', { style: { marginTop: '14px' } },
@@ -1594,9 +1598,10 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
                     padding: '8px 10px', fontSize: '12.5px', borderBottom: '1px solid var(--ink-50,#f1f4f5)',
                     ...(i === numericCol
                         ? { textAlign: 'right', fontWeight: '700', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }
-                        : {}),
+                        // REPORTS_TAX_PAY_V1 — колонки НДС — тоже числа: справа и с разрядами.
+                        : typeof cell === 'number' ? { textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } : {}),
                 },
-            }, i === numericCol ? Number(cell || 0).toLocaleString('ru-RU') : String(cell == null ? '' : cell)))));
+            }, (i === numericCol || typeof cell === 'number') ? Number(cell || 0).toLocaleString('ru-RU') : String(cell == null ? '' : cell)))));
         }
 
         const left = vis.length - page.length;
@@ -1696,10 +1701,14 @@ function renderCashierReport(el, d, period) {
         d.kpi.refunds > 0 ? ccrTile(tr('Возвраты'), d.kpi.refunds, 'out') : null,
         ccrTile(multi ? tr('Итого по этому зданию (доход − расход)') : tr('Итого (доход − расход)'), d.kpi.net, 'net')));
 
+    // REPORTS_TAX_PAY_V1 — колонка суммы — по названию, а не по номеру: номера
+    // 5 и 3 остались с тех пор, как первой колонкой не стояло «Здание», и итог
+    // таблицы складывал «Способ оплаты» (выходил 0), а ячейки способа
+    // печатались числом.
     el.appendChild(ccrTable({ title: 'Поступления', tone: 'in', kind: 'income', period: period || '',
-        columns: d.income.columns, rows: d.income.rows, numericCol: 5 }));
+        columns: d.income.columns, rows: d.income.rows, numericCol: d.income.columns.indexOf('Сумма') }));
     el.appendChild(ccrTable({ title: 'Расходы', tone: 'out', kind: 'expense', period: period || '',
-        columns: d.expense.columns, rows: d.expense.rows, numericCol: 3 }));
+        columns: d.expense.columns, rows: d.expense.rows, numericCol: d.expense.columns.indexOf('Сумма') }));
 }
 
 // Почасовая гистограмма. Все 24 часа всегда на месте: «в 8 утра не звонят» —
