@@ -18,6 +18,7 @@
 import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1 — подпись бланка анализов — подтвердивший
 import { labDocBatches } from '../../shared/lab-doc-batches.js';   // LAB_DOC_SPLIT_V1 — подтверждённые вместе — один документ
 import { openLabPrintPick } from './lab-print-pick.js';   // LAB_PRINT_PICK_V1 — «Печать…» с выбором документов
+import { panelMatrix, matrixGrid } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 — таблица посева на бланке
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, StatusTag, fmtDate, fmtDateTime, field, Avatar, avColor, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
@@ -1703,6 +1704,12 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // остальные по порядку. Правка имён в справочнике больше не
             // оставляет старые документы без норм — ровно как в лаборатории.
             const svcByVs = new Map((services || []).map((x) => [x.id, x.serviceId]));
+            // LAB_MATRIX_PANEL_V1 — панель-таблица печатается таблицей посева.
+            const matrices = new Map();
+            try {
+                const { data } = await supabase.from('lab_panels').select('service_id, kind, matrix_json').eq('active', true).limit(5000);
+                for (const pp of data || []) { const m = panelMatrix(pp); if (m && pp.service_id != null) matrices.set(pp.service_id, m); }
+            } catch (e) { /* бланк — списком */ }
             const groups = [...byPanel.values()].map(({ panel, list }) => {
                 const vsId = list.length ? list[0].vsId : null;
                 const panelList = analytesForService(idx, svcByVs.get(vsId));
@@ -1711,6 +1718,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 // LAB_SHEET_HEAD_V1 — «· № LAB-…» как на бланке лаборатории:
                 // номер образца стоит у своей таблицы, где бы бланк ни печатали.
                 title: (panel || 'Анализ') + (vsId != null ? ' · № ' + labAccession(vsId) : ''),
+                ...(matrices.has(svcByVs.get(vsId)) ? { matrix: matrixGrid(matrices.get(svcByVs.get(vsId)), list.map((r) => ({ parameter: r.name, value: r.value }))) } : {}),   // LAB_MATRIX_PANEL_V1
                 tests: list.map((r, ri) => {
                     const analyte = byOrder[ri] || resolveAnalyte(idx, r.name, null);
                     const named = namedRangeCell(analyte, gender, age);

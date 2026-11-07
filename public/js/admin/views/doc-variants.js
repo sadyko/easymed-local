@@ -827,6 +827,25 @@ function clinicHeadHtml(s, logoPx) {
     return `<div class="head"><div class="brand">${logoTag(s, logoPx)}<div><div class="wm">${esc(s.clinicName || 'Клиника')}</div>${s.tagline ? `<div class="tg">${esc(s.tagline)}</div>` : ''}</div></div>
     <div class="clinic">${s.address ? `<div class="cl">${esc(s.address)}</div>` : ''}<div class="cl">${s.phone ? `<b>Тел:</b> ${esc(s.phone)}` : ''}${s.web ? ` · <b>${esc(s.web)}</b>` : ''}</div><div class="cl">${s.taxId ? `<b>ИНН</b> ${esc(s.taxId)}` : ''}${s.license ? ` · ${esc(s.license)}` : ''}</div></div></div>`;
 }
+// LAB_MATRIX_PANEL_V1 (решение владельца 2026-11-07, п. 7) — ПАНЕЛЬ-ТАБЛИЦА НА БЛАНКЕ
+// (бак. посев), как образец клиники: раздел — строка-заголовок через всю ширину,
+// под ним графы раздела, строки — микроорганизмы и препараты, степени («+», «++»)
+// — по центру своей графы. m — shared/lab-matrix.js matrixGrid.
+function matrixHtml(m) {
+    const sections = (m && m.sections) || [];
+    const cols = Math.max(1, ...sections.map((x) => x.columns.length));
+    const w = (54 / cols).toFixed(2);
+    const pad = (n) => '<td></td>'.repeat(Math.max(0, cols - n));
+    const padTh = (n) => '<th></th>'.repeat(Math.max(0, cols - n));
+    const colg = '<colgroup><col style="width:46%">' + Array.from({ length: cols }, () => '<col style="width:' + w + '%">').join('') + '</colgroup>';
+    return '<table class="res mx">' + colg + sections.map((x) => '<tbody>'
+        + '<tr class="mx-sec"><th colspan="' + (cols + 1) + '">' + esc(x.title) + '</th></tr>'
+        + '<tr class="mx-cols"><th></th>' + x.columns.map((c) => '<th class="c">' + esc(c) + '</th>').join('') + padTh(x.columns.length) + '</tr>'
+        + x.rows.map((r) => '<tr><td class="pname">' + esc(r.name) + '</td>' + r.cells.map((v) => '<td class="c mx-v">' + esc(v) + '</td>').join('') + pad(r.cells.length) + '</tr>').join('')
+        + '</tbody>').join('') + '</table>';
+}
+const MATRIX_CSS = 'table.res.mx .mx-sec th{ text-align:left; background:#e6eaef; font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.03em; color:var(--ink); padding:4px 7px; } table.res.mx .mx-cols th{ background:#f4f5f7; } table.res.mx td.mx-v{ text-align:center; font-weight:800; font-size:12px; } /* LAB_MATRIX_PANEL_V1 */';
+
 function labClassic(s, d) {
     const fcl = (f) => f === 'H' ? 'h' : f === 'L' ? 'l' : '';
     // LAB_FLAG_CHEVRON_V1 — отклонение показывается ЦВЕТНЫМ ШЕВРОНОМ:
@@ -853,7 +872,7 @@ function labClassic(s, d) {
     const colGroupHtml = COLS.map((c, i) => `<col style="width:${W[i]}%">`).join('');
     const headHtml = COLS.map((c) => `<th${c.cls ? ` class="${c.cls}"` : ''}>${c.th}</th>`).join('');
     const row = (t) => `<tr>${COLS.map((c) => c.td(t)).join('')}</tr>`;
-    const grp = (g) => `<div class="grp"><div class="grp-h"><span class="ru">${esc(g.title)}</span>${g.titleUz ? `<span class="uz">· ${esc(g.titleUz)}</span>` : ''}</div><table class="res"><colgroup>${colGroupHtml}</colgroup><thead><tr>${headHtml}</tr></thead><tbody>${(g.tests || []).map(row).join('')}</tbody></table></div>`;
+    const grp = (g) => `<div class="grp"><div class="grp-h"><span class="ru">${esc(g.title)}</span>${g.titleUz ? `<span class="uz">· ${esc(g.titleUz)}</span>` : ''}</div>${g.matrix ? matrixHtml(g.matrix) : `<table class="res"><colgroup>${colGroupHtml}</colgroup><thead><tr>${headHtml}</tr></thead><tbody>${(g.tests || []).map(row).join('')}</tbody></table>`}</div>`;   // LAB_MATRIX_PANEL_V1 — таблица посева
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Результаты анализов · ${esc(d.patientName || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --accent-2:${esc(s.accent)}; --accent-soft:${esc(s.accentSoft || '#eef6f5')}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#3a4258; --muted:#454e63; --faint:#6b7285; --line:#e3e6ec; --line-2:#eef0f4; --paper:#fff; --page-bg:#e9eaee; --card-line:#e7eceb; --low:#2a6fb0; }
@@ -864,6 +883,7 @@ ${PRINT_FONT_FACE_CSS}
 .rule{ height:1px; background:var(--line); margin:11px 0 0; } .title{ text-align:center; margin-top:15px; } .title h1{ font-size:20px; font-weight:800; color:var(--ink); } .title .uz{ font-size:15px; font-style:normal; color:var(--muted); margin-top:3px; }
 .meta{ display:flex; justify-content:center; margin-top:9px; } .meta .chip{ font-size:14px; color:var(--ink-2); padding:0 14px; position:relative; } .meta .chip + .chip::before{ content:""; position:absolute; left:0; top:2px; bottom:2px; width:1px; background:var(--line); } .meta .chip b{ color:var(--ink); font-weight:700; }
 .pcard{ margin-top:14px; background:var(--accent-soft); border:1px solid var(--card-line); border-radius:10px; padding:11px 16px; display:grid; grid-template-columns:repeat(4,1fr); gap:9px 16px; break-inside:avoid; } .pf .fl{ font-size:11.5px; color:var(--muted); } .pf .fl i{ font-style:normal; color:var(--faint); } .pf .fv{ font-size:15px; font-weight:700; color:var(--ink); margin-top:1px; }
+${MATRIX_CSS}
 .grp{ margin-top:16px; } .grp + .grp{ margin-top:22px; padding-top:14px; border-top:1.5px dashed #9aa3b2; } /* LAB_PRINT_SPACING_V1 — между анализами место и черта */ .grp-h{ break-after:avoid; page-break-after:avoid; } .grp-h{ display:flex; align-items:baseline; gap:8px; padding-left:11px; position:relative; margin-bottom:6px; } .grp-h::before{ content:""; position:absolute; left:0; top:1px; bottom:1px; width:3.5px; border-radius:2px; background:var(--accent); } .grp-h .ru{ font-size:11px; font-weight:800; color:var(--ink); text-transform:uppercase; } .grp-h .uz{ font-size:13.5px; font-style:normal; color:var(--faint); }
 table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:11px; } table.res th, table.res td{ border:1px solid var(--line); padding:3px 7px; } table.res tbody tr:nth-child(even) td{ background:#f4f5f7; } thead{ display:table-header-group; } table.res tr{ break-inside:avoid; page-break-inside:avoid; } table.res thead th{ font-size:9.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:700; text-align:left; padding:3px 7px; border:1px solid var(--line); background:#eef1f4; } table.res thead th .uz{ display:block; color:var(--faint); font-weight:600; font-style:normal; margin-top:1px; } table.res th.c,table.res td.c{ text-align:center; } table.res th.r,table.res td.r{ text-align:right; } table.res tbody td{ padding:3px 7px; border:1px solid var(--line); vertical-align:middle; overflow-wrap:anywhere; word-break:break-word; } table.res tbody tr:last-child td{ border-bottom:none; }
 .pname{ font-weight:600; color:var(--ink); } .pname small{ color:var(--faint); font-weight:400; } .val{ font-weight:800; font-size:11px; color:var(--ink); } .val.h{ color:var(--accent-2); } .val.l{ color:var(--low); } .ref{ color:var(--ink-2); font-weight:600; white-space:nowrap; } .ref .rr{ display:block; white-space:nowrap; line-height:1.35; } .ref .rr.hit{ font-weight:800; color:var(--ink); }
@@ -920,7 +940,7 @@ function labCompact(s, d) {
     const headHtml = COLS.map((c) => `<th${c.cls ? ` class="${c.cls}"` : ''}>${c.th}</th>`).join('');
     const row = (t) => `<tr>${COLS.map((c) => c.td(t)).join('')}</tr>`;
     // LAB_PRINT_SPACING_V1 — анализ — свой блок (lgrp): между блоками место и черта.
-    const grp = (g) => `<div class="lgrp"><div class="secbar"><span class="ru">${esc(g.title)}</span></div><table class="res"><colgroup>${colGroupHtml}</colgroup><thead><tr>${headHtml}</tr></thead><tbody>${(g.tests || []).map(row).join('')}</tbody></table></div>`;
+    const grp = (g) => `<div class="lgrp"><div class="secbar"><span class="ru">${esc(g.title)}</span></div>${g.matrix ? matrixHtml(g.matrix) : `<table class="res"><colgroup>${colGroupHtml}</colgroup><thead><tr>${headHtml}</tr></thead><tbody>${(g.tests || []).map(row).join('')}</tbody></table>`}</div>`;   // LAB_MATRIX_PANEL_V1 — таблица посева
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Результаты анализов · ${esc(d.patientName || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#39414f; --muted:#474f5e; --faint:#727a88; --line:#e2e4e9; --line-2:#eef0f3; --bar:#f2f3f5; --paper:#fff; --page-bg:#e9eaee; }
@@ -931,6 +951,7 @@ ${PRINT_FONT_FACE_CSS}
 .meta{ display:flex; justify-content:center; margin-top:5px; } .meta .chip{ font-size:12px; color:var(--ink-2); padding:0 11px; position:relative; } .meta .chip + .chip::before{ content:""; position:absolute; left:0; top:1px; bottom:1px; width:1px; background:var(--line); } .meta .chip b{ color:var(--ink); font-weight:700; }
 .pstrip{ display:grid; grid-template-columns:repeat(4,1fr); gap:0 18px; margin-top:9px; padding:6px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); } .pstrip .fl{ font-size:11px; color:var(--muted); } .pstrip .fv{ font-size:13px; font-weight:700; color:var(--ink); }
 .secbar{ background:var(--bar); border-radius:5px; padding:4px 11px; margin:9px 0 4px; break-inside:avoid;  break-after:avoid; page-break-after:avoid; } .secbar .ru{ font-size:13px; font-weight:800; color:var(--ink); text-transform:uppercase; }
+${MATRIX_CSS}
 .lgrp + .lgrp{ margin-top:16px; padding-top:9px; border-top:1.5px dashed #9aa3b2; } /* LAB_PRINT_SPACING_V1 — между анализами место и черта */
 table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:11px; } table.res th, table.res td{ border:1px solid var(--line); padding:3px 7px; } table.res tbody tr:nth-child(even) td{ background:#f4f5f7; } thead{ display:table-header-group; } table.res tr{ break-inside:avoid; page-break-inside:avoid; } table.res thead th{ font-size:9.5px; text-transform:uppercase; color:var(--muted); font-weight:700; text-align:left; padding:2px 6px; border:1px solid var(--line); background:#eef1f4; } table.res th.c,table.res td.c{ text-align:center; } table.res th.r,table.res td.r{ text-align:right; } table.res tbody td{ padding:2px 6px; border:1px solid var(--line); overflow-wrap:anywhere; word-break:break-word; } .pname{ color:var(--ink); } .pname small{ color:var(--faint); } .ref{ color:var(--ink-2); font-weight:600; white-space:nowrap; } .ref .rr{ display:block; white-space:nowrap; line-height:1.35; } .ref .rr.hit{ font-weight:800; color:var(--ink); } td.flag{ font-weight:800; color:var(--ink); }
 .concl{ margin-top:10px; border-left:3px solid var(--ink); padding:1px 0 1px 10px; } .concl .ch{ font-size:12px; font-weight:800; text-transform:uppercase; color:var(--accent); margin-bottom:2px; } .concl p{ font-size:11.5px; line-height:1.45; color:var(--ink-2); white-space:pre-wrap; }

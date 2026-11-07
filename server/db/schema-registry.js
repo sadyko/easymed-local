@@ -1375,7 +1375,7 @@ export const REGISTRY = {
   lab_panels: {
     // LAB_PANEL_DEDUP_V1 (мигр. 272, ревью M1) — retired_at: панель СПИСАНА «Удалить» главного
     // здания с филиалами (rpc/lab-panels.js); экран её не показывает. Пишет только сервер.
-    read:  { roles: ALL_STAFF, columns: ['id','name','code','modality','has_narrative','service_id','core_panel_id','active','created_at','device_id','retired_at'] },
+    read:  { roles: ALL_STAFF, columns: ['id','name','code','modality','has_narrative','service_id','core_panel_id','active','created_at','device_id','retired_at','kind','matrix_json'] },   // kind, matrix_json: LAB_MATRIX_PANEL_V1 (мигр. 280) — пишет только lab_panel_save
     write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','core_panel_id','active','device_id'] },
              update: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','active','device_id'] },
              delete: { roles: LAB_SECTION_ROLES } },

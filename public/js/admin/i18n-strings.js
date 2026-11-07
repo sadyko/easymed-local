@@ -13561,5 +13561,30 @@ export const STRINGS = {
   "выдан": {"en":"issued","ru":"выдан","uz":"berilgan"},   // LAB_DOC_SPLIT_V1
   "внесены, не подтверждены": {"en":"entered, not confirmed","ru":"внесены, не подтверждены","uz":"kiritilgan, tasdiqlanmagan"},   // LAB_DOC_SPLIT_V1
   "Готовых результатов нет — печатать нечего.": {"en":"No results are ready — nothing to print.","ru":"Готовых результатов нет — печатать нечего.","uz":"Tayyor natijalar yo‘q — chop etadigan narsa yo‘q."},   // LAB_PRINT_PICK_V1
+  "Таблица панели пуста — добавьте раздел, графы и строки.": {"en":"The panel table is empty — add a section, columns and rows.","ru":"Таблица панели пуста — добавьте раздел, графы и строки.","uz":"Panel jadvali bo‘sh — bo‘lim, ustunlar va qatorlar qo‘shing."},   // LAB_MATRIX_PANEL_V1
+  "Степеней в шкале не больше {n}.": {"en":"The scale can have at most {n} grades.","ru":"Степеней в шкале не больше {n}.","uz":"Shkaladagi darajalar {n} tadan oshmasin."},   // LAB_MATRIX_PANEL_V1
+  "У раздела таблицы нет названия.": {"en":"A table section has no title.","ru":"У раздела таблицы нет названия.","uz":"Jadval bo‘limining nomi yo‘q."},   // LAB_MATRIX_PANEL_V1
+  "Раздел «{name}» записан дважды.": {"en":"Section «{name}» is listed twice.","ru":"Раздел «{name}» записан дважды.","uz":"«{name}» bo‘limi ikki marta yozilgan."},   // LAB_MATRIX_PANEL_V1
+  "В разделе «{name}» должно быть от 1 до {n} граф.": {"en":"Section «{name}» must have from 1 to {n} columns.","ru":"В разделе «{name}» должно быть от 1 до {n} граф.","uz":"«{name}» bo‘limida 1 dan {n} tagacha ustun bo‘lishi kerak."},   // LAB_MATRIX_PANEL_V1
+  "В разделе «{name}» нет ни одной строки.": {"en":"Section «{name}» has no rows.","ru":"В разделе «{name}» нет ни одной строки.","uz":"«{name}» bo‘limida birorta qator yo‘q."},   // LAB_MATRIX_PANEL_V1
+  "В разделе «{name}» больше {n} строк.": {"en":"Section «{name}» has more than {n} rows.","ru":"В разделе «{name}» больше {n} строк.","uz":"«{name}» bo‘limida {n} tadan ortiq qator bor."},   // LAB_MATRIX_PANEL_V1
+  "Строка «{row}» записана в разделе «{name}» дважды.": {"en":"Row «{row}» is listed twice in section «{name}».","ru":"Строка «{row}» записана в разделе «{name}» дважды.","uz":"«{row}» qatori «{name}» bo‘limida ikki marta yozilgan."},   // LAB_MATRIX_PANEL_V1
+  "Строка «{row}» с графой «{col}» уже есть в разделе «{name}» — назовите её иначе.": {"en":"Row «{row}» with column «{col}» already exists in section «{name}» — rename it.","ru":"Строка «{row}» с графой «{col}» уже есть в разделе «{name}» — назовите её иначе.","uz":"«{col}» ustunli «{row}» qatori «{name}» bo‘limida allaqachon bor — uni boshqacha nomlang."},   // LAB_MATRIX_PANEL_V1
+  "Разделов в таблице не больше {n}.": {"en":"The table can have at most {n} sections.","ru":"Разделов в таблице не больше {n}.","uz":"Jadvaldagi bo‘limlar {n} tadan oshmasin."},   // LAB_MATRIX_PANEL_V1
+  "Шкала степеней": {"en":"Grade scale","ru":"Шкала степеней","uz":"Darajalar shkalasi"},   // LAB_MATRIX_PANEL_V1
+  "Через запятую — то, что лаборант выбирает в ячейке: −, +, ++, +++, ++++": {"en":"Comma-separated — what the lab picks in a cell: −, +, ++, +++, ++++","ru":"Через запятую — то, что лаборант выбирает в ячейке: −, +, ++, +++, ++++","uz":"Vergul bilan — laborant katakda tanlaydigan qiymatlar: −, +, ++, +++, ++++"},   // LAB_MATRIX_PANEL_V1
+  "Название раздела, например «Антибиограмма»": {"en":"Section title, for example «Antibiogram»","ru":"Название раздела, например «Антибиограмма»","uz":"Bo‘lim nomi, masalan «Antibiogramma»"},   // LAB_MATRIX_PANEL_V1
+  "Графа": {"en":"Column","ru":"Графа","uz":"Ustun"},   // LAB_MATRIX_PANEL_V1
+  "Строка, например «E. coli» или «Ампициллин»": {"en":"Row, for example «E. coli» or «Ampicillin»","ru":"Строка, например «E. coli» или «Ампициллин»","uz":"Qator, masalan «E. coli» yoki «Ampitsillin»"},   // LAB_MATRIX_PANEL_V1
+  "Поднять строку": {"en":"Move row up","ru":"Поднять строку","uz":"Qatorni yuqoriga"},   // LAB_MATRIX_PANEL_V1
+  "Опустить строку": {"en":"Move row down","ru":"Опустить строку","uz":"Qatorni pastga"},   // LAB_MATRIX_PANEL_V1
+  "Поднять раздел": {"en":"Move section up","ru":"Поднять раздел","uz":"Bo‘limni yuqoriga"},   // LAB_MATRIX_PANEL_V1
+  "Опустить раздел": {"en":"Move section down","ru":"Опустить раздел","uz":"Bo‘limni pastga"},   // LAB_MATRIX_PANEL_V1
+  "Графы раздела (от 1 до 3)": {"en":"Section columns (1 to 3)","ru":"Графы раздела (от 1 до 3)","uz":"Bo‘lim ustunlari (1 dan 3 gacha)"},   // LAB_MATRIX_PANEL_V1
+  "Строки раздела": {"en":"Section rows","ru":"Строки раздела","uz":"Bo‘lim qatorlari"},   // LAB_MATRIX_PANEL_V1
+  "Вид панели": {"en":"Panel kind","ru":"Вид панели","uz":"Panel turi"},   // LAB_MATRIX_PANEL_V1
+  "Обычная — показатели": {"en":"Regular — indicators","ru":"Обычная — показатели","uz":"Oddiy — ko‘rsatkichlar"},   // LAB_MATRIX_PANEL_V1
+  "Таблица (бак. посев)": {"en":"Table (bacterial culture)","ru":"Таблица (бак. посев)","uz":"Jadval (bakteriologik ekma)"},   // LAB_MATRIX_PANEL_V1
+  "Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».": {"en":"Analyzers do not fill the table — grades are entered by hand in «Enter results».","ru":"Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».","uz":"Analizator jadvalni to‘ldirmaydi — darajalar «Natijalarni kiritish»da qo‘lda kiritiladi."},   // LAB_MATRIX_PANEL_V1
   // /S3 3.22.0
 };

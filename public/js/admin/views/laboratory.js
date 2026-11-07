@@ -40,6 +40,7 @@ import { dayLabels } from './lab-tube.js';   // LAB_ONE_BARCODE_V1 — один 
 import { dayLabelLine } from '../../shared/lab-day-label.js';   // LAB_ONE_BARCODE_V1 — скан этикетки дня в поиске
 import { labShownValue } from '../../shared/lab-round.js';   // LAB_ROUND_V1 — значение прибора до 2 знаков
 import { loadRoundSetting as loadLabRound } from './lab-round-card.js';
+import { panelMatrix, matrixGrid, cellName } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 — панель-таблица: лист ввода и бланк
 import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1 — подпись бланка — подтвердивший   // LAB_ROUND_V1 — настройка клиники (не прочиталась — включена)
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels, hasActorRole } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
@@ -721,7 +722,7 @@ async function fetchAndPaint() {
                 .limit(LAB_DONE_WINDOW),
             // lab_panels has no service_id filter in the registry — the list is
             // small, so load active panels whole and match client-side.
-            supabase.from('lab_panels').select('id, name, code, service_id, has_narrative, device_id').eq('active', true).limit(500),   // device_id: LAB_TUBE_LABEL_V1 — пробирка по прибору
+            supabase.from('lab_panels').select('id, name, code, service_id, has_narrative, device_id, kind, matrix_json').eq('active', true).limit(500),   // kind, matrix_json: LAB_MATRIX_PANEL_V1   // device_id: LAB_TUBE_LABEL_V1 — пробирка по прибору
             // Two small lookups; the compiler does one embed hop, so the server's
             // services(departments(kind), service_types(name)) becomes these instead.
             supabase.from('departments').select('id, name, kind').limit(200),
@@ -2128,11 +2129,57 @@ function wsAnalyteLine(e, onRemove) {
     return row;
 }
 
+// LAB_MATRIX_PANEL_V1 — лист ввода панели-таблицы: по таблице на раздел.
+function wsMatrixSection(section, matrix) {
+    const p = section.panel;
+    const svc = p.services || {};
+    const byCell = new Map();
+    for (const e of section.entries) byCell.set(String(e.a.group_label || '') + '\u0000' + String(e.a.name || ''), e);
+    const cellSelect = (e) => {
+        const saved = e.draft != null ? e.draft : (e.prev ? (e.prev.value || '') : '');
+        const sel = h('select', { class: 'le-val le-val-sel', 'data-matrix-cell': e.a.name, 'aria-label': e.a.name,
+            onchange: () => { e.draft = sel.value; } },
+            h('option', { value: '' }, ''),
+            ...matrix.scale.concat(saved && !matrix.scale.includes(saved) ? [saved] : []).map((o) => h('option', { value: o, selected: saved === o }, o)));
+        sel.value = saved;
+        e.input = sel;
+        e.flag = e.flag || (e.prev ? (e.prev.flag || 'normal') : 'normal');
+        return sel;
+    };
+    const tables = matrix.sections.map((s) => h('table', { class: 'lw-mx', style: { width: '100%', borderCollapse: 'collapse', marginTop: '8px' } },
+        h('thead', null, h('tr', null,
+            h('th', { style: { textAlign: 'left', padding: '4px 6px', borderBottom: '1px solid var(--ink-100)' } }, s.title),
+            ...s.columns.map((c) => h('th', { style: { padding: '4px 6px', borderBottom: '1px solid var(--ink-100)', textAlign: 'center' } }, c)))),
+        h('tbody', null, ...s.rows.map((r) => h('tr', null,
+            h('td', { style: { padding: '3px 6px' } }, r),
+            ...s.columns.map((c) => {
+                const e = byCell.get(s.title + '\u0000' + cellName(r, c));
+                return h('td', { style: { padding: '3px 6px', textAlign: 'center' } }, e ? cellSelect(e) : '—');
+            }))))));
+    const interpEl = h('textarea', { rows: '2', placeholder: 'Заключение по этой панели (необязательно)' });
+    section.interpEl = interpEl;
+    const st = ST[p.status] || { label: p.status || '—', kind: '' };
+    return h('div', { class: 'lw-sec', 'data-matrix-section': '' },
+        h('div', { class: 'lw-sec-head' },
+            tubePill(svc.tube_color),
+            h('div', { class: 'lw-sec-title' }, svc.name || '—', externalLabTag(svc)),
+            Tag(st.label, { kind: st.kind, dot: true })),
+        h('div', { class: 'lw-sec-body' },
+            ...tables,
+            h('div', { class: 'lw-concl' }, h('label', null, 'Заключение по панели'), interpEl)));
+}
+
 // One analysis = one section in the worksheet.
 function wsSection(section) {
     const p = section.panel;
     const svc = p.services || {};
     const listEl = h('div', { class: 'le-list' });
+    // LAB_MATRIX_PANEL_V1 (решение владельца п. 7) — панель-таблица вводится сеткой:
+    // раздел — заголовок, графы раздела — столбцы, в ячейке — степень из шкалы.
+    // Ячейка — тот же показатель панели («строка · графа» раздела), и «Сохранить всё»
+    // пишет её, как любую строку листа (wsRowPayload).
+    const matrix = panelMatrix(state.panelByService[p.service_id]);
+    if (matrix) return wsMatrixSection(section, matrix);
     function renderRows() {
         // LAB_PANEL_DEDUP_V1 — перед перерисовкой забрать набранное из полей:
         // новая строка возьмёт его (e.draft), а не только сохранённое значение.
@@ -2517,7 +2564,9 @@ async function labGroupFor(r, patient, allResults) {
 
     // Номер образца в заголовке панели: у каждого анализа своя пробирка со
     // своим штрих-кодом, и на бланке он должен стоять рядом со своей таблицей.
-    return { title: `${svc.name || 'Анализ'} · № ${accession(r)}`, tests };   // i18n-exempt: заголовок печатного бланка анализа
+    // LAB_MATRIX_PANEL_V1 — панель-таблица печатается таблицей (doc-variants.js matrixHtml).
+    const matrix = panelMatrix(state.panelByService[r.service_id]);
+    return { title: `${svc.name || 'Анализ'} · № ${accession(r)}`, tests, ...(matrix ? { matrix: matrixGrid(matrix, results) } : {}) };   // i18n-exempt: заголовок печатного бланка анализа
 }
 
 async function buildLabDoc(rows, patient, opts = {}) {
