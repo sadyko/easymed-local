@@ -382,3 +382,32 @@ test('ревью M-3: карточка — у пробирок BS-200 (сыво�
   assert.match(lastRow(db).detail, /^неоднозначно/);
   db.close();
 });
+
+// Ревью S3, L-5 — прибор назвал материал «моча» (OBR-15), а у дня визита есть строка
+// без «Материала» (клиника не заполнила его у биохимии) и строка мочи: строка без
+// материала оставалась в выборке, и креатинин мочи ложился в сывороточный бланк. Есть
+// строка мочи — проба мочи идёт только в строки мочи. Строки мочи нет — строки без
+// материала в выборке, как прежде (анализ мочи, у которого материал не указан).
+test('ревью L-5: проба мочи по номеру дня — не в строку без материала, если у дня есть строка мочи; иначе — как прежде', () => {
+  const db = clinic([[100, 42], [101, 43]]);
+  db.exec("INSERT INTO services (id, name, is_lab, specimen) VALUES (46, 'Креатинин', 1, NULL)");
+  bindPanel(db, { id: 46, serviceId: 46, deviceId: 1, name: 'Креатинин', lines: [['CREA', 'Креатинин', 'CREA']] });
+  db.exec(`DELETE FROM visit_services; INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (100, 20, 46, 'queued', ${NOW}), (101, 20, 43, 'queued', ${NOW})`);
+  const day = dayLabelValue(100);
+  bs(db, day, 'CREA', '9000', 'urine');
+  assert.deepEqual([blank(db, 100), blank(db, 101)], [{}, {}], 'креатинин мочи не лёг в бланк без материала');
+  bs(db, day, 'UPRO', '0.1', 'urine');
+  assert.deepEqual(blank(db, 101), { 'Белок мочи': '0.1' });
+  bs(db, day, 'CREA', '80', 'serum');
+  assert.deepEqual(blank(db, 100), { 'Креатинин': '80' }, 'сыворотка — в строку без материала, как прежде');
+  db.close();
+
+  // Строки мочи у дня нет: «Креатинин» без материала — единственная строка прибора, проба мочи идёт в неё, как прежде.
+  const db2 = clinic([]);
+  db2.exec("INSERT INTO services (id, name, is_lab, specimen) VALUES (46, 'Креатинин', 1, NULL)");
+  bindPanel(db2, { id: 46, serviceId: 46, deviceId: 1, name: 'Креатинин', lines: [['CREA', 'Креатинин', 'CREA']] });
+  db2.exec(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (100, 20, 46, 'queued', ${NOW})`);
+  bs(db2, dayLabelValue(100), 'CREA', '9000', 'urine');
+  assert.deepEqual(blank(db2, 100), { 'Креатинин': '9000' });
+  db2.close();
+});

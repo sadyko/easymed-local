@@ -1035,7 +1035,8 @@ function tubeAnchor(db, order, ctx, observations = null) {
 // Что решает материал — только моча против остального на ОДНОМ приборе (BS-200):
 // номер на обеих пробирках один, и глюкоза мочи легла бы в «Биохимию» сыворотки.
 // Прибор называет материал пробы (OBR-15: serum / urine) — берутся строки этого
-// материала (и без материала); не называет, а у дня визита на этом приборе есть и
+// материала (и без материала; у пробы мочи — только если строки мочи у дня нет:
+// ревью S3, L-5); не называет, а у дня визита на этом приборе есть и
 // моча, и другой материал — «неоднозначно», ничего не пишется.
 // Одни и те же анализы в двух открытых строках дня (отдельный забор того же дня,
 // дважды выставленный ОАК) — «неоднозначно», как у пробирки визита (ревью 3.17.1,
@@ -1092,7 +1093,10 @@ function dayAnchor(db, line, ctx, observations = null, hint = '', label = '') {
   const { day } = orderAge(db, line.id);
   if (!day) return null;
   let pool = visitLabSides(db, line, ctx, { day, includeSelf: true });
-  if (hint === 'urine') pool = pool.filter((s) => !otherMaterialSide(s));
+  // Ревью S3, L-5 — проба мочи: есть строка мочи — только строки мочи (строка без
+  // «Материала» — обычно биохимия, у которой его не заполнили: креатинин мочи лёг бы
+  // в сывороточный бланк); строки мочи нет — и строки без материала, как прежде.
+  if (hint === 'urine') pool = pool.some(urineSide) ? pool.filter(urineSide) : pool.filter((s) => !otherMaterialSide(s));
   else if (hint === 'other') pool = pool.filter((s) => !urineSide(s));
   if (!pool.length) return null;
   if (pool.some(urineSide) && pool.some(otherMaterialSide)) {
