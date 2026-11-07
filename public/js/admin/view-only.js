@@ -30,8 +30,13 @@ function actionButton(target, host) {
  * Смонтировать экран плитки `tileKey`: на «Просмотре» — внутри рамки «только
  * просмотр», иначе — как обычно. `render(root)` рисует экран в `root`.
  */
-export async function renderWithViewOnly(container, tileKey, render) {
-    if (settingsTileAllows(tileKey, 'edit') || !settingsTileAllows(tileKey, 'view')) return render(container);
+export async function renderWithViewOnly(container, tileKey, render, levelOf = null) {
+    // COMMERCE_BLOCK_V1 — `levelOf`: уровень берётся не у плитки настроек, а у
+    // своей строки «Ролей» (ссылки для рекламы — commerceToolLevel).
+    const allows = levelOf
+        ? (need) => { const l = levelOf(); return need === 'view' ? l === 'view' || l === 'edit' || l === 'delete' : l === 'edit' || l === 'delete'; }
+        : (need) => settingsTileAllows(tileKey, need);
+    if (allows('edit') || !allows('view')) return render(container);
     const inner = h('div');
     const host = h('div', { class: 'is-view-only' },
         h('div', { class: 'view-only-note', role: 'note' }, Icon('Lock', { size: 14 }), ' ',

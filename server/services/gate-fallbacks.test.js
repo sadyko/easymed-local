@@ -273,6 +273,8 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
   const { runReport, payPeriodStatus } = await import('./rpc/reports.js');   // PAY_PERIOD_CLOSE_V1
   const { grantLevel } = await import('./grants.js');   // REPORTS_AUDIT_FIX_V1
   const { cashierInvoiceDiscount } = await import('./rpc/billing.js');   // CASHIER_DISCOUNT_V1
+  const { telegramBroadcastSend } = await import('./rpc/telegram.js');   // COMMERCE_BLOCK_V1
+  const { telegramDeeplinksList, telegramDeeplinkDelete } = await import('./rpc/deeplinks.js');   // COMMERCE_BLOCK_V1
   const db = openDb(':memory:');
   migrate(db);
   const allowed = (fn) => { try { fn(); return true; } catch (e) { if (e && e.status === 403) return false; return true; } };
@@ -294,6 +296,10 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
         'reports.doctor_pay/edit': payPeriodStatus(db, {}, u).can_close,
         // CASHIER_DISCOUNT_V1 — ворота скидки кассы стоят до проверки счёта: 403 — ворота, иначе отказ по делу.
         'cashier.discount/edit': allowed(() => cashierInvoiceDiscount(db, { invoice_id: 999999, mode: 'pct', value: 5, reason: 'x' }, u)),
+        // COMMERCE_BLOCK_V1 — отказ ворот 403 приходит раньше проверки аргументов.
+        'commerce_push/edit': allowed(() => telegramBroadcastSend(db, {}, u)),
+        'commerce_links/view': allowed(() => telegramDeeplinksList(db, {}, u)),
+        'commerce_links/edit': allowed(() => telegramDeeplinkDelete(db, {}, u)),
       };
       for (const [k, want] of Object.entries(real)) {
         const [key, need] = k.split('/');
@@ -305,5 +311,5 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
       }
     }
   } finally { db.close(); }
-  assert.deepEqual([...FALLBACK_FN_KEYS].sort(), ['cashier.discount', 'custdev.list', 'custdev.rate', 'procurement', 'reports.doctor_pay', 'settings.departments'], 'в FALLBACK_FN новый ключ — добавьте его в сверку поведением');
+  assert.deepEqual([...FALLBACK_FN_KEYS].sort(), ['cashier.discount', 'commerce_links', 'commerce_push', 'custdev.list', 'custdev.rate', 'procurement', 'reports.doctor_pay', 'settings.departments'], 'в FALLBACK_FN новый ключ — добавьте его в сверку поведением');
 });

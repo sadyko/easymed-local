@@ -12,17 +12,20 @@
 // туда же (settings.telegram edit) смотрит и загрузка файла в хранилище
 // telegram-media (routes/storage.js, telegramDenial).
 
-import { grantAllowsAdminOr } from '../grants.js';
+import { canAdLinks } from '../commerce-grants.js';   // COMMERCE_BLOCK_V1 — своя строка «Ссылки для рекламы»
 import { listDeeplinks, saveDeeplink, deleteDeeplink, DeeplinkError, LEAD_KINDS } from '../telegram/deeplinks.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
 }
 
-const KEY = 'settings.telegram';
+// COMMERCE_BLOCK_V1 (2026-11-07) — у ссылок теперь своя строка в «Ролях»
+// («Коммерческие инструменты → Ссылки для рекламы в Telegram»). Пока роль её
+// не настраивала — прежнее правило, окно «Telegram-бот» того же уровня
+// (services/commerce-grants.js).
 function requireLevel(db, user, need) {
-  if (!grantAllowsAdminOr(db, user, KEY, need)) {
-    throw new RpcError('Ссылки для рекламы недоступны вашей роли. Права выдаёт администратор в «Настройки → Роли» (окно «Telegram-бот»).', 403);
+  if (!canAdLinks(db, user, need)) {
+    throw new RpcError('Ссылки для рекламы недоступны вашей роли. Права выдаёт администратор в «Настройки → Роли» (строка «Ссылки для рекламы в Telegram»).', 403);
   }
 }
 function rethrow(e) {

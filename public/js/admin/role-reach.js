@@ -93,6 +93,24 @@ export function landingScreen(navIds, { isHidden = shellHidden } = {}) {
 }
 
 /**
+ * ROLES_CLEAR_V1 (2026-11-07) — УРОВЕНЬ ОТКРЫТОГО ЭКРАНА, И ТОЛЬКО ПРАВДИВЫЙ.
+ *
+ * Сводка печатала «Стационар (none)»: пункт меню зовётся `admissions`, а
+ * ключ прав у него `beds` (permissions.js isModuleAllowed: «Стационар» и
+ * «Койки» — один раздел). accessLevelFor('admissions') честно отвечал «Нет»
+ * про ключ, которого роли никто не выдавал, — при открытом разделе. Здесь
+ * подставлять уровень общего ключа нельзя: `beds` делят Стационар, Порционник
+ * и Выписки, и его уровень — старший из трёх («Изменение» от Порционника),
+ * тогда как в матрице у Стационара «Просмотр». Сводка, спорящая с матрицей,
+ * хуже молчащей. Поэтому у экрана без своего ключа уровня в сводке нет вовсе
+ * (null): что внутри открыто, показывает строка раздела в матрице.
+ */
+function screenLevel(id) {
+    const own = accessLevelFor(id);
+    return own && own !== 'none' ? own : null;
+}
+
+/**
  * Полное описание доступа роли.
  *
  * @param roleRow   строка роли: { name, permissions: { sections, levels, patient_tabs } }
@@ -123,7 +141,7 @@ export function roleReach(roleRow, navIds, labelOf, translate) {
             const open = isModuleAllowed(id);
             if (!open && !withDept.has(id)) { closed.push({ id, label: label(id) }); continue; }
             const need = ROLE_GATED_SCREENS[id];
-            const entry = { id, label: label(id), level: accessLevelFor(id) };
+            const entry = { id, label: label(id), level: screenLevel(id) };
             if (need && need.length) entry.roles = need.map((r) => tr(ROLE_WORD[r] || r));
             if (!open) entry.needsDepartment = true;
             if (entry.roles || entry.needsDepartment) conditional.push(entry);
@@ -182,8 +200,13 @@ export function reachSentences(reach, translate) {
         template: 'Открыто разделов: {n} — {list}.',
         params: {
             n: reach.opens.length,
-            list: reach.opens.map((m) => m.label + ' (' + tr(LEVEL_WORD[m.level] || m.level) + ')').join(', '),
+            list: reach.opens.map((m) => m.label + (LEVEL_WORD[m.level] ? ' (' + tr(LEVEL_WORD[m.level]) + ')' : '')).join(', '),
         },
+        // ROLES_CLEAR_V1 — тот же список по пунктам: экран рисует его метками,
+        // а не одним абзацем через запятую. Предложение выше остаётся — для
+        // чтения вслух и для тестов.
+        kind: 'opens',
+        items: reach.opens.map((m) => ({ label: m.label, level: m.level, word: LEVEL_WORD[m.level] || null })),
     });
 
     // MY_STOCK_V1 — условие называется ЦЕЛИКОМ и одной строкой. Ворота у
@@ -216,6 +239,8 @@ export function reachSentences(reach, translate) {
             tone: 'plain',
             template: 'Закрыто разделов: {n} — {list}.',
             params: { n: reach.closed.length, list: reach.closed.map((m) => m.label).join(', ') },
+            kind: 'closed',
+            items: reach.closed.map((m) => ({ label: m.label, level: 'none', word: null })),
         });
     }
 

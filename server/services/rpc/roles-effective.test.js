@@ -142,10 +142,10 @@ test('в ответе — ровно строки с серверными вор
   try {
     const pseudo = { id: 0, role: 'nurse', extra_roles: [], custom_role_code: null };
     const want = catalogRows()
-      .filter((r) => r.kind !== 'section' && !r.locked && fallbackLevel(db, pseudo, r.key, 'all') !== null && !plainSettingsTile(r))
+      .filter((r) => (r.kind !== 'section' || !r.legacy) && !r.locked && fallbackLevel(db, pseudo, r.key, 'all') !== null && !plainSettingsTile(r))   // COMMERCE_BLOCK_V1 — раздел без старого ключа — как окно
       .map((r) => r.key).sort();
     assert.deepEqual(Object.keys(levelsOf(db, 'nurse')).sort(), want);
-    for (const k of ['crm.all', 'inpatient.vitals', 'custdev.rate', 'reports.revenue', 'settings.roles', 'cashier.lines', 'settings.departments', 'settings.rooms.money']) assert.ok(want.includes(k), k);
+    for (const k of ['crm.all', 'inpatient.vitals', 'custdev.rate', 'reports.revenue', 'settings.roles', 'cashier.lines', 'settings.departments', 'settings.rooms.money', 'commerce_push', 'commerce_links']) assert.ok(want.includes(k), k);
     for (const k of ['procurement', 'patients', 'patients.list', 'doctor.visits', 'mar.inpatient']) assert.ok(!want.includes(k), k + ' — без серверных ворот');
     // Ревью M2 — «Список услуг» (маршрут оболочки) и прочие плитки без своих
     // ворот: сервер отвечал «Просмотр» за всех, и экран показывал лаборанту

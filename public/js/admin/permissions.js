@@ -911,7 +911,8 @@ const SETTINGS_ROUTE_TILE = {
     'telegram-settings': 'settings.telegram',
     'api-settings': 'settings.api',
     'meta-settings': 'settings.meta',   // META_LEADS_V1
-    'telegram-deeplinks': 'settings.telegram',   // TG_DEEPLINK_V1 — ссылки для рекламы: то же окно, что настройки бота
+    // COMMERCE_BLOCK_V1 — 'telegram-deeplinks' здесь больше нет: у ссылок своя
+    // строка «Ролей» (commerceToolLevel), правило перехода — окно «Telegram-бот».
 };
 
 // Настроенный уровень плитки — или null, если роль его не настраивала.
@@ -971,6 +972,25 @@ export function stripToGrant(table, payload) {
     if (!cols) return payload;
     const one = (row) => Object.fromEntries(Object.entries(row || {}).filter(([k]) => cols.includes(k)));
     return Array.isArray(payload) ? payload.map(one) : one(payload);
+}
+
+// COMMERCE_BLOCK_V1 (2026-11-07) — «Push-уведомления» и «Ссылки для рекламы в
+// Telegram» получили свои строки в «Ролях» (блок «Коммерческие инструменты»).
+// Правило — то же, что у сервера (services/commerce-grants.js): настроенная
+// строка решает сама; не настроенная — как вчера, окно «Telegram-бот» того же
+// уровня. Администратор — полный уровень строки, если его СВОЯ роль её не
+// настроила (как grantAllowsOr на сервере).
+const COMMERCE_TOOLS = {
+    commerce_push:  { top: 'edit', legacy: () => (settingsTileAllows('settings.telegram', 'edit') ? 'edit' : 'none') },
+    commerce_links: { top: 'edit', legacy: () => { const l = settingsTileLevel('settings.telegram'); return l === 'delete' ? 'edit' : l; } },
+};
+/** Уровень инструмента витрины: 'none' | 'view' | 'edit'. */
+export function commerceToolLevel(key) {
+    const t = COMMERCE_TOOLS[key];
+    if (!t) return 'none';
+    if (_effective == null || actorIsAdmin()) { const own = ownLevel(key, null); return own === null ? t.top : own; }
+    const lvl = grantLevel(key);
+    return lvl !== null ? lvl : t.legacy();
 }
 
 /** ADMIN_ROWS_GRANTABLE_V1 — даёт ли плитка настроек уровень `need` ('view'|'edit'|'delete'). */
@@ -1192,7 +1212,9 @@ export function isRouteAllowed(view) {
     // по одному каналу: Telegram — «Telegram-бот: Изменение» (как
     // telegram_broadcast_send), SMS — администратор (sms-settings ниже, rpc/sms.js).
     // Следующий инструмент — своя строка здесь и своё «||» в правиле пункта.
-    if (view === 'commerce-push')     return settingsTileAllows('settings.telegram', 'edit') || isRouteAllowed('sms-settings');
+    // COMMERCE_BLOCK_V1 — Telegram-канал — своя строка «Push-уведомления» (пока
+    // не настроена — «Telegram-бот: Изменение», как было).
+    if (view === 'commerce-push')     return commerceToolLevel('commerce_push') === 'edit' || isRouteAllowed('sms-settings');
     // REFERENCE_LISTS_V1 — «Справочники» (города, районы, специальности с
     // кодами) — только просмотр общих списков, встроенных в программу. Данных
     // клиники в них нет, а сервер отдаёт эти таблицы на чтение всем сотрудникам,
@@ -1231,7 +1253,9 @@ export function isRouteAllowed(view) {
     // рекламы, и заводят карточки в CRM: окно «Telegram-бот» в «Ролях»
     // (SETTINGS_ROUTE_TILE выше) или администратор; ненастроенной роли — нет.
     // Сервер (rpc/deeplinks.js) отказывает второй раз, независимо от этой строки.
-    if (view === 'telegram-deeplinks') return false;
+    // COMMERCE_BLOCK_V1 — своя строка «Ссылки для рекламы в Telegram»; пока не
+    // настроена — окно «Telegram-бот», как было (commerceToolLevel).
+    if (view === 'telegram-deeplinks') return commerceToolLevel('commerce_links') !== 'none';
     // SMS_INFORM_V1 — логин и пароль Play Mobile — право слать SMS от имени
     // клиники за её деньги: только полный доступ, как у Телефонии. Сервер
     // (rpc/sms.js) отказывает второй раз, независимо от этой строки.

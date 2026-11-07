@@ -23,7 +23,7 @@
 // пустую матрицу, которая читалась бы как «у роли нет ничего».
 import { h, Icon } from './ui.js';
 import { tr, trf } from './i18n.js';
-import { CATALOG, LEVEL_LABELS, levelAllows, grantsFromLegacy, catalogRows } from '../shared/permission-catalog.js';
+import { CATALOG, LEVELS, LEVEL_LABELS, levelAllows, grantsFromLegacy, catalogRows } from '../shared/permission-catalog.js';
 
 // Старый уровень ↔ новый.
 const GRANT_TO_LEGACY = { view: 'viewer', edit: 'editor', delete: 'admin' };
@@ -260,7 +260,15 @@ function levelPicker(row, value, onChange, { disabled = false } = {}) {
     const name = 'grant:' + row.key;
     const box = h('div', { class: 'rm-levels', role: 'radiogroup', 'aria-label': tr('Уровень доступа') });
     const inputs = [];
-    for (const lvl of row.levels || ['none', 'view']) {
+    // ROLES_CLEAR_V1 (2026-11-07) — ЧЕТЫРЕ КОЛОНКИ У КАЖДОЙ СТРОКИ. Владелец:
+    // «setting roles is very messy right now». Строка рисовала только свои
+    // уровни, прижатые вправо, и «Нет» стояло у одной строки под «Просмотром»
+    // соседней, у другой — под «Изменением»: столбец глазами не прочесть.
+    // Теперь у каждого уровня своё место; уровня, которого у строки нет,
+    // заменяет пустая ячейка — выбора не появляется, только выравнивание.
+    const own = new Set(row.levels || ['none', 'view']);
+    for (const lvl of LEVELS) {
+        if (!own.has(lvl)) { box.appendChild(h('span', { class: 'rm-pill-slot', 'aria-hidden': 'true' })); continue; }
         const id = 'rm-' + row.key.replace(/[^a-z0-9]/gi, '-') + '-' + lvl;
         const inp = h('input', { type: 'radio', name, id, value: lvl, checked: value === lvl ? true : null, disabled: disabled ? true : null });
         inp.addEventListener('change', () => onChange(lvl));
@@ -303,9 +311,25 @@ function paintNote(box, row, lvl) {
 // обещание, которое экран не держит. Всё, что про такой раздел можно сказать,
 // уже в его строке: подпись и уровень справа.
 
+// ROLES_CLEAR_V2 — группы матрицы — те же, что в боковом меню (admin.js NAV):
+// человек ищет раздел там, где привык его видеть. Раздел, которого нет в
+// карте (новый в справочнике), попадает в «Прочее», а не пропадает.
+const VIEW_GROUP = {
+    patients: 'Клиника', doctor: 'Клиника', labs: 'Клиника', procedures: 'Клиника', inpatient: 'Клиника',
+    mar: 'Клиника', kitchen: 'Клиника', discharges: 'Клиника', documents: 'Клиника',
+    crm: 'Операции', custdev: 'Операции', cashier: 'Операции', cashier_head: 'Операции', procurement: 'Операции',
+    dashboard: 'Аналитика', reports: 'Аналитика',
+    settings: 'Настройки',
+};
+const GROUP_ORDER = ['Клиника', 'Операции', 'Коммерческие инструменты', 'Аналитика', 'Настройки'];
+const GROUP_ICON = { 'Клиника': 'Patients', 'Операции': 'Wallet', 'Коммерческие инструменты': 'Megaphone', 'Аналитика': 'Chart', 'Настройки': 'Settings' };
+
 /** Счёт открытого внутри раздела — для свёрнутой строки. */
 function paintCount(box, s, controls) {
     while (box.firstChild) box.removeChild(box.firstChild);
+    // ROLES_CLEAR_V1 — у закрытого раздела счёта нет: «Окна 0 из 27» под
+    // «Нет» — шум, который приходилось читать в каждой второй строке.
+    if (controls[s.key] && controls[s.key].value() === 'none') return;
     const parts = [];
     const tally = (all, template) => {
         const rows = (all || []).filter((r) => !r.locked);   // ROLE_REPORTS_SETTINGS_V1 — закрытые не выдаются и не считаются
@@ -336,12 +360,72 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
     // обычное движение руки, и оно не должно стоить всей настройки раздела.
     const closedLevels = new Map();
 
+    // ROLES_CLEAR_V2 (2026-11-07) — ПОИСК РАЗДЕЛА. Двадцать два раздела и сотня
+    // окон — это три экрана прокрутки; «где тут касса?» решается одним словом.
+    // Ищется по названию раздела и его окон и действий; совпало окно — раздел
+    // показывается и раскрывается, чтобы окно было видно.
+    const search = h('input', { type: 'search', class: 'rm-search', placeholder: 'Найти раздел или окно…', 'aria-label': 'Найти раздел или окно' });
+    const nothing = h('div', { class: 'rm-nothing muted', hidden: true }, tr('Ничего не найдено.'));
     host.appendChild(h('div', { class: 'rm-toolbar' },
+        search,
+        h('span', { class: 'grow' }),
         h('button', { type: 'button', class: 'link-btn rm-toolbar-btn', onclick: () => { for (const p of panels) p.open(true); } }, tr('Развернуть все')),
         h('span', { class: 'rm-toolbar-sep', 'aria-hidden': 'true' }, '·'),
         h('button', { type: 'button', class: 'link-btn rm-toolbar-btn', onclick: () => { for (const p of panels) p.open(false); } }, tr('Свернуть все'))));
+    host.appendChild(nothing);
 
+    // ROLES_CLEAR_V2 — РАЗДЕЛЫ ГРУППАМИ, КАК В МЕНЮ. Владелец: «still it is not
+    // very clear and user friendly». Двадцать две строки подряд не говорили,
+    // где кончается клиника и начинается касса; теперь у них те же заголовки,
+    // что в боковом меню, и у каждой группы счёт «открыто N из M» — видно, что
+    // роль получает, не читая строк. Только раскладка: ключи и порядок самого
+    // справочника не меняются (их читают сервер и тесты).
+    // COMMERCE_BLOCK_V1 — блок «Коммерческие инструменты» назначает справочник
+    // (`block` у раздела), остальные группы — эта карта.
+    const groups = new Map();   // имя → { sections: [], countEl }
+    for (const name of GROUP_ORDER) groups.set(name, { sections: [], countEl: null, head: null });
     for (const s of CATALOG) {
+        const g = s.block || VIEW_GROUP[s.key] || 'Прочее';
+        if (!groups.has(g)) groups.set(g, { sections: [], countEl: null, head: null });
+        groups.get(g).sections.push(s);
+    }
+    const blocks = [];   // [{ s, el, text, group }] — для поиска
+    const paintGroupCounts = () => {
+        for (const g of groups.values()) {
+            if (!g.countEl) continue;
+            const open = g.sections.filter((s) => controls[s.key] && controls[s.key].value() !== 'none').length;
+            g.countEl.textContent = trf('Открыто {on} из {all}', { on: open, all: g.sections.length });
+            g.countEl.className = 'rm-group-count' + (open ? ' is-some' : '');
+        }
+    };
+    const ordered = [];
+    for (const [name, g] of groups) {
+        if (!g.sections.length) continue;
+        for (const s of g.sections) ordered.push({ s, group: name });
+    }
+    let lastGroup = null;
+    for (const { s, group } of ordered) {
+        if (group !== lastGroup) {
+            lastGroup = group;
+            const g = groups.get(group);
+            g.countEl = h('span', { class: 'rm-group-count' });
+            // ROLES_TABS_BAR_V1 (2026-11-08) — владелец: «make block dropdown too».
+            // Заголовок группы — кнопка: сворачивает и разворачивает разделы
+            // группы. Свёрнутость — класс, а не hidden: hidden у раздела ставит
+            // поиск, и одно не должно отменять другое. Счёт «открыто N из M»
+            // остаётся на заголовке — свёрнутая группа всё равно говорит, что в ней.
+            g.head = h('button', { type: 'button', class: 'rm-group is-toggle', 'aria-expanded': 'true', dataset: { group } },
+                h('span', { class: 'rm-chev' }, Icon('ChevronRight', { size: 14 })),
+                Icon(GROUP_ICON[group] || 'Folder', { size: 14 }), h('span', { class: 'rm-group-name' }, tr(group)), g.countEl);
+            const groupName = group;
+            g.head.addEventListener('click', () => {
+                const collapse = g.head.getAttribute('aria-expanded') === 'true';
+                g.head.setAttribute('aria-expanded', collapse ? 'false' : 'true');
+                g.head.classList.toggle('is-collapsed', collapse);
+                for (const b of blocks) if (b.group === groupName) b.el.classList.toggle('is-group-collapsed', collapse);
+            });
+            host.appendChild(g.head);
+        }
         const sectionLvl = grants[s.key] || 'none';
         const block = h('div', { class: 'rm-section' + (sectionLvl === 'none' ? ' is-off' : ''), dataset: { section: s.key } });
         const kids = [];
@@ -365,6 +449,7 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
             // «Нет» раздела (collectGrants).
             if (closedSections) { if (lvl === 'none') closedSections.add(s.key); else closedSections.delete(s.key); }
             paintCount(count, s, controls);
+            paintGroupCounts();   // ROLES_CLEAR_V2
             hint.hidden = lvl !== 'none' || !kids.length;
             setOpen(true);
             if (onAnyChange) onAnyChange();
@@ -476,6 +561,27 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
             setOpen(openSections.has(s.key));
         }
         host.appendChild(block);
+        // ROLES_CLEAR_V2 — что ищется: раздел, его окна и действия, на языке экрана.
+        const words = [s, ...(s.windows || []), ...(s.actions || [])].map((r) => tr(r.label || '')).join(' ').toLowerCase();
+        blocks.push({ s, el: block, ownWord: tr(s.label || '').toLowerCase(), words, group, open: setOpen, hasInner });
     }
+    paintGroupCounts();
+
+    // ROLES_CLEAR_V2 — фильтр. Ничего не меняет в правах: прячет строки и
+    // заголовки групп, у которых не осталось строк. Совпало только окно —
+    // раздел раскрывается, иначе найденное окно осталось бы за шевроном.
+    search.addEventListener('input', () => {
+        const q = String(search.value || '').trim().toLowerCase();
+        const shownGroups = new Set();
+        let any = false;
+        for (const b of blocks) {
+            const hit = !q || b.words.includes(q);
+            b.el.hidden = !hit;
+            if (hit) { shownGroups.add(b.group); any = true; }
+            if (q && hit && b.hasInner && !b.ownWord.includes(q)) b.open(true);
+        }
+        for (const [name, g] of groups) if (g.head) g.head.hidden = !shownGroups.has(name);
+        nothing.hidden = any;
+    });
     return controls;
 }

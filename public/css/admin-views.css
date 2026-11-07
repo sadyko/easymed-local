@@ -7881,6 +7881,141 @@ table.list tr.is-off td { color: var(--ink-400); }
 .dept-steps li.is-done .dept-step-n { background: var(--ok-50); color: var(--ok-700); }
 .dept-wizard-body { padding: 18px 20px 6px; }
 .dept-wizard-foot { display: flex; align-items: center; gap: 10px; padding: 12px 20px 16px; border-top: 1px solid var(--ink-100); }
+
+/* ROLES_CLEAR_V1 (2026-11-07) — владелец: «setting roles is very messy right
+   now … make it accurate and clear». Логика не тронута — только как читается.
+   1. Четыре колонки уровня у КАЖДОЙ строки (пустая ячейка там, где уровня
+      нет): «Нет», «Просмотр», «Изменение», «Удаление» стоят столбцами, и
+      подписи колонок в шапке — ровно над ними.
+   2. Цвет говорит уровень: «Нет» — серый контур (раньше — тёмная заливка,
+      тяжелее выданного права), «Просмотр» — синий, «Изменение» — зелёный,
+      «Удаление» — красный. Закрытый раздел читается приглушённым сразу.
+   3. Вкладки карты пациента: галочки стоят столбцами, а не лесенкой. */
+.rm-levels, .rm-cols { display: grid; grid-template-columns: 48px 92px 100px 92px; gap: 4px;
+  flex: 0 0 auto; justify-content: end; }
+.rm-pill { justify-content: center; padding: 0 6px; color: var(--ink-500); }
+.rm-pill-slot { display: block; }
+.rm-pill:has(input:checked) { color: #fff; }
+.rm-pill.is-none:has(input:checked) { background: var(--ink-100); border-color: var(--ink-300); color: var(--ink-700); }
+.rm-pill.is-view:has(input:checked) { background: var(--info-500); border-color: var(--info-500); }
+.rm-pill.is-edit:has(input:checked) { background: var(--ok-500); border-color: var(--ok-500); }
+.rm-pill.is-delete:has(input:checked) { background: var(--crit-500); border-color: var(--crit-500); }
+.rm-col { text-align: center; font-size: 12.5px; }
+.rm-section.is-off .rm-row-section .rm-title { color: var(--ink-500); font-weight: 500; }
+.rm-section:not(.is-off) { box-shadow: inset 3px 0 0 var(--ok-500); }
+/* Шапка карточки с «Сохранить роль» остаётся на экране при прокрутке
+   длинной матрицы, а рядом — пометка «Есть несохранённые изменения». */
+.roles-card { overflow: visible; }
+.roles-card-head { position: sticky; top: var(--topbar-h, 56px); z-index: 4; background: var(--white, #fff);
+  border-top-left-radius: inherit; border-top-right-radius: inherit; }
+.roles-head-act { display: inline-flex; align-items: center; gap: 10px; }
+.roles-dirty { font-size: 12.5px; font-weight: 600; color: var(--warn-700); background: var(--warn-50);
+  border-radius: 999px; padding: 3px 10px; }
+.roles-dirty[hidden] { display: none; }
+/* Сводка: списки разделов метками. */
+.roles-reach-list { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; }
+.roles-reach-k { flex: 0 0 92px; font-size: 12.5px; font-weight: 600; color: var(--ink-600); }
+.roles-reach-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.roles-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; line-height: 1;
+  padding: 5px 9px; border-radius: 999px; border: 1px solid var(--ink-200); background: #fff; color: var(--ink-800); }
+.roles-chip.is-none { color: var(--ink-500); background: transparent; border-style: dashed; }
+.roles-chip-lv { font-size: 12.5px; font-weight: 600; }
+.roles-chip.is-view .roles-chip-lv { color: var(--info-700); }
+.roles-chip.is-edit .roles-chip-lv { color: var(--ok-700); }
+.roles-chip.is-delete .roles-chip-lv { color: var(--crit-700); }
+.roles-row > .roles-pick-txt { flex: 1; }
+/* ROLES_CLEAR_V2 (2026-11-07) — владелец: «still it is not very clear and user
+   friendly». Только вид — логика экрана не тронута.
+   1. Экран не шире 1180px: на широком мониторе название раздела стояло слева, а
+      его уровни — в полутора метрах справа, и глаз терял строку.
+   2. Группы как в меню (Клиника, Операции, …) с заголовком и счётом «открыто N из M».
+   3. Уровень — одна сегментная полоса «Нет | Просмотр | Изменение | Удаление»:
+      видно, что выбирается ОДНО значение. Уровня, которого у строки нет, нет и
+      в полосе — на его месте тихая клетка, чтобы столбцы стояли ровно.
+   4. Поиск раздела или окна. */
+.roles-ed { max-width: 1180px; }
+/* ROLES_ASIDE_V1 (2026-11-08) — «что увидит сотрудник» справа от матрицы и
+   прилипает при прокрутке; экран для этого шире (1180 → 1560). Верх прилипания —
+   под шапкой приложения и шапкой карточки с «Сохранить роль». Уже 1100px —
+   одна колонка, сводка над матрицей, как было. */
+.roles-ed { max-width: 1560px; }
+.roles-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; align-items: start; }
+.roles-main { min-width: 0; }
+.roles-aside { position: sticky; top: calc(var(--topbar-h, 56px) + 64px); padding: 12px 16px 12px 0; }
+.roles-aside .roles-reach { margin: 0; max-height: calc(100vh - var(--topbar-h, 56px) - 96px); overflow-y: auto; }
+.roles-aside .roles-reach-list { flex-direction: column; gap: 6px; padding: 8px 0 4px; }
+.roles-aside .roles-reach-k { flex: none; }
+@media (max-width: 1100px) {
+  .roles-layout { grid-template-columns: minmax(0, 1fr); }
+  .roles-aside { position: static; order: -1; padding: 0; }
+  .roles-aside .roles-reach { margin: 0 16px 12px; max-height: none; }
+}
+.rm-toolbar { gap: 10px; padding: 10px 16px; flex-wrap: wrap; }
+.rm-search { height: 34px; width: 280px; max-width: 100%; padding: 0 12px; border: 1px solid var(--ink-200);
+  border-radius: 8px; background: var(--white, #fff); font: inherit; font-size: 13.5px; color: inherit; }
+.rm-search:focus { outline: none; border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
+.rm-nothing { padding: 18px 16px; font-size: 13.5px; }
+.rm-group { display: flex; align-items: center; gap: 8px; padding: 18px 16px 8px; margin-top: 4px;
+  border-top: 1px solid var(--ink-200); font-size: 12.5px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--ink-700); background: var(--ink-25); }
+.rm-group[hidden] { display: none; }
+.rm-group-name { flex: 1; }
+.rm-group-count { font-size: 12.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink-500);
+  background: var(--white, #fff); border: 1px solid var(--ink-200); border-radius: 999px; padding: 2px 10px; }
+.rm-group-count.is-some { color: var(--ok-700); border-color: var(--ok-500); background: var(--ok-50); }
+.rm-section[hidden] { display: none; }
+/* ROLES_CARDS_V1 (2026-11-07) — владелец: «can you make each one separate from
+   each other» (выбрал: каждый раздел — своя карточка). Разделы стояли сплошным
+   списком через линию, и строка сливалась с соседней; теперь у каждого своя
+   рамка, скругление и воздух между ними. Открытый раздел — зелёная кромка
+   слева, закрытый — серый фон: как и раньше, только внутри карточки. */
+.rm-section { margin: 8px 16px 0; padding: 0 14px; border: 1px solid var(--ink-200); border-radius: 12px;
+  background: var(--white, #fff); box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
+.rm-section:not(.is-off) { box-shadow: inset 4px 0 0 var(--ok-500), 0 1px 2px rgba(15, 23, 42, .04); }
+.rm-section.is-off { background: var(--ink-25); }
+.rm-section.is-open { border-color: var(--ink-300); }
+.rm-group { margin-top: 16px; border-top: 0; background: transparent; padding: 6px 16px 0; }
+.rm-group + .rm-section { margin-top: 10px; }
+.rm { padding-bottom: 12px; }
+/* ROLES_TABS_BAR_V1 (2026-11-08) — заголовки групп сворачиваются (кнопка с
+   шевроном), вкладки карты пациента — тем же блоком и той же полосой уровня. */
+.rm-group.is-toggle { width: calc(100% - 0px); border: 0; text-align: left; font-family: inherit; cursor: pointer; }
+.rm-group.is-toggle:hover .rm-group-name { color: var(--primary-700, var(--ink-900)); }
+.rm-group.is-toggle:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--primary-500); border-radius: 8px; }
+.rm-group.is-toggle .rm-chev { transform: rotate(90deg); }
+.rm-group.is-toggle.is-collapsed .rm-chev { transform: rotate(0deg); }
+.rm-section.is-group-collapsed { display: none; }
+.rm-group-body[hidden] { display: none; }
+.rm-tabs { margin-top: 8px; border-top: 1px solid var(--ink-200); }
+.rm-tabs .roles-unset { margin: 8px 16px 0; border-radius: 8px; border-bottom: 0; }
+/* Строка вкладки — та же карточка, что раздел матрицы (класс свой: разделы
+   считают по .rm-section). */
+.rm-tab { margin: 8px 16px 0; padding: 0 14px; border: 1px solid var(--ink-200); border-radius: 12px;
+  background: var(--white, #fff); box-shadow: inset 4px 0 0 var(--ok-500), 0 1px 2px rgba(15, 23, 42, .04); }
+.rm-tab.is-off { background: var(--ink-25); box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
+.rm-tab.is-off .rm-title { color: var(--ink-500); font-weight: 500; }
+.rm-tabs { padding-bottom: 12px; }
+/* Сегментная полоса: общая рамка, без зазоров. */
+.rm-levels { gap: 0; border: 1px solid var(--ink-200); border-radius: 9px; overflow: hidden; background: var(--white, #fff); }
+.rm-levels .rm-pill { height: 32px; border: 0; border-radius: 0; border-left: 1px solid var(--ink-100); font-size: 12.5px; }
+.rm-levels > :first-child { border-left: 0; }
+.rm-levels .rm-pill:hover { background: var(--ink-25); }
+.rm-pill-slot { border-left: 1px solid var(--ink-100);
+  background: repeating-linear-gradient(135deg, var(--ink-25) 0 6px, transparent 6px 12px); }
+.rm-levels .rm-pill:has(input:focus-visible) { box-shadow: inset 0 0 0 2px var(--primary-500); }
+.rm-pill.is-none:has(input:checked) { background: var(--ink-100); color: var(--ink-800); }
+.rm-cols { gap: 0; }
+@media (max-width: 720px) {
+  .rm-search { width: 100%; }
+  .rm-levels .rm-pill-slot { display: none; }
+}
+@media (max-width: 720px) {
+  .rm-levels { grid-template-columns: repeat(4, minmax(0, 1fr)); justify-content: stretch; }
+  .rm-pill-slot { display: none; }
+  .roles-reach-list { flex-direction: column; gap: 4px; }
+  .roles-reach-k { flex: none; }
+}
+
 .dept-form { display: grid; gap: 14px; max-width: 760px; }
 .dept-form .field { margin: 0; }
 .dept-two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }

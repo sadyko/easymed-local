@@ -5,6 +5,7 @@ import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_
 import { canViewSection, canEditSection, canViewPatientTab, canEditPatientTab } from '../services/roles.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
 import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, photoRefusal, refusalText, ALLOWED_PATIENT_FILE_EXT, ALLOWED_PHOTO_EXT } from '../../public/js/shared/patient-file-limits.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
 import { grantAllowsAdminOr, isAdminUser } from '../services/grants.js';   // V3120_FIX (M7) — корзина Telegram по праву бота
+import { canPush, canAdLinks } from '../services/commerce-grants.js';   // COMMERCE_BLOCK_V1
 import { LOGO_BUCKET, LOGO_KINDS, logoRefusal } from '../../public/js/shared/clinic-logo-rules.js';   // CLINIC_PROFILE_V1
 import { readIdentity } from '../services/branch-sync/identity.js';   // CLINIC_PROFILE_V1
 import { tableWriteAllowed } from '../db/write-grant.js';   // CLINIC_PROFILE_V1 — логотип пишет тот, кто вправе записать doc_settings
@@ -233,9 +234,13 @@ export function storageRoutes(storageDir, db = null) {
     if (!user) return 'Требуется вход.';
     try {
       if (write) {
-        if (canEditSection(db, user, 'telegram-chat') || grantAllowsAdminOr(db, user, 'settings.telegram', 'edit')) return null;
+        // COMMERCE_BLOCK_V1 — картинку рассылки кладёт тот, кто рассылает; файл
+        // ссылки для рекламы — тот, кто правит ссылки (свои строки «Ролей»).
+        if (canEditSection(db, user, 'telegram-chat') || grantAllowsAdminOr(db, user, 'settings.telegram', 'edit')
+            || canPush(db, user) || canAdLinks(db, user, 'edit')) return null;
       } else if (canViewSection(db, user, 'telegram-chat') || grantAllowsAdminOr(db, user, 'settings.telegram', 'view')
-          || grantAllowsAdminOr(db, user, 'reports.telegram', 'view')) {
+          || grantAllowsAdminOr(db, user, 'reports.telegram', 'view')
+          || canPush(db, user) || canAdLinks(db, user, 'view')) {   // COMMERCE_BLOCK_V1
         return null;
       }
     } catch { /* права не прочитались — отказ */ }

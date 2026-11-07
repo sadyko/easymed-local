@@ -239,14 +239,37 @@ export const CATALOG = [
   { key: 'kitchen',     label: 'Порционник',          legacy: 'beds', desc: 'Лист питания стационара для кухни.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит порционник.', edit: 'Назначает стол.' }, windows: [], actions: [], enforced: 'route:kitchen-sheet' },
   { key: 'discharges',  label: 'Выписки',             legacy: 'beds', desc: 'Очередь выписки и выписные документы.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит очередь выписки.', edit: 'Готовит и завершает выписку.' }, windows: [], actions: [], enforced: 'route:discharge' },
   { key: 'documents',   label: 'Документы',           legacy: 'patient-documents', desc: 'Печатные документы по пациентам.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Печатает документы.', edit: 'Заполняет и правит документы.' }, windows: [], actions: [] },
-  { key: 'chat',        label: 'Чат с пациентами',    legacy: 'telegram-chat', desc: 'Переписка в Telegram-боте.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Читает переписку.', edit: 'Отвечает пациенту от имени клиники.' }, windows: [], actions: [] },
+  // COMMERCE_BLOCK_V1 (2026-11-07) — `block`: экран «Роли» рисует такие разделы
+  // одной группой под заголовком блока, как витрина «Коммерческие инструменты»
+  // (views/commerce-hub.js). Это только раскладка экрана: ключи, ворота и
+  // правила перехода у разделов блока свои, как у любых других.
+  { key: 'chat',        block: 'Коммерческие инструменты', label: 'Чат с пациентами',    legacy: 'telegram-chat', desc: 'Переписка в Telegram-боте.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Читает переписку.', edit: 'Отвечает пациенту от имени клиники.' }, windows: [], actions: [] },
   // META_INBOX_V1 (2026-10-31) — «Чат Facebook и Instagram»: сервер проверяет
   // тот же ключ раздела (rpc/meta-inbox.js, canViewSection / canEditSection).
-  { key: 'meta_chat',   label: 'Чат Facebook и Instagram', legacy: 'meta-chat', desc: 'Сообщения и комментарии страницы клиники в Facebook и Instagram.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Читает сообщения и комментарии.', edit: 'Отвечает от имени клиники, скрывает комментарии, заводит карточку CRM.' }, windows: [], actions: [] },
+  { key: 'meta_chat',   block: 'Коммерческие инструменты', label: 'Чат Facebook и Instagram', legacy: 'meta-chat', desc: 'Сообщения и комментарии страницы клиники в Facebook и Instagram.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Читает сообщения и комментарии.', edit: 'Отвечает от имени клиники, скрывает комментарии, заводит карточку CRM.' }, windows: [], actions: [] },
   // REFERRALS_NAV_V1 (2026-10-26) — «Реферирование»: свой пункт в «Операциях» и свой
   // ключ. Деньги на вкладках открывает отдельно reports.referrals, правку источников —
   // settings.referral_sources; вкладка «Telegram-бот» — только администратору.
-  { key: 'referrals',   label: 'Реферирование',       legacy: 'referrals', desc: 'Представители, врачи-источники, внутренние врачи-направители, активность врачей.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит представителей, врачей и активность; суммы — с правом «Отчёты → Рефералы».', edit: 'Закрепляет врачей за представителями (вместе с «Список источников: Изменение» правит самих врачей).' }, windows: [], actions: [] },
+  { key: 'referrals',   block: 'Коммерческие инструменты', label: 'Реферирование',       legacy: 'referrals', desc: 'Представители, врачи-источники, внутренние врачи-направители, активность врачей.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит представителей, врачей и активность; суммы — с правом «Отчёты → Рефералы».', edit: 'Закрепляет врачей за представителями (вместе с «Список источников: Изменение» правит самих врачей).' }, windows: [], actions: [] },
+  // COMMERCE_BLOCK_V1 (2026-11-07) — PUSH И ССЫЛКИ ДЛЯ РЕКЛАМЫ — СВОИ ПРАВА.
+  //
+  // Владелец: «make as commercial block and add there push and other commercial
+  // instrument». Раньше оба инструмента открывало окно «Настройки → Telegram-бот»:
+  // кто рассылает акцию, тот заодно менял и токен бота — выдать одно без другого
+  // было нельзя.
+  //
+  // ПРАВИЛО ПЕРЕХОДА — «как вчера»: пока роль строку не настраивала, ворота
+  // спрашивают «Telegram-бот» тем же уровнем, что и до этого выпуска
+  // (server/services/commerce-grants.js; gate-fallbacks.js FALLBACK_FN — то же
+  // правило для экрана «Роли»). После обновления никто ничего не теряет и не
+  // получает; разделить права можно, поставив строку здесь.
+  //
+  // Старого ключа (`legacy`) у разделов нет: их уровень не выводится из
+  // галочек, его называет сервер (role_effective_grants), как у окон с воротами.
+  // SMS-канал рассылки остаётся за администратором (rpc/sms.js) — это деньги
+  // клиники, и этой строкой он не выдаётся.
+  { key: 'commerce_push', block: 'Коммерческие инструменты', label: 'Push-уведомления', desc: 'Рассылка пациентам в Telegram-боте: текст, картинка, фильтры по визитам и услугам.', levels: ['none', 'edit'], levelDesc: { edit: 'Делает рассылку в Telegram: видит число получателей, историю и отправляет. SMS-рассылка — только администратор.' }, windows: [], actions: [], enforced: 'rpc:telegram_broadcast_send' },
+  { key: 'commerce_links', block: 'Коммерческие инструменты', label: 'Ссылки для рекламы в Telegram', desc: 'Своя ссылка на бота для каждого объявления: ответ, файл, кнопка «Оставить заявку», счётчики.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит ссылки и счётчики переходов и заявок.', edit: 'Заводит, правит и удаляет ссылки: ответ бота, файл, кнопки.' }, windows: [], actions: [], enforced: 'rpc:telegram_deeplink_save' },
   // CASHIER_HEAD_V1 (2026-09-28) — владелец: «fix in the roles for the cashier,
   // so it can change service and provider for appointed + add service, and if
   // created invoice. It should be switchable in the roles so cashier either
@@ -385,7 +408,7 @@ export const CATALOG = [
       // администратора, — ни на каком уровне; «Изменение» задаёт новые.
       { key: 'settings.crm', group: 'Системные настройки', label: 'CRM-канбан', desc: 'Воронка заявок: колонки, источники, метки.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит настройки воронки, ничего не меняет.', edit: 'Добавляет, переименовывает, скрывает и переставляет колонки, источники и метки.', delete: 'Удаляет колонки, источники и метки. Колонку или источник, в которых есть заявки, удалить нельзя — только скрыть.' }, adminDefault: true, enforced: 'rpc:crm_config_save' },
       { key: 'settings.telephony', group: 'Системные настройки', label: 'Телефония', desc: 'Подключение телефонии и маршрут звонков.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит подключения и журнал звонков. Ключи и секреты скрыты.', edit: 'Меняет подключение и маршрут звонков, может задать новый ключ. Сохранённые ключи и секреты не видит.', delete: 'Удаляет подключение провайдера и стирает подключение Binotel.' }, adminDefault: true, enforced: 'rpc:telephony_settings_save' },
-      { key: 'settings.telegram', group: 'Системные настройки', label: 'Telegram-бот', desc: 'Токен бота и выдача документов.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит настройки бота. Токен скрыт.', edit: 'Меняет настройки бота, задаёт новый токен, отвязывает чаты и делает рассылку. Сохранённый токен не видит.' }, adminDefault: true, enforced: 'rpc:telegram_settings_save' },
+      { key: 'settings.telegram', group: 'Системные настройки', label: 'Telegram-бот', desc: 'Токен бота и выдача документов.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит настройки бота. Токен скрыт.', edit: 'Меняет настройки бота, задаёт новый токен, отвязывает чаты. Сохранённый токен не видит. Рассылку и ссылки для рекламы даёт, пока их строки в «Коммерческих инструментах» не настроены.' }, adminDefault: true, enforced: 'rpc:telegram_settings_save' },
       // META_LEADS_V1 — заявки из рекламы Meta в CRM. Токен Meta — доступ к
       // заявкам всей страницы клиники: правило Telegram-бота — только
       // администратор, пока роли не выдали ключ; сохранённый токен не видит никто.

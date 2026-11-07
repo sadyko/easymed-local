@@ -82,7 +82,11 @@ const plainSettingsTile = (row) => row.parent === 'settings' && !row.adminDefaul
 function* answeredRows(db, pseudo) {
   const skipPlainTiles = !isAdminUser(pseudo);
   for (const row of catalogRows()) {
-    if (row.kind === 'section' || row.locked || (skipPlainTiles && plainSettingsTile(row))) continue;
+    // COMMERCE_BLOCK_V1 — раздел БЕЗ старого ключа (Push, ссылки для рекламы)
+    // экран из галочек не выводит: его уровень называют ворота, и он входит в
+    // ответ, как окно. Разделы со старым ключом — по-прежнему нет (см. шапку:
+    // правда ворот переписала бы старый ключ при пустом сохранении).
+    if ((row.kind === 'section' && row.legacy) || row.locked || (skipPlainTiles && plainSettingsTile(row))) continue;
     const standard = fallbackLevel(db, pseudo, row.key, 'all');
     if (standard === null) continue;   // маршрут оболочки — серверных ворот нет
     yield { row, standard };

@@ -25,6 +25,7 @@ import {
     scopedProviderId, ownDepartmentId, PERSONAL_VIEWS,   // ownDepartmentId / PERSONAL_VIEWS — MY_STOCK_V1
     canSeeAllLeads,   // CRM_HEAD_MERGE_TAGS_V1 — счётчик задач всей команды руководителю колл-центра
     canCreatePatient,   // SIDEBAR_NEW_PATIENT_V1 — кнопка «Новый пациент» в шапке меню
+    commerceToolLevel,   // COMMERCE_BLOCK_V1 — «Ссылки для рекламы»: своя строка «Ролей»
 } from './admin/permissions.js';
 // SIDEBAR_NEW_PATIENT_V1 — то же окно и ТОТ ЖЕ адрес модуля, что у «Пациентов»
 // (views/patients.js): разошедшийся ?v= завёл бы второй экземпляр окна.
@@ -1455,7 +1456,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'telephony-settings': return void await renderWithViewOnly(viewRoot, 'settings.telephony', (root) => renderTelephonySettings(root, ctx));   // TELEPHONY_V1
             case 'meta-settings': return void await renderWithViewOnly(viewRoot, 'settings.meta', (root) => renderMetaSettings(root, ctx));   // META_LEADS_V1
             case 'sms-settings': return void await renderSmsSettings(viewRoot);   // SMS_INFORM_V1 — только администратор (permissions.js)
-            case 'telegram-deeplinks': return void await renderWithViewOnly(viewRoot, 'settings.telegram', (root) => renderTelegramDeeplinks(root, ctx));   // TG_DEEPLINK_V1 — окно «Telegram-бот» в «Ролях»
+            case 'telegram-deeplinks': return void await renderWithViewOnly(viewRoot, 'settings.telegram', (root) => renderTelegramDeeplinks(root, ctx), () => commerceToolLevel('commerce_links'));   // COMMERCE_BLOCK_V1 — уровень своей строки «Ролей»   // TG_DEEPLINK_V1 — окно «Telegram-бот» в «Ролях»
             case 'crm-settings': return void await renderWithViewOnly(viewRoot, 'settings.crm', (root) => renderCrmSettings(root, ctx));   // CRM_CONFIG_V1
             case 'telegram-chat': return void await renderTelegramChat(viewRoot, ctx);   // TELEGRAM_CHAT_V1
             case 'meta-chat':     return void await renderMetaChat(viewRoot, ctx);   // META_INBOX_V1
