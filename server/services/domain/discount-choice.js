@@ -128,11 +128,12 @@ export function restDiscountOf(r, sent, base) {
   const floor = round2(base * r.floorPct / 100);
   let rest;
   if (r.choice === 'none') rest = 0;
-  else if (r.choice === 'group') rest = floor;
+  // Группа — пол группы; присланное (экран округляет до сума) — не выше пола, округлённого вверх до сума.
+  else if (r.choice === 'group') rest = round2(Math.min(Math.max(Number(sent) || 0, floor), Math.ceil(floor - 1e-9)));
   else if (r.choice === 'promo') rest = round2(Math.min(Math.max(Number(sent) || 0, 0), r.cap == null ? base : r.cap));
   else rest = round2(Math.max(Number(sent) || 0, floor));   // прежнее правило и «вручную»
   rest = round2(Math.min(rest, base));
-  const floorWins = rest > 0 && floor > 0 && rest <= floor + 0.005;
+  const floorWins = rest > 0 && floor > 0 && rest <= Math.ceil(floor - 1e-9) + 0.005;   // пол группы, округлённый экраном до сума, — тоже группа
   const share = rest <= 0 ? 1 : (floorWins ? r.reducesFloor : r.reducesChosen);
   // Причина: выбран промокод — он; скидка не больше пола группы — группа; иначе — вручную.
   let note = null;

@@ -76,6 +76,7 @@ import { listTemplates, packageValidOn, cartPackage } from './service-templates.
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';
 import { nearestFree, noFreeText, nearestButtonText, visitDayNote } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
 import { loadPatientBookings, bookedJoinFor, joinMinutes } from './booked-rows.js';   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
+import { groupOf, discountChoiceOptions, choiceArgs, choiceFloorPct, choiceReason } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
 import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // INVOICE_APPEND_V1 — дописанный счёт печатается целиком, из строк сервера
 
@@ -300,8 +301,8 @@ export function openServicePickerModal({
             const { data: row } = await supabase.from('patients').select('id, category_id, payer_id').eq('id', p.id).maybeSingle();
             let pct = 0;
             if (row && row.category_id != null) {
-                const { data: cat } = await supabase.from('patient_categories').select('id, discount_percent, active').eq('id', row.category_id).maybeSingle();
-                if (cat && isOn(cat.active)) pct = Math.min(100, Math.max(0, Number(cat.discount_percent) || 0));
+                const { data: cat } = await supabase.from('patient_categories').select('id, name, discount_percent, active').eq('id', row.category_id).maybeSingle();
+                if (cat && isOn(cat.active)) { pct = Math.min(100, Math.max(0, Number(cat.discount_percent) || 0)); wiz.categoryName = cat.name || ''; }   // DISCOUNT_V2 — имя группы для выбора скидки
             }
             if (pct > 0 && row && row.payer_id != null) {
                 const { data: payer } = await supabase.from('payers').select('id, active').eq('id', row.payer_id).maybeSingle();
@@ -1711,7 +1712,7 @@ export function openServicePickerModal({
         refs.attachedPatient = p;
         closeAttach();
         renderCalcBar();
-        if (catListEl) { wiz.depositBalance = null; wiz.categoryPct = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); }   // CATALOG_WIZARD_V4
+        if (catListEl) { wiz.depositBalance = null; wiz.categoryPct = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.discountChoice = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); }   // CATALOG_WIZARD_V4
         refreshTierQuotes();   // VISIT_TIER_PRICING_V1 — the patient decides the tier
         const nm = (p.lastName || p.fullName || '').toString().trim();
         toast(nm ? trf('Пациент привязан: {name}', { name: nm }) : tr('Пациент привязан'));
@@ -2344,7 +2345,7 @@ export function openServicePickerModal({
                     h('div', { style: { fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, nm),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—')),
                 patient ? null : h('button', { class: 'x', type: 'button', title: 'Отвязать пациента',
-                    onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); resetQuotes(state.added); wiz.depositBalance = null; wiz.categoryPct = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
+                    onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); resetQuotes(state.added); wiz.depositBalance = null; wiz.categoryPct = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.discountChoice = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
         } else if (!attachMode) {
             // PICKER_CATALOG_EVERYWHERE_V1 — привязка пациента есть только у
             // мастера записи. В режиме привязки пациент либо уже известен (визит),
@@ -2567,7 +2568,48 @@ export function openServicePickerModal({
             } else {
                 const discIn = h('input', { class: 'tp-input', type: 'number', min: '0', max: '100', step: '1',
                     value: String(wizDiscountPct()), style: { width: '72px' },
-                    oninput: (e) => { pm.discountPct = e.target.value; refresh(); } });
+                    oninput: (e) => {
+                        pm.discountPct = e.target.value;
+                        // DISCOUNT_V2 — своё число — выбор «Своя скидка (вручную)»: промокод снимается.
+                        pm.discountChoice = 'manual';
+                        wiz.applied = (wiz.applied || []).filter((x) => isStoredValueCard(x));
+                        if (choiceSel) choiceSel.value = 'manual';
+                        refresh();
+                    } });
+                // DISCOUNT_V2 — выбор ОДНОЙ скидки: группа, промокоды клиники, вручную, без скидки.
+                if (wiz.allDiscounts === undefined) {
+                    wiz.allDiscounts = null;
+                    supabase.from('patient_discounts').select('id, name, kind, percent, amount, remaining, active, valid_from, valid_until, category_id, service_ids, reduces_doctor_share').eq('active', 1).order('name')
+                        .then(({ data }) => { wiz.allDiscounts = Array.isArray(data) ? data : []; if (wiz._railRefresh) wiz._railRefresh(); })
+                        .catch(() => { wiz.allDiscounts = []; });
+                }
+                const discOpts = discountChoiceOptions({ group: calcGroup(), discounts: wiz.allDiscounts || [], fmtMoney: formatMoney,
+                    ctx: { today: localYmd(), categoryId: wizPatientCategoryId(), serviceIds: state.added.map((a) => Number(a.service && a.service.id)) } });
+                const curKey = calcChoice();
+                if (curKey.startsWith('promo:') && !discOpts.some((o) => o.key === curKey) && wizPromo()) {
+                    discOpts.splice(discOpts.length - 1, 0, { key: curKey, kind: 'promo', label: { text: 'Промокод «{name}» — −{value}%', params: { name: wizPromo().name || '', value: String(Number(wizPromo().percent) || 0) } } });
+                }
+                const choiceSel = h('select', { class: 'tp-input', 'data-discount-choice': '', style: { flex: '1', minWidth: 0 },
+                    onchange: () => {
+                        const key = choiceSel.value;
+                        pm.discountChoice = key;
+                        const cards = (wiz.applied || []).filter((x) => isStoredValueCard(x));
+                        if (key.startsWith('promo:')) {
+                            const row = (wiz.allDiscounts || []).find((x) => 'promo:' + x.id === key) || wizPromo();
+                            wiz.applied = row ? [...cards, row] : cards;
+                            pm.discountPct = 0;
+                        } else {
+                            wiz.applied = cards;
+                            if (key === 'none' || key === 'group') pm.discountPct = 0;
+                        }
+                        refresh();
+                    } }, ...discOpts.map((o) => h('option', { value: o.key, selected: o.key === curKey }, trf(o.label.text, o.label.params))));
+                choiceSel.value = curKey;
+                const dNow = pickerDiscount(previewBillLines(), calcDiscountArgs());
+                const why = choiceReason(curKey, { group: calcGroup(), promo: wizPromo(), applied: dNow.restOff, floor: Math.round(dNow.restSubtotal * choiceFloorPct(curKey, calcGroup()) / 100), fmtMoney: formatMoney });
+                box.appendChild(h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginTop: '8px' } },
+                    h('span', { style: { fontSize: '12.5px' } }, tr('Скидка')), choiceSel));
+                if (why) box.appendChild(h('div', { class: 'muted', 'data-discount-reason': '', style: { fontSize: '12.5px', marginTop: '4px' } }, trf(why.text, why.params)));
                 box.appendChild(h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginTop: '8px', justifyContent: 'space-between' } },
                     h('span', { style: { fontSize: '12.5px' } }, 'Скидка (лояльность), %'), discIn));
                 const codeIn = h('input', { class: 'tp-input', placeholder: 'Промокод / карта / сертификат', style: { flex: '1', minWidth: 0 } });
@@ -2692,6 +2734,26 @@ export function openServicePickerModal({
     function wizDiscountPct() {
         return Math.min(100, Math.max(0, Number(wiz.payment.discountPct) || 0));
     }
+    // DISCOUNT_V2 (решение владельца 2026-11-07, п. 4) — ОДНА СКИДКА НА ВЫБОР: группа,
+    // промокод, вручную или без скидки. Не выбрано явно — как было: промокод, если
+    // применён; своя скидка, если введена; иначе скидка группы (или без скидки).
+    function calcGroup() { return groupOf(wiz.categoryName || '', wiz.categoryPct); }
+    function calcChoice() {
+        if (wiz.payment.discountChoice) return wiz.payment.discountChoice;
+        const promo = wizPromo();
+        if (promo) return 'promo:' + promo.id;
+        if (wizDiscountPct() > 0) return 'manual';
+        return Number(wiz.categoryPct) > 0 ? 'group' : 'none';
+    }
+    /** Аргументы pickerDiscount по выбору: одна скидка — без сложения. */
+    function calcDiscountArgs() {
+        const key = calcChoice();
+        return {
+            pct: key === 'manual' ? wizDiscountPct() : 0,
+            promo: String(key).startsWith('promo:') ? wizPromo() : null,
+            categoryPct: choiceFloorPct(key, calcGroup()),
+        };
+    }
     function wizDiscounted(n) {
         return Math.round(Number(n || 0) * (1 - wizDiscountPct() / 100));
     }
@@ -2739,7 +2801,7 @@ export function openServicePickerModal({
         if (wiz.payment.mode !== 'patient') {
             return { full, afterDisc: full, promoOff: 0, packageOff: 0, payable: full, cards: 0, bal: 0, due: full };
         }
-        const d = pickerDiscount(previewBillLines(), { pct: wizDiscountPct(), promo: wizPromo(), categoryPct: wiz.categoryPct || 0 });
+        const d = pickerDiscount(previewBillLines(), calcDiscountArgs());   // DISCOUNT_V2 — одна скидка по выбору
         // DEPOSIT_WALLET_V1 — баланс пациента снова тратится при записи: у
         // сервера теперь есть дверь (record_payment способом 'wallet' списывает
         // баланс в той же транзакции). Тратит только касса/админ.
@@ -2803,6 +2865,7 @@ export function openServicePickerModal({
             if (wizCard()) { toast('Можно применить только одну карту.', 'fail'); return; }
         } else if (wizPromo()) { toast('Можно применить только один промокод.', 'fail'); return; }   // RPC_PORT_V1 — одна скидка на счёт, как в мастере записи
         wiz.applied.push(row);
+        if (!isStoredValueCard(row)) { wiz.payment.discountChoice = 'promo:' + row.id; wiz.payment.discountPct = 0; }   // DISCOUNT_V2 — одна скидка
         toast(trf('{kind} применён: {code}', { kind: tr(KIND_RU3[row.kind] || 'Код'), code: row.code || row.name }));
     }
 
@@ -2830,8 +2893,8 @@ export function openServicePickerModal({
             const cid = wizPatientCategoryId();
             if (cid) {
                 try {
-                    const { data } = await supabase.from('patient_categories').select('id, discount_percent, active').eq('id', cid).maybeSingle();
-                    if (data && (data.active === 1 || data.active === true)) wiz.categoryPct = Math.min(100, Math.max(0, Number(data.discount_percent) || 0));
+                    const { data } = await supabase.from('patient_categories').select('id, name, discount_percent, active').eq('id', cid).maybeSingle();
+                    if (data && (data.active === 1 || data.active === true)) { wiz.categoryPct = Math.min(100, Math.max(0, Number(data.discount_percent) || 0)); wiz.categoryName = data.name || ''; }   // DISCOUNT_V2
                 } catch (_) {}
             }
         }
@@ -3346,7 +3409,8 @@ export function openServicePickerModal({
                 // отпускает в очередь ВСЕ строки счёта — и прежние, неоплаченные.
                 const spendStored = canSpendStoredValue()
                     && ((wiz.useBalance && (Number(wiz.depositBalance) || 0) > 0) || !!cardRow);
-                const bill = await invoicePickerLines({ visitId: visit.id, lines: patientRows.map(billLineOf), pct: wizDiscountPct(), promo: promoRow, categoryPct: wiz.categoryPct || 0, append: !spendStored });
+                const da = calcDiscountArgs();   // DISCOUNT_V2 — одна скидка по выбору; сервер считает по discount_choice
+                const bill = await invoicePickerLines({ visitId: visit.id, lines: patientRows.map(billLineOf), pct: da.pct, promo: da.promo ? promoRow : null, categoryPct: da.categoryPct, append: !spendStored, choice: calcChoice() });
                 if (bill.error || !bill.data || !bill.data.invoice) {
                     const msg = (bill.error && (bill.error.message || bill.error)) || '—';
                     console.warn('[wizard] invoice:', msg);
@@ -4010,13 +4074,14 @@ export function pickerTierNote(a, people = []) {
  * INVOICE_APPEND_V1 (ревью M1) — append: false — новый счёт, а не дописывание
  * в неоплаченный счёт визита (его просят, когда сразу платят балансом/картой).
  */
-export async function invoicePickerLines({ visitId, lines, pct = 0, promo = null, categoryPct = 0, append = true }) {
+export async function invoicePickerLines({ visitId, lines, pct = 0, promo = null, categoryPct = 0, append = true, choice = null }) {
     const d = pickerDiscount(lines, { pct, promo, categoryPct });
     const ids = (lines || []).map((l) => Number(l.visit_service_id)).filter((n) => Number.isInteger(n) && n > 0);
     let data = null, error = null;
     try {
         const res = await supabase.rpc('create_invoice_for_visit',
-            { visit_id: visitId, visit_service_ids: ids, discount_amount: d.discount, ...(append === false ? { append: false } : {}) });
+            { visit_id: visitId, visit_service_ids: ids, discount_amount: d.discount, ...(append === false ? { append: false } : {}),
+              ...(choice && (promo || !String(choice).startsWith('promo:')) ? choiceArgs(choice) : {}) });   // DISCOUNT_V2 — промокод не прошёл проверку — правило 3.21
         data = res.data || null;
         error = res.error || null;
     } catch (e) { error = e; }

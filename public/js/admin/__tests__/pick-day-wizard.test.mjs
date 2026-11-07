@@ -570,17 +570,21 @@ test('ревью, остаток 6: один день, VIP 10 % и −5 000 су
   assert.deepEqual(invoiceMoney(), [[140000, 14000, 126000]]);
 });
 
-test('ревью, остаток 6: один день, VIP 10 % снижен до 5 % + промокод 3 000 — смета 126 000, как счёт; в счёт ушло прежнее 10 000', async () => {
+// DISCOUNT_V2 (решение владельца 2026-11-07, п. 4) — ОДНА СКИДКА: промокод, выбранный после
+// «5 %», ЗАМЕНЯЕТ и ручную скидку, и скидку группы (прежде складывались: 5 % + 3 000, а пол
+// группы поднимал до 14 000). Регистратор видит обе скидки в выборе и выбирает одну.
+test('ревью, остаток 6 → DISCOUNT_V2: один день, VIP 10 % снижен до 5 %, затем промокод 3 000 — одна скидка: 3 000, смета 137 000, как счёт', async () => {
   seed();
   vipPatient(10);
   DB.prepare("INSERT INTO patient_discounts (name, kind, percent, amount, active) VALUES ('ПРОБА', 'promo', 0, 3000, 1)").run();
   await oneDayCart();
   await pctDiscount(5);
   await pickPromo('ПРОБА');
-  assert.equal(estimateTotal(), 126000, 'смета не знает пола группы');
+  assert.equal(estimateTotal(), 137000, 'скидки сложились');
   await pressUntilCreate();
-  assert.deepEqual(sentDiscounts(), [10000], 'в счёт уходит не прежнее');
-  assert.deepEqual(invoiceMoney(), [[140000, 14000, 126000]]);
+  assert.deepEqual(sentDiscounts(), [3000]);
+  assert.deepEqual(invoiceMoney(), [[140000, 3000, 137000]]);
+  assert.equal(RPC.find((c) => c.name === 'create_invoice_for_visit').body.discount_choice, 'promo');
 });
 
 test('ревью, остаток 6: один день, без группы, −5 000 суммой — как прежде: смета 135 000 и счёт 135 000', async () => {

@@ -37,6 +37,7 @@ import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
 // они действуют; одно правило на оба мастера.
 import { eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';
+import { groupOf, discountChoiceOptions, keepChoice, choiceArgs, choiceFloorPct, choiceReason } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
 import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
@@ -256,6 +257,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         discountPct: 0,      // «Скидка (лояльность), %»
         discountAbs: 0,      // «Скидка (лояльность), сум»
         promo: null,         // применённый patient_discounts: { name, percent, amount, service_ids }
+        discountChoice: 'none',   // DISCOUNT_V2 — выбранная скидка: 'none' | 'group' | 'manual' | 'promo:<id>' (одна, без сложения)
         discounts: [],       // DISCOUNT_RULES_V1 — все действующие скидки клиники; подходящие отбираются на лету
         bookings: [],        // BOOKED_JOIN_V1 — записи пациента (врач, время) на 15 дней
         bookingsReady: Promise.resolve(),
@@ -667,7 +669,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 wiz.categoryPct = Math.min(100, Number(cat.discount_percent));
                 // Подставляется, только если регистратор ещё ничего не ввёл:
                 // сервер всё равно применит скидку группы как минимум (billing.js).
-                if (!Number(wiz.discountPct) && !Number(wiz.discountAbs)) { wiz.discountMode = 'pct'; wiz.discountPct = wiz.categoryPct; }
+                if (!Number(wiz.discountPct) && !Number(wiz.discountAbs)) { wiz.discountMode = 'pct'; wiz.discountPct = wiz.categoryPct; wiz.discountChoice = 'group'; }   // DISCOUNT_V2 — по умолчанию скидка группы
             }
         } catch (e) { wiz.discounts = []; }
         // BOOKED_JOIN_V1 — записи пациента на 15 дней: услуга к врачу, к которому пациент
@@ -2467,7 +2469,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const room = restCart().filter((c) => !isCovered(c)).reduce((s, c) => s + cartLinePrice(c) * c.qty, 0);
         const job = visibleCart().some((c) => !isCovered(c));
         if (!job) return 0;
-        const cat = Math.min(100, Math.max(0, Number(wiz.categoryPct) || 0));
+        const cat = floorPctNow();   // DISCOUNT_V2 — пол группы сервера по выбору скидки
         return r2(Math.min(Math.max(send, r2(room * cat / 100)), room));
     }
     // INVOICE_APPEND_V1 (ревью-2) — СМЕТА НА НЕСКОЛЬКО ДНЕЙ — ЭТО НЕСКОЛЬКО
@@ -2499,7 +2501,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const money = (list) => list.reduce((s, c) => s + cartLinePrice(c) * c.qty, 0);
         const manual = !doctorBill;   // REFERRAL_BILL_V1 — врач присылает 0: только пол группы сервера
         const pct = manual && wiz.discountMode !== 'abs' ? Math.min(100, Math.max(0, Number(wiz.discountPct) || 0)) : 0;
-        const cat = Math.min(100, Math.max(0, Number(wiz.categoryPct) || 0));
+        const cat = floorPctNow();   // DISCOUNT_V2 — пол группы сервера по выбору скидки
         const rest = restCart();
         const vis = visibleCart();
         const rows = days.map((day) => {
@@ -2538,6 +2540,28 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // Вся скидка сметы — для показа и печати: пакет + остальное.
     function discountAmount() {
         return Math.min(cartTotal(), Math.round(packageDiscountTotal()) + restDiscount());
+    }
+    // DISCOUNT_V2 — группа пациента со скидкой ({ name, pct } или null) и пол группы,
+    // который сервер положит при выбранной скидке (группа и «вручную» — да).
+    function wizGroup() { return groupOf(wiz.categoryName, wiz.categoryPct); }
+    function floorPctNow() { return choiceFloorPct(wiz.discountChoice, wizGroup()); }
+    /** DISCOUNT_V2 — варианты выбора скидки на ЭТУ смету (discount-choice.js). */
+    function discountOptions() {
+        return discountChoiceOptions({
+            group: wizGroup(), discounts: wiz.discounts, fmtMoney: fmtPrice,
+            ctx: { today: localYmd(), categoryId: wiz.categoryId, serviceIds: visibleCart().map((c) => Number(c.svc.id)) },
+        });
+    }
+    /** DISCOUNT_V2 — выбрать скидку: одна, без сложения; значения поля «вручную» — по выбору. */
+    function applyDiscountChoice(key) {
+        wiz.discountChoice = key;
+        wiz.promo = null;
+        if (key === 'group') { wiz.discountMode = 'pct'; wiz.discountPct = wiz.categoryPct; }
+        else if (key === 'none') { wiz.discountPct = 0; wiz.discountAbs = 0; }
+        else if (String(key).startsWith('promo:')) {
+            wiz.discountPct = 0; wiz.discountAbs = 0;
+            wiz.promo = (wiz.discounts || []).find((d) => 'promo:' + d.id === key) || null;
+        }
     }
     // Which discounts this patient may pick today for THIS cart.
     function discountChoices() {
@@ -2923,6 +2947,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const discRow = h('div', { class: 'row', style: { gap: '10px', display: 'none' } },
             h('span', { class: 'muted', style: { flex: 1, fontSize: '13.5px' } }, 'Скидка'),
             discEl);
+        // DISCOUNT_V2 — почему скидка такая: «Скидка группы «VIP» — 10%», промокод, вручную.
+        const discWhyEl = h('div', { class: 'muted', 'data-discount-reason': '', style: { fontSize: '12.5px', textAlign: 'right', display: 'none' } });
         // PACKAGES_V1 (ревью I-1) — скидка пакета отдельной строкой: её даёт
         // сам пакет, а не поле лояльности ниже, и регистратор должен видеть,
         // откуда взялась каждая часть итога.
@@ -2938,6 +2964,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const d = restDiscount();
             discRow.style.display = d > 0 ? '' : 'none';
             discEl.textContent = '−' + fmtPrice(d) + ' ' + tr('сум');
+            const why = doctorBill ? null : choiceReason(wiz.discountChoice, { group: wizGroup(), promo: wiz.promo, applied: d,
+                floor: Math.round(restTotal() * floorPctNow() / 100), fmtMoney: fmtPrice });
+            discWhyEl.style.display = why ? '' : 'none';
+            discWhyEl.textContent = why ? trf(why.text, why.params) : '';
             totEl.textContent = fmtPrice(grandTotal()) + ' ' + tr('сум');
         };
 
@@ -2964,6 +2994,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const n = Math.max(0, Number(discInp.value) || 0);
             if (isAbs()) wiz.discountAbs = n;
             else wiz.discountPct = Math.min(100, n);
+            // DISCOUNT_V2 — своё число в поле — это выбор «Своя скидка (вручную)»: одна скидка.
+            if (wiz.discountChoice !== 'manual') { wiz.discountChoice = 'manual'; wiz.promo = null; if (choiceSel) choiceSel.value = 'manual'; }
             refreshTotals();
         });
 
@@ -2997,8 +3029,20 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // DISCOUNT_RULES_V1 — выпадающий список подходящих скидок вместо
         // набора кода: регистратор видит, что положено ЭТОМУ пациенту сегодня
         // на ЭТУ смету (срок, группа, услуги — discount-rules.js), и выбирает.
-        const choices = discountChoices();
-        if (wiz.promo && !choices.some((d) => d.id === wiz.promo.id)) wiz.promo = null;   // состав сметы изменился — скидка больше не подходит
+        // DISCOUNT_V2 — промокоды ушли в выбор скидки (одна скидка); здесь — только карты
+        // и сертификаты: ими платят, скидкой они не являются.
+        const choices = discountChoices().filter((d) => isStoredValueCard(d));
+        const discOpts = discountOptions();
+        wiz.discountChoice = keepChoice(wiz.discountChoice, discOpts, wizGroup());   // состав сметы изменился — промокод мог перестать подходить
+        if (wiz.discountChoice === 'group' && !Number(wiz.discountPct)) applyDiscountChoice('group');
+        if (String(wiz.discountChoice).startsWith('promo:')) applyDiscountChoice(wiz.discountChoice);
+        else if (wiz.promo) wiz.promo = null;
+        const choiceSel = doctorBill ? null : h('select', {
+            'data-discount-choice': '',
+            style: { flex: 1, minWidth: 0, padding: '10px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px' },
+            onchange: () => { applyDiscountChoice(choiceSel.value); syncDiscInput(); refreshTotals(); },
+        }, ...discOpts.map((o) => h('option', { value: o.key, selected: o.key === wiz.discountChoice }, trf(o.label.text, o.label.params))));
+        if (choiceSel) choiceSel.value = wiz.discountChoice;
         if (wiz.card && !choices.some((d) => d.id === wiz.card.id)) wiz.card = null;   // CARD_BALANCE_V1
         const promoSel = h('select', {
             style: { flex: 1, minWidth: 0, padding: '10px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px' },
@@ -3016,28 +3060,22 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     return;
                 }
                 wiz.card = null;
-                wiz.promo = picked;
                 refreshTotals();
-                if (wiz.promo) {
-                    const parts = discountOptionParts(wiz.promo, fmtPrice);
-                    toast(trf('Применено: {what}', { what: parts.name + (parts.value ? ' (' + parts.value + ')' : '') }), 'ok');
-                }
             },
         },
             h('option', { value: '' }, choices.length ? tr('— выберите скидку —') : tr('Подходящих скидок нет')),
             ...choices.map((d) => {
                 const parts = discountOptionParts(d, fmtPrice);
-                return h('option', { value: String(d.id), selected: !!((wiz.promo && wiz.promo.id === d.id) || (wiz.card && wiz.card.id === d.id)) },
+                return h('option', { value: String(d.id), selected: !!(wiz.card && wiz.card.id === d.id) },
                     parts.name + (parts.value ? ' — ' + parts.value : '') + (parts.scoped ? ' · ' + tr('на выбранные услуги') : ''));
             }));
-        if (wiz.promo) promoSel.value = String(wiz.promo.id);
         if (wiz.card) promoSel.value = String(wiz.card.id);
         if (!choices.length) promoSel.disabled = true;
 
         // PROMO_TICK_V1 — промокод используется редко: по умолчанию поле
         // скрыто, вместо него маленькая галочка. Применённый код держит
         // блок раскрытым.
-        if (wiz.promo || wiz.card) wiz.promoOpen = true;
+        if (wiz.card) wiz.promoOpen = true;
         const promoRow = h('div', { class: 'row', style: { gap: '8px', display: wiz.promoOpen ? '' : 'none' } }, promoSel);
         const promoChk = h('input', {
             type: 'checkbox', checked: !!wiz.promoOpen,
@@ -3046,11 +3084,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         promoChk.addEventListener('change', () => {
             wiz.promoOpen = promoChk.checked;
             promoRow.style.display = wiz.promoOpen ? '' : 'none';
-            if (!wiz.promoOpen && (wiz.promo || wiz.card)) { wiz.promo = null; wiz.card = null; promoSel.value = ''; refreshTotals(); }   // снятие галочки снимает код
+            if (!wiz.promoOpen && wiz.card) { wiz.card = null; promoSel.value = ''; refreshTotals(); }   // снятие галочки снимает карту
             if (wiz.promoOpen) promoSel.focus();
         });
         const promoTick = h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer', fontSize: '12.5px', color: 'var(--ink-500)' } },
-            promoChk, 'Промокод / карта / сертификат');
+            promoChk, tr('Оплатить картой / сертификатом'));
 
         railEl.appendChild(h('div', { style: { borderTop: '1px solid var(--ink-100)', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' } },
             h('div', { style: { fontSize: '13.5px', fontWeight: 800, color: 'var(--ink-900)' } }, 'Кто платит'),
@@ -3058,6 +3096,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 : [h('div', { class: 'muted', 'data-payer-note': '', style: { fontSize: '12.5px' } }, tr('Плательщика укажет регистратура или касса.'))]),   // LIVE_AUDIT_FIX_V1
             // REFERRAL_BILL_V1 — ручной скидки и промокода у врача нет: сервер
             // их врачу не примет (в счёт уходит discount_amount: 0).
+            // DISCOUNT_V2 — выбор ОДНОЙ скидки: группа, промокоды, вручную, без скидки.
+            doctorBill ? null : h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
+                h('span', { style: { fontSize: '13.5px', color: 'var(--ink-700)' } }, tr('Скидка')), choiceSel),
             doctorBill ? null : h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
                 discLabelEl, modesEl, discInp),
             // CATEGORY_DISCOUNT_V1 — откуда взялся процент: скидка группы пациента.
@@ -3066,14 +3107,15 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 doctorBill
                     ? trf('Скидка группы «{name}» — {pct}%: применится в счёте сама.', { name: wiz.categoryName, pct: wiz.categoryPct })
                     : trf('Скидка группы «{name}» — {pct}% подставлена; можно изменить.', { name: wiz.categoryName, pct: wiz.categoryPct })) : null,
-            doctorBill ? null : promoTick,   // REFERRAL_BILL_V1
-            doctorBill ? null : promoRow,    // REFERRAL_BILL_V1
+            doctorBill || !choices.length ? null : promoTick,   // REFERRAL_BILL_V1 · DISCOUNT_V2 — только карты
+            doctorBill || !choices.length ? null : promoRow,    // REFERRAL_BILL_V1
             balanceRow(),
         ));
 
         railEl.appendChild(h('div', { style: { borderTop: '2px solid var(--ink-100)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '4px' } },
             pkgDiscRow,
             discRow,
+            discWhyEl,   // DISCOUNT_V2
             h('div', { class: 'row', style: { gap: '10px' } },
                 h('span', { style: { flex: 1, fontWeight: 800, fontSize: '17px' } }, 'Итого'),
                 totEl),
@@ -3532,6 +3574,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         const disc = job.payer === null ? (dayRow ? dayDiscountSend(dayRow, discountLeft) : discountLeft) : 0;
                         const { data: iRes, error: iErr } = await supabase.rpc('create_invoice_for_visit',
                             { visit_id: visit.id, visit_service_ids: job.ids, discount_amount: disc, payer_id: job.payer,
+                                ...(doctorBill || job.payer !== null ? {} : choiceArgs(wiz.discountChoice)),   // DISCOUNT_V2 — сервер считает по выбору
                                 ...(spendStored && job.payer === null ? { append: false } : {}) });   // INVOICE_APPEND_V1 (ревью M1)
                         if (iErr) {
                             // REFERRAL_BILL_V1 — врачу «выставить из визита» не

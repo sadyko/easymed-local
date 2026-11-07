@@ -944,7 +944,8 @@ test('REFERRAL_BILL_V1: регистратура — как прежде: пла
     const txt = textOf(w.overlay());
     assert.ok(!/Плательщика укажет регистратура/.test(txt));
     assert.ok(walk(w.overlay()).find((n) => n.tagName === 'INPUT' && n.max === '100'), 'у регистратуры пропало поле скидки');
-    assert.match(txt, /Промокод \/ карта \/ сертификат/);
+    // DISCOUNT_V2 (3.22.0) — промокоды — в выборе скидки (одна скидка); карты — «Оплатить картой / сертификатом», если они есть.
+    assert.ok(walk(w.overlay()).find((n) => n.tagName === 'SELECT' && n.attrs['data-discount-choice'] !== undefined), 'у регистратуры нет выбора скидки');
     assert.match(txt, /Скидка группы «VIP» — 10% подставлена; можно изменить/);
     await pressUntilCreate();
     const calls = RPC.filter((c) => c.name === 'create_invoice_for_visit').map((c) => c.body);

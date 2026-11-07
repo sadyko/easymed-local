@@ -13575,5 +13575,19 @@ export const STRINGS = {
   "Срок промокода «{name}» истёк.": {"en":"The promo code «{name}» has expired.","ru":"Срок промокода «{name}» истёк.","uz":"«{name}» promokodining muddati tugagan."},   // DISCOUNT_V2
   "Промокод «{name}» — только для другой группы пациентов.": {"en":"The promo code «{name}» is only for another patient group.","ru":"Промокод «{name}» — только для другой группы пациентов.","uz":"«{name}» promokodi faqat boshqa bemorlar guruhi uchun."},   // DISCOUNT_V2
   "Промокод «{name}» действует на другие услуги.": {"en":"The promo code «{name}» applies to other services.","ru":"Промокод «{name}» действует на другие услуги.","uz":"«{name}» promokodi boshqa xizmatlarga amal qiladi."},   // DISCOUNT_V2
+  // DISCOUNT_V2 — выбор одной скидки в окнах регистрации (discount-choice.js, мастер, быстрая регистрация, калькулятор)
+  "Скидка группы «{name}» — {pct}%": {"en":"Group «{name}» discount — {pct}%","ru":"Скидка группы «{name}» — {pct}%","uz":"«{name}» guruhi chegirmasi — {pct}%"},   // DISCOUNT_V2
+  "Своя скидка (вручную)": {"en":"Own discount (manual)","ru":"Своя скидка (вручную)","uz":"O‘z chegirmasi (qo‘lda)"},   // DISCOUNT_V2
+  "Промокод «{name}» — −{value}%": {"en":"Promo code «{name}» — −{value}%","ru":"Промокод «{name}» — −{value}%","uz":"«{name}» promokodi — −{value}%"},   // DISCOUNT_V2
+  "Промокод «{name}» — −{value}% · на выбранные услуги": {"en":"Promo code «{name}» — −{value}% · on selected services","ru":"Промокод «{name}» — −{value}% · на выбранные услуги","uz":"«{name}» promokodi — −{value}% · tanlangan xizmatlarga"},   // DISCOUNT_V2
+  "Промокод «{name}» — −{value} сум": {"en":"Promo code «{name}» — −{value} UZS","ru":"Промокод «{name}» — −{value} сум","uz":"«{name}» promokodi — −{value} so‘m"},   // DISCOUNT_V2
+  "Промокод «{name}» — −{value} сум · на выбранные услуги": {"en":"Promo code «{name}» — −{value} UZS · on selected services","ru":"Промокод «{name}» — −{value} сум · на выбранные услуги","uz":"«{name}» promokodi — −{value} so‘m · tanlangan xizmatlarga"},   // DISCOUNT_V2
+  "Оплатить картой / сертификатом": {"en":"Pay with a card / certificate","ru":"Оплатить картой / сертификатом","uz":"Karta / sertifikat bilan to‘lash"},   // DISCOUNT_V2 — карты: деньги, а не скидка
+  // DISCOUNT_V2 — «Только на эти услуги»: окно выбора (views/discount-service-picker.js)
+  "Поиск услуги или категории…": {"en":"Search for a service or category…","ru":"Поиск услуги или категории…","uz":"Xizmat yoki toifani qidirish…"},   // DISCOUNT_V2
+  "Снять всю категорию": {"en":"Clear the whole category","ru":"Снять всю категорию","uz":"Butun toifani olib tashlash"},   // DISCOUNT_V2
+  "Выбрать всю категорию": {"en":"Select the whole category","ru":"Выбрать всю категорию","uz":"Butun toifani tanlash"},   // DISCOUNT_V2
+  "Услуги скидки": {"en":"Discount services","ru":"Услуги скидки","uz":"Chegirma xizmatlari"},   // DISCOUNT_V2
+  "Выбрать услуги…": {"en":"Choose services…","ru":"Выбрать услуги…","uz":"Xizmatlarni tanlash…"},   // DISCOUNT_V2
   // /S1 3.22.0
 };
