@@ -1679,6 +1679,23 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                         st: labDocStatus(orders, b.ready, b.total),
                     });
                 }
+                // Ревью S3, M-1 — результаты заказов визита без флага «лабораторная» и без
+                // типа 'lab': в очередь лаборатории их ставит отдел или привязанная панель
+                // (lab-service.js isLabService), а в g.orders их нет. 3.21.1 печатал их в
+                // документе визита; разбивка по заказам их теряла — и в списке, и в
+                // «Печать…». Теперь — отдельным документом визита (с заказами из строк
+                // «Услуг», чтобы окно «Печать…» их показало).
+                const orphans = g.rows.filter(r => !byId.has(Number(r.vsId)));
+                if (orphans.length) {
+                    const ids = [...new Set(orphans.map(r => Number(r.vsId)).filter(Number.isFinite))];
+                    const svcById = new Map((services || []).map(o => [Number(o.id), o]));
+                    const orders = ids.map(id => svcById.get(id) || { id, name: (orphans.find(r => Number(r.vsId) === id) || {}).panel || '—', status: '' });
+                    const total = ids.length || 1;
+                    out.push({ _lab: true, id: 'lab:' + key + ':other', doc_type: 'lab',
+                        title: trf('Результаты анализов · {n} анализ(ов)', { n: total }),
+                        created_at: (g.day || '') + 'T12:00:00Z', rows: orphans, orders,
+                        ready: total, total, complete: true, st: labDocStatus(orders, total, total) });
+                }
             }
             return out;
         }

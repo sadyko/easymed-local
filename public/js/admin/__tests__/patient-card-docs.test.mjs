@@ -414,3 +414,49 @@ test('LAB_PRINT_PICK_V1: «Печать…» — окно с готовыми д
   assert.ok(html.includes('Лейкоциты') && html.includes('Глюкоза'), 'отмеченные анализы — на бланке');
   assert.ok(!html.includes('ТТГ'), 'снятый анализ напечатан');
 });
+
+// Ревью S3, M-1 — услугу в очередь лаборатории ставит и отдел, и привязанная панель
+// (isLabService), а флага is_lab / типа 'lab' у неё может не быть («Мазок на флору»).
+// 3.21.1 печатал её результаты в документе визита; разбивка 3.22 строила документы
+// только из заказов с флагом, и результаты «Мазка» не попадали ни в один документ —
+// ни в строку списка, ни в окно «Печать…». Теперь они — отдельным документом визита.
+test('ревью M-1: результаты анализа без флага «лабораторная» (отдел/панель) — в документе и в «Печать…», как в 3.21.1', async () => {
+  const lineX = (id, name, status, verified_at, svc) => ({ id, visit_id: 20, service_id: id, status, verified_at, visit_date: '2026-11-07',
+    quantity: 1, total: 0, services: { name, ...svc } });
+  const lines = [lineX(101, 'ОАК', 'completed', T1, { is_lab: 1, type: 'lab' }), lineX(104, 'Мазок на флору', 'resulted', null, { is_lab: 0, type: 'other' })];
+  calls = []; opened = [];
+  payload = { ...payloadWith([]), services: lines, lab_orders: lines,
+    lab_results: [labRes(1, 101, 'Лейкоциты', '6.1'), labRes(4, 104, 'Флора', 'кокковая')] };
+  setFullAccess('Администратор');
+  const printed = [];
+  const prevOpen = globalThis.window.open;
+  globalThis.window.open = () => ({ document: { open() {}, write(s) { printed.push(String(s)); }, close() {} }, focus() {}, print() {} });
+  document.body.children.length = 0;
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => (String(url).startsWith('/api/db') ? { ok: true, status: 200, json: async () => ({ data: [] }) } : prevFetch(url, opts));
+  try {
+    const box = mk('div');
+    renderPatientCard(box, { onNavigate() {}, payload: { id: 1 } });
+    await tick();
+    openDocsTab(box);
+    await tick();
+    const rows = walk(box).filter((n) => n.tagName === 'TR' && textOf(n).includes('Результаты анализов'));
+    assert.equal(rows.length, 2, 'ОАК (выдан) и «Мазок» — по документу: ' + rows.map(textOf).join(' | '));
+    // «Печать…» — оба документа готовы и отмечены; бланк несёт и «Флору».
+    walk(box).find((n) => n.tagName === 'BUTTON' && n.hasAttribute('data-docs-print')).click();
+    await tick();
+    const dlg = walk(document.body).find((n) => n.hasAttribute && n.hasAttribute('data-lab-print-pick'));
+    assert.ok(dlg, 'окно выбора не открылось');
+    const ids = walk(dlg).filter((n) => n.tagName === 'INPUT' && n.hasAttribute('data-pick-order')).map((b) => b.getAttribute('data-pick-order')).sort();
+    assert.deepEqual(ids, ['101', '104']);
+    walk(dlg).filter((n) => n.tagName === 'BUTTON').find((b) => textOf(b).includes('Печать')).click();
+    await tick(80);
+  } finally {
+    globalThis.window.open = prevOpen;
+    globalThis.fetch = prevFetch;
+  }
+  assert.equal(printed.length, 1);
+  const html = printed[0].replace(/<style[\s\S]*?<\/style>/g, '');
+  assert.ok(html.includes('Лейкоциты'), 'ОАК на бланке');
+  assert.ok(html.includes('Флора'), 'результат «Мазка» пропал с бланка');
+});
