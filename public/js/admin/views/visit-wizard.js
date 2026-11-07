@@ -540,6 +540,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
     // ---- shell ----
     const overlay = h('div', {
+        'data-visit-wizard': '',   // DIAG_ROUTE_V1 (3.22.0, ревью I-2) — кабинет не обновляет список под мастером
         style: {
             position: 'fixed', inset: '0', zIndex: '150',
             background: 'var(--ink-25, #f6f8f9)',

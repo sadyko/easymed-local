@@ -135,7 +135,10 @@ globalThis.fetch = async (url, opts) => {
     if (isQueue) {
       // DIAG_ROUTE_V1 (D7) — очередь читается двумя запросами (открытые строки и окно
       // завершённых); одно перечитывание — один запрос открытых.
-      if ((body.filters || []).some((f) => f.col === 'status' && f.op === 'in')) QUEUE_READS++;
+      // DIAG_ROUTE_V1 (3.22.0, ревью L-2) — открытые строки — двумя запросами (консультации по виду
+      // приёма — service_id пуст — и услуги каталога); одно перечитывание — один запрос открытых услуг.
+      if ((body.filters || []).some((f) => f.col === 'status' && f.op === 'in')
+          && !(body.filters || []).some((f) => f.col === 'service_id' && f.op === 'is')) QUEUE_READS++;
       if (FAIL_QUEUE) return { ok: false, status: 500, json: async () => ({ error: { message: 'сбой сервера' } }) };
     }
     let rows = TABLES()[body.table] || [];

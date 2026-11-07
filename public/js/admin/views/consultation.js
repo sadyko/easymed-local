@@ -335,11 +335,13 @@ function cabinetOnScreen() {
     if (state.tab !== 'appointments') return false;
     return !(containerRef.style && containerRef.style.display === 'none');
 }
-/** Открыто модальное окно (у всех окон приложения — .modal / .modal-backdrop). */
+/** Открыто модальное окно (у всех окон приложения — .modal / .modal-backdrop) или полноэкранный
+ *  мастер записи «Направить на услуги» (у его подложки класса .modal нет — метка data-visit-wizard;
+ *  DIAG_ROUTE_V1, 3.22.0, ревью I-2). */
 function dialogOpen() {
     try {
         if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return false;
-        return !!document.querySelector('.modal-backdrop, .modal');
+        return !!document.querySelector('.modal-backdrop, .modal, [data-visit-wizard]');
     } catch (_) { return false; }
 }
 /** Снять таймер (новое открытие раздела, уход с экрана). Экспорт — для проверки. */
@@ -557,6 +559,27 @@ function unassignedBlock() {
 const CABINET_OPEN_STATUSES = ['added', 'queued', 'in_progress'];
 const CABINET_OPEN_LIMIT = 5000;
 const CABINET_DONE_WINDOW = 300;
+// DIAG_ROUTE_V1 (3.22.0, ревью L-2) — открытые строки клиники у администратора — визиты не
+// старше этого числа дней (и все будущие): давние незакрытые строки не тратят предел.
+const CABINET_ADMIN_PAST_DAYS = 60;
+
+/**
+ * DIAG_ROUTE_V1 (3.22.0, ревью L-3) — открытые и завершённые строки читаются параллельно; строку,
+ * завершённую между двумя чтениями, вернут оба — она одна, завершённая (на месте открытой).
+ * Экспорт — для проверки.
+ */
+export function mergeOpenDone(open, done) {
+    const doneById = new Map((done || []).map((r) => [String(r.id), r]));
+    const out = [];
+    const seen = new Set();
+    for (const r of [...(open || []), ...(done || [])]) {
+        const k = String(r.id);
+        if (seen.has(k)) continue;   // одна строка — один раз (и из двух запросов открытых)
+        seen.add(k);
+        out.push(doneById.get(k) || r);
+    }
+    return out;
+}
 async function loadServices() {
     const build = () => {
         let query = supabase
@@ -588,13 +611,33 @@ async function loadServices() {
         return query;
     };
     const unassignedP = loadUnassigned();   // DIAG_ROUTE_V1 (ревью M-1) — параллельно, своим запросом
-    const [openRes, doneRes] = await Promise.all([
-        build().in('status', CABINET_OPEN_STATUSES).order('created_at', { ascending: false }).limit(CABINET_OPEN_LIMIT),
+    // DIAG_ROUTE_V1 (3.22.0, ревью L-2) — предел открытых строк не тратится на чужое кабинету:
+    // строки отменённых и несостоявшихся визитов и услуги групп «Лаборатория» / «Процедуры»
+    // отсекает SQL (прежде — экран, после предела: у администратора запись, сделанная заранее,
+    // пропадала за 5000 более новых анализов). Двумя запросами: консультации по виду приёма
+    // (услуги нет — фильтр по группе их бы выбросил) и услуги каталога. «Консультации» из
+    // отделения «Лаборатория» отсекает экран, как прежде (_goesElsewhere). У администратора —
+    // визиты не старше CABINET_ADMIN_PAST_DAYS дней (и все будущие).
+    const adminFrom = (() => {
+        const scoped = (typeof scopedProviderId === 'function') ? scopedProviderId() : null;
+        if (scoped) return null;
+        const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - CABINET_ADMIN_PAST_DAYS);
+        return d.toISOString();
+    })();
+    const openLive = (q) => {
+        let x = q.in('status', CABINET_OPEN_STATUSES).not('visits.status', 'in', '(cancelled,no_show)');
+        if (adminFrom) x = x.gte('visits.visit_date', adminFrom);
+        return x;
+    };
+    const [consultRes, svcRes, doneRes] = await Promise.all([
+        openLive(build()).is('service_id', null).order('created_at', { ascending: false }).limit(CABINET_OPEN_LIMIT),
+        openLive(build()).not('service_id', 'is', null).not('services.type', 'in', '(lab,procedure)')
+            .order('created_at', { ascending: false }).limit(CABINET_OPEN_LIMIT),
         build().eq('status', 'completed').order('created_at', { ascending: false }).limit(CABINET_DONE_WINDOW),
     ]);
     state.unassigned = await unassignedP;
-    const error = openRes.error || doneRes.error;
-    const data = [...(openRes.data || []), ...(doneRes.data || [])];
+    const error = consultRes.error || svcRes.error || doneRes.error;
+    const data = mergeOpenDone([...(consultRes.data || []), ...(svcRes.data || [])], doneRes.data || []);   // ревью L-3
     if (error) {
         console.error('[my-services] load failed:', error);
         toast('Could not load services: ' + error.message, 'fail');
