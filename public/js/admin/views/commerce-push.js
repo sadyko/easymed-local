@@ -22,7 +22,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { fileTo16x9Jpeg } from './image-16x9.js';
-import { settingsTileAllows, isRouteAllowed } from '../permissions.js';
+import { commerceToolLevel, isRouteAllowed } from '../permissions.js';   // COMMERCE_BLOCK_V1
 
 const MEDIA_BUCKET = 'telegram-media';   // та же корзина, что у рассылки в Telegram
 const CAPTION_LIMIT = 1024;
@@ -33,10 +33,11 @@ async function rpc(name, args = {}) {
     return data;
 }
 
-/** Каналы, которые роли можно: Telegram — «Telegram-бот: Изменение», SMS — администратор. */
+/** Каналы, которые роли можно: Telegram — строка «Push-уведомления» (COMMERCE_BLOCK_V1;
+ *  пока не настроена — «Telegram-бот: Изменение»), SMS — администратор. */
 export function pushChannels() {
     const out = [];
-    if (settingsTileAllows('settings.telegram', 'edit')) out.push('telegram');
+    if (commerceToolLevel('commerce_push') === 'edit') out.push('telegram');
     if (isRouteAllowed('sms-settings')) out.push('sms');
     return out;
 }

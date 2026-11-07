@@ -58,6 +58,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm9';   // ROLES_SAVE_TRUTH_V1 — сбор с «показанным при открытии»; ROLES_REVIEW_V1 — семья без ворот по списку ролей, ключи другой сборки переносятся
 // V3121_ROLES — «Проверьте права этой роли»: «Просмотр» от старого экрана «Роли» (мигр. 215).
 import { roleReviewNotice } from './roles-review.js';
+import { CATALOG, LEVEL_LABELS } from '../../shared/permission-catalog.js';   // ROLES_CLEAR_V1 — метки сводки по строкам матрицы
 // ROLES_SAVE_TRUTH_V1 — «Проверьте права этой роли»: права выше обычных для основы (мигр. 230).
 import { roleGrantReviewNotice } from './roles-grant-review.js?v=rgr4';   // ROLES_REVIEW_V1 — раздел «Закупки» словами справочника (ревью M4); «восстановлено» — только снятым (m8); тост «снимать нечего» (N3)
 
@@ -104,6 +105,24 @@ const ROLE_LEVELS = [
     ['admin',  'Изменение и удаление'],
 ];
 const DEFAULT_LEVEL = 'editor';
+
+// ROLES_CLEAR_V1 — заголовки колонок матрицы (LEVEL_LABELS) и метки сводки говорят ТЕМИ ЖЕ
+// словами, что кнопки уровня: «Изменение» в сводке — то же «Изменение», что
+// нажато в строке, а не «просмотр и изменение» другого словаря.
+const REACH_CHIP = { viewer: ['view', 'Просмотр'], editor: ['edit', 'Изменение'], admin: ['delete', 'Удаление'] };
+// ROLES_CLEAR_V1 — метка в сводке обязана говорить то же, что строка матрицы.
+// Уровень старого ключа с ней расходится: у «Кабинета врача» старый ключ
+// `consultation` стоит «editor» (окна внутри правят), а сама строка раздела —
+// «Нет / Просмотр». Поэтому для пункта меню, у которого в справочнике ровно
+// одна строка раздела, метка берёт уровень С ЭТОЙ СТРОКИ — как она нажата
+// сейчас. `admissions` — пункт меню «Стационар», его строка — `inpatient`.
+const NAV_SECTION = (() => {
+    const byLegacy = {};
+    for (const s of CATALOG) if (s.legacy) (byLegacy[s.legacy] = byLegacy[s.legacy] || []).push(s.key);
+    const out = { admissions: 'inpatient' };
+    for (const [k, list] of Object.entries(byLegacy)) if (list.length === 1) out[k] = list[0];
+    return out;
+})();
 
 // CUSTOM_ROLES_V1 (2026-09-16) — СВОИ РОЛИ КЛИНИКИ.
 //
@@ -191,7 +210,7 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         custom: [],       // CUSTOM_ROLES_V1 — роли клиники (и включённые, и отключённые)
         selected: ROLE_LIST[0].key,
         controls: {},     // moduleKey -> { chk, level }
-        tabControls: {},  // PATIENT_TAB_ACCESS_V1: tabId -> { view, edit, del }
+        tabControls: {},  // PATIENT_TAB_ACCESS_V1: tabId -> { value(), disable(on) } (ROLES_TABS_BAR_V1)
         otherTabs: {},    // настройки вкладок, которых этот экран НЕ рисует — переносим как есть
         baseline: null,   // снимок на момент загрузки; null = данных нет
         busy: false,      // идёт сохранение — форма и переключатель заперты
@@ -291,7 +310,7 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // сделанную где-то ещё.
         const patient_tabs = { ...state.otherTabs };
         for (const [tab, ctl] of Object.entries(state.tabControls)) {
-            patient_tabs[tab] = tabLevelOf({ view: ctl.view.checked, edit: !!(ctl.edit && ctl.edit.checked), del: !!(ctl.del && ctl.del.checked) });
+            patient_tabs[tab] = ctl.value();   // ROLES_TABS_BAR_V1 — уровень полосы, те же четыре значения, что у tabLevelOf
         }
         return { sections, levels, patient_tabs, grants };
     }
@@ -496,10 +515,13 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
             : (cur0 && cur0.base_role === 'admin') ? 'Роль на основе администратора меняет только администратор.'
             : null;
 
+        const dirtyMark = lockWhy ? null : h('span', { class: 'roles-dirty', role: 'status', hidden: true }, 'Есть несохранённые изменения');
+        state.dirtyMark = dirtyMark;
         const card = h('div', { class: 'card roles-card' },
-            h('div', { class: 'card-header' },
+            h('div', { class: 'card-header roles-card-head' },
                 h('h3', null, Icon('Shield', { size: 16 }), ' ', 'Разделы и уровень доступа', ' · ', labelOf(state.selected)),
-                lockWhy ? h('span', { class: 'muted roles-locked-why' }, Icon('Lock', { size: 13 }), ' ', lockWhy) : saveBtn,
+                lockWhy ? h('span', { class: 'muted roles-locked-why' }, Icon('Lock', { size: 13 }), ' ', lockWhy)
+                    : h('span', { class: 'roles-head-act' }, dirtyMark, saveBtn),
             ),
         );
 
@@ -554,8 +576,17 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // пересчитывается на КАЖДОЕ изменение, ещё до сохранения: увидеть
         // последствие галочки нужно тогда, когда её ставят, а не после того,
         // как роль уже выдана живому человеку.
+        //
+        // ROLES_ASIDE_V1 (2026-11-08) — владелец: «put information about role on
+        // a right side as there is enough space». Сводка стоит СПРАВА от матрицы
+        // и при прокрутке остаётся на месте (position: sticky): человек ставит
+        // уровень внизу списка и тут же видит итог, не прокручивая наверх. Узкий
+        // экран — сводка снова над матрицей (admin-views.css, .roles-layout).
         const reachBox = h('div', { class: 'roles-reach' });
-        card.appendChild(reachBox);
+        const main = h('div', { class: 'roles-main' });
+        card.appendChild(h('div', { class: 'roles-layout' },
+            main,
+            h('aside', { class: 'roles-aside', 'aria-label': 'Что увидит сотрудник с этой ролью' }, reachBox)));
         function paintReach() {
             clear(reachBox);
             // NAV лежит в оболочке (admin.js открывает его наружу). Нет
@@ -583,13 +614,39 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
             reachBox.appendChild(h('div', { class: 'roles-reach-h' },
                 Icon('Doc', { size: 13 }), ' ', tr('Что увидит сотрудник с этой ролью')));
             for (const line of reachSentences(reach, tr)) {
+                // ROLES_CLEAR_V1 — списки разделов меткам, по одной на раздел:
+                // абзац из двадцати названий через запятую не читался.
+                if (line.items && (line.kind === 'opens' || line.kind === 'closed')) {
+                    const open = line.kind === 'opens';
+                    reachBox.appendChild(h('div', { class: 'roles-reach-list is-' + line.kind },
+                        h('span', { class: 'roles-reach-k' },
+                            trf(open ? 'Открыто: {n}' : 'Закрыто: {n}', { n: line.items.length })),
+                        h('span', { class: 'roles-reach-chips' }, ...line.items.map((it, i) => {
+                            const sec = open && NAV_SECTION[reach.opens[i] && reach.opens[i].id];
+                            const ctl = sec && state.grantControls && state.grantControls[sec];
+                            const g = ctl ? ctl.value() : null;
+                            const lv = !open ? null
+                                : (g && g !== 'none') ? [g, LEVEL_LABELS[g]]
+                                : REACH_CHIP[it.level] || null;
+                            return h('span', { class: 'roles-chip is-' + (open ? (lv ? lv[0] : 'open') : 'none') },
+                                it.label, lv ? h('span', { class: 'roles-chip-lv' }, tr(lv[1])) : null);
+                        }))));
+                    continue;
+                }
                 reachBox.appendChild(h('div', { class: 'roles-reach-line is-' + line.tone },
                     line.params ? trf(line.template, line.params) : tr(line.template)));
             }
         }
+        // ROLES_CLEAR_V1 — «есть несохранённое» видно в шапке карточки, рядом с
+        // кнопкой: тридцать переключателей на три экрана прокрутки, и раньше
+        // единственным знаком, что правка не записана, был вопрос при уходе.
+        function paintDirty() {
+            if (!dirtyMark) return;
+            dirtyMark.hidden = !isDirty();
+        }
         // Одно делегированное событие на карточку вместо обработчика на каждую
         // из трёх десятков галочек и списков.
-        card.addEventListener('change', paintReach);
+        card.addEventListener('change', () => { paintReach(); paintDirty(); });
 
         // ROLES_MATRIX_V1 — раздел → окно → действие. Роль без grants получает
         // их из старых полей: экран показывает то, что действует сейчас, а не
@@ -617,14 +674,17 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // «Нет», строки погашены, а открой его — будут ровно такими.
         const truthShown = truthLost ? {} : { ...truth.levels, ...(truth.ifOpen || {}) };
         const grants = { ...grantsFromLegacy(perms), ...truthShown, ...(perms.grants || {}) };
-        card.appendChild(h('div', { class: 'roles-group' },
+        // ROLES_CLEAR_V1 — подписи колонок стоят ровно над колонками уровней
+        // (.rm-levels — та же сетка из четырёх ячеек), а не строкой справа.
+        main.appendChild(h('div', { class: 'roles-group' },
             h('span', { class: 'roles-group-name' }, 'Разделы, окна и действия'),
-            h('span', { class: 'roles-group-lvl' }, 'Нет · Просмотр · Изменение · Удаление'),
+            h('span', { class: 'roles-group-lvl rm-cols', 'aria-hidden': 'true' },
+                ...['none', 'view', 'edit', 'delete'].map((l) => h('span', { class: 'rm-col is-' + l }, LEVEL_LABELS[l]))),
         ));
-        card.appendChild(h('p', { class: 'roles-unset' },
-            'Уровни вложены: «Изменение» включает «Просмотр», «Удаление» — всё вместе. Подпись под строкой — что даёт выбранный уровень; наведите на уровень, чтобы узнать, что даст он.'));
+        main.appendChild(h('p', { class: 'roles-unset' },
+            'Уровни вложены: каждый следующий включает предыдущий. Под строкой — что даёт выбранный уровень; наведите на кнопку, чтобы узнать, что даст другой.'));
         const matrixHost = h('div', { class: 'rm' });
-        card.appendChild(matrixHost);
+        main.appendChild(matrixHost);
         // Набор закрытых заводится НА КАЖДУЮ РОЛЬ заново: решение, принятое про
         // одну роль, про соседнюю не значит ничего.
         state.closedSections = new Set();
@@ -646,13 +706,24 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         state.otherTabs = {};
         for (const [k, v] of Object.entries(tabs)) if (!rendered.has(k)) state.otherTabs[k] = v;
 
-        card.appendChild(h('div', { class: 'roles-group' },
-            h('span', { class: 'roles-group-name' }, 'Карта пациента — вкладки'),
-            h('span', { class: 'roles-group-lvl' }, 'Что открыто'),
-        ));
-        card.appendChild(h('p', { class: 'roles-unset' },
-            'По умолчанию открыты все вкладки. Снимите галочку, чтобы закрыть вкладку этой роли.'));
-        for (const t of PATIENT_TABS) card.appendChild(tabRow(t, tabs));
+        // ROLES_TABS_BAR_V1 (2026-11-08) — владелец: «make this ticking design more
+        // like in here … and make block dropdown too». Вкладки — тем же блоком, что
+        // группы матрицы: заголовок сворачивает и разворачивает его, а у каждой
+        // вкладки та же полоса уровня, что у разделов.
+        const tabsBody = h('div', { class: 'rm-group-body' },
+            h('p', { class: 'roles-unset' },
+                'По умолчанию у каждой вкладки полный доступ. Выберите уровень ниже, чтобы сузить его для этой роли.'));
+        for (const t of PATIENT_TABS) tabsBody.appendChild(tabRow(t, tabs));
+        const tabsHead = h('button', { type: 'button', class: 'rm-group is-toggle', 'aria-expanded': 'true', dataset: { group: 'patient-tabs' } },
+            h('span', { class: 'rm-chev' }, Icon('ChevronRight', { size: 14 })),
+            Icon('Doc', { size: 14 }), h('span', { class: 'rm-group-name' }, tr('Карта пациента — вкладки')));
+        tabsHead.addEventListener('click', () => {
+            const open = tabsBody.hidden;
+            tabsBody.hidden = !open;
+            tabsHead.setAttribute('aria-expanded', open ? 'true' : 'false');
+            tabsHead.classList.toggle('is-collapsed', !open);
+        });
+        main.appendChild(h('div', { class: 'rm rm-tabs' }, tabsHead, tabsBody));
 
         matrixWrap.appendChild(card);
         paintReach();   // ROLE_REACH_V1 — сводка есть сразу, а не после первой галочки
@@ -662,58 +733,56 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // ROLES_SAVE_TRUTH_V1 — и без правды сервера тоже.
         if (lockWhy || truthLost) {
             for (const ctl of Object.values(state.grantControls || {})) ctl.disable(true);
-            for (const ctl of Object.values(state.tabControls)) {
-                ctl.view.disabled = true;
-                if (ctl.edit) ctl.edit.disabled = true;
-                if (ctl.del) ctl.del.disabled = true;
-            }
+            for (const ctl of Object.values(state.tabControls)) ctl.disable(true);
         }
     }
 
-    // Строка вкладки: «Видна» · «Редакт.» · «Удаление». Галочка рисуется
-    // ТОЛЬКО там, где право существует (permissions.js PATIENT_TABS caps):
-    // «Удаление» у «Счёта» обещало бы то, чего нет ни в карте, ни в реестре
-    // таблиц, и админ считал бы, что выдал доступ, который на деле не работает.
+    // Строка вкладки — полоса уровня, как у разделов матрицы (ROLES_TABS_BAR_V1):
+    // «Нет · Просмотр · Изменение · Удаление». Уровень предлагается ТОЛЬКО там,
+    // где право существует (permissions.js PATIENT_TABS caps): «Удаление» у
+    // «Счёта» обещало бы то, чего нет ни в карте, ни в реестре таблиц, — на его
+    // месте пустая клетка. Значения те же четыре, что давали три галочки
+    // (tabLevelOf), поэтому сохраняется ровно то же, что и раньше.
     function tabRow(t, tabs) {
         const caps = t.caps || { edit: true, del: true };
-        const lvl = tabs[t.id];
-        const box = (labelText, on, aria) => {
-            const cb = h('input', { type: 'checkbox', checked: on });
-            cb.dataset.ptabKey = t.id;
-            cb.setAttribute('aria-label', tr(aria) + ': ' + tr(t.label));
-            return { cb, el: h('label', { class: 'roles-tab-opt' }, cb, h('span', null, labelText)) };
+        const own = ['none', 'view', ...(caps.edit ? ['edit'] : []), ...(caps.del ? ['delete'] : [])];
+        const top = own[own.length - 1];
+        // ОТСУТСТВИЕ НАСТРОЙКИ = ПОЛНЫЙ ДОСТУП, и полоса обязана показывать
+        // именно это. Если бы ненастроенная вкладка рисовалась ниже полного,
+        // ПЕРВОЕ же сохранение любой роли молча отняло бы право, которым клиника
+        // пользуется сегодня. Записанный уровень выше возможного (старая запись)
+        // срезается до верхнего существующего — как делали галочки.
+        const saved = tabs[t.id];
+        const start = saved == null ? top : (own.includes(saved) ? saved : (saved === 'delete' || saved === 'edit' ? top : 'none'));
+        const name = 'ptab:' + t.id;
+        const inputs = [];
+        const bar = h('div', { class: 'rm-levels', role: 'radiogroup', 'aria-label': tr('Вкладка') + ': ' + tr(t.label) });
+        for (const lvl of ['none', 'view', 'edit', 'delete']) {
+            if (!own.includes(lvl)) {
+                const why = lvl === 'edit' ? 'Изменять на этой вкладке нечего' : 'Удаления на этой вкладке не существует';
+                bar.appendChild(h('span', { class: 'rm-pill-slot', title: why, 'aria-hidden': 'true' }));
+                continue;
+            }
+            const id = 'ptab-' + t.id + '-' + lvl;
+            const inp = h('input', { type: 'radio', name, id, value: lvl, checked: lvl === start ? true : null });
+            inp.dataset.ptabKey = t.id;
+            inputs.push(inp);
+            bar.appendChild(h('label', { class: 'rm-pill is-' + lvl, for: id }, inp, h('span', null, tr(LEVEL_LABELS[lvl]))));
+        }
+        state.tabControls[t.id] = {
+            value: () => { const on = inputs.find((i) => i.checked); return on ? on.value : 'none'; },
+            disable: (on) => { for (const i of inputs) i.disabled = !!on; },
         };
-        // ОТСУТСТВИЕ НАСТРОЙКИ = ПОЛНЫЙ ДОСТУП, и галочки обязаны показывать
-        // именно это. Если бы «Удаление» у ненастроенной роли рисовалось
-        // снятым, ПЕРВОЕ же сохранение любой роли молча отняло бы право,
-        // которым клиника пользуется сегодня, — и никто бы не понял, почему
-        // после «просто сохранил» перестала убираться неоплаченная услуга.
-        const view = box('Видна',    lvl == null ? true : lvl !== 'none', 'Вкладка видна');
-        const edit = caps.edit ? box('Редакт.',  lvl == null ? true : (lvl === 'edit' || lvl === 'delete'), 'Изменение на вкладке') : null;
-        const del  = caps.del  ? box('Удаление', lvl == null ? true : lvl === 'delete', 'Удаление на вкладке') : null;
-
-        const sync = (src) => {
-            if (src === 'view' && !view.cb.checked) { if (edit) edit.cb.checked = false; if (del) del.cb.checked = false; }
-            if (src === 'edit') { if (edit.cb.checked) view.cb.checked = true; else if (del) del.cb.checked = false; }
-            if (src === 'del' && del.cb.checked) { if (edit) edit.cb.checked = true; view.cb.checked = true; }
-        };
-        view.cb.addEventListener('change', () => sync('view'));
-        if (edit) edit.cb.addEventListener('change', () => sync('edit'));
-        if (del)  del.cb.addEventListener('change', () => sync('del'));
-        state.tabControls[t.id] = { view: view.cb, edit: edit && edit.cb, del: del && del.cb };
-
-        const dash = (why) => h('span', { class: 'roles-why', title: why }, '—');
-        return h('div', { class: 'roles-row', dataset: { patientTab: t.id } },
-            h('span', { class: 'roles-pick-txt' },
-                h('span', { class: 'roles-mod' }, t.label),
-                t.note ? h('span', { class: 'roles-desc' }, t.note) : null,
-            ),
-            h('div', { class: 'roles-tab-opts' },
-                view.el,
-                edit ? edit.el : dash('Изменять на этой вкладке нечего'),
-                del  ? del.el  : dash('Удаления на этой вкладке не существует'),
-            ),
-        );
+        const row = h('div', { class: 'rm-tab' + (start === 'none' ? ' is-off' : ''), dataset: { patientTab: t.id } },
+            h('div', { class: 'rm-row rm-row-section' },
+                h('div', { class: 'rm-toggle is-static' },
+                    h('span', { class: 'rm-chev is-blank', 'aria-hidden': 'true' }),
+                    h('span', { class: 'rm-name' },
+                        h('span', { class: 'rm-title' }, t.label),
+                        t.note ? h('span', { class: 'rm-desc' }, h('span', null, t.note)) : null)),
+                bar));
+        bar.addEventListener('change', () => row.classList.toggle('is-off', state.tabControls[t.id].value() === 'none'));
+        return row;
     }
 
     // ROLE_ACTIONS_V1 — СТРОКА РАЗДЕЛА ГОВОРИТ ДЕЙСТВИЯМИ.
@@ -802,6 +871,7 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
             state.initialGrants = shownGrants();
             state.prevLegacy = { sections, levels };
             if (state.closedSections) state.closedSections.clear();
+            if (state.dirtyMark) state.dirtyMark.hidden = true;   // ROLES_CLEAR_V1
             toast(tr('Права сохранены — сотрудники увидят их при следующем входе.') + ' · ' + (customOf(role) ? customOf(role).name : tr(roleLabel(role))), 'ok');
         } catch (e) {
             // В сообщении есть следующий шаг, а не только беда.
@@ -827,11 +897,7 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // же причине, что и галочки вкладок ниже.
         for (const ctl of Object.values(state.grantControls || {})) ctl.disable(on);
         // PATIENT_TAB_ACCESS_V1 — галочки вкладок по той же причине.
-        for (const ctl of Object.values(state.tabControls)) {
-            ctl.view.disabled = on;
-            if (ctl.edit) ctl.edit.disabled = on;
-            if (ctl.del)  ctl.del.disabled = on;
-        }
+        for (const ctl of Object.values(state.tabControls)) ctl.disable(on);
         matrixWrap.setAttribute('aria-busy', on ? 'true' : 'false');
     }
 }

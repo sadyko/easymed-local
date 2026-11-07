@@ -272,6 +272,8 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
   const { stockMinimumsList } = await import('./rpc/stock-requests.js');
   const { runReport, payPeriodStatus } = await import('./rpc/reports.js');   // PAY_PERIOD_CLOSE_V1
   const { grantLevel } = await import('./grants.js');   // REPORTS_AUDIT_FIX_V1
+  const { telegramBroadcastSend } = await import('./rpc/telegram.js');   // COMMERCE_BLOCK_V1
+  const { telegramDeeplinksList, telegramDeeplinkDelete } = await import('./rpc/deeplinks.js');   // COMMERCE_BLOCK_V1
   const db = openDb(':memory:');
   migrate(db);
   const allowed = (fn) => { try { fn(); return true; } catch (e) { if (e && e.status === 403) return false; return true; } };
@@ -291,6 +293,10 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
         'procurement/edit': !!stockMinimumsList(db, { scope: 'mine' }, u).can_manage_all,
         'reports.doctor_pay/view': allowed(() => runReport(db, { kind: 'doctor_salaries' }, u)),
         'reports.doctor_pay/edit': payPeriodStatus(db, {}, u).can_close,
+        // COMMERCE_BLOCK_V1 — отказ ворот 403 приходит раньше проверки аргументов.
+        'commerce_push/edit': allowed(() => telegramBroadcastSend(db, {}, u)),
+        'commerce_links/view': allowed(() => telegramDeeplinksList(db, {}, u)),
+        'commerce_links/edit': allowed(() => telegramDeeplinkDelete(db, {}, u)),
       };
       for (const [k, want] of Object.entries(real)) {
         const [key, need] = k.split('/');
@@ -302,5 +308,5 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
       }
     }
   } finally { db.close(); }
-  assert.deepEqual([...FALLBACK_FN_KEYS].sort(), ['custdev.list', 'custdev.rate', 'procurement', 'reports.doctor_pay', 'settings.departments'], 'в FALLBACK_FN новый ключ — добавьте его в сверку поведением');
+  assert.deepEqual([...FALLBACK_FN_KEYS].sort(), ['commerce_links', 'commerce_push', 'custdev.list', 'custdev.rate', 'procurement', 'reports.doctor_pay', 'settings.departments'], 'в FALLBACK_FN новый ключ — добавьте его в сверку поведением');
 });

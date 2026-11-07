@@ -283,7 +283,9 @@ test('сторож: у незаписанного ключа с воротами
     // Ревью M2: плитки «Настроек» без своих ворот сервер не называет — их
     // экран рисует правилом оболочки (settingsLegacyView).
     const plainSettingsTile = (r) => r.parent === 'settings' && !r.adminDefault && !isFnGate(r.key);
-    const gated = catalogRows().filter((r) => r.kind !== 'section' && !r.locked && fallbackLevel(db, pseudo, r.key, 'all') !== null && !plainSettingsTile(r)).map((r) => r.key).sort();
+    const gated = catalogRows().filter((r) => (r.kind !== 'section' || !r.legacy) && !r.locked && fallbackLevel(db, pseudo, r.key, 'all') !== null && !plainSettingsTile(r)).map((r) => r.key).sort();
+    // COMMERCE_BLOCK_V1 — раздел без старого ключа (Push, ссылки для рекламы) экран
+    // из галочек не выводит: про него отвечает сервер, как про окно с воротами.
     assert.deepEqual(Object.keys(levels).sort(), gated, role + ': сервер ответил не про все ключи с воротами');
     const explicit = permsOf(db, role).grants || {};
     await openRole(root, role, label);

@@ -299,3 +299,17 @@ test('FIX_318_V1: оболочка не отдаёт администратор�
     assert.match(body, /isModuleAllowed\('dashboard'\) && !navHidden\.has\('dashboard'\)/,
         'дашборд администратору отдаётся раньше проверки скрытых');
 });
+
+// ROLES_CLEAR_V1 (2026-11-07) — у владельца сводка печатала «Стационар (none)»:
+// пункт меню `admissions` открыт ключом `beds`, а уровень спрашивался про сам
+// `admissions`. Уровня, которого нет, сводка не выдумывает и не печатает
+// «none» словом: экран назван, уровень у него — то, что скажет матрица.
+test('ROLES_CLEAR_V1: экран, открытый чужим ключом, не получает уровень «none»', () => {
+    const reach = roleReach(role(['patients', 'beds'], { levels: { patients: 'editor', beds: 'editor' } }), NAV, LABEL);
+    const adm = reach.opens.find((m) => m.id === 'admissions');
+    assert.ok(adm, 'Стационар открыт ключом beds — сводка обязана это сказать');
+    assert.equal(adm.level, null, 'уровень чужого ключа выдан за уровень Стационара');
+    const opens = reachSentences(reach).find((l) => l.kind === 'opens');
+    assert.ok(!/none|undefined|null/.test(opens.params.list), 'в сводку просочилось служебное слово: ' + opens.params.list);
+    assert.deepEqual(opens.items.map((i) => i.label), reach.opens.map((m) => m.label), 'метки сводки разошлись со списком открытого');
+});

@@ -9,6 +9,7 @@
 import { hasAnyRole, canViewSection, canEditSection } from '../roles.js';
 import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { grantAllowsAdminOr, isAdminUser } from '../grants.js';   // ADMIN_ROWS_GRANTABLE_V1
+import { canPush } from '../commerce-grants.js';   // COMMERCE_BLOCK_V1 — своё право «Push-уведомления»
 import { listChats, chatMessages, markRead, unreadTotal, sendChatMessage, sendChatFile, linkChatToPhone,
          listFolders, createFolder, renameFolder, deleteFolder, setChatFolder } from '../telegram/chat.js';
 import { publicSettings, saveSettings, clearToken, getDecryptedToken, recordCheck, SettingsError } from '../telegram/settings.js';
@@ -46,6 +47,19 @@ function requireLevel(db, user, key, need) {
 function requireReach(db, user) {
   if (grantAllowsAdminOr(db, user, 'reports.telegram', 'view') || grantAllowsAdminOr(db, user, 'settings.telegram', 'view')) return;
   throw new RpcError('Отчёт по Telegram-боту недоступен вашей роли. Права выдаёт администратор в «Настройки → Роли».', 403);
+}
+// COMMERCE_BLOCK_V1 — окно рассылки: число получателей, фильтры, ход и
+// история. Пускает охват бота (как раньше) или своё право «Push-уведомления»:
+// тот, кому выдали рассылку без настроек бота, должен видеть, кому шлёт.
+function requirePushReach(db, user) {
+  if (canPush(db, user)) return;
+  requireReach(db, user);
+}
+// COMMERCE_BLOCK_V1 — отправка: строка «Push-уведомления»; пока её не
+// настроили — «Telegram-бот: Изменение», как до этого выпуска.
+function requirePush(db, user) {
+  if (canPush(db, user)) return;
+  throw new RpcError('Рассылка недоступна вашей роли. Права выдаёт администратор в «Настройки → Роли» (строка «Push-уведомления»).', 403);
 }
 function maskedFor(user, settings) {
   if (isAdminUser(user) || !settings || typeof settings !== 'object') return settings;
@@ -326,7 +340,7 @@ export function telegramStats(db, _args, user) {
 // (broadcast.js AUDIENCE_CACHE_MS); fresh: true — число, которое администратор
 // сейчас подтвердит перед отправкой, считается заново.
 export function telegramBroadcastPreview(db, args, user) {
-  requireReach(db, user);
+  requirePushReach(db, user);   // COMMERCE_BLOCK_V1
   const a = args || {};
   return previewAudience(db, a.filters || {}, 8, { cache: a.fresh !== true });
 }
@@ -334,7 +348,7 @@ export function telegramBroadcastPreview(db, args, user) {
 // TG_BROADCAST_FILTERS_V1 — справочники для подробных фильтров окна рассылки.
 // Те же ворота, что у предпросмотра: списки врачей и услуг — часть той же задачи.
 export function telegramBroadcastOptions(db, _args, user) {
-  requireReach(db, user);
+  requirePushReach(db, user);   // COMMERCE_BLOCK_V1
   return broadcastOptions(db);
 }
 
@@ -342,7 +356,7 @@ export function telegramBroadcastOptions(db, _args, user) {
 // браузере: диалог в интерфейсе — это удобство, а защита от «разослал черновик
 // всей базе» должна стоять на сервере, где её нельзя обойти.
 export function telegramBroadcastSend(db, args, user) {
-  requireLevel(db, user, 'settings.telegram', 'edit');
+  requirePush(db, user);   // COMMERCE_BLOCK_V1
   const a = args || {};
   const textRu = String(a.text_ru || '').trim();
   if (!textRu) throw new RpcError('Сообщение не может быть пустым.', 400);
@@ -390,14 +404,14 @@ export function telegramBroadcastSend(db, args, user) {
 }
 
 export function telegramBroadcastStatus(db, args, user) {
-  requireReach(db, user);
+  requirePushReach(db, user);   // COMMERCE_BLOCK_V1
   const st = broadcastStatus(db, args && args.id);
   if (!st) throw new RpcError('Рассылка не найдена.', 404);
   return st;
 }
 
 export function telegramBroadcastHistory(db, args, user) {
-  requireReach(db, user);
+  requirePushReach(db, user);   // COMMERCE_BLOCK_V1
   return broadcastHistory(db, args && args.limit);
 }
 

@@ -15,6 +15,7 @@
 import { hasAnyRole, canViewSection, canEditSection } from './roles.js';
 import { catalogByKey } from '../../public/js/shared/permission-catalog.js';
 import { JOURNALS_KEY } from './report-access.js';   // JOURNALS_V1_RJ3
+import { COMMERCE_LEGACY } from './commerce-grants.js';   // COMMERCE_BLOCK_V1
 
 export const GATE_FALLBACK = Object.freeze({
   'inpatient.services':      { view: [['admin', 'head_doctor', 'registrar', 'nurse', 'doctor', 'cashier']],
@@ -59,6 +60,10 @@ const FALLBACK_FN = {
     view: (db, u) => hasAnyRole(u, ['admin']) || canViewSection(db, u, 'reports-hub'),
     edit: (db, u) => hasAnyRole(u, ['admin']),
   },
+  // COMMERCE_BLOCK_V1 — Push и ссылки для рекламы: пока строка не настроена,
+  // решает «Telegram-бот» (commerce-grants.js — те же функции, что у ворот).
+  commerce_push: { edit: COMMERCE_LEGACY.push },
+  commerce_links: { view: COMMERCE_LEGACY.linksView, edit: COMMERCE_LEGACY.linksEdit },
 };
 
 /** Ворота ключа — прежняя галочка раздела (FALLBACK_FN), а не список ролей. */
