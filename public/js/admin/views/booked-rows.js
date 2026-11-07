@@ -99,6 +99,76 @@ export function isBookedTwin(line, b) {
   return screenTakesBooked(line, b, { needsDoctor: !!(line.needsDoctor || b.needsDoctor) });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BOOKED_JOIN_V1 (решение владельца 2026-11-07) — УСЛУГА К ВРАЧУ, К КОТОРОМУ
+// ПАЦИЕНТ УЖЕ ЗАПИСАН В ЭТОТ ДЕНЬ, ИДЁТ В ЭТУ ЗАПИСЬ.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Колл-центр (карточка CRM или календарь) записал пациента к врачу. Регистратор
+// добавлял к тому же врачу ещё услугу — и окно отвечало «у врача нет свободного
+// времени»: время врача держала сама запись (строка записи в смете занимает
+// свой слот, а у калькулятора и вся запись — в занятости врача). Теперь такая
+// услуга ложится в ту же запись: тот же визит, время записи, свой слот ей не
+// нужен. Запрет повтора той же услуги в визите (DUP_STOP_V1) действует как
+// прежде — это другая проверка.
+
+/**
+ * Записи пациента на дни [сегодня, сегодня + days): живые визиты своего здания
+ * («Записан», «Подтверждён», «Пришёл» — те, что держат время врача) — врач и
+ * время визита, а также строки визита с врачом и своим временем (вторая услуга
+ * к другому врачу в тот же день).
+ * @returns {Promise<Array<{visitId:number, doctorId:number, when:string, day:string}>>}
+ *   when — местное 'YYYY-MM-DDTHH:MM'. Пустой список при отказе сервера —
+ *   регистратор тогда выбирает время, как прежде.
+ */
+export async function loadPatientBookings(patientId, { now = new Date(), days = 15 } = {}) {
+  if (!isPosInt(patientId)) return [];
+  const { from } = localDayBounds(now);
+  const end = new Date(now); end.setHours(0, 0, 0, 0); end.setDate(end.getDate() + days);
+  const { data: visits, error } = await supabase.from('visits').select('id, visit_date, doctor_id, status')
+    .eq('patient_id', Number(patientId)).in('status', ['scheduled', 'confirmed', 'arrived']).is('sync_origin', null)
+    .gte('visit_date', from).lt('visit_date', end.toISOString()).order('visit_date').limit(50);
+  if (error || !Array.isArray(visits) || !visits.length) return [];
+  const out = [];
+  for (const v of visits) {
+    const when = localSlot(v.visit_date);
+    if (when && isPosInt(v.doctor_id)) out.push({ visitId: Number(v.id), doctorId: Number(v.doctor_id), when, day: when.slice(0, 10) });
+  }
+  const { data: lines, error: lErr } = await supabase.from('visit_services')
+    .select('visit_id, doctor_id, scheduled_at, status')
+    .in('visit_id', visits.map((v) => Number(v.id))).neq('status', 'cancelled').limit(500);
+  if (!lErr && Array.isArray(lines)) {
+    for (const l of lines) {
+      if (!isPosInt(l.doctor_id) || !l.scheduled_at) continue;
+      const when = localSlot(l.scheduled_at);
+      if (!when || when.endsWith('T00:00')) continue;   // строка «на дату» времени врача не держит
+      if (out.some((b) => b.visitId === Number(l.visit_id) && b.doctorId === Number(l.doctor_id) && b.when === when)) continue;
+      out.push({ visitId: Number(l.visit_id), doctorId: Number(l.doctor_id), when, day: when.slice(0, 10) });
+    }
+  }
+  return out;
+}
+
+/**
+ * BOOKED_JOIN_V1 — запись пациента к врачу `doctorId` в день `dayIso`: самая
+ * ранняя, { visitId, doctorId, when, day } — или null.
+ * @param {Array<{visitId:number, doctorId:number, when:string}>} bookings when — местное 'YYYY-MM-DDTHH:MM'
+ */
+export function bookedJoinFor(bookings, doctorId, dayIso) {
+  if (!isPosInt(doctorId) || !dayIso) return null;
+  const hits = (bookings || []).filter((b) => b && Number(b.doctorId) === Number(doctorId)
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(b.when || ''))
+    && String(b.when).slice(0, 10) === String(dayIso));
+  if (!hits.length) return null;
+  return hits.slice().sort((a, b) => String(a.when).localeCompare(String(b.when)))[0];
+}
+
+/** BOOKED_JOIN_V1 — минуты от местной полуночи времени записи ('…THH:MM'), или null. */
+export function joinMinutes(join) {
+  const m = /T(\d{2}):(\d{2})$/.exec(String((join && join.when) || ''));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
 /** Подпись строки «из записи»: статус записи словами (переводит вызывающий через tr). */
 export function bookedStatusLabel(status) {
   return status === 'confirmed' ? 'Подтверждён' : 'Записан';

@@ -75,6 +75,7 @@ import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 import { listTemplates, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // SERVICES_PACKAGES_V1 — cartPackage: цена услуги в пакете
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';
 import { nearestFree, noFreeText, nearestButtonText, visitDayNote } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
+import { loadPatientBookings, bookedJoinFor, joinMinutes } from './booked-rows.js';   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
 import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // INVOICE_APPEND_V1 — дописанный счёт печатается целиком, из строк сервера
 
@@ -1815,7 +1816,30 @@ export function openServicePickerModal({
     async function ensureDocSlots(docId, durationMin) {
         await primeSlotDays(docId, catDays().map(d => d.iso), durationMin || 30);
     }
+    // BOOKED_JOIN_V1 — записи пациента окна (врач, время): услуга к врачу, к которому
+    // пациент уже записан в этот день, идёт в ту же запись, на её время. Читается один
+    // раз на пациента; сбой — пустой список (время выбирают, как прежде).
+    const joinCache = { pid: null, p: null, list: [] };
+    function calcBookings() {
+        const pid = patientId || (refs.attachedPatient && refs.attachedPatient.id) || null;
+        if (!pid) return Promise.resolve([]);
+        if (joinCache.pid !== pid) {
+            joinCache.pid = pid; joinCache.list = [];
+            joinCache.p = loadPatientBookings(pid).then((b) => { if (joinCache.pid === pid) joinCache.list = b; return b; }).catch(() => []);
+        }
+        return joinCache.p;
+    }
+    function calcJoin(docId, dayIso) {
+        const pid = patientId || (refs.attachedPatient && refs.attachedPatient.id) || null;
+        return pid && joinCache.pid === pid ? bookedJoinFor(joinCache.list, docId, dayIso) : null;
+    }
     function freeStarts(docId, dayIso, dur, exceptItem) {
+        const join = calcJoin(docId, dayIso);   // BOOKED_JOIN_V1 — время записи — тоже выбор
+        const jm = join ? joinMinutes(join) : null;
+        const own = freeStartsOwn(docId, dayIso, dur, exceptItem);
+        return jm == null || own.includes(jm) ? own : [...own, jm].sort((a, b) => a - b);
+    }
+    function freeStartsOwn(docId, dayIso, dur, exceptItem) {
         const free = freeStartMinutes(slotDayCached(docId, dayIso, dur));
         if (!free.length) return free;
         // CATALOG_WIZARD_V2 — строки ЭТОЙ ЖЕ сметы, ещё не записанные, тоже
@@ -2028,6 +2052,11 @@ export function openServicePickerModal({
         // строке со временем). Нет времени — пометка и выбор дня (catNoToday).
         const first = catDays()[0];
         item.__dayIso = first.iso;
+        // BOOKED_JOIN_V1 — пациент в этот день уже записан к этому врачу: время записи.
+        await calcBookings();
+        if (item.doctor !== doc || !state.added.includes(item)) return;
+        const join = calcJoin(doc.id, first.iso);
+        if (join && joinMinutes(join) != null) { item.__noToday = false; catPickTime(item, first.iso, joinMinutes(join), !!auto); return; }
         const f = freeStarts(doc.id, first.iso, item.durationMinutes, item);
         if (f.length) { item.__noToday = false; catPickTime(item, first.iso, f[0], !!auto); return; }
         item.__noToday = true;

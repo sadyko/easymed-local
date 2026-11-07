@@ -54,6 +54,7 @@ import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../s
 import { pendingCrmLines } from '../crm-lines.js';
 import { isDeskNow } from './wizard-desk.js';   // CRM_LINK_ALL_V1 (R3) — «сейчас» у стойки: одно правило с сервером
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin, localSlot, setLinePerformer } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»; localSlot — DOCTOR_REFERRAL_DESK_V1
+import { loadPatientBookings, bookedJoinFor } from './booked-rows.js';   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
 import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
 // CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на три двери:
 // у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
@@ -256,6 +257,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         discountAbs: 0,      // «Скидка (лояльность), сум»
         promo: null,         // применённый patient_discounts: { name, percent, amount, service_ids }
         discounts: [],       // DISCOUNT_RULES_V1 — все действующие скидки клиники; подходящие отбираются на лету
+        bookings: [],        // BOOKED_JOIN_V1 — записи пациента (врач, время) на 15 дней
+        bookingsReady: Promise.resolve(),
         categoryId: null,    // категория пациента (для скидок «только для группы»)
         categoryName: '',    // CATEGORY_DISCOUNT_V1 — скидка группы подставляется в «лояльность» сама
         categoryPct: 0,
@@ -667,6 +670,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 if (!Number(wiz.discountPct) && !Number(wiz.discountAbs)) { wiz.discountMode = 'pct'; wiz.discountPct = wiz.categoryPct; }
             }
         } catch (e) { wiz.discounts = []; }
+        // BOOKED_JOIN_V1 — записи пациента на 15 дней: услуга к врачу, к которому пациент
+        // уже записан в этот день, встаёт на время записи (autoPickSlot, slotsForDay).
+        wiz.bookingsReady = loadPatientBookings(patient && patient.id)
+            .then((b) => { wiz.bookings = b; }).catch(() => { wiz.bookings = []; });
         // DEPOSIT_WALLET_V1 — баланс пациента (депозит и зачисленные возвраты);
         // сбой не мешает мастеру — просто нечего предложить.
         { const w = await loadPatientWallet(patient && patient.id); wiz.balance = w.balance; wiz.walletDebt = w.debt; }
@@ -1610,14 +1617,33 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             .filter(c => c !== line && c.doctorId === line.doctorId && c.when && !c.dateOnly)
             .map(c => { const s = new Date(c.when).getTime(); return { s, e: s + (Number(c.svc.duration_minutes) || 30) * 60000 }; });
         const durMs = dur * 60000;
-        return freeStartMinutes(day)
+        const free = freeStartMinutes(day)
             .map(m => base.getTime() + m * 60000)
             .filter(t => !taken.some(b => t < b.e && b.s < t + durMs));
+        // BOOKED_JOIN_V1 — время записи пациента к этому врачу в этот день — тоже выбор:
+        // услуга ложится в запись, своего слота ей не нужно (его держит запись).
+        const join = joinFor(line.doctorId, dayIso);
+        if (join) {
+            const t = new Date(join.when).getTime();
+            if (Number.isFinite(t) && !free.includes(t)) return [...free, t].sort((a, b) => a - b);
+        }
+        return free;
+    }
+
+    /** BOOKED_JOIN_V1 — запись пациента к врачу в местный день dayIso (или null). */
+    function joinFor(doctorId, dayIso) {
+        return bookedJoinFor(wiz.bookings, doctorId, dayIso);
+    }
+    /** BOOKED_JOIN_V1 — новая строка врача стоит на времени записи пациента к нему: она идёт В запись. */
+    function ridesBooking(c) {
+        if (!c || c.booked || c.dateOnly || !c.doctorId || !c.when) return false;
+        const j = joinFor(c.doctorId, String(c.when).slice(0, 10));
+        return !!(j && j.when === c.when);
     }
 
     /** CRM_LINK_ALL_V1 (R7a) — строка «из записи» с прежним временем: её слот уже занят записью. */
     function bookedKeepsSlot(c) {
-        return !!(c && c.booked && c.when === c.booked.when);
+        return !!(c && c.booked && c.when === c.booked.when) || ridesBooking(c);   // BOOKED_JOIN_V1 — и строка, идущая в запись
     }
 
     /** Строка дня, которая ЗАНИМАЕТ ВРЕМЯ ВРАЧА: с врачом, со слотом, не живая очередь. */
@@ -1701,6 +1727,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         await loadBusy(line);   // прогреть у сервера 14 дней: «Ближайшее» ищется в них
         if (line.booked) return;   // CRM_LINK_ALL_V1 (ред. 2) — у строки «из записи» время записи
         const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+        // BOOKED_JOIN_V1 — пациент сегодня уже записан к этому врачу: услуга идёт в ту же
+        // запись, на её время — свободное окно не ищется (запись его и держит).
+        await wiz.bookingsReady;
+        const join = joinFor(line.doctorId, isoDay(d0.getTime()));
+        if (join) { line.ui.day = d0.getTime(); line.when = join.when; line.ui.noToday = false; return; }
         const today = slotsForDay(line, d0.getTime());
         line.ui.day = d0.getTime();
         if (today.length) { line.when = slotToLocalIso(today[0]); line.ui.noToday = false; return; }
@@ -2644,6 +2675,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         Icon('Stethoscope', { size: 12 }), trf('от врача · {name}', { name: c.booked.referrerName || '—' })) : null,
                     c.booked && !c.booked.doctorOrder ? h('span', { 'data-booked-line': String(c.booked.vsId), style: { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12.5px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-50, #e8f3f2)', borderRadius: '999px', padding: '1px 7px', whiteSpace: 'nowrap' } },
                         Icon('Calendar', { size: 12 }), tr('из записи') + ' · ' + tr(bookedStatusLabel(c.booked.status))) : null,
+                    // BOOKED_JOIN_V1 — строка идёт в запись пациента к этому врачу, на её время.
+                    ridesBooking(c) ? h('span', { 'data-join-booked': String(c.svc.id), style: { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12.5px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-50, #e8f3f2)', borderRadius: '999px', padding: '1px 7px', whiteSpace: 'nowrap' } },
+                        Icon('Calendar', { size: 12 }), trf('в запись · {time}', { time: String(c.when).slice(11, 16) })) : null,
                     // DUP_STOP_V1 (ревью M1) — повтор в визите этого дня: выберите другой день или уберите
                     // строку (администратору и главному врачу запись спросит причину).
                     dupHit ? h('span', {

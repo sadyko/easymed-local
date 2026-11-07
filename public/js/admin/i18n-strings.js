@@ -13541,4 +13541,7 @@ export const STRINGS = {
   "Направил: {name}": {"en":"Referred by: {name}","ru":"Направил: {name}","uz":"Yo‘llagan: {name}"},   // DOCTOR_REFERRAL_DESK_V1
   "направления врача": {"en":"doctor referrals","ru":"направления врача","uz":"shifokor yo‘llanmalari"},   // DOCTOR_REFERRAL_DESK_V1
   // /DOCTOR_REFERRAL_DESK_V1
+  // ── S1 3.22.0 — BOOKED_JOIN_V1 · DISCOUNT_V2 · CASHIER_DISCOUNT_V1 ──
+  "в запись · {time}": {"en":"into the booking · {time}","ru":"в запись · {time}","uz":"yozuvga · {time}"},   // BOOKED_JOIN_V1
+  // /S1 3.22.0
 };
