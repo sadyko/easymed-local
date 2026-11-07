@@ -36,7 +36,7 @@ import { tr, trf } from '../i18n.js';
 import { canFixCashierLines, canSwapPaidLines } from '../permissions.js';
 import { localYmd } from '../discount-rules.js';   // REFERRAL_BILL_V1 — местный день, как у остальной кассы
 import { TUBE_STATUSES } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 (ревью U11, M3/L5) — статусы строк, у которых есть пробирка
-import { serviceRoute } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — анализ ли услуга, решает группа
+import { serviceRoute, needsPerformer, ROUTE_SELECT } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0) — анализ ли услуга решает группа (ревью L-5); услуге кабинета нужен исполнитель и у кассы (I-4)
 
 // Работа по строке начата или сделана — сервер её не меняет (PERFORMED_LINE_STATUSES).
 const PERFORMED = ['collected', 'in_progress', 'resulted', 'completed'];
@@ -122,7 +122,7 @@ let servicesCache = null;
 async function loadServices() {
     if (servicesCache) return servicesCache;
     const { data, error } = await supabase.from('services')
-        .select('id, name, price, requires_doctor, is_lab, type').eq('active', 1).order('name', { ascending: true }).limit(5000);   // REFUND_SWAP_V1 — is_lab, type: окно замены называет, что новый анализ уйдёт в лабораторию
+        .select('id, name, price, requires_doctor, is_lab, type, ' + ROUTE_SELECT).eq('active', 1).order('name', { ascending: true }).limit(5000);   // REFUND_SWAP_V1 — is_lab, type: окно замены называет, что новый анализ уйдёт в лабораторию
     if (error) throw error;
     servicesCache = data || [];
     return servicesCache;
@@ -184,7 +184,12 @@ export function pickService(title, { visitId = null, exceptLineId = null, doctor
  * REFUND_SWAP_V1 — вместе с id приходят имя и цена строки у этого
  * исполнителя (full_name, unit_price): окно замены показывает выбранного.
  */
-export function pickPerformer(title, args, { allowNone = false } = {}) {
+// DIAG_ROUTE_V1 (I-4, 3.22.0) — `service`: услуга строки. Услуга кабинета (needsPerformer —
+// то же правило, что у регистратуры) без исполнителя не видна ни одному кабинету
+// (SERVICE_SCOPE_V3), поэтому «Без врача» ей не предлагается и у кассы; единственный
+// исполнитель выбирается сам.
+export function pickPerformer(title, args, { allowNone = false, service = null } = {}) {
+    const mustPick = !!(service && needsPerformer(service));
     return new Promise((resolve) => {
         let done = false;
         const finish = (v) => { if (done) return; done = true; resolve(v); };
@@ -198,7 +203,13 @@ export function pickPerformer(title, args, { allowNone = false } = {}) {
             clear(list);
             if (error) { list.appendChild(h('div', { style: { color: 'var(--crit-600)' } }, error.message || tr('Не удалось загрузить.'))); return; }
             const people = (data && data.performers) || [];
-            if (allowNone && !(data && data.requires_doctor)) {
+            // DIAG_ROUTE_V1 (I-4) — один кандидат у услуги кабинета — выбран сам.
+            if (mustPick && people.length === 1) {
+                const p = people[0];
+                pick({ id: p.id, full_name: p.full_name || null, unit_price: p.unit_price });
+                return;
+            }
+            if (allowNone && !mustPick && !(data && data.requires_doctor)) {
                 list.appendChild(h('button', { type: 'button', class: 'btn btn-ghost', 'data-performer': 'none', style: { justifyContent: 'space-between', display: 'flex', width: '100%' }, onclick: () => pick({ id: null, full_name: null, unit_price: data && data.catalog_price }) },
                     h('span', null, 'Без врача'), h('span', { class: 'num muted' }, fmtSum(data && data.catalog_price), ' ', tr('сум'))));
             }
@@ -551,7 +562,7 @@ export async function openRefundSwap(inv, item, line, { work = null, onDone = nu
     }
     async function choosePerformer() {
         if (busy) return;
-        const picked = await pickPerformer(tr('Кто оказывает услугу'), { service_id: svc.id, visit_id: inv.visit_id }, { allowNone: true });
+        const picked = await pickPerformer(tr('Кто оказывает услугу'), { service_id: svc.id, visit_id: inv.visit_id }, { allowNone: true, service: svc });   // DIAG_ROUTE_V1 (I-4)
         if (!picked || busy) return;
         who = picked;
         paintPicks();
@@ -713,7 +724,7 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
     addBtn.addEventListener('click', async () => {
         const svc = await pickService(tr('Добавить услугу'), { visitId: current.visit_id });   // DUP_STOP_V1
         if (!svc) return;
-        const who = await pickPerformer(tr('Кто оказывает услугу'), { service_id: svc.id, visit_id: current.visit_id }, { allowNone: true });
+        const who = await pickPerformer(tr('Кто оказывает услугу'), { service_id: svc.id, visit_id: current.visit_id }, { allowNone: true, service: svc });   // DIAG_ROUTE_V1 (I-4)
         if (!who) return;
         const r = await runRpc('cashier_line_add', { invoice_id: current.id, service_id: svc.id, doctor_id: who.id }, null);
         if (!r) return;

@@ -198,4 +198,27 @@ test('время сегодня есть — каталог ставит его 
     assert.match(textOf(top()), /сегодня 10:00/);
 });
 
+// BOOKED_JOIN_V1 (решение владельца 2026-11-07) — пациент сегодня уже записан к узисту на
+// 15:00 (колл-центр), а других окон у врача сегодня нет: УЗИ встаёт на время записи —
+// в ту же запись, — а не «Сегодня у врача нет свободного времени».
+test('BOOKED_JOIN_V1: врач сегодня занят, но пациент к нему записан на 15:00 — УЗИ на 15:00, пометки нет, смета готова', async () => {
+    busyToday = true;
+    try {
+        seed();
+        const at15 = dayAt(0); at15.setHours(15, 0, 0, 0);
+        DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, created_by) VALUES (3, ?, 5, 'scheduled', 1)").run(at15.toISOString());
+        forgetSlots();
+        BODY.children.length = 0;
+        openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
+            patient: { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' } });
+        const top = () => BODY.children[BODY.children.length - 1];
+        const addOf = (name) => byClass(top(), 'wzc-svc').filter((r) => textOf(r).includes(name)).map((r) => byClass(r, 'wzc-add')[0]).find(Boolean);
+        await until(() => addOf('УЗИ'), 'строка УЗИ в каталоге');
+        addOf('УЗИ').click();
+        await until(() => byClass(top(), 'wzc-cta')[0] && byClass(top(), 'wzc-cta')[0].disabled === false, 'смета готова');
+        assert.ok(!textOf(top()).includes('Сегодня у врача нет свободного времени'), 'пометка «нет времени» при записи к этому врачу');
+        assert.match(textOf(top()), /сегодня 15:00/);
+    } finally { busyToday = false; }
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });

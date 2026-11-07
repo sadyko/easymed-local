@@ -1588,3 +1588,55 @@ for (const order of ['patient-first', 'package-first']) {
     dlg.close();
   });
 }
+
+// ===========================================================================
+// DISCOUNT_V2 (решение владельца 2026-11-07, п. 4) — ВЫБОР ОДНОЙ СКИДКИ В БЫСТРОЙ
+// РЕГИСТРАЦИИ: скидка группы (по умолчанию), промокоды клиники, «Без скидки»; причина —
+// рядом; в счёт уходит выбор (discount_choice), промокод — с его стоимостью на смете.
+// ===========================================================================
+test('DISCOUNT_V2: VIP 10 % и промокод «ЛЕТО» 15 % — выбор одной скидки; выбран промокод — счёт с discount_choice promo и 16 800', async () => {
+  reset();
+  patientRows = [{ ...KARIMOVA, category_id: 3, patient_categories: { id: 3, name: 'VIP', discount_percent: 10, active: 1 } }];
+  sheetTables = { patient_discounts: [{ id: 11, name: 'ЛЕТО', kind: 'promo', percent: 15, amount: 0, active: 1, service_ids: [] },
+    { id: 12, name: 'Подарок', kind: 'gift_card', percent: 0, amount: 50000, remaining: 50000, active: 1, service_ids: [] }] };
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  await pickKarimova(dlg);
+  await tick(40);
+  const sel = walk(dlg.card).find((n) => n.tagName === 'SELECT' && n.attrs['data-discount-choice'] !== undefined);
+  assert.ok(sel, 'нет выбора скидки');
+  const opts = sel.children.filter((o) => o.tagName === 'OPTION').map((o) => textOf(o).trim());
+  assert.deepEqual(opts, ['Без скидки', 'Скидка группы «VIP» — 10%', 'Промокод «ЛЕТО» — −15%']);
+  assert.equal(sel.value, 'group');
+  const why = walk(dlg.card).find((n) => n.attrs && n.attrs['data-discount-reason'] !== undefined);
+  assert.equal(why._t, 'Скидка группы «VIP» — 10%');
+  sel.value = 'promo:11';
+  sel.fireChange();
+  assert.equal(why._t, 'Промокод «ЛЕТО» — −15%');
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+  const inv = calls.find((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit');
+  assert.ok(inv, 'счёт не выставлен');
+  assert.deepEqual([inv.body.discount_choice, inv.body.discount_id, inv.body.discount_amount], ['promo', 11, 16800]);
+  dlg.close();
+});
+
+test('DISCOUNT_V2: без выбора по умолчанию — скидка группы: discount_choice group и 0 (пол группы ставит сервер, как прежде)', async () => {
+  reset();
+  patientRows = [{ ...KARIMOVA, category_id: 3, patient_categories: { id: 3, name: 'VIP', discount_percent: 10, active: 1 } }];
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  await pickKarimova(dlg);
+  await tick(40);
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+  const inv = calls.find((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit');
+  assert.deepEqual([inv.body.discount_choice, inv.body.discount_amount], ['group', 0]);
+  dlg.close();
+});

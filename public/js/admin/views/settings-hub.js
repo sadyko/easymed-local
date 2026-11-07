@@ -55,7 +55,8 @@ import { prepareConsultTypeSave } from '../../shared/consultation-price.js';   /
 // BRANCH_PROFILE_V1 — «Филиалы» — свой экран (views/branches-editor.js: список
 // зданий карточками и страница здания) вместо общего редактора справочника;
 // карточку связи зданий он монтирует над списком, как раньше.
-import { renderBranchesEditor } from './branches-editor.js';   // BRANCH_PROFILE_V1
+import { renderBranchesEditor } from './branches-editor.js';
+import { discountServicesField } from './discount-service-picker.js';   // DISCOUNT_V2 — «Только на эти услуги»: окно выбора   // BRANCH_PROFILE_V1
 
 let state = { section: null, readOnly: false };   // null = hub; else one of LOOKUP_CONFIG's keys
 
@@ -689,7 +690,7 @@ async function paintUpdateStatus() {
 //   column types: plain (row[key]) | embed (row[key][embedLabel||'name'])
 //     embed cfg: cfg.embed = 'table(col)[, table2(col2)]'  (matches select())
 // -----------------------------------------------------------------------------
-const LOOKUP_CONFIG = {
+export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради теста полей скидки
     // ---- Основное / General ----------------------------------------------
     patient_categories: {
         table: 'patient_categories', title: 'Категории пациентов', icon: 'ID',
@@ -700,6 +701,8 @@ const LOOKUP_CONFIG = {
         fields: [
             { key: 'name', label: 'Название', type: 'text', required: true },
             { key: 'discount_percent', label: 'Скидка группы, % — применяется к счетам пациентов этой категории сама', type: 'number' },
+            // DISCOUNT_V2 (решение владельца 2026-11-07, п. 5) — снята: доля врача — от цены до скидки (клиника берёт скидку на себя).
+            { key: 'reduces_doctor_share', label: 'Скидка уменьшает долю врача', type: 'checkbox', checkedValue: 1, uncheckedValue: 0, default: 1, full: true },
             { key: 'tier', label: 'Уровень (необязательно)', type: 'text' },
         ],
     },
@@ -742,6 +745,8 @@ const LOOKUP_CONFIG = {
             { key: 'valid_until', label: 'Действует по (пусто — бессрочно)', type: 'date' },
             { key: 'category_id', label: 'Только для группы пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name' },
             { key: 'service_ids', label: 'Только на эти услуги (ничего не отмечено — на весь счёт)', type: 'services', full: true },
+            // DISCOUNT_V2 (решение владельца 2026-11-07, п. 5) — снята: доля врача — от цены до скидки (клиника берёт скидку на себя).
+            { key: 'reduces_doctor_share', label: 'Скидка уменьшает долю врача', type: 'checkbox', checkedValue: 1, uncheckedValue: 0, default: 1, full: true },
             { key: 'note', label: 'Примечание', type: 'text', full: true },
         ],
     },
@@ -1084,40 +1089,6 @@ export function discountScopeText(row) {
     return ids.length ? trf('услуг: {n}', { n: ids.length }) : tr('на весь счёт');
 }
 
-// DISCOUNT_RULES_V1 — список активных услуг с отметками и поиском. Загружается
-// после монтирования (load), как fk-списки; .value — массив отмеченных id.
-function servicesPicker(initialIds, emptyHint = 'Ничего не отмечено — скидка действует на весь счёт') {
-    const picked = new Set((initialIds || []).map(Number).filter(Number.isFinite));
-    const q = h('input', { type: 'text', placeholder: 'Поиск услуги…', style: { width: '100%', marginBottom: '6px' } });
-    const list = h('div', { style: { maxHeight: '180px', overflowY: 'auto', border: '1px solid var(--ink-100)', borderRadius: '8px', padding: '6px 8px', display: 'grid', gap: '4px' } },
-        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка…'));
-    const countEl = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } }, '');
-    let rows = [];
-    const paint = () => {
-        clear(list);
-        const needle = q.value.trim().toLowerCase();
-        const shown = rows.filter((r) => !needle || String(r.name || '').toLowerCase().includes(needle));
-        if (!shown.length) list.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, rows.length ? 'Ничего не найдено' : 'Услуг нет'));
-        for (const r of shown) {
-            const cb = h('input', { type: 'checkbox', checked: picked.has(Number(r.id)), onchange: () => { if (cb.checked) picked.add(Number(r.id)); else picked.delete(Number(r.id)); sync(); } });
-            list.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', cursor: 'pointer' } }, cb, r.name || ''));
-        }
-        sync();
-    };
-    const sync = () => { countEl.textContent = picked.size ? trf('Отмечено услуг: {n}', { n: picked.size }) : tr(emptyHint); };
-    q.addEventListener('input', paint);
-    const el = h('div', null, q, list, countEl);
-    el.load = async () => {
-        try {
-            const { data, error } = await supabase.from('services').select('id,name').eq('active', 1).order('name').limit(2000);
-            rows = error ? [] : (data || []);
-        } catch (e) { rows = []; }
-        paint();
-    };
-    Object.defineProperty(el, 'value', { get: () => [...picked] });
-    return el;
-}
-
 // The label for a stored enum value, for the LIST view — without this the table
 // would keep printing the raw value while the editor showed the translated one.
 function enumLabel(cfg, key, value) {
@@ -1424,7 +1395,7 @@ async function renderEditor(container, key) {
             } else if (f.type === 'services') {
                 // DISCOUNT_RULES_V1 — отметки по списку активных услуг с поиском;
                 // .value отдаёт массив id (колонка объявлена json в реестре).
-                control = servicesPicker(Array.isArray(row && row[f.key]) ? row[f.key] : [], f.emptyHint);
+                control = discountServicesField(Array.isArray(row && row[f.key]) ? row[f.key] : [], f.emptyHint);   // DISCOUNT_V2 — окно выбора
                 fkFields.push({ ...f, __services: true });
             } else if (f.type === 'phone') {
                 // PHONE_INPUT_V1 — country picker, Uzbekistan by default. Its

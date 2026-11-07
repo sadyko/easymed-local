@@ -7,6 +7,7 @@ import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDe
   rebillPaidLine, rebillPaidLineQuote,   // REFUND_SWAP_V1 — «Вернуть эту услугу и выставить новую»
   invoiceLineWork } from './billing.js';   // REFUND_ANY_V1 — что уже сделано по строкам счёта
 import { refundedLines } from './billing.js';   // REFUND_ANY_V1 — «услуга возвращена»
+import { cashierInvoiceDiscount } from './billing.js';   // CASHIER_DISCOUNT_V1 — скидка кассы при оплате
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { dashboardOverview } from './dashboard-overview.js';   // DASHBOARD_OVERVIEW_V1
@@ -189,6 +190,8 @@ export const RPC = {
   cashier_line_set_doctor:     (db, args, user) => setUnpaidLineDoctor(db, args, user, { rpc: 'cashier_line_set_doctor', cashier: true }),
   cashier_line_add:            (db, args, user) => addServiceToVisitInvoice(db, args, user, { rpc: 'cashier_line_add' }),
   cashier_line_remove:         (db, args, user) => removeUnpaidService(db, args, user, { rpc: 'cashier_line_remove', cashier: true }),
+  // CASHIER_DISCOUNT_V1 (3.22.0) — скидка кассы на неоплаченный счёт до приёма денег (запись).
+  cashier_invoice_discount:    (db, args, user) => cashierInvoiceDiscount(db, args, user),
   cashier_line_performers:     (db, args, user) => cashierLinePerformers(db, args, user),   // только чтение
   // CASHIER_PAID_SWAP_V1 — замена услуги/врача в оплаченном счёте с расчётом
   // разницы (возврат сразу или доплата) и её предпросмотр для окна

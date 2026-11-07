@@ -356,6 +356,23 @@ export function cashMove(db, args, user) {
 // CASHIER_DESIGN_V2 — data for «X-отчёт» / «Внутренний отчёт» / «История»:
 // the shift row + per-method totals + drawer movements + the payment log.
 // Defaults to the caller's open shift; admins may pass any shift_id.
+// DISCOUNT_V2 (3.22.0) — СЧЕТА СО СКИДКОЙ 100 % В ОТЧЁТЕ СМЕНЫ. Платежа у них нет, и
+// отчёт смены (он считает платежи) их не видел. Здесь — счета на 0 со скидкой
+// (subtotal > 0), закрытые за время смены (paid_at — миг закрытия счёта на 0), которые
+// кассир смены выставил сам или закрыл своей скидкой (журнал счёта, action
+// 'discount'). Это СЧЁТ и сумма скидки — в итоги денег смены они не входят.
+function fullDiscountOfShift(db, shift) {
+  const to = shift.closed_at || db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') n").get().n;
+  const r = db.prepare(`
+    SELECT COUNT(*) n, COALESCE(SUM(i.discount_amount), 0) s FROM invoices i
+     WHERE i.total_amount = 0 AND i.subtotal > 0 AND i.discount_amount > 0 AND i.status = 'paid'
+       AND i.payer_id IS NULL AND i.paid_at >= ? AND i.paid_at <= ?
+       AND (i.created_by = ? OR EXISTS (SELECT 1 FROM invoice_audit_log l
+                                         WHERE l.invoice_id = i.id AND l.action = 'discount' AND l.actor_user_id = ?))`)
+    .get(shift.opened_at, to, shift.cashier_id, shift.cashier_id);
+  return { n: Number(r.n) || 0, discount: round2(Number(r.s) || 0) };
+}
+
 export function shiftReport(db, args, user) {
   requireRole(user, SHIFT_ROLES);
 
@@ -390,6 +407,7 @@ export function shiftReport(db, args, user) {
 
   const totals = paymentTotals(db, shift.id);
   const moves = movementTotals(db, shift.id);
+  const fullDiscount = fullDiscountOfShift(db, shift);   // DISCOUNT_V2 — счета со скидкой 100 %
   const payments = db.prepare(`
     SELECT p.paid_at, p.amount, p.method,
            i.invoice_number AS invoice, pt.full_name AS patient
@@ -403,6 +421,7 @@ export function shiftReport(db, args, user) {
 
   return {
     shift, totals, payments, movements,
+    full_discount: fullDiscount,   // DISCOUNT_V2 — { n, discount }: деньгами итога не являются
     cash_in: moves.cash_in,
     cash_out: moves.cash_out,
     expected_drawer: round2(shift.opening_float + totals.cash + moves.cash_in - moves.cash_out),
@@ -445,6 +464,8 @@ function cashierRowSelect(idsSql) {
   return `
     SELECT i.id, i.invoice_number, i.status, i.subtotal, i.discount_amount,
            i.total_amount, i.paid_amount, i.created_at, i.paid_at,
+           -- DISCOUNT_V2 · CASHIER_DISCOUNT_V1 — причина скидки (группа, промокод, касса): окно оплаты и история.
+           i.discount_note AS discount_note,
            pt.full_name AS patient_name, pt.mrn AS mrn, pt.phone AS phone,
            -- DEPOSIT_WALLET_V1 — окно оплаты спрашивает баланс пациента.
            i.patient_id AS patient_id,
@@ -489,7 +510,11 @@ export function cashierInvoices(db, args, user) {
        -- FREE_SERVICE_V1 — счёт на ноль в кассу не попадает: взять по нему
        -- нечего, он закрыт в момент создания. Бесплатные консультации создавали
        -- по счёту на каждую и засоряли «Приём оплат» строками на 0 сум.
-       AND i.total_amount > 0
+       -- DISCOUNT_V2 (3.22.0, п. 5 списка S1) — КРОМЕ СКИДКИ 100 %: услуги платные,
+       -- скидка съела всю сумму (группа, промокод, касса). Такой счёт кассе виден
+       -- (с пометкой «скидка 100%», сумма 0) — иначе он пропадал из истории и отчёта
+       -- смены. Деньги итогов он не трогает: сумма 0, платежей нет.
+       AND (i.total_amount > 0 OR (i.subtotal > 0 AND i.discount_amount > 0))
      ORDER BY i.created_at DESC, i.id DESC
      LIMIT 500
   `).all(...ids.params);
@@ -563,7 +588,7 @@ const SEARCH_VISIBLE = `i.payer_id IS NULL AND i.sync_origin IS NULL
        AND (i.visit_id IS NOT NULL OR (
              NOT EXISTS (SELECT 1 FROM patient_deposits dep WHERE dep.invoice_id = i.id AND dep.kind = 'deposit')
          AND NOT EXISTS (SELECT 1 FROM patient_discounts crd WHERE crd.sale_invoice_id = i.id)))
-       AND NOT (i.total_amount = 0 AND NOT EXISTS (SELECT 1 FROM payments pay WHERE pay.invoice_id = i.id))`;
+       AND NOT (i.total_amount = 0 AND NOT (i.subtotal > 0 AND i.discount_amount > 0) AND NOT EXISTS (SELECT 1 FROM payments pay WHERE pay.invoice_id = i.id))`;   // DISCOUNT_V2 — скидка 100 % находится
 
 function invoiceSearchIds(q) {
   const who = patientMatchSql(q);
@@ -593,12 +618,13 @@ export function invoiceSearchPageQuery(q, offset) {
 // Ревью кода B1 (M-1) — почему счёта по номеру нет в поиске. Порядок — как у
 // правил SEARCH_VISIBLE; документ денег — тем же правилом, что оплата и возврат.
 function invoiceHiddenReason(db, id) {
-  const inv = db.prepare('SELECT id, invoice_number, payer_id, sync_origin, total_amount FROM invoices WHERE id = ?').get(id);
+  const inv = db.prepare('SELECT id, invoice_number, payer_id, sync_origin, total_amount, subtotal, discount_amount FROM invoices WHERE id = ?').get(id);
   if (!inv) return 'missing';
   if (inv.sync_origin != null) return 'branch';
   if (inv.payer_id != null) return 'payer';
   if (moneyDocRefusal(db, inv)) return 'money_doc';
-  if (Number(inv.total_amount) === 0 && !db.prepare('SELECT 1 FROM payments WHERE invoice_id = ? LIMIT 1').get(inv.id)) return 'free';
+  if (Number(inv.total_amount) === 0 && !(Number(inv.subtotal) > 0 && Number(inv.discount_amount) > 0)   // DISCOUNT_V2 — скидка 100 % не «бесплатный»
+      && !db.prepare('SELECT 1 FROM payments WHERE invoice_id = ? LIMIT 1').get(inv.id)) return 'free';
   return 'missing';
 }
 

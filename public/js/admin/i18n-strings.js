@@ -13576,4 +13576,54 @@ export const STRINGS = {
   "Период — не длиннее года.": {"en":"The period must not exceed one year.","ru":"Период — не длиннее года.","uz":"Davr — bir yildan oshmasin."},   // MY_REFERRALS_V1
   "Исполнитель строки — не врач и не отмечен на эту услугу («Сотрудники» → «Услуги и ставки»).": {"en":"The line's performer is not a doctor and is not assigned to this service (“Employees” → “Services & rates”).","ru":"Исполнитель строки — не врач и не отмечен на эту услугу («Сотрудники» → «Услуги и ставки»).","uz":"Qator ijrochisi shifokor emas va bu xizmatga belgilanmagan («Xodimlar» → «Xizmatlar va tariflar»)."},   // DIAG_ROUTE_V1
   // /S4 · 3.22.0
+  // ── S1 3.22.0 — BOOKED_JOIN_V1 · DISCOUNT_V2 · CASHIER_DISCOUNT_V1 ──
+  "в запись · {time}": {"en":"into the booking · {time}","ru":"в запись · {time}","uz":"yozuvga · {time}"},   // BOOKED_JOIN_V1
+  // CASHIER_DISCOUNT_V1 — сервер (rpc/billing.js cashierInvoiceDiscount) и строка роли
+  "Давать скидку в кассе — недоступно вашей роли. Право «Кассир может давать скидку» включает администратор в «Настройки → Роли» (раздел «Касса»).": {"en":"Giving a discount at the cash desk is not available to your role. The administrator turns on «Cashier can give a discount» in «Settings → Roles» (section «Cash desk»).","ru":"Давать скидку в кассе — недоступно вашей роли. Право «Кассир может давать скидку» включает администратор в «Настройки → Роли» (раздел «Касса»).","uz":"Kassada chegirma berish rolingiz uchun mavjud emas. «Kassir chegirma bera oladi» huquqini administrator «Sozlamalar → Rollar» bo‘limida («Kassa» qismi) yoqadi."},   // CASHIER_DISCOUNT_V1
+  "Укажите скидку процентом или суммой.": {"en":"Enter the discount as a percentage or an amount.","ru":"Укажите скидку процентом или суммой.","uz":"Chegirmani foiz yoki summa bilan kiriting."},   // CASHIER_DISCOUNT_V1
+  "Скидка должна быть больше нуля.": {"en":"The discount must be greater than zero.","ru":"Скидка должна быть больше нуля.","uz":"Chegirma noldan katta bo‘lishi kerak."},   // CASHIER_DISCOUNT_V1
+  "Скидка в процентах — не больше 100.": {"en":"A percentage discount cannot exceed 100.","ru":"Скидка в процентах — не больше 100.","uz":"Foizdagi chegirma 100 dan oshmasligi kerak."},   // CASHIER_DISCOUNT_V1
+  "Укажите причину скидки.": {"en":"Enter the reason for the discount.","ru":"Укажите причину скидки.","uz":"Chegirma sababini kiriting."},   // CASHIER_DISCOUNT_V1
+  "Причина скидки — не длиннее 200 знаков.": {"en":"The discount reason must be at most 200 characters.","ru":"Причина скидки — не длиннее 200 знаков.","uz":"Chegirma sababi 200 belgidan oshmasligi kerak."},   // CASHIER_DISCOUNT_V1
+  "Скидку класть не на что: строки счёта уже со скидкой целиком (или это строки пакета со своей ценой).": {"en":"There is nothing left to discount: the invoice lines are already fully discounted (or they are package lines with their own price).","ru":"Скидку класть не на что: строки счёта уже со скидкой целиком (или это строки пакета со своей ценой).","uz":"Chegirma qo‘yadigan narsa qolmadi: hisob qatorlari allaqachon to‘liq chegirmali (yoki bu o‘z narxi bor paket qatorlari)."},   // CASHIER_DISCOUNT_V1
+  "Скидку дают до оплаты: счёт уже {status}.": {"en":"A discount is given before payment: the invoice is already {status}.","ru":"Скидку дают до оплаты: счёт уже {status}.","uz":"Chegirma to‘lovdan oldin beriladi: hisob allaqachon {status}."},   // CASHIER_DISCOUNT_V1
+  "Кассир может давать скидку": {"en":"Cashier can give a discount","ru":"Кассир может давать скидку","uz":"Kassir chegirma bera oladi"},   // CASHIER_DISCOUNT_V1
+  "В окне оплаты — «Скидка»: процент или сумма с обязательной причиной, до приёма денег, на неоплаченный счёт. Скидка и причина видны в истории кассы, журнале счёта и отчётах. Выключите, чтобы кассир только принимал оплату.": {"en":"In the payment window — «Discount»: a percentage or an amount with a required reason, before the money is taken, on an unpaid invoice. The discount and its reason show in the cash desk history, the invoice log and the reports. Turn it off so the cashier only takes payments.","ru":"В окне оплаты — «Скидка»: процент или сумма с обязательной причиной, до приёма денег, на неоплаченный счёт. Скидка и причина видны в истории кассы, журнале счёта и отчётах. Выключите, чтобы кассир только принимал оплату.","uz":"To‘lov oynasida — «Chegirma»: foiz yoki summa, sababi majburiy, pul olinmasdan oldin, to‘lanmagan hisobga. Chegirma va sababi kassa tarixida, hisob jurnalida va hisobotlarda ko‘rinadi. Kassir faqat to‘lov qabul qilishi uchun o‘chiring."},   // CASHIER_DISCOUNT_V1
+  "Даёт скидку на неоплаченный счёт при оплате (процент или сумма, с причиной).": {"en":"Gives a discount on an unpaid invoice at payment (a percentage or an amount, with a reason).","ru":"Даёт скидку на неоплаченный счёт при оплате (процент или сумма, с причиной).","uz":"To‘lov paytida to‘lanmagan hisobga chegirma beradi (foiz yoki summa, sababi bilan)."},   // CASHIER_DISCOUNT_V1
+  // CASHIER_DISCOUNT_V1 — окно скидки кассы (views/cashier-desk.js)
+  "Скидка 100 % — счёт закрыт на 0, услуги переданы в работу.": {"en":"100 % discount — the invoice is closed at 0, the services are sent to work.","ru":"Скидка 100 % — счёт закрыт на 0, услуги переданы в работу.","uz":"100 % chegirma — hisob 0 bilan yopildi, xizmatlar ishga topshirildi."},   // CASHIER_DISCOUNT_V1
+  "Например: постоянный пациент": {"en":"For example: regular patient","ru":"Например: постоянный пациент","uz":"Masalan: doimiy bemor"},   // CASHIER_DISCOUNT_V1
+  "Скидка {off} сум — к оплате {due} сум": {"en":"Discount {off} UZS — to pay {due} UZS","ru":"Скидка {off} сум — к оплате {due} сум","uz":"Chegirma {off} so‘m — to‘lovga {due} so‘m"},   // CASHIER_DISCOUNT_V1
+  "Счёт {no} — к оплате {sum} сум": {"en":"Invoice {no} — to pay {sum} UZS","ru":"Счёт {no} — к оплате {sum} сум","uz":"Hisob {no} — to‘lovga {sum} so‘m"},   // CASHIER_DISCOUNT_V1
+  "Причина скидки": {"en":"Discount reason","ru":"Причина скидки","uz":"Chegirma sababi"},   // CASHIER_DISCOUNT_V1
+  "Скидка уменьшает долю врача": {"en":"Discount reduces the doctor's share","ru":"Скидка уменьшает долю врача","uz":"Chegirma shifokor ulushini kamaytiradi"},   // CASHIER_DISCOUNT_V1 · DISCOUNT_V2
+  "Дать скидку": {"en":"Give discount","ru":"Дать скидку","uz":"Chegirma berish"},   // CASHIER_DISCOUNT_V1
+  "Скидка не записана.": {"en":"The discount was not saved.","ru":"Скидка не записана.","uz":"Chegirma saqlanmadi."},   // CASHIER_DISCOUNT_V1
+  "Скидка {sum} сум записана.": {"en":"Discount of {sum} UZS saved.","ru":"Скидка {sum} сум записана.","uz":"{sum} so‘m chegirma saqlandi."},   // CASHIER_DISCOUNT_V1
+  "скидка {sum}": {"en":"discount {sum}","ru":"скидка {sum}","uz":"chegirma {sum}"},   // CASHIER_DISCOUNT_V1 — «История операций»
+  "скидка 100%": {"en":"100% discount","ru":"скидка 100%","uz":"100% chegirma"},   // DISCOUNT_V2 — счёт на 0 со скидкой в «Истории операций»
+  // DISCOUNT_V2 — сервер (domain/discount-choice.js)
+  "Скидка выбрана неверно.": {"en":"The discount was chosen incorrectly.","ru":"Скидка выбрана неверно.","uz":"Chegirma noto‘g‘ri tanlangan."},   // DISCOUNT_V2
+  "Промокод не выбран.": {"en":"No promo code was chosen.","ru":"Промокод не выбран.","uz":"Promokod tanlanmagan."},   // DISCOUNT_V2
+  "Промокод не найден.": {"en":"The promo code was not found.","ru":"Промокод не найден.","uz":"Promokod topilmadi."},   // DISCOUNT_V2
+  "Промокод «{name}» выключен в настройках.": {"en":"The promo code «{name}» is turned off in the settings.","ru":"Промокод «{name}» выключен в настройках.","uz":"«{name}» promokodi sozlamalarda o‘chirilgan."},   // DISCOUNT_V2
+  "Промокод «{name}» ещё не действует.": {"en":"The promo code «{name}» is not valid yet.","ru":"Промокод «{name}» ещё не действует.","uz":"«{name}» promokodi hali amal qilmaydi."},   // DISCOUNT_V2
+  "Срок промокода «{name}» истёк.": {"en":"The promo code «{name}» has expired.","ru":"Срок промокода «{name}» истёк.","uz":"«{name}» promokodining muddati tugagan."},   // DISCOUNT_V2
+  "Промокод «{name}» — только для другой группы пациентов.": {"en":"The promo code «{name}» is only for another patient group.","ru":"Промокод «{name}» — только для другой группы пациентов.","uz":"«{name}» promokodi faqat boshqa bemorlar guruhi uchun."},   // DISCOUNT_V2
+  "Промокод «{name}» действует на другие услуги.": {"en":"The promo code «{name}» applies to other services.","ru":"Промокод «{name}» действует на другие услуги.","uz":"«{name}» promokodi boshqa xizmatlarga amal qiladi."},   // DISCOUNT_V2
+  // DISCOUNT_V2 — выбор одной скидки в окнах регистрации (discount-choice.js, мастер, быстрая регистрация, калькулятор)
+  "Скидка группы «{name}» — {pct}%": {"en":"Group «{name}» discount — {pct}%","ru":"Скидка группы «{name}» — {pct}%","uz":"«{name}» guruhi chegirmasi — {pct}%"},   // DISCOUNT_V2
+  "Своя скидка (вручную)": {"en":"Own discount (manual)","ru":"Своя скидка (вручную)","uz":"O‘z chegirmasi (qo‘lda)"},   // DISCOUNT_V2
+  "Промокод «{name}» — −{value}%": {"en":"Promo code «{name}» — −{value}%","ru":"Промокод «{name}» — −{value}%","uz":"«{name}» promokodi — −{value}%"},   // DISCOUNT_V2
+  "Промокод «{name}» — −{value}% · на выбранные услуги": {"en":"Promo code «{name}» — −{value}% · on selected services","ru":"Промокод «{name}» — −{value}% · на выбранные услуги","uz":"«{name}» promokodi — −{value}% · tanlangan xizmatlarga"},   // DISCOUNT_V2
+  "Промокод «{name}» — −{value} сум": {"en":"Promo code «{name}» — −{value} UZS","ru":"Промокод «{name}» — −{value} сум","uz":"«{name}» promokodi — −{value} so‘m"},   // DISCOUNT_V2
+  "Промокод «{name}» — −{value} сум · на выбранные услуги": {"en":"Promo code «{name}» — −{value} UZS · on selected services","ru":"Промокод «{name}» — −{value} сум · на выбранные услуги","uz":"«{name}» promokodi — −{value} so‘m · tanlangan xizmatlarga"},   // DISCOUNT_V2
+  "Оплатить картой / сертификатом": {"en":"Pay with a card / certificate","ru":"Оплатить картой / сертификатом","uz":"Karta / sertifikat bilan to‘lash"},   // DISCOUNT_V2 — карты: деньги, а не скидка
+  // DISCOUNT_V2 — «Только на эти услуги»: окно выбора (views/discount-service-picker.js)
+  "Поиск услуги или категории…": {"en":"Search for a service or category…","ru":"Поиск услуги или категории…","uz":"Xizmat yoki toifani qidirish…"},   // DISCOUNT_V2
+  "Снять всю категорию": {"en":"Clear the whole category","ru":"Снять всю категорию","uz":"Butun toifani olib tashlash"},   // DISCOUNT_V2
+  "Выбрать всю категорию": {"en":"Select the whole category","ru":"Выбрать всю категорию","uz":"Butun toifani tanlash"},   // DISCOUNT_V2
+  "Услуги скидки": {"en":"Discount services","ru":"Услуги скидки","uz":"Chegirma xizmatlari"},   // DISCOUNT_V2
+  "Выбрать услуги…": {"en":"Choose services…","ru":"Выбрать услуги…","uz":"Xizmatlarni tanlash…"},   // DISCOUNT_V2
+  // /S1 3.22.0
 };

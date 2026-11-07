@@ -95,5 +95,7 @@ test('калькулятор: офлайн-скидка любого вида �
     }
     assert.ok(!/x\.kind === 'promo_code'/.test(spm), "применённая скидка не должна отбираться по облачному виду 'promo_code'");
     // INVOICE_APPEND_V1 (ревью M1) — и append: новый счёт, когда сразу платят балансом/картой.
-    assert.match(spm, /invoicePickerLines\(\{ visitId: visit\.id, lines: patientRows\.map\(billLineOf\), pct: wizDiscountPct\(\), promo: promoRow, categoryPct: wiz\.categoryPct \|\| 0, append: !spendStored \}\)/, 'сумма скидки в счёте — тем же правилом, что в смете');
+    // DISCOUNT_V2 (3.22.0) — одна скидка по выбору: смета и счёт берут её из calcDiscountArgs(), сервер — discount_choice.
+    assert.match(spm, /const d = pickerDiscount\(previewBillLines\(\), calcDiscountArgs\(\)\)/, 'смета — по выбору скидки');
+    assert.match(spm, /invoicePickerLines\(\{ visitId: visit\.id, lines: patientRows\.map\(billLineOf\), pct: da\.pct, promo: da\.promo \? promoRow : null, categoryPct: da\.categoryPct, append: !spendStored, choice: calcChoice\(\) \}\)/, 'сумма скидки в счёте — тем же правилом, что в смете');
 });

@@ -31,7 +31,8 @@ import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANC
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
 import { canOfferLineFix, openLineFix, openRebill, openRefundSwap, invoiceSwappable, openLabTubeLine } from './cashier-line-fix.js?v=refbill4';   // REFUND_SWAP_V1 — «Заменить услугу» в окне «Платежи»; CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп) · REFBILL_REVIEW_V1 — плательщик карты перечитывается, отказ перечитывает строки
 import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт по счёту плательщику, та же сборка, что у мастера визита
-import { canCloseOtherShifts, canSwapPaidLines } from '../permissions.js';   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
+import { canCloseOtherShifts, canSwapPaidLines } from '../permissions.js';
+import { canCashierDiscount } from '../permissions.js';   // CASHIER_DISCOUNT_V1 — «Кассир может давать скидку»   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
 // CARD_BALANCE_V1 — «Подарочная карта»: оплата остатком карты / сертификата.
@@ -589,6 +590,10 @@ async function historyModal(root) {
                 svc,
                 inv.doctor_name ? trf('врач: {name}', { name: inv.doctor_name }) : null,
                 cancelled ? tr('отменён') : (debt > 0 ? trf('долг {sum}', { sum: fmtPrice(debt) }) : tr('оплачен полностью')),
+                // DISCOUNT_V2 · CASHIER_DISCOUNT_V1 — скидка и её причина (группа, промокод, касса).
+                Number(inv.discount_amount) > 0 ? trf('скидка {sum}', { sum: fmtPrice(inv.discount_amount) }) + (inv.discount_note ? ' (' + inv.discount_note + ')' : '') : null,
+                // DISCOUNT_V2 (3.22.0) — скидка 100 %: счёт на 0 со скидкой виден в истории с пометкой.
+                isFullDiscount(inv) ? tr('скидка 100%') : null,
             ].filter(Boolean).join(' · ');
             rows.push(line(hhmm(d),
                 trf('Счёт {no} выставлен', { no: inv.invoice_number || '#' + inv.id }),
@@ -616,6 +621,11 @@ async function historyModal(root) {
         async () => true, 760);
 }
 
+/** DISCOUNT_V2 (3.22.0) — счёт на 0, у которого сумма съедена скидкой (а не бесплатная услуга). */
+export function isFullDiscount(inv) {
+    return !!inv && Number(inv.total_amount) === 0 && Number(inv.subtotal) > 0 && Number(inv.discount_amount) > 0;
+}
+
 async function printShiftReport(withPayments) {
     const r = await loadShiftReport();
     if (r) printReportDoc(r, withPayments);
@@ -637,6 +647,7 @@ function printReportDoc(r, withPayments) {
         ${row('Перевод', fmtPrice(r.totals.transfer))}
         ${row('Эквайринг', fmtPrice(r.totals.acquiring))}
         ${row(`Всего оплат (${r.totals.count} платеж.)`, fmtPrice(r.totals.total))}
+        ${r.full_discount && r.full_discount.n > 0 ? row(`Счета со скидкой 100 % (${r.full_discount.n}) — сумма скидки, не деньги`, fmtPrice(r.full_discount.discount)) : ''}
         ${row('Внесения', fmtPrice(r.cash_in))}
         ${row('Изъятия', fmtPrice(r.cash_out))}
         ${row('Остаток наличных', fmtPrice(r.expected_drawer), true)}
@@ -1888,6 +1899,24 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
             // Частично оплаченный счёт: видно, что уже внесено и сколько осталось.
             paid > 0 ? totalRow('Уже оплачено', h('span', { class: 'num', style: { color: 'var(--ok-700, #047857)', whiteSpace: 'nowrap' } }, fmtPrice(paid), ' сум')) : null,
             paid > 0 ? totalRow('К оплате', money(balance), { strong: true }) : null,
+            // DISCOUNT_V2 — почему у счёта скидка: группа, промокод, касса.
+            inv.discount_note && disc > 0 ? h('div', { 'data-discount-note': String(inv.id), class: 'muted', style: { fontSize: '12.5px', lineHeight: 1.45, marginTop: '4px' } },
+                Icon('Coins', { size: 12 }), ' ', inv.discount_note) : null,
+            // CASHIER_DISCOUNT_V1 — «Скидка» до приёма денег (право роли «Кассир может давать скидку»).
+            cashierDiscountAllowed(inv) ? h('div', { style: { marginTop: '8px' } },
+                h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-cashier-discount': String(inv.id),
+                    onclick: () => openCashierDiscount(inv, (res) => {
+                        if (closePay) closePay();
+                        const fresh = { ...inv, ...res.invoice };
+                        const due = Math.max(0, (Number(fresh.total_amount) || 0) - (Number(fresh.paid_amount) || 0));
+                        if (fresh.status === 'paid' || due <= 0) {
+                            toast(tr('Скидка 100 % — счёт закрыт на 0, услуги переданы в работу.'), 'ok');
+                            Promise.resolve(after()).catch(() => {});
+                            return;
+                        }
+                        payModal(root, fresh, due, opts);
+                    }) },
+                    Icon('Coins', { size: 13 }), ' ', tr('Скидка'))) : null,
         ));
         linesEl.appendChild(box);
     };
@@ -2086,6 +2115,7 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
     }
     render();
 
+    let closePay = null;   // CASHIER_DISCOUNT_V1 — окно оплаты закрывается после скидки и открывается с новой суммой
     modal(trf('Оплата · {no}', { no: inv.invoice_number || ('#' + inv.id) }), 'Receipt',
         [
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px' } },
@@ -2134,7 +2164,7 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
         // DEBT_BTN_V1 — «Оставить как долг» рядом с «Отмена»: записать введённую
         // часть (если есть), перевести счёт в долг, услуги отдать в работу —
         // врач/лаборатория/процедуры видят их, не дожидаясь полной оплаты.
-        (close) => h('button', {
+        (close) => (closePay = close, h('button', {
             class: 'btn', type: 'button',
             style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-300, #fca5a5)', fontWeight: 700 },
             onclick: async (e) => {
@@ -2182,8 +2212,67 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
                     btn.disabled = false;
                 }
             },
-        }, 'Оставить как долг'),
+        }, 'Оставить как долг')),
         opts.onClose || null);   // REFUND_SWAP_V1
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CASHIER_DISCOUNT_V1 (решение владельца 2026-11-07, п. 2) — СКИДКА КАССЫ ПРИ ОПЛАТЕ.
+// Любой кассир (право роли «Кассир может давать скидку»), процент от суммы к оплате
+// или сумма, причина обязательна, до приёма денег, на неоплаченный счёт пациента.
+// Деньги считает сервер (cashier_invoice_discount): окно только спрашивает.
+// «Скидка уменьшает долю врача» (п. 5) — по умолчанию да.
+// ═══════════════════════════════════════════════════════════════════════════
+export function cashierDiscountAllowed(inv) {
+    if (!inv || !canCashierDiscount()) return false;
+    if (inv.payer_id != null || inv.status !== 'unpaid' || Number(inv.paid_amount) > 0) return false;
+    if (/^(DEP|CARD)-/.test(String(inv.invoice_number || ''))) return false;
+    return Number(inv.total_amount) > 0;
+}
+
+const discountNumber = (v) => Number(String(v || '').replace(/\s/g, '').replace(',', '.'));
+
+export function openCashierDiscount(inv, onDone) {
+    let mode = 'pct';
+    const due = Math.max(0, (Number(inv.total_amount) || 0) - (Number(inv.paid_amount) || 0));
+    const valueIn = h('input', { type: 'text', inputmode: 'decimal', 'data-discount-value': '', placeholder: '0', style: { width: '100%' } });
+    const reasonIn = h('input', { type: 'text', 'data-discount-reason': '', maxlength: '200', placeholder: tr('Например: постоянный пациент'), style: { width: '100%' } });
+    const reducesBox = h('input', { type: 'checkbox', checked: true, 'data-discount-reduces': '' });
+    const preview = h('div', { class: 'muted', 'data-discount-preview': '', style: { fontSize: '12.5px' } });
+    const amountOf = () => {
+        const v = discountNumber(valueIn.value);
+        if (!(Number.isFinite(v) && v > 0)) return 0;
+        return mode === 'pct' ? Math.round(due * Math.min(v, 100)) / 100 : Math.min(v, due);
+    };
+    const paintPreview = () => {
+        const off = amountOf();
+        preview.textContent = off > 0 ? trf('Скидка {off} сум — к оплате {due} сум', { off: fmtPrice(off), due: fmtPrice(Math.max(0, due - off)) }) : '';
+    };
+    valueIn.addEventListener('input', paintPreview);
+    const modeRow = segmented([['pct', '%'], ['abs', 'сум']], mode, (v) => { mode = v; paintPreview(); });
+    modal(tr('Скидка'), 'Coins', [
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('Счёт {no} — к оплате {sum} сум', { no: inv.invoice_number || ('#' + inv.id), sum: fmtPrice(due) })),
+        modeRow,
+        field(tr('Скидка'), valueIn, { required: true }),
+        field(tr('Причина скидки'), reasonIn, { required: true }),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', cursor: 'pointer' } },
+            reducesBox, tr('Скидка уменьшает долю врача')),
+        preview,
+    ], tr('Дать скидку'), async () => {
+        const raw = discountNumber(valueIn.value);
+        if (!(Number.isFinite(raw) && raw > 0)) { toast(tr('Скидка должна быть больше нуля.'), 'fail'); return false; }
+        if (mode === 'pct' && raw > 100) { toast(tr('Скидка в процентах — не больше 100.'), 'fail'); return false; }
+        const reason = String(reasonIn.value || '').trim();
+        if (!reason) { toast(tr('Укажите причину скидки.'), 'fail'); return false; }
+        const { data, error } = await supabase.rpc('cashier_invoice_discount', {
+            invoice_id: inv.id, mode, value: raw, reason, reduces_doctor_share: !!reducesBox.checked,
+            idempotency_key: newIdemKey(),
+        });
+        if (error) { toast(error.message || tr('Скидка не записана.'), 'fail'); return false; }
+        toast(trf('Скидка {sum} сум записана.', { sum: fmtPrice((data && data.discount) || 0) }), 'ok');
+        if (typeof onDone === 'function') onDone(data || {});
+        return true;
+    }, 420);
 }
 
 function voidModal(root, inv) {

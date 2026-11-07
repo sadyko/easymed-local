@@ -21,7 +21,9 @@ import { packageLineMoney } from '../../../public/js/shared/package-price.js';  
 import { hasAnyRole, effectiveRoles } from '../roles.js';
 import { localDate, localMonth, today } from '../domain/day.js';   // INVOICE_APPEND_V1 (ревью m2) — today
 // CASHIER_HEAD_V1 — право кассы «Исправляет услуги в счёте» (cashier.lines).
-import { grantAllowsAdminOr, isAdminUser } from '../grants.js';
+import { grantAllowsAdminOr, grantAllowsOr, isAdminUser } from '../grants.js';
+import { cashierDiscountByRole } from '../gate-fallbacks.js';   // CASHIER_DISCOUNT_V1 — прежнее правило строки «Кассир может давать скидку»
+import { floorApplies, groupNote, patientGroupDiscount, resolveDiscountChoice, restDiscountOf } from '../domain/discount-choice.js';   // DISCOUNT_V2
 import { requireServicesEdit, requireServicesDelete } from './patient-card.js';   // CASHIER_HEAD_V1 (ревью I2) — вкладка «Услуги» у регистратуры/администратора
 import { surgeryWithoutBedRefusal } from '../domain/surgery-bed.js';   // CASHIER_HEAD_V1 (ревью I4)
 // BILLING_AUDIT_FIX_V1 (B3) — тариф заменённой услуги спрашивается заново.
@@ -595,7 +597,7 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
     // на её счёт молча уменьшала сумму, которую клиника выставляет
     // контрагенту. Ручная скидка кассира и скидка пакета остаются.
     const payerSet = args && args.payer_id !== undefined && args.payer_id !== null;
-    const categoryPercent = payerSet ? 0 : patientCategoryDiscount(db, visit.patient_id);
+    let categoryPercent = payerSet ? 0 : patientCategoryDiscount(db, visit.patient_id);
     // PACKAGES_V1 (2026-09-26) — СКИДКА ПАКЕТА ПОСТРОЧНО: строка пакета со
     // скидкой получает СВОЮ скидку (invoice_items.discount_amount).
     // SERVICES_PACKAGES_V1 (решение владельца 1, 2026-10-06) — ЦЕНА ПАКЕТА
@@ -616,8 +618,21 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
     }
     const lineDiscounts = round2(priced.reduce((sum, p) => sum + p.ownDiscount, 0));
     const restSubtotal = round2(priced.reduce((sum, p) => sum + (p.ownDiscount > 0 ? 0 : p.line), 0));
+    // DISCOUNT_V2 (решение владельца 2026-11-07, п. 4) — ОДНА СКИДКА, ВЫБРАННАЯ У СТОЙКИ.
+    // discount_choice — что выбрал регистратор ('group' | 'manual' | 'none' | 'promo' +
+    // discount_id); без него — правило 3.21 (пол группы, присланное — не меньше).
+    // Сервер проверяет выбор и считает деньги сам (domain/discount-choice.js): «Без
+    // скидки» и промокод снимают пол группы, промокод — не больше своей стоимости на
+    // строках счёта без своей скидки. Врач скидку не выбирает (doctorInvoiceRefusal).
+    const choice = resolveDiscountChoice(db, {
+      choice: doctorOnly ? null : (args && args.discount_choice), discountId: args && args.discount_id,
+      patientId: visit.patient_id, payerSet, today: today(db),
+      restLines: priced.filter((p) => !(p.ownDiscount > 0)).map((p) => ({ service_id: p.row.service_id, total: p.line })),
+    });
+    categoryPercent = choice.floorPct;
     const categoryDiscount = round2(restSubtotal * categoryPercent / 100);
-    const restDiscount = round2(Math.min(Math.max(discountRaw, categoryDiscount), restSubtotal));
+    const chosen = restDiscountOf(choice, discountRaw, restSubtotal);
+    const restDiscount = chosen.rest;
     const discount = round2(lineDiscounts + restDiscount);
     const total = round2(subtotal - discount);
     // INVOICE_APPEND_V1 — номер счёта берётся ниже, после выбора «дописать или
@@ -672,12 +687,12 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
     //     нецелом поле (33 333 × 15 % = 4 999,95) приходит 5 000 — это больше
     //     пола на 0,05, допуск не пускает, и выходит новый счёт, как в 3.20.0
     //     (безопасно: деньги — как у двух отдельных счетов).
-    if (append && payerRaw === null && total > 0 && discountRaw <= categoryDiscount + 0.005) {
+    if (append && payerRaw === null && total > 0 && restDiscount <= categoryDiscount + 0.005 && (choice.choice !== 'promo')) {
       const target = appendTargetInvoice(db, visitId, categoryPercent);
       if (target) {
         return appendToVisitInvoice(db, target, {
           visitId, priced, subtotal, restSubtotal,
-          discount, given: round2(Math.min(discountRaw, restSubtotal)), restDiscount,
+          discount, given: chosen.given, restDiscount, share: chosen.share, note: chosen.note,
         }, user);
       }
     }
@@ -685,8 +700,9 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
 
     const insertInvoice = db.prepare(`
       INSERT INTO invoices
-        (invoice_number, visit_id, patient_id, branch_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by, paid_at, payer_id, manual_discount, manual_base)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+        (invoice_number, visit_id, patient_id, branch_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by, paid_at, payer_id, manual_discount, manual_base,
+         discount_source, discount_note, doctor_discount_share)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const info = insertInvoice.run(
       invoiceNumber,
@@ -702,8 +718,12 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
       payerRaw,
       // CASHIER_HEAD_V1 (ревью I3, мигр. 219) — ручная часть скидки, как её
       // дали: сумма и база строк без своей скидки (repriceUnpaidInvoice).
-      round2(Math.min(discountRaw, restSubtotal)),
+      chosen.given,
       restSubtotal,
+      // DISCOUNT_V2 (мигр. 273) — какая скидка, почему и какая её доля уменьшает долю врача.
+      choice.source,
+      chosen.note,
+      chosen.share,
     );
     const invoiceId = info.lastInsertRowid;
 
@@ -849,7 +869,7 @@ function appendTargetInvoice(db, visitId, pct) {
 // счёт следующего дня (DISCOUNT_CARRY_V1) и вычитает ровно её.
 // items — позиции НОВОЙ части в порядке строк вызова (BILLING_AUDIT_FIX_V1 A2:
 // быстрая регистрация сверяет их со своими строками по месту).
-function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubtotal, discount, given, restDiscount }, user) {
+function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubtotal, discount, given, restDiscount, share = 1, note = null }, user) {
   assertOwnBuilding(db, target, 'Счёт');
   const oldBase = invoiceRestBase(db, target.id);
   const known = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
@@ -874,6 +894,12 @@ function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubto
   const off = Math.min(round2((Number(target.discount_amount) || 0) + discount), sum);
   db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ?, manual_discount = ?, manual_base = ? WHERE id = ?')
     .run(sum, off, round2(sum - off), round2(oldGiven + given), round2(oldBase + restSubtotal), target.id);
+  // DISCOUNT_V2 — доля скидки, уменьшающая долю врача, — средняя по скидкам частей; причина — прежняя или новой части.
+  // Прежний остаток скидки счёта: прежняя скидка минус прежние свои скидки строк (свои = после вставки − новых частей).
+  const prevRest = Math.max(round2((Number(target.discount_amount) || 0) - invoiceOwnDiscount(db, target.id) + priced.reduce((a, p) => a + (Number(p.ownDiscount) || 0), 0)), 0);
+  const oldShare = Number.isFinite(Number(target.doctor_discount_share)) ? Number(target.doctor_discount_share) : 1;
+  const mixed = prevRest + restDiscount > 0 ? Math.min(1, Math.max(0, (prevRest * oldShare + restDiscount * share) / (prevRest + restDiscount))) : oldShare;
+  db.prepare('UPDATE invoices SET doctor_discount_share = ?, discount_note = COALESCE(discount_note, ?) WHERE id = ?').run(mixed, note, target.id);
   settleZeroTotal(db, target.id);   // итог новой части > 0 — счёт остаётся «к оплате»; страж правила нуля
   const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(target.id);
   lineAudit(db, {
@@ -1228,7 +1254,8 @@ function repriceUnpaidInvoice(db, inv, oldOwn, { oldBase = null, absolute = fals
   // REFUND_ANY_V1 — и у счёта стационара пола группы нет: его собирает
   // buildAdmissionInvoice без скидки группы, и возврат одной строки иначе дарил
   // бы скидку оставшимся.
-  const catPct = (inv.payer_id || inv.admission_id) ? 0 : patientCategoryDiscount(db, inv.patient_id);
+  // DISCOUNT_V2 — «Без скидки» и промокод пол группы не берут и при правке строк.
+  const catPct = (inv.payer_id || inv.admission_id || !floorApplies(inv)) ? 0 : patientCategoryDiscount(db, inv.patient_id);
   const floor = round2(base * catPct / 100);
   let oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - oldOwn), 0);
   let given = null; let givenBase = null;
@@ -3084,4 +3111,99 @@ export function invoiceLineWork(db, args, user) {
       };
     }),
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CASHIER_DISCOUNT_V1 (решение владельца 2026-11-07, п. 2) — СКИДКА КАССЫ ПРИ ОПЛАТЕ.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// В окне оплаты кассир даёт скидку — процент или сумму — с обязательной причиной, ДО
+// приёма денег. Любой кассир, любая сумма; владелец выключает это у роли строкой
+// «Кассир может давать скидку» (раздел «Касса», ключ cashier.discount; ненастроенная
+// строка — кто принимает оплату, тот и даёт скидку: gate-fallbacks.js).
+//
+// Скидка ложится тем же путём, что ручная скидка регистратуры: остаток скидки счёта
+// (строки без своей скидки пакета) растёт на неё, и это «ручная часть, как её дали»
+// (manual_discount / manual_base, мигр. 219) — правка строк кассой потом пересчитает
+// её в той же доле (repriceUnpaidInvoice). Скидка суммой — не больше того, что ещё
+// можно скинуть со строк без своей скидки; процент — от суммы к оплате, в тех же
+// пределах. Итог 0 (скидка 100 %) — счёт закрыт, строки в очередь (settleZeroTotal),
+// как бесплатный счёт.
+//
+// ДЕНЕЖНЫЕ ПРАВИЛА — те же, что у правки строк кассой: только счёт пациента (не
+// плательщику), своего здания, «Не оплачен» и без единого платежа в истории
+// (оплаченный и частично оплаченный — нет: доля врача и кэшбэк от оплаты держатся на
+// том, что сумма с деньгами задним числом не меняется), не депозит и не продажа
+// карты, месяц визита в «Оплате врачей» не закрыт.
+//
+// «Скидка уменьшает долю врача» (п. 5) — переключатель в окне скидки, по умолчанию
+// да. Счёт хранит, какая доля его скидки уменьшает долю врача
+// (doctor_discount_share, мигр. 273): прежняя скидка со своей долей + скидка кассы со
+// своей — средняя по суммам. Причина — в журнале счёта (invoice_audit_log,
+// action 'discount') и в discount_note счёта: её видят история кассы и отчёты.
+const CASHIER_DISCOUNT_REASON_MAX = 200;
+
+function requireCashierDiscount(db, user) {
+  if (grantAllowsOr(db, user, 'cashier.discount', 'edit', () => cashierDiscountByRole(db, user))) return;
+  throw new RpcError('Давать скидку в кассе — недоступно вашей роли. Право «Кассир может давать скидку» включает администратор в «Настройки → Роли» (раздел «Касса»).', 403);
+}
+
+export function cashierInvoiceDiscount(db, args, user) {
+  requireCashierDiscount(db, user);
+  { const seen = idemReplay(db, 'cashier_invoice_discount', args); if (seen) return seen; }
+  const a = args || {};
+  const invoiceId = a.invoice_id;
+  if (!isPositiveInt(invoiceId)) throw new RpcError('Счёт указан неверно.', 400);
+  const mode = a.mode === 'abs' ? 'abs' : a.mode === 'pct' ? 'pct' : null;
+  if (!mode) throw new RpcError('Укажите скидку процентом или суммой.', 400);
+  const value = Number(a.value);
+  if (!(typeof a.value === 'number' && Number.isFinite(value) && value > 0)) throw new RpcError('Скидка должна быть больше нуля.', 400);
+  if (mode === 'pct' && value > 100) throw new RpcError('Скидка в процентах — не больше 100.', 400);
+  const reason = typeof a.reason === 'string' ? a.reason.trim() : '';
+  if (!reason) throw new RpcError('Укажите причину скидки.', 400);
+  if (reason.length > CASHIER_DISCOUNT_REASON_MAX) throw new RpcError('Причина скидки — не длиннее 200 знаков.', 400);
+  const reduces = a.reduces_doctor_share === false || a.reduces_doctor_share === 0 ? 0 : 1;
+
+  const run = db.transaction(() => {
+    const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
+    if (!inv) throw new RpcError('Счёт не найден.', 400);
+    assertOwnBuilding(db, inv, 'Счёт');
+    assertNotPayerInvoice(inv);
+    { const refusal = moneyDocRefusal(db, inv); if (refusal) throw new RpcError(refusal, 400); }
+    if (inv.status !== 'unpaid' || (Number(inv.paid_amount) || 0) > 0
+        || db.prepare('SELECT 1 FROM payments WHERE invoice_id = ? LIMIT 1').get(inv.id)) {
+      throw rpcT(RpcError, 'Скидку дают до оплаты: счёт уже {status}.', { status: inv.paid_amount > 0 ? 'оплачен (частично)' : statusRu(inv.status) }, 409);
+    }
+    if (inv.visit_id) assertVisitMonthOpen(db, inv.visit_id);
+    const own = invoiceOwnDiscount(db, inv.id);
+    const base = invoiceRestBase(db, inv.id);
+    const oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - own), 0);
+    const room = round2(Math.max(base - oldRest, 0));
+    if (!(room > 0)) throw new RpcError('Скидку класть не на что: строки счёта уже со скидкой целиком (или это строки пакета со своей ценой).', 409);
+    const due = round2(Number(inv.total_amount) || 0);
+    const want = mode === 'pct' ? round2(due * value / 100) : round2(value);
+    const add = round2(Math.min(want, room));
+    if (!(add > 0)) throw new RpcError('Скидка должна быть больше нуля.', 400);
+    const newRest = round2(oldRest + add);
+    const oldShare = Number.isFinite(Number(inv.doctor_discount_share)) ? Number(inv.doctor_discount_share) : 1;
+    const share = newRest > 0 ? Math.min(1, Math.max(0, (oldRest * oldShare + add * reduces) / newRest)) : 1;
+    const discount = Math.min(round2(own + newRest), round2(Number(inv.subtotal) || 0));
+    const total = round2((Number(inv.subtotal) || 0) - discount);
+    const what = (mode === 'pct' ? `${String(value).replace('.', ',')}% — ` : '') + moneyWords(add) + ' сум';
+    const piece = `Касса: ${reason} — ${what}${reduces ? '' : ' (доля врача — от цены до скидки)'}`;
+    const prevNote = inv.discount_note || (oldRest > 0 && floorApplies(inv) ? groupNote(patientGroupDiscount(db, inv.patient_id)) : null);
+    const note = [prevNote, piece].filter(Boolean).join('; ').slice(0, 500);
+    db.prepare(`UPDATE invoices SET discount_amount = ?, total_amount = ?, manual_discount = ?, manual_base = ?,
+                       doctor_discount_share = ?, discount_note = ? WHERE id = ?`)
+      .run(discount, total, newRest, base, share, note, inv.id);
+    settleZeroTotal(db, inv.id);   // скидка 100 % — счёт закрыт, строки в очередь
+    const after = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+    lineAudit(db, {
+      inv: after, number: inv.invoice_number, visitId: inv.visit_id, action: 'discount',
+      fromStatus: inv.status, toStatus: after.status, amount: after.total_amount,
+      notes: 'Скидка кассы: −' + what + (reduces ? '' : ' · доля врача — от цены до скидки'), reason,
+    }, user);
+    return idemRemember(db, 'cashier_invoice_discount', args, user, { invoice: after, discount: add });
+  });
+  return run();
 }

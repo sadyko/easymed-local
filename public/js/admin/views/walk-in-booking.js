@@ -200,7 +200,7 @@ async function quoteTiers(patientId, serviceIds, visitId, doctorIds = {}) {
     }
 }
 
-export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedVisitId = null, referralSourceId = null, createdBy = null, actorRole = null, now = () => new Date() } = {}) {
+export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedVisitId = null, referralSourceId = null, createdBy = null, actorRole = null, now = () => new Date(), discount = null } = {}) {
     const pid = Number(patientId);
     const items = (Array.isArray(lines) ? lines : []).filter(Boolean);
     // WALK_IN_ROLE_GATE_V1 — раньше всего остального: роль решает, дойдёт ли
@@ -387,11 +387,15 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
 
     // 5. Счёт пациенту. discount_amount = 0 — см. шапку: процент категории
     //    применяет сервер, и он же зажимает скидку суммой счёта.
+    // DISCOUNT_V2 — выбор скидки быстрой регистрации (discount_choice / discount_id и
+    // стоимость промокода на смете); без выбора — как прежде: 0, скидку группы даст сервер.
+    const choice = discount && discount.discount_choice ? discount : null;
     const { data: inv, error: invErr } = await supabase.rpc('create_invoice_for_visit', {
         visit_id: visit.id,
         visit_service_ids: vsIds,
-        discount_amount: 0,
+        discount_amount: choice ? Math.max(0, Number(choice.discount_amount) || 0) : 0,
         payer_id: null,
+        ...(choice ? { discount_choice: choice.discount_choice, ...(choice.discount_id ? { discount_id: choice.discount_id } : {}) } : {}),
     });
     if (invErr) throw failAfterVisit(trf('Счёт не выставлен: {msg}', { msg: msgOf(invErr) }));
     // BILLING_AUDIT_FIX_V1 (A2) — ЦЕНА СТРОКИ — ЦЕНА СЧЁТА. Позиции счёта

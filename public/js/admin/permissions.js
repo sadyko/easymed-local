@@ -628,6 +628,18 @@ export function canSwapPaidLines() {
     return hasActorRole(['admin', 'cashier']);
 }
 
+// CASHIER_DISCOUNT_V1 (решение владельца 2026-11-07, п. 2) — «КАССИР МОЖЕТ ДАВАТЬ
+// СКИДКУ». Зеркало серверных ворот (rpc/billing.js requireCashierDiscount): строка,
+// записанная роли, решает сама; ненастроенная — кто принимает оплату (касса и
+// администратор — PAYMENT_ROLES сервера), тот и даёт скидку. Закрытый раздел «Касса»
+// закрывает и её.
+export function canCashierDiscount() {
+    if (_effective == null && !_preview) return true;   // полный доступ: администратор клиники
+    if (grantLevel('cashier') === 'none') return false;
+    if (grantLevel('cashier.discount') !== null) return grantAllows('cashier.discount', 'edit');
+    return hasActorRole(['admin', 'cashier']);
+}
+
 // CASHIER_HEAD_V1 (ревью) — «Закрыть смену» у ЧУЖОЙ смены. Зеркало сервера
 // (rpc/cashier.js headCashierLevel → roles.js explicitSectionLevel): раздел
 // «Старший кассир», записанный БЕЗ уровня (старый экран), — только просмотр;
