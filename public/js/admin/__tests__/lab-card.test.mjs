@@ -317,11 +317,12 @@ test('номер пробы на месте, и он копируется одн
   assert.strictEqual(acc.tagName, 'BUTTON', 'номер пробы снова просто текст — его нечем скопировать');
   assert.strictEqual(acc.getAttribute('aria-label'), 'Скопировать номер пробы',
     'у кнопки номера нет имени: экранный диктор прочитает набор цифр и ничего больше');
-  assert.ok(textOf(acc).includes('LAB-000805'), 'номер образца не отрисован: ' + textOf(acc));
+  // LAB_ONE_BARCODE_V1 — номер пробы на карточке — номер дня визита (90000000 + самая старая открытая строка), как на этикетке «Штрих-код».
+  assert.ok(textOf(acc).includes('90000805'), 'номер образца не отрисован: ' + textOf(acc));
   copied = [];
   acc.click();
   await tick();
-  assert.deepStrictEqual(copied, ['LAB-000805'], 'нажатие на номер ничего не скопировало');
+  assert.deepStrictEqual(copied, ['90000805'], 'нажатие на номер ничего не скопировало');
   assert.strictEqual(toastMsg, 'Номер пробы скопирован', 'копирование прошло молча — непонятно, сработало ли');
 });
 

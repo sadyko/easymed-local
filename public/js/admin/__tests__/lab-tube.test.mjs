@@ -239,3 +239,34 @@ test('время на этикетке — местное, числом: 14:06 U
     ], { deviceByService: BC780, today: TODAY });
     assert.equal(tubes[0].collectedAt, '2026-11-02T14:06:00Z', 'время пробирки — первый забор');
 });
+
+// ═══ LAB_ONE_BARCODE_V1 (решение владельца 2026-11-07, п. 10) — один номер на день визита ═══
+const { dayLabels } = await import('../views/lab-tube.js');
+
+test('LAB_ONE_BARCODE_V1: один номер на день — 90000000 + самая старая открытая строка дня; копий — по числу пробирок', () => {
+    const [d, ...more] = dayLabels(PHOTO(), { deviceByService: BC780, today: TODAY });
+    assert.equal(more.length, 0, 'день один');
+    assert.equal(d.code, '90000028');
+    assert.equal(d.lineId, 28);
+    assert.equal(d.copies, 3, 'кровь двух счетов — одна пробирка, моча — две');
+    assert.deepEqual(d.rowIds, [28, 29, 31, 32]);
+    assert.deepEqual(d.tests, ['Анализ крови', 'Анализ мочи']);
+    assert.equal(d.recent, true);
+});
+
+test('LAB_ONE_BARCODE_V1: строка, добавленная позже, номер дня не меняет; возвращённая строка номера не даёт', () => {
+    const later = PHOTO().concat([line(35, 40, BLOOD)]);
+    assert.equal(dayLabels(later, { deviceByService: BC780, today: TODAY })[0].code, '90000028');
+    assert.equal(dayLabels(PHOTO(), { deviceByService: BC780, today: TODAY, skipIds: new Set([28]) })[0].code, '90000029');
+});
+
+test('LAB_ONE_BARCODE_V1: стационар — свой номер на каждый день; строка не помещается — номера дня нет (прежние этикетки пробирок)', () => {
+    const days = dayLabels([
+        line(50, 40, BLOOD, 'queued', { created_at: '2026-11-01T06:00:00Z' }),
+        line(60, 40, BLOOD, 'queued'),
+    ], { deviceByService: BC780, today: TODAY, visitDate: '2026-11-01T06:00:00Z' });
+    assert.deepEqual(days.map((d) => [d.day, d.code]), [['2026-11-01', '90000050'], ['2026-11-02', '90000060']]);
+    const big = dayLabels([line(12345678, 40, BLOOD)], { deviceByService: BC780, today: TODAY });
+    assert.equal(big[0].code, '');
+    assert.equal(big[0].tubes[0].code, '12345678');
+});

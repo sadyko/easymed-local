@@ -36,6 +36,8 @@ import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — бан
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printBarcodeLabel, printBarcodeLabels } from './lab-barcode.js';   // LAB_TUBE_LABEL_V1 — этикетки визита одним окном печати
 import { tubeGroups, tubeDeviceMap, tubeLabelStamp, shortTestName, BARE_ID_MAX_AGE_DAYS } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 — этикетка на пробирку (чистые правила); срок голого номера — ревью U11, L6
+import { dayLabels } from './lab-tube.js';   // LAB_ONE_BARCODE_V1 — один номер на день визита
+import { dayLabelLine } from '../../shared/lab-day-label.js';   // LAB_ONE_BARCODE_V1 — скан этикетки дня в поиске
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels, hasActorRole } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=panelsv15';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now · LIS_REAL_ANALYZERS_V1 — штамп · LAB_PANEL_DEDUP_V1 — v15
@@ -869,10 +871,14 @@ function paintRows() {
     // LAB_BARCODE_DIGITS_V1 — скан этикетки (цифры, LAB- или «ДФИ-» русской
     // раскладки) находит этот заказ; обычный поиск (ID карты из цифр) — как прежде.
     const scanned = labScanNumber(state.search);
+    // LAB_ONE_BARCODE_V1 — скан этикетки дня визита (9 и семь цифр) находит визит её строки.
+    const dayLine = scanned != null ? dayLabelLine(scanned) : null;
+    const dayRow = dayLine != null ? state.rows.find(r => Number(r.id) === dayLine) : null;
     const visible = state.rows.filter(r => {
         if (!f.match(r.status)) return false;
         if (!q) return true;
         if (scanned != null && Number(r.id) === scanned) return true;
+        if (dayRow && dayRow.visit_id != null && r.visit_id === dayRow.visit_id) return true;
         const info = state.patientMap[r.visit_id] || {};
         const p = info.patient || {};
         return (p.full_name || '').toLowerCase().includes(q)
@@ -1028,6 +1034,40 @@ function tubeChips(tubes, fallback) {
     return tubes.length > 1 ? tubes.map(tubeChip) : [accessionButton(headAccession(tubes, fallback))];
 }
 
+// LAB_ONE_BARCODE_V1 (решение владельца 2026-11-07, п. 10) — НОМЕР ПРОБЫ — НОМЕР ДНЯ ВИЗИТА.
+// Карточка и окно «Внести результаты» показывают тот же номер, что на этикетке
+// «Штрих-код»: один на все анализы дня визита (его набирают в анализатор, когда
+// этикетка не читается, и в «Привязать»). Дней с номером несколько (стационар) —
+// по кнопке на день; номера дня нет (строка не помещается) — прежние номера пробирок.
+function dayChip(d) {
+    const tests = (d.tests || []).join(', ');
+    return h('button', {
+        class: 'lq-acc lq-tube', type: 'button', 'data-day-label': d.code,
+        title: 'Скопировать номер пробы', 'aria-label': 'Скопировать номер пробы',
+        onclick: () => copyAccession(d.code),
+    },
+        h('span', { class: 'k' }, 'Проба'),
+        h('span', { class: 'v' }, d.code),
+        tests ? h('span', { class: 'lq-tube-tests' }, tests) : null,
+        Icon('Copy', { size: 12 }));
+}
+/** Номер в строке очереди: день, который печатается (новейший в сроке); '' — номера дня нет. */
+function headDayCode(days) {
+    const list = (days || []).filter((d) => d.code).slice().reverse();
+    const d = list.find((x) => x.recent) || list[0];
+    return d ? d.code : '';
+}
+function labelChips(days, tubes, fallback) {
+    const withCode = (days || []).filter((d) => d.code);
+    if (!withCode.length) return tubeChips(tubes || [], fallback);
+    return withCode.length > 1 ? withCode.map(dayChip) : [accessionButton(withCode[0].code)];
+}
+/** Нужен ли на карточке ряд номеров (больше одного номера). */
+function manyLabels(days, tubes) {
+    const n = (days || []).filter((d) => d.code).length;
+    return n ? n > 1 : (tubes || []).length > 1;
+}
+
 // ДАТА РОЖДЕНИЯ. На снимке владельца в узбекском интерфейсе стояло
 // «1994 M11 15» — корневая локаль Intl на машине без данных для uz. Карточка чинила
 // это у себя (MONTH_WORDS_V1 убрал ту запасную сборку): теперь общий fmtDate
@@ -1099,6 +1139,7 @@ function labGroupCard(g, byVisit = new Map()) {
     // LAB_TUBE_LABEL_V1 — пробирки визита (lab-tube.js): этикетка на каждую,
     // номер — самая старая открытая строка пробирки.
     const tubes = visitTubes(g, byVisit, info);
+    const days = visitDays(g, byVisit, info);   // LAB_ONE_BARCODE_V1 — один номер на день визита
 
     const sexTxt = g.patientSex === 'male' ? 'М' : g.patientSex === 'female' ? 'Ж' : '';
     const age = ageYears(g.patientDob);
@@ -1112,15 +1153,16 @@ function labGroupCard(g, byVisit = new Map()) {
     }, Icon(icon, { size: 13 }), ' ' + label);
     const defs = [
         anyActive && canWriteLabResults() ? ['worksheet', 'Внести результаты', 'Flask',
-            'Внести результаты всех анализов одним документом', () => openPatientWorksheet(g, patient, tubes)] : null,   // tubes: ревью U11, M2 — те же номера, что на карточке
+            'Внести результаты всех анализов одним документом', () => openPatientWorksheet(g, patient, tubes, days)] : null,   // tubes: ревью U11, M2 — те же номера, что на карточке; days: LAB_ONE_BARCODE_V1
         anyToVerify && canWriteLabResults() ? ['verify', 'Подтвердить', 'Check',
             'Подтвердить и выдать результаты', () => verifyGroup(g)] : null,
         // LAB_BLANK_ALL_PANELS_V1 — печатаем ВЕСЬ образец, а не одну строку.
         anyResulted ? ['report', 'Бланк', 'Print',
             'Печать бланка: все анализы образца', () => printGroupReport(rows, patient)] : null,
         // LAB_TUBE_LABEL_V1 — этикетка на каждую пробирку (было: одна, rows[0] — самая новая строка).
+        // LAB_ONE_BARCODE_V1 — номер на них один: номер дня визита (копий — по числу пробирок).
         tubes.length ? ['barcode', 'Штрих-код', 'Scan',
-            'Этикетки на пробирки — по одной на пробирку', () => printTubeLabels(tubes, patient)] : null,
+            'Один номер на все пробирки дня визита — этикетка на каждую пробирку', () => printDayLabels(days, patient)] : null,
     ].filter(Boolean);
     // Главная — первой слева: порядок ряда и есть подсказка «начни отсюда».
     // ADMIN_ACT_AS_V1 (R3) — «Подтвердить» (проверить и выдать всё) от чужого имени неактивна.
@@ -1180,7 +1222,8 @@ function labGroupCard(g, byVisit = new Map()) {
             ),
             // LAB_TUBE_LABEL_V1 — номер пробирки, тот же, что на её этикетке; ревью U11, M2 —
             // места на один: первая пробирка, которую кормит прибор (все — в списке ниже).
-            accessionButton(headAccession(tubes, g.accession)),
+            // LAB_ONE_BARCODE_V1 — номер дня визита, тот же, что на этикетке «Штрих-код».
+            accessionButton(headDayCode(days) || headAccession(tubes, g.accession)),
         ),
         // 3. В КАКОМ СОСТОЯНИИ — и 4. ЧТО ДЕЛАТЬ ДАЛЬШЕ.
         h('div', { class: 'lq-status' },
@@ -1200,7 +1243,7 @@ function labGroupCard(g, byVisit = new Map()) {
         // 2. ЧТО В ПРОБЕ. LAB_TUBE_LABEL_V1 (ревью U11, M2) — пробирок несколько: сначала
         // номер каждой (как в окне «Внести результаты»), потом анализы.
         h('div', { class: 'lq-list' },
-            tubes.length > 1 ? h('div', { class: 'lq-tubes' }, ...tubeChips(tubes, g.accession)) : null,
+            manyLabels(days, tubes) ? h('div', { class: 'lq-tubes' }, ...labelChips(days, tubes, g.accession)) : null,   // LAB_ONE_BARCODE_V1 — по номеру на день
             ...rows.map(r => lqItem(r, patient))),
     );
 }
@@ -1264,31 +1307,46 @@ function visitTubes(g, byVisit, info) {
     });
 }
 
-// LAB_TUBE_LABEL_V1 — этикетки всех пробирок визита ОДНИМ окном: второе окно
-// подряд браузер блокирует как всплывающее. Время — местное.
-//
-// Ревью U11, L4 — возвраты кассы не прочитались (refunded_lines): пустой список
-// значит «не знаем», и возвращённая строка стала бы номером пробирки. Этикеток
-// пробирок не печатаем, говорим почему; этикетка строки («Забор пробы», «Печать
-// этикетки») — номер самой строки, она печатается, как прежде.
-// Ревью U11, L6 — пробирку старше срока голого номера (BARE_ID_MAX_AGE_DAYS — тот
-// же, что у приёма) не печатаем: приём её номер отказал бы. Остальные — печатаем.
-function printTubeLabels(tubes, patient) {
+// LAB_TUBE_LABEL_V1 — этикетки визита ОДНИМ окном: второе окно подряд браузер
+// блокирует как всплывающее. Время — местное. Ревью U11, L4 и L6 — правила
+// «возвраты не прочитались» и «старше срока голого номера» — в printDayLabels ниже
+// (LAB_ONE_BARCODE_V1 заменил этикетку на пробирку этикеткой дня визита).
+
+// LAB_ONE_BARCODE_V1 — дни визита карточки (lab-tube.js dayLabels): те же строки и
+// правила, что у пробирок (visitTubes), — один номер на день.
+function visitDays(g, byVisit, info) {
+    const rows = g.visitId != null ? (byVisit.get(g.visitId) || g.rows) : g.rows;
+    return dayLabels(rows, {
+        deviceByService: state.deviceByService,
+        skipIds: state.refundedIds,
+        visitDate: (info && info.visit_date) || null,
+    });
+}
+
+// LAB_ONE_BARCODE_V1 (решение владельца 2026-11-07, п. 10) — «Штрих-код»: ОДИН номер
+// на день визита, одна и та же этикетка на каждую пробирку (копий — по числу
+// пробирок дня), одним окном. Прибор по этому номеру заполняет свои анализы дня в
+// любом порядке (ingest.js dayAnchor). Правила печати прежние (LAB_TUBE_LABEL_V1):
+// возвраты кассы не прочитались — не печатаем (возвращённая строка стала бы
+// номером); день старше срока голого номера — не печатаем, говорим почему.
+// Номер строки не помещается в номер дня — этикетки пробирок этого дня, как в 3.21.
+function printDayLabels(days, patient) {
     if (!state.refundedKnown) {
         toast(tr('Не удалось проверить возвраты кассы — этикетки пробирок не печатаются. Этикетку строки печатают «Забор пробы» и «Печать этикетки».'), 'warn');
         return;
     }
-    const fresh = tubes.filter((t) => t.recent);
-    if (fresh.length) {
-        printBarcodeLabels(fresh.map((t) => ({
-            code: t.code,
-            patientName: patient.full_name || '',
-            mrn: patient.mrn || '',
-            dateStr: tubeLabelStamp(t.collectedAt),
-            tests: t.tests.join(', '),
-        })));
+    const who = { patientName: patient.full_name || '', mrn: patient.mrn || '' };
+    const fresh = days.filter((d) => d.recent);
+    const list = [];
+    for (const d of fresh) {
+        if (d.code) {
+            list.push({ ...who, code: d.code, copies: d.copies, dateStr: tubeLabelStamp(d.collectedAt), tests: d.tests.join(', ') });
+        } else {
+            for (const t of d.tubes) list.push({ ...who, code: t.code, dateStr: tubeLabelStamp(t.collectedAt), tests: t.tests.join(', ') });
+        }
     }
-    if (fresh.length < tubes.length) {
+    if (list.length) printBarcodeLabels(list);
+    if (fresh.length < days.length) {
         toast(trf('Пробирки старше {days} дней не напечатаны: результат анализатора по такому номеру не принимается — привяжите его кнопкой «Привязать».', { days: BARE_ID_MAX_AGE_DAYS }), 'warn');
     }
 }
@@ -2071,7 +2129,7 @@ function wsSection(section) {
     );
 }
 
-async function openPatientWorksheet(g, patient, tubes = []) {   // tubes: LAB_TUBE_LABEL_V1 (ревью U11, M2) — пробирки карточки
+async function openPatientWorksheet(g, patient, tubes = [], days = []) {   // tubes: LAB_TUBE_LABEL_V1 (ревью U11, M2) — пробирки карточки; days: LAB_ONE_BARCODE_V1
     const panels = g.rows;
     if (!panels.length) { toast('Нет анализов для этого пациента.', 'warn'); return; }
 
@@ -2108,7 +2166,8 @@ async function openPatientWorksheet(g, patient, tubes = []) {   // tubes: LAB_TU
         // as in the queue (LAB_CARD_V3), not a black block louder than the name.
         // LAB_TUBE_LABEL_V1 (ревью U11, M2) — номера тех же пробирок, что на карточке,
         // по кнопке на пробирку; было g.accession — самая новая видимая строка.
-        h('div', { class: 'lw-accwrap' }, ...tubeChips(tubes || [], g.accession)),
+        // LAB_ONE_BARCODE_V1 — номер дня визита, как на карточке и этикетке.
+        h('div', { class: 'lw-accwrap' }, ...labelChips(days || [], tubes || [], g.accession)),
     ));
 
     for (const section of sections) body.appendChild(wsSection(section));

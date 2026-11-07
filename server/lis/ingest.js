@@ -45,6 +45,7 @@ import { today, localDate } from '../services/domain/day.js';
 import { refundedWithoutResult } from '../services/domain/pay-releases.js';   // REFUND_ANY_V1 — «по заказу возврат»
 import { specimenKey } from '../../public/js/shared/specimen-key.js';   // LAB_TUBE_LABEL_V1 — одно правило материала для приёма и этикетки
 import { BARE_ID_MAX_AGE_DAYS } from '../../public/js/shared/lab-label-age.js';   // LAB_TUBE_LABEL_V1 (ревью U11, L6) — один срок голого номера для приёма и этикетки
+import { dayLabelLine, dayLabelValue } from '../../public/js/shared/lab-day-label.js';   // LAB_ONE_BARCODE_V1 — один номер на день визита
 
 /**
  * LIS_REAL_ANALYZERS_V1_SAMPLE — номер пробы БЕЗ «LAB-» (голые цифры)
@@ -826,14 +827,19 @@ function siblingSides(db, order, ctx) {
  * вчерашний черновик ОАК и анализ прошлой недели — не пробирка сегодняшнего
  * номера. D3 (siblingSides) — как прежде: по возрастанию номера, без срока.
  */
-function visitLabSides(db, order, ctx, { material = null, repick = false } = {}) {
+// LAB_ONE_BARCODE_V1 — day: только строки этого дня визита (orderAge — тот же
+// день, что у карточки), новейшие SIBLINGS_MAX, результат — по возрастанию
+// номера; includeSelf — и сама строка order (номер этикетки дня — лишь ключ дня).
+function visitLabSides(db, order, ctx, { material = null, repick = false, day = null, includeSelf = false } = {}) {
   if (order.visit_id == null) return [];
   const out = [];
   const rows = db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
                              JOIN services s ON s.id = vs.service_id
                             WHERE vs.visit_id = ? AND vs.id <> ? AND s.is_lab = 1
-                            ORDER BY vs.id ${repick ? 'DESC' : 'ASC'} LIMIT ?`).all(order.visit_id, order.id, SIBLINGS_MAX);   // service_specimen: LIS_PROXY_V1 (ревью C1)
+                            ORDER BY vs.id ${repick || day != null ? 'DESC' : 'ASC'} LIMIT ?`).all(order.visit_id, includeSelf ? -1 : order.id, SIBLINGS_MAX);   // service_specimen: LIS_PROXY_V1 (ревью C1)
+  if (day != null) rows.reverse();   // LAB_ONE_BARCODE_V1 — новейшие SIBLINGS_MAX, по возрастанию номера
   for (const o of rows) {
+    if (day != null && orderAge(db, o.id).day !== day) continue;   // LAB_ONE_BARCODE_V1 — только этот день визита
     // LIS_PROXY_V1 (ревью C1) — одна пробирка — заказы ОДНОГО материала: проба
     // мочи не заполняет «Биохимию» сыворотки (и не переписывает её 5.1 своими
     // 0.3), а рабочий список пробирки мочи не велит гнать на ней глюкозу
@@ -959,6 +965,94 @@ function tubeAnchor(db, order, ctx, observations = null) {
   // устойчив: при равных — порядок отбора, новейший первым.
   const { order: anchor, closed, ...side } = open.find(hitBy) || [...pool[0]].sort((a, b) => rank(a) - rank(b))[0];
   return { order: anchor, side };
+}
+
+// ═══ LAB_ONE_BARCODE_V1 (решение владельца 2026-11-07, п. 10) — ЭТИКЕТКА ДНЯ ВИЗИТА ═══
+// Карточка очереди печатает ОДИН номер на день визита (shared/lab-day-label.js:
+// 90000000 + самая старая открытая оплаченная лабораторная строка дня) и одну и ту
+// же этикетку на каждую пробирку. Номер называет не заказ, а день визита: проба
+// идёт в КАЖДУЮ лабораторную строку этого дня визита, которую кормит прибор
+// сообщения (orderSide и подтверждённый код — как у D3 и пробирки визита), в
+// любом порядке заказа и при любом материале услуги.
+//
+// Жалоба клиники («ОАК второй в списке — значения не ставятся»): этикетка 3.21 —
+// на пробирку по материалу, «СОЭ» (материал не указан) и «ОАК» («Кровь») одного
+// BC-780 получали разные номера, лаборатория клеила первый, и D3 не делил пробирку
+// между разными материалами. По номеру дня материал заказа номера ничего не решает.
+//
+// Что решает материал — только моча против остального на ОДНОМ приборе (BS-200):
+// номер на обеих пробирках один, и глюкоза мочи легла бы в «Биохимию» сыворотки.
+// Прибор называет материал пробы (OBR-15: serum / urine) — берутся строки этого
+// материала (и без материала); не называет, а у дня визита на этом приборе есть и
+// моча, и другой материал — «неоднозначно», ничего не пишется.
+// Одни и те же анализы в двух открытых строках дня (отдельный забор того же дня,
+// дважды выставленный ОАК) — «неоднозначно», как у пробирки визита (ревью 3.17.1,
+// M1): угадывать нельзя; этикетка строки («Печать этикетки») ведёт точно.
+// Дальше приём идёт как с номером строки: ворота оплаты, возврат, выдано (D7),
+// серия — у каждой строки свои; номер в журнале — как прислал прибор.
+
+/** Материал, который назвал прибор (OBR-15): 'urine', 'other' или '' — не назвал. */
+function materialHint(obrs) {
+  for (const o of obrs || []) {
+    const s = String((o && o.specimen) || '').trim().toLowerCase();
+    if (!s) continue;
+    return /urine|моч/.test(s) ? 'urine' : 'other';
+  }
+  return '';
+}
+const urineSide = (s) => specimenKey(s.order.service_specimen) === 'urine';
+const otherMaterialSide = (s) => { const k = specimenKey(s.order.service_specimen); return k !== '' && k !== 'urine'; };
+
+/** Номер этикетки дня словами для журнала: как прислан, иначе — как напечатан. */
+const dayWords = (label, day) => 'номер пробы «' + label + '» — этикетка дня визита ' + dmy(day);
+
+function dayAmbiguousText(label, day, why) {
+  return 'неоднозначно: ' + dayWords(label, day) + ', а ' + why + ': чья это пробирка, не понять;'
+    + ' печатайте для этой пробирки этикетку строки («Печать этикетки») или привяжите пробу кнопкой «Привязать»';
+}
+const dayAgeText = (label, day) => dayWords(label, day) + ' — старше ' + BARE_ID_MAX_AGE_DAYS
+  + ' дней: возможно, это старая этикетка; если проба этого визита — нажмите «Привязать»';
+const dayNothingText = (label, day) => dayWords(label, day) + ': ни одну лабораторную строку этого дня визита этот прибор не кормит'
+  + ' (панель услуги не привязана к нему или коды не подтверждены) — проверьте «Лаборатория → Панели» или привяжите пробу кнопкой «Привязать»';
+const DAY_NO_DEVICE = 'номер пробы — этикетка дня визита, а прибор этого сообщения неизвестен (его строку удалили или он не заведён):'
+  + ' по такому номеру строку визита выбирает прибор — значения не записаны; пробу привяжите кнопкой «Привязать»';
+
+/**
+ * LAB_ONE_BARCODE_V1 — строки дня визита, в которые идёт проба по номеру этикетки
+ * дня. line — строка номера (ключ: визит и день, orderAge). observations — строки
+ * прибора; null — сообщения нет (рабочий список). hint — materialHint.
+ * @returns {{order:object, side:object, closed:string, rest:object[]} | {ambiguous:string} | null}
+ *   order — строка, которая идёт первой (как заказ номера: открытая оплаченная, к
+ *   которой подходит сообщение; иначе по рангу); rest — остальные строки дня этого
+ *   прибора (как siblingSides); null — прибор не кормит ни одной строки дня.
+ */
+function dayAnchor(db, line, ctx, observations = null, hint = '', label = '') {
+  const { day } = orderAge(db, line.id);
+  if (!day) return null;
+  let pool = visitLabSides(db, line, ctx, { day, includeSelf: true });
+  if (hint === 'urine') pool = pool.filter((s) => !otherMaterialSide(s));
+  else if (hint === 'other') pool = pool.filter((s) => !urineSide(s));
+  if (!pool.length) return null;
+  if (pool.some(urineSide) && pool.some(otherMaterialSide)) {
+    const groups = new Map();
+    for (const s of pool) {
+      const k = specimenKey(s.order.service_specimen);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(s);
+    }
+    return { ambiguous: dayAmbiguousText(label, day, materialsWhy(groups) + ', и материал пробы прибор не назвал') };
+  }
+  const open = pool.filter((s) => s.closed === '');
+  const lineHits = (obs, s) => planObservations([obs], s.analytes).taken.length > 0;
+  if (observations) {
+    const twins = open.filter((s) => observations.some((obs) => lineHits(obs, s) && open.some((o) => o !== s && lineHits(obs, o))));
+    if (twins.length > 1) return { ambiguous: dayAmbiguousText(label, day, twinsWhy(twins)) };
+  }
+  const hitBy = (s) => !!observations && planObservations(observations, s.analytes).taken.length > 0;
+  const rank = (s) => (s.closed === '' ? 0 : s.closed === 'unpaid' ? 1 : 2);
+  const pick = open.find(hitBy) || [...pool].sort((a, b) => rank(a) - rank(b))[0];
+  const { order, closed, ...side } = pick;
+  return { order, side, closed, rest: pool.filter((s) => s !== pick) };
 }
 
 /**
@@ -1234,12 +1328,15 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   }
 
   const vsId = parseSampleId(pick.value);
+  // LAB_ONE_BARCODE_V1 — номер этикетки дня визита: по нему читается строка-ключ
+  // (визит и день), а проба идёт в строки дня, которые кормит прибор (dayAnchor).
+  const dayLine = dayLabelLine(vsId);
 
   // LAB_TUBE_ANCHOR_V1 — let: заказ номера прибор не кормит — дальше идёт заказ визита, который кормит (ниже).
   let order = vsId
     ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
                     JOIN services s ON s.id = vs.service_id
-                   WHERE vs.id = ?`).get(vsId)   // service_specimen: LIS_PROXY_V1 (ревью C1) — материал пробирки для D3
+                   WHERE vs.id = ?`).get(dayLine != null ? dayLine : vsId)   // service_specimen: LIS_PROXY_V1 (ревью C1) — материал пробирки для D3
     : null;
 
   if (!order) {
@@ -1254,6 +1351,33 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   const sender = deviceId ? db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(deviceId) : null;
   const ctx = { deviceId, sender, profile, messageModel: guessProfile({ app: head.app, facility: head.facility }) };
   let x = orderSide(db, order, ctx);
+  // LAB_ONE_BARCODE_V1 — этикетка дня визита: строка, которая пойдёт первой, и
+  // остальные строки дня этого прибора (dayRest — вместо siblingSides ниже).
+  // Прибор неизвестен или ещё не добавлен, день старше 7 дней (у номера,
+  // названного человеком, срок не судится — как у голых цифр), прибор не кормит
+  // ни одной строки дня, «неоднозначно» — в лоток сразу, строка не при заказе.
+  let dayRest = null;
+  if (dayLine != null) {
+    const { day, recent } = orderAge(db, order.id);
+    const label = pick.value || dayLabelValue(dayLine);
+    let refusal = '';
+    let a = null;
+    if (!deviceId) refusal = DAY_NO_DEVICE;
+    else if (device && Number(device.added) === 0) refusal = NOT_ADDED_DETAIL;
+    else if (!recent && !manual) refusal = dayAgeText(label, day);
+    else {
+      a = dayAnchor(db, order, ctx, observations, materialHint(obrs), label);
+      if (!a) refusal = dayNothingText(label, day);
+      else if (a.ambiguous) refusal = a.ambiguous;
+    }
+    if (refusal) {
+      record({ ...base, status: 'unmatched', detail: refusal });
+      return 'AA';
+    }
+    order = a.order;
+    x = a.side;
+    dayRest = a.rest;
+  }
   // LAB_TUBE_ANCHOR_V1 (решение владельца 2026-10-20) — заказ номера этот прибор
   // не кормит, а одна этикетка визита несёт номер ПЕРВОЙ услуги: проба идёт в
   // заказ того же визита, который прибор кормит (tubeAnchor), и дальше всё —
@@ -1267,7 +1391,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // Ревью выпуска 3.17.1, M2 — только у заказа номера не старше 7 дней (orderAge),
   // при любом виде номера: старая пробирка долгого визита, прогнанная снова, не
   // ложится в сегодняшний ОАК — у неё прежний путь и прежние тексты.
-  const anchor = order.is_lab && !x.ok && deviceId && order.visit_id != null && orderAge(db, order.id).recent
+  const anchor = dayRest == null && order.is_lab && !x.ok && deviceId && order.visit_id != null && orderAge(db, order.id).recent   // dayRest: LAB_ONE_BARCODE_V1 — строку дня уже выбрал dayAnchor
     ? tubeAnchor(db, order, ctx, observations) : null;
   const moved = anchor && anchor.order ? anchor : null;
   // Голые цифры — только для открытого заказа последних 7 дней (решение
@@ -1362,7 +1486,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // других заказов — «неоднозначно» (не угадываем). Прибор неизвестен — других
   // заказов не ищем: чей это прибор, не знает никто.
   const sides = [{ order, ...x, closed: refundedTube ? 'refunded' : isReleased(db, order.id) ? 'released' : '' }];   // REFUND_ANY_V1 (ревью B4)
-  if (deviceId) sides.push(...siblingSides(db, order, ctx));
+  if (deviceId) sides.push(...(dayRest || siblingSides(db, order, ctx)));   // dayRest: LAB_ONE_BARCODE_V1 — строки дня визита любого материала
   const tube = planTube(observations, sides.map((s, i) => ({ analytes: s.analytes, tier: i === 0 ? 0 : (s.closed ? 2 : 1) })));
   const fanned = tube.ambiguous.length > 0 || tube.involved.some((v, i) => i > 0 && v);
 
@@ -1607,13 +1731,15 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
 // «неоднозначно». Правило голых цифр (bare), ворота и «выдан» — у найденного
 // заказа; не найден — у заказа номера, как прежде.
 export function worklistLines(db, { deviceId, orderId, bare = false, shown = '' } = {}) {
+  const dayLine = dayLabelLine(orderId);   // LAB_ONE_BARCODE_V1 — номер этикетки дня визита
   let order = orderId ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
-                                      JOIN services s ON s.id = vs.service_id WHERE vs.id = ?`).get(orderId) : null;
+                                      JOIN services s ON s.id = vs.service_id WHERE vs.id = ?`).get(dayLine != null ? dayLine : orderId) : null;
   if (!order) return { ok: false, why: 'заказ по номеру пробы не найден' };
   // LAB_TUBE_ANCHOR_V1 — прибор, orderSide и пробирка визита — до правила голых
   // цифр и ворот (только чтение), как у приёма.
   const sender = deviceId ? db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(deviceId) : null;
   const ctx = sender ? { deviceId, sender, profile: getProfile(sender.profile), messageModel: null } : null;
+  if (dayLine != null) return dayWorklist(db, order, ctx, { bare, label: shown || dayLabelValue(dayLine) });
   let own = ctx ? orderSide(db, order, ctx) : null;
   // Ревью выпуска 3.17.1, M2 — только у заказа номера не старше 7 дней, как у приёма.
   const anchor = own && !own.ok && order.is_lab && order.visit_id != null && orderAge(db, order.id).recent ? tubeAnchor(db, order, ctx) : null;
@@ -1651,4 +1777,35 @@ export function worklistLines(db, { deviceId, orderId, bare = false, shown = '' 
   const patient = db.prepare('SELECT p.date_of_birth, p.gender FROM visits v JOIN patients p ON p.id = v.patient_id WHERE v.id = ?').get(order.visit_id)
     || { date_of_birth: null, gender: null };
   return { ok: true, codes, patient, specimen: order.service_specimen || '' };
+}
+
+/**
+ * LAB_ONE_BARCODE_V1 — рабочий список по номеру этикетки дня визита: тесты всех
+ * открытых оплаченных невыданных строк этого дня, которые кормит прибор (dayAnchor
+ * без сообщения: моча и другой материал на одном приборе — «неоднозначно»; одни и
+ * те же тесты в двух строках — код один раз). Срок голого номера — у дня.
+ */
+function dayWorklist(db, line, ctx, { bare, label }) {
+  if (!ctx) return { ok: false, why: 'прибор не найден' };
+  const { day, recent } = orderAge(db, line.id);
+  if (bare && !recent) return { ok: false, why: dayAgeText(label, day) };
+  const a = dayAnchor(db, line, ctx, null, '', label);
+  if (!a) return { ok: false, why: dayNothingText(label, day) };
+  if (a.ambiguous) return { ok: false, why: a.ambiguous };
+  const open = [{ order: a.order, ...a.side, closed: a.closed }, ...a.rest].filter((s) => !s.closed);
+  if (!open.length) return { ok: false, why: gateRefusal(db, a.order) || 'результат заказа уже выдан' };
+  const seen = new Set();
+  const codes = [];
+  for (const s of open) {
+    for (const an of s.analytes.filter(confirmedCode)) {
+      const code = String(an.device_code).trim();
+      if (seen.has(codeKey(code))) continue;
+      seen.add(codeKey(code));
+      codes.push(code);
+    }
+  }
+  if (!codes.length) return { ok: false, why: 'у панели нет подтверждённых кодов этого прибора' };
+  const patient = db.prepare('SELECT p.date_of_birth, p.gender FROM visits v JOIN patients p ON p.id = v.patient_id WHERE v.id = ?').get(a.order.visit_id)
+    || { date_of_birth: null, gender: null };
+  return { ok: true, codes, patient, specimen: open[0].order.service_specimen || '' };
 }

@@ -13541,4 +13541,7 @@ export const STRINGS = {
   "Направил: {name}": {"en":"Referred by: {name}","ru":"Направил: {name}","uz":"Yo‘llagan: {name}"},   // DOCTOR_REFERRAL_DESK_V1
   "направления врача": {"en":"doctor referrals","ru":"направления врача","uz":"shifokor yo‘llanmalari"},   // DOCTOR_REFERRAL_DESK_V1
   // /DOCTOR_REFERRAL_DESK_V1
+  // ═══ S3 3.22.0 — лаборатория (LAB_ONE_BARCODE_V1, LAB_ROUND_V1, LAB_MATRIX_PANEL_V1, LAB_DOC_SPLIT_V1, LAB_PRINT_PICK_V1, LAB_PRINT_SPACING_V1, PRINT_PERFORMER_V1) ═══
+  "Один номер на все пробирки дня визита — этикетка на каждую пробирку": {"en":"One number for all tubes of the visit day — a label for each tube","ru":"Один номер на все пробирки дня визита — этикетка на каждую пробирку","uz":"Tashrif kunining barcha probirkalari uchun bitta raqam — har bir probirkaga etiketka"},   // LAB_ONE_BARCODE_V1
+  // /S3 3.22.0
 };
