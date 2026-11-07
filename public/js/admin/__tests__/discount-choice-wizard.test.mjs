@@ -102,6 +102,8 @@ globalThis.fetch = async (url, opts) => {
     try {
       if (meta.op === 'select') {
         const rows = reshape(DB.prepare(sql).all(...params), meta);
+        // ревью S1 M-1 — JSON-колонки (service_ids промокода) — массивом, как отдаёт настоящий маршрут.
+        for (const r of rows) for (const c of meta.json || []) if (r && typeof r[c] === 'string') { try { r[c] = JSON.parse(r[c]); } catch { /* как есть */ } }
         if (meta.single === 'single') return ok(rows[0]);
         if (meta.single === 'maybe') return ok(rows[0] ?? null);
         return ok(rows);
@@ -263,6 +265,42 @@ test('без группы и промокодов: выбор «Без скид�
   await pressUntilCreate();
   assert.equal(invoiceCall().body.discount_choice, 'manual');
   assert.equal(money()[0].discount_amount, 9000);
+});
+
+// DISCOUNT_V2 (ревью S1 M-1, пробы A6/A11) — СМЕТА НА ДВА ДНЯ И ПРОМОКОД НА ЧАСТЬ УСЛУГ. Выбор скидки
+// один на смету, а счёт — на каждый день. Мастер слал промокод в счёт КАЖДОГО дня, и сервер отказывал
+// дню, где нет ни одной услуги промокода («Промокод … действует на другие услуги») — счёт этого дня не
+// выставлялся. Теперь такой день идёт «Без скидки»: скидка одна — промокод, и ложится только там, где
+// действует; смета и сумма счетов сходятся.
+test('ревью S1 M-1: смета на два дня, промокод только на консультацию — оба счёта выставлены: день анализа «Без скидки», день консультации — промокод', async () => {
+  seed();   // врач сегодня не работает: консультация — на завтра, анализ — сегодня
+  vipPatient(10);
+  const id = Number(DB.prepare("INSERT INTO patient_discounts (name, kind, percent, amount, active, service_ids) VALUES ('КОНС20', 'promo', 20, 0, 1, '[21]')").run().lastInsertRowid);
+  await openWizard([21, 22]);
+  byAttr(overlay(), 'data-pick-nearest', 21).click();
+  await flush(20);
+  assert.ok(byAttr(overlay(), 'data-many-days', 2), 'смета не на два дня');
+  await choose('КОНС20');
+  assert.ok(textOf(overlay()).includes('120 000 сум'), 'смета — не 120 000 к оплате (140 000 − 20 000 промокода)');
+  await pressUntilCreate();
+  const calls = RPC.filter((c) => c.name === 'create_invoice_for_visit').map((c) => [c.body.discount_choice, c.body.discount_id ?? null, c.body.discount_amount]);
+  assert.deepEqual(calls, [['none', null, 0], ['promo', id, 20000]], 'выбор скидки по дням');
+  assert.ok(!TOASTS.some((t) => /не выставлен/.test(t)), 'счёт дня не выставлен: ' + JSON.stringify(TOASTS));
+  assert.deepEqual(money().map((m) => [m.subtotal, m.discount_amount, m.total_amount, m.discount_source]),
+    [[40000, 0, 40000, 'none'], [100000, 20000, 80000, 'promo:' + id]]);
+});
+
+test('ревью S1 M-1: промокод на все услуги — оба дня по промокоду, как прежде (перенос остатка)', async () => {
+  seed();
+  const id = Number(DB.prepare("INSERT INTO patient_discounts (name, kind, percent, amount, active) VALUES ('ВСЕМ', 'promo', 0, 50000, 1)").run().lastInsertRowid);
+  await openWizard([21, 22]);
+  byAttr(overlay(), 'data-pick-nearest', 21).click();
+  await flush(20);
+  await choose('ВСЕМ');
+  await pressUntilCreate();
+  const calls = RPC.filter((c) => c.name === 'create_invoice_for_visit').map((c) => [c.body.discount_choice, c.body.discount_id ?? null]);
+  assert.deepEqual(calls, [['promo', id], ['promo', id]]);
+  assert.equal(money().reduce((n, m) => n + m.discount_amount, 0), 50000, 'промокод суммой дан не один раз');
 });
 
 test.after(() => { if (DB) DB.close(); DB = null; });

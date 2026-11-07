@@ -37,7 +37,7 @@ import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';   // OWN_PRICE_REPEAT_V1 — одно правило с сервером
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
 // они действуют; одно правило на оба мастера.
-import { eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';
+import { eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining, serviceScope } from '../discount-rules.js';
 import { groupOf, discountChoiceOptions, keepChoice, choiceArgs, choiceFloorPct, choiceReason } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
 import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
@@ -2522,6 +2522,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 pct: Math.round(money(mine) * pct / 100),
                 floor: r2(room * cat / 100),
                 job: vis.some((c) => lineDay(c) === day && !isCovered(c)),   // счёт пациента этого дня будет
+                promoMiss: promoMissesLines(vis.filter((c) => lineDay(c) === day && !isCovered(c))),   // ревью S1 M-1 — день «Без скидки»
             };
         });
         // Пол группы, который сервер сам даст следующим дням сверх их процента.
@@ -2537,7 +2538,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         }
         let left = carry, total = 0;
         for (const r of rows) {
-            const got = r.job ? r2(Math.min(Math.max(dayDiscountSend(r, left), r.floor), r.room)) : 0;
+            const got = r.job && !r.promoMiss ? r2(Math.min(Math.max(dayDiscountSend(r, left), r.floor), r.room)) : 0;
             left = dayDiscountLeft(r, left, got);
             total += got;
         }
@@ -2555,6 +2556,17 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // который сервер положит при выбранной скидке (группа и «вручную» — да).
     function wizGroup() { return groupOf(wiz.categoryName, wiz.categoryPct); }
     function floorPctNow() { return choiceFloorPct(wiz.discountChoice, wizGroup()); }
+    // DISCOUNT_V2 (ревью S1 M-1) — ПРОМОКОД НА ЧАСТЬ УСЛУГ И СМЕТА НА НЕСКОЛЬКО ДНЕЙ. Выбор
+    // скидки один на смету, а счёт — на каждый день. Счёт дня, среди строк которого (без своей
+    // скидки пакета — на них скидка счёта не ложится) нет ни одной услуги промокода, сервер
+    // отказывал («Промокод … действует на другие услуги»), и счёт дня не выставлялся. Такой
+    // день идёт «Без скидки»: скидка одна — промокод, и ложится он только там, где действует.
+    function promoMissesLines(lines) {
+        if (!wiz.promo || !String(wiz.discountChoice).startsWith('promo:')) return false;
+        const scope = serviceScope(wiz.promo);
+        if (!scope.length) return false;
+        return !(lines || []).some((c) => c && c.svc && !linePackageOn(c) && scope.includes(Number(c.svc.id)));
+    }
     /** DISCOUNT_V2 — варианты выбора скидки на ЭТУ смету (discount-choice.js). */
     function discountOptions() {
         return discountChoiceOptions({
@@ -3581,10 +3593,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     for (const job of jobs) {
                         // WIZARD_DISCOUNT_V1 — сервер зажимает discount_amount в [0, subtotal].
                         // INVOICE_APPEND_V1 (ревью-2) — по плану дней: процент дня + перенос.
-                        const disc = job.payer === null ? (dayRow ? dayDiscountSend(dayRow, discountLeft) : discountLeft) : 0;
+                        // DISCOUNT_V2 (ревью S1 M-1) — промокод не касается ни одной услуги этого счёта — счёт
+                        // «Без скидки»: промокод весь уходит дальше, к дню своих услуг.
+                        const promoMiss = job.payer === null && !doctorBill && promoMissesLines(job.ids.map((id) => lineByVsId.get(id)));
+                        const disc = job.payer === null && !promoMiss ? (dayRow ? dayDiscountSend(dayRow, discountLeft) : discountLeft) : 0;
                         const { data: iRes, error: iErr } = await supabase.rpc('create_invoice_for_visit',
                             { visit_id: visit.id, visit_service_ids: job.ids, discount_amount: disc, payer_id: job.payer,
-                                ...(doctorBill || job.payer !== null ? {} : choiceArgs(wiz.discountChoice)),   // DISCOUNT_V2 — сервер считает по выбору
+                                ...(doctorBill || job.payer !== null ? {} : choiceArgs(promoMiss ? 'none' : wiz.discountChoice)),   // DISCOUNT_V2 — сервер считает по выбору
                                 ...(spendStored && job.payer === null ? { append: false } : {}) });   // INVOICE_APPEND_V1 (ревью M1)
                         if (iErr) {
                             // REFERRAL_BILL_V1 — врачу «выставить из визита» не
