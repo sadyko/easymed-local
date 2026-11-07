@@ -15,6 +15,7 @@ import { migrate } from '../../db/migrate.js';
 import { myReferrals } from './my-referrals.js';
 import { RPC } from './index.js';
 import { isReadOnlyRpc } from '../control/gate.js';
+import { today } from '../domain/day.js';
 
 process.env.TZ = 'Asia/Tashkent';
 
@@ -147,7 +148,11 @@ test('MY_REFERRALS_V1: период — по дню направления, по
   assert.deepEqual(Object.keys(byId(res)).map(Number), [fresh]);
   assert.equal(byId(res)[fresh].group, 'lab');
   assert.match(res.from, /^\d{4}-\d{2}-\d{2}$/);
-  const wide = myReferrals(db, { from: iso(60).slice(0, 10), to: iso(0).slice(0, 10) }, U.docA);
+  // Границы — местные дни, как у самого RPC (today(db) — date('now','localtime')): UTC-дата
+  // iso(0).slice(0, 10) с 19:00 до 24:00 UTC отстаёт на день, и свежая строка уходила за «по».
+  const localToday = today(db);
+  const localFrom = db.prepare("SELECT date(?, '-60 days') AS d").get(localToday).d;
+  const wide = myReferrals(db, { from: localFrom, to: localToday }, U.docA);
   assert.deepEqual(Object.keys(byId(wide)).map(Number).sort(), [old, fresh].sort());
   assert.throws(() => myReferrals(db, { from: 'вчера' }, U.docA), (e) => e.status === 400);
   assert.throws(() => myReferrals(db, { from: '2026-01-10', to: '2026-01-01' }, U.docA), (e) => e.status === 400);
