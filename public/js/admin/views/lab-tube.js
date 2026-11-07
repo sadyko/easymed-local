@@ -197,12 +197,25 @@ export function tubeGroups(rows, opts = {}) {
  * номеру заполняет каждую строку дня, которую кормит прибор (ingest.js dayAnchor),
  * — порядок анализов и материал услуги больше не решают. Дней обычно один; у
  * стационарного визита — свой номер на каждый день.
+ *
+ * Ревью S3, M-2 — ПОВТОРНЫЙ ЗАБОР. Тот же анализ того же прибора дважды за день в
+ * РАЗНЫХ пробирках (утренняя проба взята, вечерняя ждёт): по номеру дня приём не
+ * знает, в который из двух открытых заказов писать, и общие анализы отказывает
+ * («неоднозначно»). Пробирке повторного забора — своя этикетка строки (номер
+ * заказа, lab-doc.js labBarcodeValue): приём ведёт её прежним путём точно — в этот
+ * заказ, а прочие строки пробирки заполняет D3. Два одинаковых анализа в ОДНОЙ
+ * пробирке (оба ждут забора) — это одна пробирка, отдельной этикетки нет (приём
+ * скажет «неоднозначно», лишний заказ снимает человек). Строки без прибора приём
+ * не заполняет — им номер дня, как был.
  * @returns {Array<{day:string, lineId:number, code:string, copies:number, tests:string[],
- *                  rowIds:number[], collectedAt:string|null, recent:boolean, tubes:object[]}>}
+ *                  rowIds:number[], collectedAt:string|null, recent:boolean, tubes:object[],
+ *                  own:Array<{code:string, why:'repeat', tests:string[], rowIds:number[], collectedAt:string|null}>}>}
  *          по возрастанию дня; code '' — номер строки не помещается в номер дня
- *          (тогда печатаются прежние этикетки пробирок этого дня: tubes)
+ *          (тогда печатаются прежние этикетки пробирок этого дня: tubes);
+ *          own — пробирки со своей этикеткой строки (ревью S3, M-2), copies — без них
  */
 export function dayLabels(rows, opts = {}) {
+    const rowById = new Map((rows || []).filter((r) => r && r.id != null).map((r) => [Number(r.id), r]));
     const byDay = new Map();
     for (const t of tubeGroups(rows, opts)) {
         let d = byDay.get(t.day);
@@ -221,8 +234,40 @@ export function dayLabels(rows, opts = {}) {
     for (const d of out) {
         d.rowIds.sort((a, b) => a - b);
         d.code = dayLabelValue(d.lineId);
+        d.own = [];
+        const repeats = repeatTubes(d, rowById);   // ревью S3, M-2
+        for (const t of d.tubes) {
+            const ids = repeats.get(t);
+            if (!ids) continue;
+            d.copies -= 1;
+            d.own.push({ code: labBarcodeValue(Math.min(...ids)), why: 'repeat', tests: t.tests.slice(), rowIds: t.rowIds.slice(), collectedAt: t.collectedAt });
+        }
     }
     return out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.lineId - b.lineId));
+}
+
+/**
+ * Ревью S3, M-2 — пробирки повторного забора дня: пробирка → номера её строк, у
+ * которых тот же анализ (услуга) того же прибора уже есть в ДРУГОЙ пробирке этого
+ * дня с меньшим номером строки. Строки без прибора — не в счёт.
+ * @returns {Map<object, number[]>}
+ */
+function repeatTubes(d, rowById) {
+    const tubeOf = new Map();
+    for (const t of d.tubes) for (const id of t.rowIds) tubeOf.set(id, t);
+    const first = new Map();   // услуга → пробирка её первой строки дня
+    const out = new Map();
+    for (const id of d.rowIds) {
+        const t = tubeOf.get(id);
+        const r = rowById.get(id);
+        if (!t || t.deviceId == null || !r || r.service_id == null) continue;
+        const k = String(r.service_id);
+        if (!first.has(k)) { first.set(k, t); continue; }
+        if (first.get(k) === t) continue;   // та же пробирка — одна пробирка, своей этикетки нет
+        if (!out.has(t)) out.set(t, []);
+        out.get(t).push(id);
+    }
+    return out;
 }
 
 /**

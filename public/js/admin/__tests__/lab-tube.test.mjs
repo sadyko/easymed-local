@@ -270,3 +270,28 @@ test('LAB_ONE_BARCODE_V1: стационар — свой номер на каж
     assert.equal(big[0].code, '');
     assert.equal(big[0].tubes[0].code, '12345678');
 });
+
+// Ревью S3, M-2 — второй забор того же анализа в тот же день (утренняя проба уже
+// взята, вечерняя ждёт): по общему номеру дня приём не знает, в который из двух
+// открытых заказов писать, и отказывает («неоднозначно»). Пробирке повторного
+// забора — этикетка строки (номер заказа): приём ведёт её точно, прежним путём.
+test('ревью M-2: повторный забор того же анализа в другой пробирке — у неё своя этикетка строки, номер дня остальным', () => {
+    const rows = [
+        line(100, 40, BLOOD, 'collected', { sample_collected_at: '2026-11-02T06:00:00Z' }),
+        line(101, 41, URINE, 'queued'),
+        line(106, 40, BLOOD, 'queued'),
+    ];
+    const [d, ...more] = dayLabels(rows, { deviceByService: BC780, today: TODAY });
+    assert.equal(more.length, 0);
+    assert.equal(d.code, '90000100');
+    assert.equal(d.copies, 2, 'утренняя кровь и моча — номер дня');
+    assert.deepEqual(d.own.map((o) => [o.code, o.why, o.tests]), [['00000106', 'repeat', ['Анализ крови']]]);
+    assert.deepEqual(d.own[0].rowIds, [106]);
+});
+
+test('ревью M-2: два одинаковых анализа в ОДНОЙ пробирке (оба ждут забора) — отдельной этикетки нет; без прибора — правило не нужно', () => {
+    const same = dayLabels([line(100, 40, BLOOD), line(106, 40, BLOOD)], { deviceByService: BC780, today: TODAY })[0];
+    assert.deepEqual([same.code, same.copies, same.own], ['90000100', 1, []]);
+    const noDevice = dayLabels([line(100, 40, BLOOD, 'collected'), line(106, 40, BLOOD)], { deviceByService: {}, today: TODAY })[0];
+    assert.deepEqual([noDevice.copies, noDevice.own], [2, []], 'анализ без прибора приём не заполняет — номер дня, как был');
+});

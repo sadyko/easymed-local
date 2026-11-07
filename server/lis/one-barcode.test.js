@@ -284,3 +284,68 @@ test('рабочий список (LIS Proxy) по номеру дня: тест
   assert.match(w.why, /неоднозначно/);
   db.close();
 });
+
+// ═══ Ревью S3, M-2 — ОБЩИЙ КОД В ДВУХ СТРОКАХ ДНЯ ═══════════════════════════════
+// 3.22: если хоть один анализ прибора стоял в двух открытых строках дня («ОАК» и
+// отдельный «Гемоглобин»; «Биохимия» и отдельная «Глюкоза»), вся проба уходила в
+// «Необработанные» — у BC-780 вместе с WBC. Теперь «неоднозначно» — только общие
+// коды (их значение не пишется никуда и названы оба заказа), остальное ложится.
+// Общий код НЕ отдаётся первой строке: если утренняя пробирка ещё не прогнана,
+// значение дневной легло бы в утренний бланк.
+function overlapClinic(lines) {
+  const db = freshDb();
+  db.exec(`${DEVICES};
+    INSERT INTO patients (id, full_name) VALUES (7, 'Тестов');
+    INSERT INTO visits (id, patient_id, visit_date, status) VALUES (20, 7, ${NOW}, 'scheduled');
+    INSERT INTO services (id, name, is_lab, specimen) VALUES
+      (41, 'ОАК', 1, 'Кровь'), (49, 'Гемоглобин', 1, 'Кровь'), (42, 'Биохимия', 1, 'Сыворотка'), (48, 'Глюкоза', 1, 'Сыворотка');`);
+  for (const [id, sid, status = 'queued'] of lines) {
+    db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (?, 20, ?, ?, ${NOW})`).run(id, sid, status);
+  }
+  bindPanel(db, { id: 41, serviceId: 41, deviceId: 3, name: 'ОАК', lines: [['WBC', 'Лейкоциты', 'WBC'], ['HGB', 'Гемоглобин', 'HGB']] });
+  bindPanel(db, { id: 49, serviceId: 49, deviceId: 3, name: 'Гемоглобин', lines: [['HGB', 'Гемоглобин', 'HGB']] });
+  bindPanel(db, { id: 42, serviceId: 42, deviceId: 1, name: 'Биохимия', lines: [['GLU', 'Глюкоза', 'GLU'], ['CREA', 'Креатинин', 'CREA']] });
+  bindPanel(db, { id: 48, serviceId: 48, deviceId: 1, name: 'Глюкоза', lines: [['GLU', 'Глюкоза', 'GLU']] });
+  return db;
+}
+const CBC = [['6690-2^WBC^LN', '7.25'], ['718-7^HGB^LN', '140']];
+
+test('ревью M-2: «ОАК» (WBC, HGB) и отдельный «Гемоглобин» (HGB) в один день — WBC ложится в ОАК, HGB «неоднозначно» и не пишется никуда', () => {
+  const db = overlapClinic([[100, 41], [107, 49]]);
+  assert.equal(bc(db, dayLabelValue(100), CBC), 'AA');
+  const m = lastRow(db);
+  assert.equal(m.status, 'unmapped', 'общий код ждёт человека — строка в лотке');
+  assert.deepEqual([blank(db, 100), blank(db, 107)], [{ 'Лейкоциты': '7.25' }, {}], 'WBC записан, HGB не отдан ни первой строке, ни второй');
+  assert.match(m.detail, /неоднозначно: 718-7\^HGB\^LN — у заказов № 100, № 107/);
+  assert.doesNotMatch(m.detail, /не пришли/, 'пришедший, но общий HGB — не «не пришли»');
+  assert.equal(statusOf(db, 100), 'resulted');
+  assert.equal(statusOf(db, 107), 'queued');
+
+  // «Привязать» к нужному заказу — HGB ложится туда; WBC в ОАК не тронут.
+  const r = lisMessageAttach(db, { id: m.id, visit_service_id: 107 }, { id: 1, role: 'admin' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual([blank(db, 100), blank(db, 107)], [{ 'Лейкоциты': '7.25' }, { 'Гемоглобин': '140' }]);
+  db.close();
+});
+
+test('ревью M-2: «Биохимия» (GLU, CREA) и отдельная «Глюкоза» (GLU), BS-200 по тесту — CREA в «Биохимию», GLU «неоднозначно», ничего не записано', () => {
+  const db = overlapClinic([[100, 42], [106, 48]]);
+  const day = dayLabelValue(100);
+  bs(db, day, 'CREA', '80');
+  assert.deepEqual(blank(db, 100), { 'Креатинин': '80' }, 'анализ, который есть только в «Биохимии», ложится');
+  bs(db, day, 'GLU', '5.1');
+  const m = lastRow(db);
+  assert.equal(m.status, 'unmatched', m.detail);
+  assert.match(m.detail, /^неоднозначно/);
+  assert.match(m.detail, /«Биохимия» \(№ 100\), «Глюкоза» \(№ 106\)/);
+  assert.deepEqual([blank(db, 100), blank(db, 106)], [{ 'Креатинин': '80' }, {}]);
+  db.close();
+});
+
+test('ревью M-2: общий код у ЗАКРЫТОЙ второй строки (выдана) — не «неоднозначно», всё ложится в открытую', () => {
+  const db = overlapClinic([[100, 41], [107, 49, 'completed']]);
+  bc(db, dayLabelValue(100), CBC);
+  assert.deepEqual(blank(db, 100), { 'Лейкоциты': '7.25', 'Гемоглобин': '140' });
+  assert.equal(lastRow(db).status, 'applied', lastRow(db).detail);
+  db.close();
+});

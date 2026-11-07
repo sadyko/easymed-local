@@ -1384,6 +1384,9 @@ function visitDays(g, byVisit, info) {
 // возвраты кассы не прочитались — не печатаем (возвращённая строка стала бы
 // номером); день старше срока голого номера — не печатаем, говорим почему.
 // Номер строки не помещается в номер дня — этикетки пробирок этого дня, как в 3.21.
+// Ревью S3, M-2 — пробирка повторного забора того же анализа (lab-tube.js dayLabels,
+// own) — со своей этикеткой строки: номер дня приём между двумя открытыми заказами
+// одного анализа не разложит. Человеку сказано почему.
 function printDayLabels(days, patient) {
     if (!state.refundedKnown) {
         toast(tr('Не удалось проверить возвраты кассы — этикетки пробирок не печатаются. Этикетку строки печатают «Забор пробы» и «Печать этикетки».'), 'warn');
@@ -1394,15 +1397,22 @@ function printDayLabels(days, patient) {
     const list = [];
     for (const d of fresh) {
         if (d.code) {
-            list.push({ ...who, code: d.code, copies: d.copies, dateStr: tubeLabelStamp(d.collectedAt), tests: d.tests.join(', ') });
+            if (d.copies > 0) list.push({ ...who, code: d.code, copies: d.copies, dateStr: tubeLabelStamp(d.collectedAt), tests: d.tests.join(', ') });
+            for (const o of d.own || []) list.push({ ...who, code: o.code, dateStr: tubeLabelStamp(o.collectedAt), tests: o.tests.join(', ') });   // ревью S3, M-2
         } else {
             for (const t of d.tubes) list.push({ ...who, code: t.code, dateStr: tubeLabelStamp(t.collectedAt), tests: t.tests.join(', ') });
         }
     }
     if (list.length) printBarcodeLabels(list);
-    if (fresh.length < days.length) {
-        toast(trf('Пробирки старше {days} дней не напечатаны: результат анализатора по такому номеру не принимается — привяжите его кнопкой «Привязать».', { days: BARE_ID_MAX_AGE_DAYS }), 'warn');
+    const notes = [];
+    const repeats = fresh.filter((d) => d.code).flatMap((d) => (d.own || []).filter((o) => o.why === 'repeat'));   // ревью S3, M-2
+    if (repeats.length) {
+        notes.push(trf('Повторный забор того же анализа в этот день — у его пробирки своя этикетка (номер заказа {codes}): по общему номеру дня анализатор не понял бы, в какой из заказов писать.', { codes: repeats.map((o) => o.code).join(', ') }));
     }
+    if (fresh.length < days.length) {
+        notes.push(trf('Пробирки старше {days} дней не напечатаны: результат анализатора по такому номеру не принимается — привяжите его кнопкой «Привязать».', { days: BARE_ID_MAX_AGE_DAYS }));
+    }
+    if (notes.length) toast(notes.join(' '), fresh.length < days.length ? 'warn' : 'info');
 }
 
 function printLabel(r, patient) {

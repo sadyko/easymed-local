@@ -13673,4 +13673,7 @@ export const STRINGS = {
   "Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».": {"en":"Analyzers do not fill the table — grades are entered by hand in «Enter results».","ru":"Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».","uz":"Analizator jadvalni to‘ldirmaydi — darajalar «Natijalarni kiritish»da qo‘lda kiritiladi."},   // LAB_MATRIX_PANEL_V1
   "Привязанная услуга выключена": {"en":"The linked service is switched off","ru":"Привязанная услуга выключена","uz":"Bog‘langan xizmat o‘chirilgan"},   // ревью lab2 L-4 (S3 3.22.0)
   // /S3 3.22.0
+  // ═══ S3 3.22.0 — лаборатория, правки по ревью S3 (H-1, M-1…M-3, L-1…L-5, LAB_SCAN_BIND_V1) ═══
+  "Повторный забор того же анализа в этот день — у его пробирки своя этикетка (номер заказа {codes}): по общему номеру дня анализатор не понял бы, в какой из заказов писать.": {"en":"A repeat draw of the same test on this day — its tube has its own label (order number {codes}): by the shared day number the analyzer could not tell which order to write to.","ru":"Повторный забор того же анализа в этот день — у его пробирки своя этикетка (номер заказа {codes}): по общему номеру дня анализатор не понял бы, в какой из заказов писать.","uz":"Shu kuni xuddi shu tahlil qayta olindi — uning probirkasiga alohida etiketka (buyurtma raqami {codes}): kunning umumiy raqami bo‘yicha analizator qaysi buyurtmaga yozishni bilmas edi."},   // ревью S3, M-2
+  // /S3 3.22.0 правки ревью
 };

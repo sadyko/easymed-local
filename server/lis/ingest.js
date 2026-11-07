@@ -1018,6 +1018,14 @@ function tubeAnchor(db, order, ctx, observations = null) {
 // Одни и те же анализы в двух открытых строках дня (отдельный забор того же дня,
 // дважды выставленный ОАК) — «неоднозначно», как у пробирки визита (ревью 3.17.1,
 // M1): угадывать нельзя; этикетка строки («Печать этикетки») ведёт точно.
+// Ревью S3, M-2 — «неоднозначно» только ОБЩИЕ коды: строка прибора, которая
+// подходит к двум и больше открытым строкам дня («ОАК» и отдельный «Гемоглобин»:
+// HGB; «Биохимия» и отдельная «Глюкоза»: GLU), не пишется никуда и названа в
+// журнале с обоими заказами; остальные строки сообщения ложатся как обычно (WBC
+// того же ОАК больше не уходит в лоток из-за общего HGB). Первой строке общий код
+// не отдаётся: утренняя пробирка, ещё не прогнанная, получила бы значение дневной.
+// Общие ВСЕ строки сообщения (второй забор того же анализа, BS-200 по тесту) —
+// отказ целиком, как прежде.
 // Дальше приём идёт как с номером строки: ворота оплаты, возврат, выдано (D7),
 // серия — у каждой строки свои; номер в журнале — как прислал прибор.
 
@@ -1051,10 +1059,12 @@ const DAY_NO_DEVICE = 'номер пробы — этикетка дня виз�
  * LAB_ONE_BARCODE_V1 — строки дня визита, в которые идёт проба по номеру этикетки
  * дня. line — строка номера (ключ: визит и день, orderAge). observations — строки
  * прибора; null — сообщения нет (рабочий список). hint — materialHint.
- * @returns {{order:object, side:object, closed:string, rest:object[]} | {ambiguous:string} | null}
+ * @returns {{order:object, side:object, closed:string, rest:object[], shared:Array<{obs:object, orders:number[]}>} | {ambiguous:string} | null}
  *   order — строка, которая идёт первой (как заказ номера: открытая оплаченная, к
  *   которой подходит сообщение; иначе по рангу); rest — остальные строки дня этого
- *   прибора (как siblingSides); null — прибор не кормит ни одной строки дня.
+ *   прибора (как siblingSides); shared — строки сообщения, общие для нескольких
+ *   открытых строк дня (ревью S3, M-2: не пишутся, «неоднозначно»); null — прибор
+ *   не кормит ни одной строки дня.
  */
 function dayAnchor(db, line, ctx, observations = null, hint = '', label = '') {
   const { day } = orderAge(db, line.id);
@@ -1074,15 +1084,28 @@ function dayAnchor(db, line, ctx, observations = null, hint = '', label = '') {
   }
   const open = pool.filter((s) => s.closed === '');
   const lineHits = (obs, s) => planObservations([obs], s.analytes).taken.length > 0;
+  // Ревью S3, M-2 — общие коды: строка прибора подходит к двум и больше открытым строкам дня.
+  const shared = [];
+  let rest = observations;
   if (observations) {
-    const twins = open.filter((s) => observations.some((obs) => lineHits(obs, s) && open.some((o) => o !== s && lineHits(obs, o))));
-    if (twins.length > 1) return { ambiguous: dayAmbiguousText(label, day, twinsWhy(twins)) };
+    for (const obs of observations) {
+      const to = open.filter((s) => lineHits(obs, s));
+      if (to.length > 1) shared.push({ obs, orders: to.map((s) => s.order.id).sort((a, b) => a - b) });
+    }
+    if (shared.length) {
+      if (shared.length === observations.length) {
+        const twins = open.filter((s) => shared.some((a) => a.orders.includes(s.order.id)));
+        return { ambiguous: dayAmbiguousText(label, day, twinsWhy(twins)) };
+      }
+      const gone = new Set(shared.map((a) => a.obs));
+      rest = observations.filter((o) => !gone.has(o));
+    }
   }
-  const hitBy = (s) => !!observations && planObservations(observations, s.analytes).taken.length > 0;
+  const hitBy = (s) => !!rest && planObservations(rest, s.analytes).taken.length > 0;
   const rank = (s) => (s.closed === '' ? 0 : s.closed === 'unpaid' ? 1 : 2);
   const pick = open.find(hitBy) || [...pool].sort((a, b) => rank(a) - rank(b))[0];
   const { order, closed, ...side } = pick;
-  return { order, side, closed, rest: pool.filter((s) => s !== pick) };
+  return { order, side, closed, rest: pool.filter((s) => s !== pick), shared };
 }
 
 /**
@@ -1388,6 +1411,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // названного человеком, срок не судится — как у голых цифр), прибор не кормит
   // ни одной строки дня, «неоднозначно» — в лоток сразу, строка не при заказе.
   let dayRest = null;
+  let dayShared = [];   // ревью S3, M-2 — общие коды строк дня: не пишутся никуда, «неоднозначно»
   if (dayLine != null) {
     const { day, recent } = orderAge(db, order.id);
     const label = pick.value || dayLabelValue(dayLine);
@@ -1408,6 +1432,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
     order = a.order;
     x = a.side;
     dayRest = a.rest;
+    dayShared = a.shared || [];
   }
   // LAB_TUBE_ANCHOR_V1 (решение владельца 2026-10-20) — заказ номера этот прибор
   // не кормит, а одна этикетка визита несёт номер ПЕРВОЙ услуги: проба идёт в
@@ -1518,8 +1543,11 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // заказов не ищем: чей это прибор, не знает никто.
   const sides = [{ order, ...x, closed: refundedTube ? 'refunded' : isReleased(db, order.id) ? 'released' : '' }];   // REFUND_ANY_V1 (ревью B4)
   if (deviceId) sides.push(...(dayRest || siblingSides(db, order, ctx)));   // dayRest: LAB_ONE_BARCODE_V1 — строки дня визита любого материала
-  const tube = planTube(observations, sides.map((s, i) => ({ analytes: s.analytes, tier: i === 0 ? 0 : (s.closed ? 2 : 1) })));
-  const fanned = tube.ambiguous.length > 0 || tube.involved.some((v, i) => i > 0 && v);
+  // Ревью S3, M-2 — общие коды строк дня до раскладки сняты: их значение не пишется никуда.
+  const sharedObs = new Set(dayShared.map((a) => a.obs));
+  const tube = planTube(sharedObs.size ? observations.filter((o) => !sharedObs.has(o)) : observations,
+    sides.map((s, i) => ({ analytes: s.analytes, tier: i === 0 ? 0 : (s.closed ? 2 : 1) })));
+  const fanned = dayShared.length > 0 || tube.ambiguous.length > 0 || tube.involved.some((v, i) => i > 0 && v);
 
   // D7 — выданный бланк молча не переписывается. Проверка ДО записи: замещать
   // черновик помощь, замещать выданный отчёт пациента — другое дело.
@@ -1631,6 +1659,8 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
         p = { ...p, missing: p.missing.filter((m) => !filled.has(m.analyte.name)) };
       }
       if (fanned) p = { ...p, unused: [] };
+      // Ревью S3, M-2 — общий код пришёл, но «неоднозначно»: это не «не пришли».
+      if (sharedObs.size) p = { ...p, missing: p.missing.filter((m) => !dayShared.some((a) => planObservations([a.obs], [m.analyte]).taken.length > 0)) };
       const core = outcome(p, { lead: held.length ? [heldChangeText(held)] : [], info: dupes.length ? [resentText(dupes)] : [] });
       let status = held.length ? 'unmapped' : core.status;
       let detail = core.detail;
@@ -1697,7 +1727,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       if (reports[0].pending) detail = SERIES_PENDING_PREFIX + detail;
     } else {
       const t = tubeOutcome(reports, {
-        ambiguous: tube.ambiguous.map((a) => ({ obs: a.obs, orders: a.orders.map((i) => sides[i].order.id) })),
+        ambiguous: [...tube.ambiguous.map((a) => ({ obs: a.obs, orders: a.orders.map((i) => sides[i].order.id) })), ...dayShared],   // dayShared: ревью S3, M-2
         unused: tube.unused,
       });
       status = t.status;
