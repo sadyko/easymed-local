@@ -341,3 +341,76 @@ test('перепечатка записи без архива у роли без
   assert.ok(html.includes('30.09.2026'), 'на листе нет дня визита');
   assert.ok(!html.includes('01.10.2026'), 'лист датирован днём подписи, а не днём визита');
 });
+
+// ═══ LAB_DOC_SPLIT_V1 + LAB_PRINT_PICK_V1 (решение владельца 2026-11-07, п. 8) ═══
+// Подтверждённые вместе анализы — отдельный документ; ещё не подтверждённые —
+// свой. «Печать…» вкладки — окно с галочками (все готовые отмечены), печатаются
+// отмеченные одним бланком.
+const T1 = '2026-11-07T05:00:00.000Z';
+const T2 = '2026-11-07T09:30:00.000Z';
+const labLine = (id, name, status, verified_at) => ({ id, visit_id: 20, service_id: id, status, verified_at, visit_date: '2026-11-07',
+  quantity: 1, total: 0, services: { name, is_lab: 1, type: 'lab' } });
+const labRes = (id, vs, parameter, value) => ({ id, visit_service_id: vs, parameter, value, unit: '', flag: 'normal',
+  entered_at: '2026-11-07T04:00:00Z', verified_at: null, verified_by: null });
+function labPayload() {
+  const lines = [labLine(101, 'ОАК', 'completed', T1), labLine(102, 'Биохимия', 'completed', T2), labLine(103, 'Гормоны', 'resulted', null)];
+  return { ...payloadWith([]), services: lines, lab_orders: lines,
+    lab_results: [labRes(1, 101, 'Лейкоциты', '6.1'), labRes(2, 102, 'Глюкоза', '5.2'), labRes(3, 103, 'ТТГ', '2.1')] };
+}
+
+test('LAB_DOC_SPLIT_V1: визит, подтверждённый в два приёма, и неподтверждённый анализ — три документа анализов', async () => {
+  calls = []; opened = [];
+  payload = labPayload();
+  setFullAccess('Администратор');
+  const box = mk('div');
+  renderPatientCard(box, { onNavigate() {}, payload: { id: 1 } });
+  await tick();
+  openDocsTab(box);
+  await tick();
+  const rows = walk(box).filter((n) => n.tagName === 'TR' && textOf(n).includes('Результаты анализов'));
+  assert.equal(rows.length, 3, textOf(box).slice(0, 600));
+  const t = rows.map(textOf).join(' | ');
+  assert.equal((t.match(/Выдан/g) || []).length, 2, t);
+  assert.match(t, /Готов/);
+});
+
+test('LAB_PRINT_PICK_V1: «Печать…» — окно с готовыми документами, всё отмечено; сняли «Гормоны» — бланк без них', async () => {
+  calls = []; opened = [];
+  payload = labPayload();
+  setFullAccess('Администратор');
+  const printed = [];
+  const prevOpen = globalThis.window.open;
+  globalThis.window.open = () => ({ document: { open() {}, write(s) { printed.push(String(s)); }, close() {} } });
+  document.body.children.length = 0;
+  const prevFetch = globalThis.fetch;
+  // справочник показателей бланка (/api/db) — пустой список
+  globalThis.fetch = async (url, opts) => (String(url).startsWith('/api/db') ? { ok: true, status: 200, json: async () => ({ data: [] }) } : prevFetch(url, opts));
+  try {
+    const box = mk('div');
+    renderPatientCard(box, { onNavigate() {}, payload: { id: 1 } });
+    await tick();
+    openDocsTab(box);
+    await tick();
+    const btn = walk(box).find((n) => n.tagName === 'BUTTON' && n.hasAttribute('data-docs-print'));
+    assert.ok(btn, 'нет кнопки «Печать…»');
+    btn.click();
+    await tick();
+    const dlg = walk(document.body).find((n) => n.hasAttribute && n.hasAttribute('data-lab-print-pick'));
+    assert.ok(dlg, 'окно выбора не открылось');
+    const orderBoxes = walk(dlg).filter((n) => n.tagName === 'INPUT' && n.hasAttribute('data-pick-order'));
+    assert.deepEqual(orderBoxes.map((b) => [b.getAttribute('data-pick-order'), b.checked]), [['103', true], ['102', true], ['101', true]]);
+    const hormones = orderBoxes.find((b) => b.getAttribute('data-pick-order') === '103');
+    hormones.checked = false;
+    hormones.dispatchEvent({ type: 'change' });
+    const print = walk(dlg).filter((n) => n.tagName === 'BUTTON').find((b) => textOf(b).includes('Печать'));
+    print.click();
+    await tick(80);
+  } finally {
+    globalThis.window.open = prevOpen;
+    globalThis.fetch = prevFetch;
+  }
+  assert.equal(printed.length, 1, 'бланк не открылся одним окном');
+  const html = printed[0].replace(/<style[\s\S]*?<\/style>/g, '');
+  assert.ok(html.includes('Лейкоциты') && html.includes('Глюкоза'), 'отмеченные анализы — на бланке');
+  assert.ok(!html.includes('ТТГ'), 'снятый анализ напечатан');
+});

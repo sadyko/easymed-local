@@ -166,6 +166,7 @@ const state = {
     // загрузке очереди: настройка приезжает из главного филиала со справочником,
     // и филиал должен подхватить её без перезапуска приложения.
     labScope: LAB_SCOPE_DEFAULT,
+    picked: new Set(),   // LAB_DOC_SPLIT_V1 — отмеченные анализы карточек (подтвердить / напечатать только их)
     labRound: true,   // LAB_ROUND_V1 — «Округлять результаты анализаторов до 2 знаков» (doc_settings.lab_round_analyzer)
 };
 
@@ -1111,6 +1112,7 @@ function lqItem(r, patient) {
     const svc = r.services || {};
     const results = state.resultsByVs[r.id] || [];
     return h('div', { class: 'lq-item', 'data-status': r.status || '' },
+        pickBox(r, results),   // LAB_DOC_SPLIT_V1 — отметить анализ
         tubePill(svc.tube_color),
         h('div', { class: 'lq-item-main' },
             h('div', { class: 'lq-name' }, svc.name || '—', externalLabTag(svc), refundedTag(r)),   // EXTERNAL_LAB_V1 · REFUND_ANY_V1 (ревью B4)
@@ -1168,7 +1170,7 @@ function labGroupCard(g, byVisit = new Map()) {
             'Подтвердить и выдать результаты', () => verifyGroup(g)] : null,
         // LAB_BLANK_ALL_PANELS_V1 — печатаем ВЕСЬ образец, а не одну строку.
         anyResulted ? ['report', 'Бланк', 'Print',
-            'Печать бланка: все анализы образца', () => printGroupReport(rows, patient)] : null,
+            'Печать бланка: все анализы образца', () => printGroupReport(pickedOf(rows), patient)] : null,   // LAB_DOC_SPLIT_V1 — отмеченные, иначе все
         // LAB_TUBE_LABEL_V1 — этикетка на каждую пробирку (было: одна, rows[0] — самая новая строка).
         // LAB_ONE_BARCODE_V1 — номер на них один: номер дня визита (копий — по числу пробирок).
         tubes.length ? ['barcode', 'Штрих-код', 'Scan',
@@ -1254,8 +1256,49 @@ function labGroupCard(g, byVisit = new Map()) {
         // номер каждой (как в окне «Внести результаты»), потом анализы.
         h('div', { class: 'lq-list' },
             manyLabels(days, tubes) ? h('div', { class: 'lq-tubes' }, ...labelChips(days, tubes, g.accession)) : null,   // LAB_ONE_BARCODE_V1 — по номеру на день
+            pickAllRow(rows),   // LAB_DOC_SPLIT_V1 — отметить все анализы карточки
             ...rows.map(r => lqItem(r, patient))),
     );
+}
+
+// LAB_DOC_SPLIT_V1 (решение владельца 2026-11-07, п. 8) — ОТМЕТКА АНАЛИЗОВ КАРТОЧКИ.
+// Галочка у анализа с результатом: «Подтвердить» подтверждает, а «Бланк» печатает
+// только отмеченные (группа — «Отметить все» карточки). Подтверждённые вместе —
+// один документ в «Документах» (shared/lab-doc-batches.js); не отмечено ничего —
+// карточка работает, как прежде, со всеми анализами.
+function pickable(r) {
+    return (state.resultsByVs[r.id] || []).length > 0 && (r.status === 'resulted' || r.status === 'completed');
+}
+function pickedOf(rows) {
+    const mine = rows.filter((r) => state.picked.has(Number(r.id)));
+    return mine.length ? mine : rows;
+}
+function pickBox(r) {
+    if (!pickable(r)) return h('span', { class: 'lq-pick lq-pick-none' });
+    const box = h('input', { type: 'checkbox', class: 'lq-pick', 'data-pick': String(r.id),
+        title: tr('Отметить анализ: подтвердить или напечатать только отмеченные'), 'aria-label': tr('Отметить анализ') });
+    box.checked = state.picked.has(Number(r.id));
+    if (box.checked) box.setAttribute('checked', '');
+    box.addEventListener('change', () => {
+        if (box.checked) state.picked.add(Number(r.id)); else state.picked.delete(Number(r.id));
+        paintRows();
+    });
+    return box;
+}
+function pickAllRow(rows) {
+    const can = rows.filter(pickable);
+    if (can.length < 2) return null;
+    const n = can.filter((r) => state.picked.has(Number(r.id))).length;
+    const box = h('input', { type: 'checkbox', class: 'lq-pick-all', 'aria-label': tr('Отметить все анализы') });
+    box.checked = n === can.length;
+    if (box.checked) box.setAttribute('checked', '');
+    box.addEventListener('change', () => {
+        for (const r of can) { if (box.checked) state.picked.add(Number(r.id)); else state.picked.delete(Number(r.id)); }
+        paintRows();
+    });
+    return h('label', { class: 'lq-pick-row', style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', padding: '4px 0' } },
+        box, h('span', null, tr('Отметить все анализы')),
+        n ? h('span', { class: 'muted' }, trf('Отмечено {n}: «Подтвердить» и «Бланк» — только для них', { n })) : null);
 }
 
 // LAB_ONE_SCREEN_V1 — кнопка-значок из системы (.btn-icon), а не свой
@@ -1389,7 +1432,9 @@ function printLabel(r, patient) {
 // -----------------------------------------------------------------------------
 async function verifyGroup(g) {
     if (refuseSignWhileActing()) return;   // ADMIN_ACT_AS_V1 (R3) — от чужого имени не выдаётся
-    const panels = g.rows.filter(r => r.status === 'resulted');
+    // LAB_DOC_SPLIT_V1 — отмечены анализы карточки — подтверждаются только они (и уходят
+    // отдельным документом: одна отметка verified_at); не отмечено ничего — все, как прежде.
+    const panels = pickedOf(g.rows).filter(r => r.status === 'resulted');
     if (!panels.length) { toast('Нет результатов для подтверждения.', 'fail'); return; }
 
     // LAB_PANEL_DEDUP_V1 (ревью L3) — критические — из того, что напечатает бланк:
@@ -1426,6 +1471,7 @@ async function verifyGroup(g) {
         toast(critical.length
             ? trf('Подтверждено — {n} критич. значений отмечено для врача.', { n: critical.length })
             : 'Подтверждено и выдано.', 'ok');
+        for (const p of panels) state.picked.delete(Number(p.id));   // LAB_DOC_SPLIT_V1
         await fetchAndPaint();
     } catch (e) {
         toast(trf('Не удалось подтвердить: {msg}', { msg: (e && e.message) || e }), 'fail');

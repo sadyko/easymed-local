@@ -42,6 +42,8 @@ import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, mat
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';
 import { labShownValue, labRoundOn } from '../../shared/lab-round.js';   // LAB_ROUND_V1
 import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1
+import { labDocBatches } from '../../shared/lab-doc-batches.js';   // LAB_DOC_SPLIT_V1
+import { openLabPrintPick } from './lab-print-pick.js';   // LAB_PRINT_PICK_V1
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_PANEL_DEDUP_V1 — одно правило «лабораторная услуга» с очередью лаборатории
 
 const refs = { container: null, onNavigate: null, bodyEl: null, docsWrap: null };
@@ -495,7 +497,7 @@ export async function fetchLabByVisit(visitIds) {
         // Справочники маленькие; не прочитались — правило работает по тому, что есть.
         const [vsRes, deptsRes, typesRes, panelsRes] = await Promise.all([
             supabase.from('visit_services')
-                .select('id,visit_id,service_id,services(name,result_unit,ref_low,ref_high,ref_text,is_lab,type,department_id,type_id)')
+                .select('id,visit_id,service_id,status,verified_at,services(name,result_unit,ref_low,ref_high,ref_text,is_lab,type,department_id,type_id)')   // status, verified_at: LAB_DOC_SPLIT_V1
                 .in('visit_id', visitIds),
             supabase.from('departments').select('id, kind').limit(200),
             supabase.from('service_types').select('id, name').limit(200),
@@ -558,6 +560,8 @@ export async function fetchLabByVisit(visitIds) {
                             enteredAt:       result.entered_at || null,
                             verifiedAt:      result.verified_at || null,
                             verifiedBy:      result.verified_by || null,   // PRINT_PERFORMER_V1 — кто подтвердил
+                            orderStatus:     vs.status || '',              // LAB_DOC_SPLIT_V1 — документ по подтверждению
+                            orderVerifiedAt: vs.verified_at || null,
                             value:           result.value,
                             unit:            result.unit || svc.result_unit || '',
                             reference_range: result.reference_range || '',
@@ -600,7 +604,7 @@ function visitCard(v) {
 
     const labBtn = hasLab ? h('button', {
         class: 'btn btn-outline btn-sm', type: 'button',
-        onclick: () => printLabReport(v, labResults, state.brand, state.patient),
+        onclick: () => pickAndPrintLab(v, labResults, state.brand, state.patient),   // LAB_PRINT_PICK_V1 — окно выбора
     }, Icon('Flask', { size: 13 }), ' Lab report') : null;
 
     const editBtn = h('button', {
@@ -770,6 +774,42 @@ async function printLabReport(visit, results, brand, patient) {
             mrn: (patient && patient.mrn) || '',
             ...signer,
             groups,
+        },
+    });
+}
+
+// LAB_DOC_SPLIT_V1 + LAB_PRINT_PICK_V1 (решение владельца 2026-11-07, п. 8) — «Печать»
+// анализов визита открывает окно выбора: документы визита (подтверждённые вместе —
+// один документ; не подтверждённые, но внесённые полностью — свой) и их анализы,
+// все отмечены; печатаются отмеченные одним бланком. Неготовые (внесено не всё) не
+// предлагаются — их ждут.
+export function labPrintDocs(visit, results) {
+    const orders = [];
+    const seen = new Set();
+    for (const r of results || []) {
+        if (r.vsId == null || seen.has(r.vsId)) continue;
+        seen.add(r.vsId);
+        orders.push({ id: r.vsId, visitId: visit && visit.id, status: r.orderStatus || '', verifiedAt: r.orderVerifiedAt || null, name: r.panelName || '' });
+    }
+    const name = new Map(orders.map((o) => [Number(o.id), o.name]));
+    return labDocBatches(orders, { hasResult: (id) => seen.has(id) })
+        .filter((b) => b.complete)
+        .map((b) => ({
+            key: b.key,
+            title: b.kind === 'issued' ? tr('Результаты анализов') + ' · ' + tr('выдан') : tr('Результаты анализов') + ' · ' + tr('внесены, не подтверждены'),
+            subtitle: b.kind === 'issued' && b.verifiedAt ? fmtDateTime(b.verifiedAt) : '',
+            orders: b.orderIds.map((id) => ({ id, name: name.get(id) || '' })),
+        }));
+}
+function pickAndPrintLab(visit, results, brand, patient) {
+    const docs = labPrintDocs(visit, results);
+    if (!docs.length) return toast('Готовых результатов нет — печатать нечего.', 'info');
+    openLabPrintPick({
+        title: 'Что напечатать',
+        docs,
+        onPrint: (ids) => {
+            const want = new Set(ids.map(Number));
+            printLabReport(visit, (results || []).filter((r) => want.has(Number(r.vsId))), brand, patient);
         },
     });
 }
@@ -1006,7 +1046,7 @@ async function printVisitFromFeed(r, btn) {
                 if (data) state.docs.doctorMap[visit.doctor_id] = data.full_name;
             } catch (e) { /* бланк печатается и без имени врача */ }
         }
-        await printLabReport(visit, results, brand, patient);
+        pickAndPrintLab(visit, results, brand, patient);   // LAB_PRINT_PICK_V1 — окно выбора
     } catch (e) {
         toast(trf('Не удалось напечатать: {msg}', { msg: (e && e.message) || e }), 'fail');
     } finally {

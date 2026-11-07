@@ -13549,5 +13549,17 @@ export const STRINGS = {
   "Изменить может администратор.": {"en":"Only an administrator can change this.","ru":"Изменить может администратор.","uz":"Faqat administrator o‘zgartira oladi."},   // LAB_ROUND_V1
   "Результаты анализаторов — до 2 знаков": {"en":"Analyzer results — to 2 decimal places","ru":"Результаты анализаторов — до 2 знаков","uz":"Analizator natijalari — 2 xonagacha"},   // LAB_ROUND_V1
   "Результаты анализаторов — полностью": {"en":"Analyzer results — full values","ru":"Результаты анализаторов — полностью","uz":"Analizator natijalari — to‘liq"},   // LAB_ROUND_V1
+  "Отметить анализ: подтвердить или напечатать только отмеченные": {"en":"Select the analysis: confirm or print only the selected ones","ru":"Отметить анализ: подтвердить или напечатать только отмеченные","uz":"Tahlilni belgilang: faqat belgilanganlarni tasdiqlash yoki chop etish"},   // LAB_DOC_SPLIT_V1
+  "Отметить анализ": {"en":"Select analysis","ru":"Отметить анализ","uz":"Tahlilni belgilash"},   // LAB_DOC_SPLIT_V1
+  "Отметить все анализы": {"en":"Select all analyses","ru":"Отметить все анализы","uz":"Barcha tahlillarni belgilash"},   // LAB_DOC_SPLIT_V1
+  "Отмечено {n}: «Подтвердить» и «Бланк» — только для них": {"en":"{n} selected: «Confirm» and «Form» apply only to them","ru":"Отмечено {n}: «Подтвердить» и «Бланк» — только для них","uz":"{n} ta belgilandi: «Tasdiqlash» va «Blank» faqat ular uchun"},   // LAB_DOC_SPLIT_V1
+  "Что напечатать": {"en":"What to print","ru":"Что напечатать","uz":"Nimani chop etish"},   // LAB_PRINT_PICK_V1
+  "Отмечено анализов: {n}": {"en":"Analyses selected: {n}","ru":"Отмечено анализов: {n}","uz":"Belgilangan tahlillar: {n}"},   // LAB_PRINT_PICK_V1
+  "Выбрать документы анализов и напечатать одним бланком": {"en":"Choose lab documents and print them on one form","ru":"Выбрать документы анализов и напечатать одним бланком","uz":"Tahlil hujjatlarini tanlab, bitta blankda chop etish"},   // LAB_PRINT_PICK_V1
+  "Печать…": {"en":"Print…","ru":"Печать…","uz":"Chop etish…"},   // LAB_PRINT_PICK_V1
+  "Готовых документов анализов нет — печатать нечего.": {"en":"No lab documents are ready — nothing to print.","ru":"Готовых документов анализов нет — печатать нечего.","uz":"Tayyor tahlil hujjatlari yo‘q — chop etadigan narsa yo‘q."},   // LAB_PRINT_PICK_V1
+  "выдан": {"en":"issued","ru":"выдан","uz":"berilgan"},   // LAB_DOC_SPLIT_V1
+  "внесены, не подтверждены": {"en":"entered, not confirmed","ru":"внесены, не подтверждены","uz":"kiritilgan, tasdiqlanmagan"},   // LAB_DOC_SPLIT_V1
+  "Готовых результатов нет — печатать нечего.": {"en":"No results are ready — nothing to print.","ru":"Готовых результатов нет — печатать нечего.","uz":"Tayyor natijalar yo‘q — chop etadigan narsa yo‘q."},   // LAB_PRINT_PICK_V1
   // /S3 3.22.0
 };
