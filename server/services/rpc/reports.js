@@ -963,6 +963,23 @@ const ITEM_GOODS_VAT_LINE_SQL = `(CASE WHEN ${ITEM_SVC_TAX_SQL} IS NULL AND ${IT
 const ITEM_AFTER_DISCOUNT_SQL = `(ii.total - (${ITEM_DISCOUNT_SQL}))`;
 const ITEM_TAX_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} * ${ITEM_TAX_RATE_SQL} / ${ITEM_TAX_BASE_SQL})`;
 const ITEM_NET_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} - ${ITEM_TAX_SQL})`;
+// DISCOUNT_V2 (решение владельца 2026-11-07, п. 5) — «СКИДКА УМЕНЬШАЕТ ДОЛЮ ВРАЧА».
+//
+// Счёт хранит, какая доля его скидки (остатка: ручная, группы, промокод, касса — без
+// своих скидок строк пакета и без скидки после продажи) уменьшает долю врача
+// (invoices.doctor_discount_share, мигр. 273): 1 — вся, как всегда было; 0 — никакая
+// (клиника берёт скидку на себя). Доля врача считается от суммы строки после скидки
+// плюс «не уменьшающая» часть доли строки в остатке скидки (та же первая ступень, что
+// STAGE1_DISCOUNT_SQL), минус налог по тому же правилу. Счёт с долей 1 (все прежние)
+// идёт по ITEM_NET_SQL бит в бит — ветка выписана явно. Выручка, «скидка», «налог» и
+// «после налога» отчётов не меняются: это деньги счёта; меняется только доля врача.
+const DOC_SHARE_SQL = 'COALESCE(i.doctor_discount_share, 1)';
+const ITEM_DOC_KEEP_SQL = `(CASE WHEN COALESCE(ii.discount_amount, 0) > 0 THEN 0
+  WHEN ${REST_BASE_SQL} > 0 THEN (1 - ${DOC_SHARE_SQL}) * MIN(${REST_DISCOUNT_SQL}, ${REST_BASE_SQL}) * ii.total / ${REST_BASE_SQL}
+  ELSE 0 END)`;
+const ITEM_DOC_AFTER_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} + ${ITEM_DOC_KEEP_SQL})`;
+const ITEM_DOC_NET_SQL = `(CASE WHEN ${DOC_SHARE_SQL} >= 1 THEN ${ITEM_NET_SQL}
+  ELSE (${ITEM_DOC_AFTER_SQL} - ${ITEM_DOC_AFTER_SQL} * ${ITEM_TAX_RATE_SQL} / ${ITEM_TAX_BASE_SQL}) END)`;
 // Примечание к отчётам, где в одной колонке «Налог» и услуги, и товары.
 const GOODS_VAT_NOTE = '«Налог» у услуг и товаров считается одинаково — он внутри цены: сумма после скидки × ставка / 100 (из 100 при 12 % — 12 налога и 88). У товаров он же — в колонке «в т.ч. НДС (товары)».';
 const GOODS_VAT_NOTE_SHORT = '«Налог» у услуг и товаров считается одинаково — он внутри цены: сумма после скидки × ставка / 100 (из 100 при 12 % — 12 налога и 88).';
@@ -1017,7 +1034,7 @@ const ITEM_FEE_SQL = `CASE
   WHEN ${ITEM_FIX_SQL} IS NOT NULL THEN ${ITEM_FIX_SQL} * COALESCE(ii.quantity, 1) * ${POST_SALE_KEEP_SQL}
   -- DOCTOR_TIER_V1 — процент строки берётся действующий (со ступенью выше порога),
   -- а не голый личный; фиксированную ставку ступень не трогает.
-  ELSE ${ITEM_NET_SQL} * ${ITEM_EFF_PCT_SQL} / 100.0
+  ELSE ${ITEM_DOC_NET_SQL} * ${ITEM_EFF_PCT_SQL} / 100.0   -- DISCOUNT_V2 — от суммы, которую скидка не уменьшает для врача
 END`;
 
 // INPATIENT_SHARE_V1 — доля строки стационара и «одна доля на строку» для
@@ -1027,7 +1044,7 @@ END`;
 // INPATIENT_BONUS_V1 — фикс стационарной ставки: сумма × количество строки.
 const INPATIENT_FEE_SQL = `CASE
   WHEN ${INPATIENT_FIX_SQL} IS NOT NULL THEN ${INPATIENT_FIX_SQL} * COALESCE(ii.quantity, 1) * ${POST_SALE_KEEP_SQL}
-  ELSE (${ITEM_NET_SQL} * ${INPATIENT_PCT_SQL} / 100.0) END`;
+  ELSE (${ITEM_DOC_NET_SQL} * ${INPATIENT_PCT_SQL} / 100.0) END`;   // DISCOUNT_V2
 const LINE_FEE_SQL = `CASE WHEN ias.id IS NOT NULL THEN ${INPATIENT_FEE_SQL} ELSE ${ITEM_FEE_SQL} END`;
 const LINE_PCT_SQL = `CASE WHEN ias.id IS NOT NULL THEN ${INPATIENT_PCT_SQL} ELSE ${ITEM_EFF_PCT_SQL} END`;
 const LINE_FIX_SQL = `CASE WHEN ias.id IS NOT NULL THEN ${INPATIENT_FIX_SQL} ELSE ${ITEM_FIX_SQL} END`;
@@ -1236,6 +1253,8 @@ const BILLED_COLUMNS_SQL = `
            CASE WHEN ii.id IS NOT NULL THEN ${ITEM_DISCOUNT_SQL} END AS billed_discount,
            CASE WHEN ii.id IS NOT NULL THEN ${ITEM_TAX_SQL} END      AS billed_tax,
            CASE WHEN ii.id IS NOT NULL THEN ${ITEM_NET_SQL} END      AS billed_net,
+           -- DISCOUNT_V2 — сумма после налога, от которой считается доля врача (переключатель скидки).
+           CASE WHEN ii.id IS NOT NULL THEN ${ITEM_DOC_NET_SQL} END  AS billed_doc_net,
            -- V3120_FINAL (C1) — доля денег после скидки после продажи (фикс × она).
            CASE WHEN ii.id IS NOT NULL THEN ${POST_SALE_KEEP_SQL} END AS post_sale_keep`;
 
@@ -1508,6 +1527,7 @@ function makePayPricer(db) {
   const pkgStmt = db.prepare('SELECT valid_from, valid_until FROM service_templates WHERE id = ?');   // SERVICES_PACKAGES_V1 — только срок
   const units = new Map();
   let cats = null;   // id пациента → скидка категории, %; загружается один раз
+  let catKeeps = null;   // DISCOUNT_V2 — id пациента → скидка группы НЕ уменьшает долю врача
   const pkgs = new Map();
   return {
     unit(r) {
@@ -1533,13 +1553,20 @@ function makePayPricer(db) {
     categoryPct(patientId) {
       if (cats === null) {
         cats = new Map();
-        for (const r of db.prepare(`SELECT p.id AS id, c.discount_percent AS pct FROM patients p
+        catKeeps = new Set();
+        for (const r of db.prepare(`SELECT p.id AS id, c.discount_percent AS pct, c.reduces_doctor_share AS reduces FROM patients p
                                       JOIN patient_categories c ON c.id = p.category_id AND c.active = 1`).all()) {
           const pct = Number(r.pct);
           if (Number.isFinite(pct) && pct > 0) cats.set(r.id, Math.min(pct, 100));
+          if (Number(r.reduces) === 0) catKeeps.add(r.id);
         }
       }
       return cats.get(Number(patientId)) || 0;
+    },
+    // DISCOUNT_V2 — скидка группы пациента НЕ уменьшает долю врача (переключатель группы).
+    categoryKeepsDoctor(patientId) {
+      if (cats === null) this.categoryPct(patientId);
+      return catKeeps.has(Number(patientId));
     },
     // SERVICES_PACKAGES_V1 (было ревью M3) — скидка пакета строки: записанная
     // на строке при записи (цена пакета окончательная), только в сроке пакета —
@@ -1558,12 +1585,13 @@ function makePayPricer(db) {
  * Строка со счётом: суммы из SQL (как прежде). Без счёта: цена счёта.
  */
 function payLineMoney(r, pricer) {
-  let amount, discount, tax, net;
+  let amount, discount, tax, net, docNet;
   if (r.invoice_item_id != null) {
     amount = r.billed_amount || 0;
     discount = r.billed_discount || 0;
     tax = r.billed_tax || 0;
     net = r.billed_net || 0;
+    docNet = r.billed_doc_net != null ? Number(r.billed_doc_net) || 0 : net;   // DISCOUNT_V2
   } else {
     const qty = Number(r.qty) || 0;
     amount = round2(pricer.unit(r) * qty);
@@ -1577,6 +1605,10 @@ function payLineMoney(r, pricer) {
     // SUPPLIERS_VAT_V1 — налог внутри цены, одно правило у товара и услуги (lineTaxOf).
     tax = lineTaxOf(r, after);
     net = after - tax;
+    // DISCOUNT_V2 — скидка группы с выключенным «уменьшает долю врача»: доля — от цены до неё.
+    if (catPct > 0 && !(pkgOff > 0) && pricer.categoryKeepsDoctor && pricer.categoryKeepsDoctor(r.patient_id)) {
+      docNet = amount - lineTaxOf(r, amount);
+    } else docNet = net;
   }
   // DOCTOR_FIX_RATE_V1 — фикс за единицу и налогом не режется; иначе процент
   // от суммы после налога (DOCTOR_SHARE_AFTER_TAX_V1) — тот же порядок
@@ -1589,9 +1621,9 @@ function payLineMoney(r, pricer) {
   // что процент (у процента она уже в сумме строки после скидки).
   const base = Number(r.goods) === 1 ? 0 : (r.fix != null
     ? r.fix * (r.qty == null ? 1 : r.qty) * postSaleKeepOf(r)
-    : net * (r.pct || 0) / 100);
+    : docNet * (r.pct || 0) / 100);   // DISCOUNT_V2 — при доле скидки 1 docNet === net
   const fee = keep === 1 ? base : base * keep;
-  return { amount, discount, tax, net, fee };
+  return { amount, discount, tax, net, fee, docNet };
 }
 
 // V3120_FINAL (C1) — доля денег строки после скидки после продажи (1 — её нет).
@@ -1636,6 +1668,7 @@ function livePayLines(db, { from, to, doctorId = null, kinds = ['out', 'in'], ar
       invoiced: r.invoice_item_id != null,
       inpatient_line_id: r.kind === 'in' ? r.line_id : null,
       amount: m.amount, discount: m.discount, tax: m.tax, net: m.net,
+      doc_net: m.docNet,   // DISCOUNT_V2 — от чего считается доля врача (ставка месяца — payFeeAtMonthRate)
       doctor_fee: m.fee,
     };
   });
@@ -1905,6 +1938,8 @@ function payFeeAtMonthRate(L, rec, sample) {
       : rec.tax_rate != null ? (Number(rec.tax_rate) || 0) / 100 : null;
     if (share != null) net = after - after * share;
   }
+  // DISCOUNT_V2 — скидка, которая долю врача не уменьшает: та же прибавка, что у живой строки.
+  if (L.doc_net != null) net += (Number(L.doc_net) || 0) - (Number(L.net) || 0);
   const base = rate.fix != null ? rate.fix * (L.qty == null ? 1 : L.qty) * postSaleKeepOf(L) : net * pct / 100;
   const keep = L.refund_keep == null ? 1 : Number(L.refund_keep);
   const fee = keep === 1 ? base : base * keep;
