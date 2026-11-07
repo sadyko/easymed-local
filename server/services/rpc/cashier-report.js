@@ -27,9 +27,9 @@ import { INFLOW_SQL, METHOD_RU as SHARED_METHOD_RU } from '../../../public/js/sh
 // REPORTS_AUDIT_FIX_V1 — период проверяется тем же правилом, что у остальных
 // отчётов (мусор и «с» позже «по» — отказ по-русски, а не пустая касса), а
 // пустой филиал счёта — своё здание (счёт госпитализации пишется без него).
-import { resolveRange, OWN_BRANCH_OR, invoiceVatMap, vatShareOf } from './reports.js';
+import { resolveRange, OWN_BRANCH_OR, invoiceVatMap, vatShareOf, reportFilters, invoiceMatcher } from './reports.js';
 // REPORTS_TAX_PAY_V1 — три ячейки НДС (без НДС / НДС / с НДС), как во всех отчётах.
-import { vatCells, VAT_COLUMNS } from '../domain/pay-parts.js';
+import { vatCells, VAT_COLUMNS, UNPAID, PAY_METHOD_ORDER } from '../domain/pay-parts.js';
 
 // V3120_FIX — способы оплаты называются ОДНИМ словарём с кассой и «Счетами»
 // (shared/payment-methods.js): прежде здесь «Перечисление», там «Перевод», а
@@ -76,6 +76,9 @@ const CASH_MOVE_LOCAL_NOTE = 'Расходы кассы между здания�
 // вместо отсутствующей.
 const REFUND_NOTE = 'Строки «Возврат» — деньги, отданные пациенту (со знаком минус, способом, которым их вернули). Приход в итоге — за вычетом возвратов.';
 
+// REPORTS_TAX_PAY_V1 — что значат фильтры у кассы: строка — платёж целиком.
+const FILTER_NOTE = 'Фильтры: способ оплаты и кассир — платежи этим способом и этого кассира; врач, группа услуг и группа пациентов — платежи по счетам, где есть услуга этого врача или этой группы и пациент этой группы (сумма — весь платёж). Расходы кассы показаны, только если фильтр их касается: наличные и кассир смены.';
+
 const NET_SCOPE_NOTE = 'Итог считается ПО ЭТОМУ ЗДАНИЮ: приход этого здания минус его расход. Доход по всей клинике показан отдельной плиткой — вычитать из него местный расход нельзя, движения кассы между зданиями не передаются.';
 
 // Кассир приехавшего платежа неизвестен: карточки сотрудников между зданиями
@@ -92,6 +95,13 @@ export function cashierReport(db, args, user) {
   const range = resolveRange(db, a);
   const from = String(range.from).slice(0, 10);
   const to = String(range.to).slice(0, 10);
+  // REPORTS_TAX_PAY_V1 — фильтры окна отчёта (те же аргументы, что у run_report).
+  const f = reportFilters(a);
+  const payF = [];
+  const payP = [];
+  if (f.method === UNPAID) payF.push(' AND 0');   // «Не оплачено» — денег в кассе нет
+  else if (f.method) { payF.push(' AND p.method = ?'); payP.push(f.method); }
+  if (f.cashierId != null) { payF.push(' AND p.cashier_id = ?'); payP.push(f.cashierId); }
 
   // Филиал живёт на СЧЁТЕ, а не на платеже. Пустой список = все филиалы:
   // так же ведут себя остальные отчёты (см. reports.js), и «ничего не выбрано»
@@ -123,7 +133,7 @@ export function cashierReport(db, args, user) {
   // та же выборка, что inLocalRange). p.id — явный порядок платежей одной
   // секунды (прежде — порядок чтения таблицы, тот же по возрастанию id).
   const payRange = localRangeWhere('p.paid_at', from, to);
-  const income = db.prepare(`
+  const incomeAll = db.prepare(`
     SELECT p.id, p.amount, p.method, p.invoice_id, ${payOrigin} AS origin, ${localDate('p.paid_at')} AS day,
            strftime('%H:%M', p.paid_at, 'localtime') AS at,
            COALESCE(i.invoice_number, '') AS invoice_no,
@@ -141,8 +151,11 @@ export function cashierReport(db, args, user) {
       LEFT JOIN invoices i  ON i.id = p.invoice_id
       LEFT JOIN patients pat ON pat.id = i.patient_id
       LEFT JOIN users cash   ON cash.id = p.cashier_id
-     WHERE ${payRange.sql} AND p.${INFLOW_SQL}${branchSql}${gf.clause}
-     ORDER BY origin, p.paid_at DESC, p.id`).all(...payRange.params, ...branchIds, ...gf.params);
+     WHERE ${payRange.sql} AND p.${INFLOW_SQL}${branchSql}${gf.clause}${payF.join('')}
+     ORDER BY origin, p.paid_at DESC, p.id`).all(...payRange.params, ...branchIds, ...gf.params, ...payP);
+  // REPORTS_TAX_PAY_V1 — врач, группа услуг, группа пациентов — по счёту платежа.
+  const invMatch = invoiceMatcher(db, incomeAll.map((r) => r.invoice_id), f);
+  const income = invMatch ? incomeAll.filter((r) => invMatch(r.invoice_id)) : incomeAll;
 
   // ---- Расходы -----------------------------------------------------------
   //
@@ -150,15 +163,21 @@ export function cashierReport(db, args, user) {
   // принадлежит смене, а смена — филиалу.
   const moveBranchSql = branchIds.length ? ` AND sh.branch_id IN (${branchIds.map(() => '?').join(',')})` : '';
   const moveRange = localRangeWhere('m.created_at', from, to);
-  const expense = db.prepare(`
+  // REPORTS_TAX_PAY_V1 — расход кассы — наличные смены: способ «не наличные»,
+  // врач, группа услуг и группа пациентов его не касаются (расходов нет);
+  // кассир — его смены (иначе — кто провёл).
+  const moveOff = (f.method && f.method !== 'cash') || f.doctorId != null || !!f.group || f.patientGroup != null;
+  const moveCashier = f.cashierId != null ? ' AND COALESCE(sh.cashier_id, m.created_by) = ?' : '';
+  const expense = moveOff ? [] : db.prepare(`
     SELECT m.id, m.amount, m.article, m.note, ${moveOrigin} AS origin, ${localDate('m.created_at')} AS day,
            strftime('%H:%M', m.created_at, 'localtime') AS at,
            COALESCE(u.full_name, '—') AS author
       FROM cash_movements m
       LEFT JOIN cash_shifts sh ON sh.id = m.shift_id
       LEFT JOIN users u        ON u.id = m.created_by
-     WHERE m.kind = 'out' AND ${moveRange.sql}${moveBranchSql}${gfm.clause}
-     ORDER BY origin, m.created_at DESC, m.id`).all(...moveRange.params, ...branchIds, ...gfm.params);
+     WHERE m.kind = 'out' AND ${moveRange.sql}${moveBranchSql}${gfm.clause}${moveCashier}
+     ORDER BY origin, m.created_at DESC, m.id`).all(...moveRange.params, ...branchIds, ...gfm.params,
+      ...(f.cashierId != null ? [f.cashierId] : []));
 
   const incomeTotal = income.reduce((n, r) => n + num(r.amount), 0);
   const expenseTotal = expense.reduce((n, r) => n + num(r.amount), 0);
@@ -189,6 +208,12 @@ export function cashierReport(db, args, user) {
     isRefund(r) ? 'Возврат · ' + methodRu(r) : methodRu(r), num(r.amount), ...vatOf(r), r.invoice_no || '—', cashierCell(ctx, r),
   ]);
   const refundTotal = income.reduce((n, r) => n + (isRefund(r) ? -num(r.amount) : 0), 0);
+  // REPORTS_TAX_PAY_V1 — приход по способам оплаты (возвраты — минусом, тем же
+  // правилом, что итог смены cashier.js paymentTotals): сверяется со сменой.
+  const byMethodMap = new Map();
+  for (const r of income) byMethodMap.set(r.method, (byMethodMap.get(r.method) || 0) + num(r.amount));
+  const rank = (m) => { const i = PAY_METHOD_ORDER.indexOf(m); return i < 0 ? PAY_METHOD_ORDER.length : i; };
+  const byMethod = Object.fromEntries([...byMethodMap.entries()].filter(([, v]) => v !== 0).sort((x, y) => rank(x[0]) - rank(y[0])));
   const refundCount = income.filter(isRefund).length;
 
   // Колонки «Комментарий» здесь нет намеренно: у движения кассы всего два
@@ -244,12 +269,14 @@ export function cashierReport(db, args, user) {
       // и сколько было возвратов; в income они уже вычтены.
       refunds: refundTotal,
       refund_count: refundCount,
+      by_method: byMethod,   // REPORTS_TAX_PAY_V1 — { cash: …, card: … }
     },
     income: { columns: incomeColumns, rows: incomeRows, total: incomeTotal },
     expense: { columns: expenseColumns, rows: expenseRows, total: expenseTotal },
     by_building,
     notes: [...(multiBuilding ? [CASH_MOVE_LOCAL_NOTE, NET_SCOPE_NOTE] : [CASH_MOVE_LOCAL_NOTE]),
-            ...(refundCount ? [REFUND_NOTE] : [])],
+            ...(refundCount ? [REFUND_NOTE] : []),
+            ...(f.method || f.cashierId != null || f.doctorId != null || f.group || f.patientGroup != null ? [FILTER_NOTE] : [])],
     columns, rows,
   };
 }

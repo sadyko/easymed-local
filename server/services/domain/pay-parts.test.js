@@ -75,3 +75,16 @@ test('подписи способов и проверка значения фи�
   for (const v of PAY_FILTER_VALUES) assert.equal(payMethodArgOk(v), true, v);
   assert.equal(payMethodArgOk('bitcoin'), false);
 });
+
+test('оплата в счёте без строк платежей (перенос из прежней программы) — «Способ не указан», а не долг', () => {
+  // Итог 40 000, оплачено по счёту 10 000, платежей нет.
+  assert.deepEqual(payParts(40000, [], {}, 10000).map((p) => [p.method, p.share]), [['unknown', 0.25], ['unpaid', 0.75]]);
+  assert.deepEqual(payParts(40000, [], { method: 'unpaid' }, 10000).map((p) => [p.method, p.share]), [['unpaid', 0.75]]);
+  assert.deepEqual(payParts(40000, [], { method: 'cash' }, 10000), []);
+  assert.equal(methodLabel('unknown'), 'Способ не указан');
+  // Сходится — оплачено по счёту равно платежам: ровно как без него.
+  assert.deepEqual(payParts(100000, [pay('cash', 60000)], {}, 60000), payParts(100000, [pay('cash', 60000)]));
+  // Платежей больше записанной оплаты — части платежей в доле записанной оплаты.
+  assert.deepEqual(payParts(100000, [pay('cash', 60000), pay('card', 40000)], {}, 50000).map((p) => [p.method, p.share]),
+    [['cash', 0.3], ['card', 0.2], ['unpaid', 0.5]]);
+});

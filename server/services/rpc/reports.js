@@ -1199,12 +1199,12 @@ const cashierNamesOf = (names, ids) => (ids || []).map((id) => names.get(id) || 
  * (выполнена, но не выставлена) — одна часть «Не оплачено» без кассира; при
  * фильтре по способу или кассиру её нет.
  */
-function partsOfLine(payMap, f, invoiceId, invTotal) {
+function partsOfLine(payMap, f, invoiceId, invTotal, invPaid = null) {
   if (invoiceId == null) {
     if (f.cashierId != null || (f.method != null && f.method !== UNPAID)) return [];
     return [{ method: UNPAID, share: 1, cashier_ids: [] }];
   }
-  return payParts(invTotal, payMap.get(Number(invoiceId)) || [], { method: f.method, cashierId: f.cashierId });
+  return payParts(invTotal, payMap.get(Number(invoiceId)) || [], { method: f.method, cashierId: f.cashierId }, invPaid);
 }
 // Способы оплаты счёта словами, для отчётов, где строка не делится (выплата
 // врачу считается по работе, а не по деньгам): «Наличные, Карта».
@@ -1212,9 +1212,70 @@ function methodsText(payMap, invoiceId) {
   if (invoiceId == null) return '';
   return formatMethods((payMap.get(Number(invoiceId)) || []).filter((p) => Math.abs(p.amount) > 0.004).map((p) => p.method));
 }
+/**
+ * Строки → части оплаты (REPORTS_TAX_PAY_V1): у каждой строки столько частей,
+ * сколько способов у её счёта (с фильтром — только подходящие). Денежные поля
+ * fields делятся по долям (splitMoney — части в сумме дают ровно строку);
+ * количество — только у первой части, чтобы «Итого» по нему не удваивалось.
+ * Часть несёт pay_method (код способа, 'unpaid' или null) и pay_cashier
+ * (кассиры её платежей словами).
+ */
+function splitByPayment(db, lines, f, fields, { qtyField = 'qty' } = {}) {
+  const payMap = invoicePayMap(db, lines.map((r) => r.invoice_id));
+  const names = userNames(db);
+  const out = [];
+  for (const r of lines) {
+    const parts = partsOfLine(payMap, f, r.invoice_id, r.inv_total, r.inv_paid);
+    if (!parts.length) continue;
+    const shares = parts.map((p) => p.share);
+    const split = {};
+    for (const k of fields) split[k] = splitMoney(Number(r[k]) || 0, shares);
+    parts.forEach((p, i) => {
+      const x = { ...r, pay_method: p.method, pay_cashier: cashierNamesOf(names, p.cashier_ids) };
+      for (const k of fields) x[k] = split[k][i];
+      if (qtyField && i > 0) x[qtyField] = null;
+      out.push(x);
+    });
+  }
+  return out;
+}
 const PAY_SPLIT_NOTE = '«Способ оплаты»: строка счёта, оплаченного несколькими способами, разделена на части — у каждой своя сумма (доля способа = оплачено этим способом за вычетом возвратов / итог счёта); неоплаченный остаток — частью «Не оплачено». Сумма частей по способу сходится с кассой по этим счетам; период — по дате счёта, в «Отчёте кассира» — по дате платежа.';
 const VAT_NOTE = '«Сумма без НДС», «НДС», «Сумма с НДС»: цены в программе — с НДС, налог внутри цены по ставке услуги («Налог %» в карточке услуги) или товара: НДС = сумма после скидки × ставка / 100, без НДС = с НДС − НДС. У услуги без ставки НДС = 0.';
 const FILTERED_NOTE = 'Показаны строки по выбранным фильтрам; «Итого» и выгрузка в Excel — по ним же.';
+/**
+ * Отбор СЧЕТОВ по врачу, группе услуги и группе пациента (для отчётов, где
+ * строка — счёт или платёж): счёт подходит, если пациент счёта — в группе и в
+ * счёте есть строка этого врача / этой группы. null — таких фильтров нет.
+ * Врач строки — исполнитель строки визита, у стационара — исполнитель, иначе
+ * назначивший (как LINE_DOCTOR_ID_SQL у доли врача).
+ */
+export function invoiceMatcher(db, invoiceIds, f) {
+  if (f.doctorId == null && !f.group && f.patientGroup == null) return null;
+  const ids = [...new Set((invoiceIds || []).filter((x) => x != null).map(Number))];
+  if (!ids.length) return () => false;
+  const json = JSON.stringify(ids);
+  const inGroup = patientGroupOf(db, f);
+  const patientOf = new Map(db.prepare('SELECT id, patient_id FROM invoices WHERE id IN (SELECT value FROM json_each(?))')
+    .all(json).map((r) => [Number(r.id), r.patient_id]));
+  let byLines = null;
+  if (f.doctorId != null || f.group) {
+    const items = db.prepare(`
+      SELECT ii.invoice_id, ii.service_id, s.type AS service_group, s.is_lab AS service_is_lab,
+             COALESCE(s.name, ii.description) AS service,
+             COALESCE((SELECT vs.doctor_id FROM visit_services vs WHERE vs.invoice_item_id = ii.id AND vs.doctor_id IS NOT NULL ORDER BY vs.id LIMIT 1),
+                      (SELECT COALESCE(x.performer_id, x.doctor_id) FROM admission_services x WHERE x.invoice_item_id = ii.id ORDER BY x.id LIMIT 1)) AS doctor_id
+        FROM invoice_items ii
+        LEFT JOIN services s ON s.id = ii.service_id
+       WHERE ii.invoice_id IN (SELECT value FROM json_each(?))`).all(json);
+    const keep = lineFilter(db, { ...f, patientGroup: null });
+    byLines = new Set(items.filter(keep).map((r) => Number(r.invoice_id)));
+  }
+  return (id) => {
+    const n = Number(id);
+    if (inGroup && !inGroup(patientOf.get(n))) return false;
+    return !byLines || byLines.has(n);
+  };
+}
 
 function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
   const { from, to } = resolveRange(db, args);
@@ -2523,16 +2584,20 @@ function hasUnattributed(ctx, rows) {
 }
 
 function totalRevenueReport(db, args, ctx) {
-  const src = itemRowsQuery(db, args, ctx);
+  const f = reportFilters(args);   // REPORTS_TAX_PAY_V1
+  const lines = itemRowsQuery(db, args, ctx);
+  // REPORTS_TAX_PAY_V1 — строка счёта, оплаченного несколькими способами, —
+  // строкой на способ, со своей долей денег (domain/pay-parts.js).
+  const src = splitByPayment(db, lines, f, ['amount', 'discount', 'tax', 'doctor_fee']);
   return {
     // REPORTS_TAX_PAY_V1 — «Сумма без НДС / НДС / Сумма с НДС» сразу за налогом:
     // те же числа, что «После скидки» и «Налог», названные так, как их читает
     // бухгалтер, — одинаково во всех отчётах.
     columns: [BUILDING_COL, 'Дата', '№ счёта', 'Пациент', 'МРН', 'Услуга', 'Кол-во', 'Цена', 'Сумма',
               'Скидка', 'После скидки', 'Налог %', 'Налог', 'в т.ч. НДС (товары)', ...VAT_COLUMNS, 'Врач', 'Ставка врача', 'Фикс врача', 'Доля врача',
-              'Филиал', 'Регистратор', 'Реферал', 'Статус'],
+              'Филиал', 'Регистратор', 'Реферал', 'Статус', PAY_COLUMN, CASHIER_COLUMN],
     rows: src.map((r) => {
-      const after = r.amount - r.discount;
+      const after = round2(r.amount - r.discount);
       // DOCTOR_FIX_RATE_V1 — the rate column states WHICH rate applied. Printing
       // a percentage for a fixed-rate line would read as "this doctor gets 0%"
       // next to a non-zero fee.
@@ -2549,14 +2614,15 @@ function totalRevenueReport(db, args, ctx) {
               ...vatCells(after, r.tax), doctorCell(ctx, r),
               fixed ? null : round2(r.doctor_pct), fixed ? round2(r.doctor_fix) : null,
               round2(r.doctor_fee), r.branch || '', r.registrar || '',
-              r.referral || '', INV_STATUS_RU[r.status] || r.status];
+              r.referral || '', INV_STATUS_RU[r.status] || r.status,
+              methodLabel(r.pay_method), r.pay_cashier || ''];
     }),
     by_building: summariseByBuilding(ctx, src, {
       total: (r) => r.amount - r.discount,
       doctor_fee: (r) => r.doctor_fee || 0,
     }),
     total_label: 'После скидки',
-    notes: [PERFORMED_NOTE, REVENUE_SHARE_NOTE, REVENUE_EXCLUDED_NOTE, GOODS_VAT_NOTE, VAT_NOTE, ...(hasUnattributed(ctx, src) ? [UNATTRIBUTED_NOTE] : [])],
+    notes: [PERFORMED_NOTE, REVENUE_SHARE_NOTE, REVENUE_EXCLUDED_NOTE, GOODS_VAT_NOTE, VAT_NOTE, PAY_SPLIT_NOTE, ...(hasUnattributed(ctx, src) ? [UNATTRIBUTED_NOTE] : [])],
     row_doctor_ids: src.map((r) => r.doctor_id ?? null),   // REPORTS_AUDIT_FIX_V1 — маска долей
   };
 }
@@ -3145,11 +3211,12 @@ function referralsReport(db, args, ctx) {
 function referralsDetailReport(db, args, ctx) {
   const lines = referralReportLines(db, args, ctx);   // INPATIENT_BONUS_V1 — и стационар; V3120_FIX — закрытые месяцы
   const taxOf = referralTaxer(db);   // REPORTS_TAX_PAY_V1
+  const payMap = invoicePayMap(db, lines.map((r) => r.invoice_id));   // REPORTS_TAX_PAY_V1 — способы оплаты счёта
   return {
-    columns: [BUILDING_COL, 'Дата', '№ счёта', 'Статус', 'Номер', 'Источник', 'Вид', 'Где', 'Пациент', 'МРН',
+    columns: [BUILDING_COL, 'Дата', '№ счёта', 'Статус', PAY_COLUMN, 'Номер', 'Источник', 'Вид', 'Где', 'Пациент', 'МРН',
               '№ госпитализации', 'Услуга', 'Кол-во', 'Сумма после скидки', ...VAT_COLUMNS, 'Ставка', 'Вознаграждение'],
     rows: lines.map((r) => [ctx.label(r.origin), r.date, r.invoice || '', INV_STATUS_RU[r.status] || r.status,
-      r.referral_code || '', r.referral, REFERRER_KIND_RU[r.internal ? 'internal' : 'external'], WHERE_RU[r.where],
+      r.where === 'adj' ? '' : methodsText(payMap, r.invoice_id), r.referral_code || '', r.referral, REFERRER_KIND_RU[r.internal ? 'internal' : 'external'], WHERE_RU[r.where],
       r.patient, r.mrn || '', r.admission_no || '', r.service || '', r.qty, round2(r.after_discount),
       ...vatCells(r.after_discount, taxOf(r)),
       r.where === 'adj' ? '' : rateText(r.rate), round2(r.reward)]),
@@ -3255,13 +3322,11 @@ function invoicesFullReport(db, args, ctx) {
            b.name AS branch, py.name AS payer,
            i.subtotal AS subtotal, i.discount_amount AS discount,
            i.total_amount AS total, i.paid_amount AS paid, i.status AS status,
-           COALESCE(${localDate('i.paid_at')}, '') AS paid_at, reg.full_name AS registrar,
-           -- INVOICE_METHOD_COLUMN_V1 — чем платили. Подзапросом, а не JOIN'ом:
-           -- у счёта может быть НЕСКОЛЬКО платежей (record_payment_split —
-           -- часть наличными, часть картой), и join размножил бы строку счёта
-           -- по числу оплат, испортив все суммы правее. Тот же приём, что в
-           -- rpc/cashier.js для списка счетов кассы.
-           (SELECT GROUP_CONCAT(DISTINCT p.method) FROM payments p WHERE p.invoice_id = i.id) AS methods
+           COALESCE(${localDate('i.paid_at')}, '') AS paid_at, reg.full_name AS registrar
+           -- INVOICE_METHOD_COLUMN_V1 — чем платили. REPORTS_TAX_PAY_V1 — платежи
+           -- счёта читаются ниже одним запросом (invoicePayMap), и счёт делится
+           -- на части по способам; JOIN платежей здесь по-прежнему размножил бы
+           -- строку счёта и испортил суммы.
       FROM invoices i
       JOIN patients pt ON pt.id = i.patient_id
       LEFT JOIN branches b ON b.id = i.branch_id
@@ -3274,32 +3339,53 @@ function invoicesFullReport(db, args, ctx) {
      ORDER BY origin, i.created_at DESC, i.id DESC
   `).all(...rangeParams(from, to), ...bf.params, ...gf.params);
   const outside = (r) => r.status === 'void' || r.status === 'refunded' || isDepositNumber(r.number);
-  const counted = rows.filter((r) => !outside(r));
-  const skip = [];
-  rows.forEach((r, i) => { if (outside(r)) skip.push(i); });
   const debtOf = (r) => (r.status === 'void' || r.status === 'refunded' ? 0 : Math.max(r.total - r.paid, 0));
   // REPORTS_TAX_PAY_V1 — НДС счёта: доля НДС его строк от «Итого».
   const vatMap = invoiceVatMap(db, rows.map((r) => r.id));
+  // REPORTS_TAX_PAY_V1 — СЧЁТ — СТРОКОЙ НА СПОСОБ ОПЛАТЫ. Счёт, оплаченный
+  // наличными и картой, — две строки, у каждой своя доля «Суммы без скидки»,
+  // «Скидки», «Итого» и НДС; у части способа «Оплачено» = её сумма, «Остаток» 0;
+  // у части «Не оплачено» — наоборот. Части одного счёта в сумме дают счёт.
+  // Бесплатный счёт — одна строка, как прежде.
+  const f = reportFilters(args);
+  const payMap = invoicePayMap(db, rows.map((r) => r.id));
+  const names = userNames(db);
+  const parts = [];
+  for (const r of rows) {
+    const ps = payParts(r.total, payMap.get(r.id) || [], { method: f.method, cashierId: f.cashierId }, r.paid);
+    if (!ps.length) continue;
+    const shares = ps.map((p) => p.share);
+    const sub = splitMoney(r.subtotal, shares);
+    const disc = splitMoney(r.discount, shares);
+    const tot = splitMoney(r.total, shares);
+    const tax = splitMoney(vatShareOf(vatMap.get(r.id), r.total), shares);
+    ps.forEach((p, k) => {
+      const unpaid = p.method === UNPAID;
+      const paid = p.method == null ? round2(r.paid) : unpaid ? 0 : tot[k];
+      const debt = p.method == null ? round2(debtOf(r)) : unpaid ? (r.status === 'void' || r.status === 'refunded' ? 0 : tot[k]) : 0;
+      parts.push({ r, origin: r.origin, total: tot[k], paid, row: [ctx.label(r.origin), r.number || '', r.created, r.patient, r.mrn || '', r.phone || '',
+        r.branch || '', r.payer || 'Пациент', sub[k], disc[k],
+        tot[k], ...vatCells(tot[k], tax[k]), paid, debt,
+        INV_STATUS_RU[r.status] || r.status,
+        methodLabel(p.method), cashierNamesOf(names, p.cashier_ids),
+        r.paid_at || '', r.registrar || ''] });
+    });
+  }
+  const skip = [];
+  parts.forEach((x, i) => { if (outside(x.r)) skip.push(i); });
+  const counted = parts.filter((x) => !outside(x.r));
   return {
     columns: [BUILDING_COL, '№ счёта', 'Дата', 'Пациент', 'МРН', 'Телефон', 'Филиал', 'Кто платит',
               'Сумма без скидки', 'Скидка', 'Итого', ...VAT_COLUMNS, 'Оплачено', 'Остаток / долг',
-              'Статус', 'Способ оплаты', 'Дата оплаты', 'Регистратор'],
-    rows: rows.map((r) => [ctx.label(r.origin), r.number || '', r.created, r.patient, r.mrn || '', r.phone || '',
-      r.branch || '', r.payer || 'Пациент', round2(r.subtotal), round2(r.discount),
-      round2(r.total), ...vatCells(r.total, vatShareOf(vatMap.get(r.id), r.total)), round2(r.paid), round2(debtOf(r)),
-      INV_STATUS_RU[r.status] || r.status,
-      // GROUP_CONCAT возвращает "cash,card" одной строкой — режем и отдаём в
-      // общий с браузером словарь, чтобы оба отчёта «Счета» называли один и тот
-      // же платёж одинаково.
-      formatMethods(String(r.methods || '').split(',')),
-      r.paid_at || '', r.registrar || '']),
+              'Статус', PAY_COLUMN, CASHIER_COLUMN, 'Дата оплаты', 'Регистратор'],
+    rows: parts.map((x) => x.row),
     by_building: summariseByBuilding(ctx, counted, {
-      total: (r) => r.total || 0,
-      paid: (r) => r.paid || 0,
+      total: (x) => x.total || 0,
+      paid: (x) => x.paid || 0,
     }),
     total_label: 'Итого по счетам',
     total_skip_rows: skip,
-    notes: [...(skip.length ? [INVOICES_TOTAL_NOTE] : []), VAT_NOTE],
+    notes: [...(skip.length ? [INVOICES_TOTAL_NOTE] : []), VAT_NOTE, PAY_SPLIT_NOTE],
   };
 }
 
@@ -3714,7 +3800,10 @@ function surgeryProfitReport(db, args, ctx) {
   // admission_services.id). qty is negative on dispense and positive on its
   // void; cost falls back to the product's rolling average.
   // SQLite lower() doesn't fold Cyrillic, so the «хирургия» match runs in JS.
-  const src = itemRowsQuery(db, args, ctx).filter(isSurgeryLine);
+  // REPORTS_TAX_PAY_V1 — операция, оплаченная несколькими способами, — строкой
+  // на способ; расходники ниже делятся по суммам частей так же, как по строкам.
+  const src = splitByPayment(db, itemRowsQuery(db, args, ctx).filter(isSurgeryLine), reportFilters(args),
+    ['amount', 'discount', 'tax', 'doctor_fee']);
   // Ключ расходников строки: госпитализация счёта, иначе его визит.
   const keyOf = (r) => (r.admission_id != null ? 'a' + r.admission_id : r.visit_id != null ? 'v' + r.visit_id : null);
 
@@ -3778,13 +3867,13 @@ function surgeryProfitReport(db, args, ctx) {
       ctx.label(r.origin), r.patient, r.service, round2(invoiced), r.tax_rate, round2(tax),
       ...vatCells(invoiced, tax),   // REPORTS_TAX_PAY_V1
       round2(surgeonFee), round2(products), round2(profit),
-      invoiced > 0 ? round2(profit / invoiced * 100) : 0] };
+      invoiced > 0 ? round2(profit / invoiced * 100) : 0, methodLabel(r.pay_method)] };
   });
-  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, SURGERY_NOTE, STOCK_LOCAL_NOTE, REVENUE_EXCLUDED_NOTE, VAT_NOTE];
+  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, SURGERY_NOTE, STOCK_LOCAL_NOTE, REVENUE_EXCLUDED_NOTE, VAT_NOTE, PAY_SPLIT_NOTE];
   if (hasUnattributed(ctx, src)) notes.push(UNATTRIBUTED_NOTE);
   return {
     columns: [BUILDING_COL, 'Пациент', 'Операция', 'Сумма по счёту', 'Ставка налога (%)', 'Налог', ...VAT_COLUMNS,
-              'Гонорар хирурга', 'Расходники (товары)', 'Прибыль клиники', 'Маржа (%)'],
+              'Гонорар хирурга', 'Расходники (товары)', 'Прибыль клиники', 'Маржа (%)', PAY_COLUMN],
     rows: computed.map((c) => c.row),
     by_building: summariseByBuilding(ctx, computed, {
       total: (c) => c.invoiced,
@@ -3964,6 +4053,7 @@ function inpatientShareReport(db, args, ctx) {
   // «Выполнено»), со счётом или без; период — по дню выполнения.
   const src = performedPayLines(db, { from, to, kinds: ['in'], args, ctx });
   const noRate = inpatientNoRateNote(src);
+  const payMap = invoicePayMap(db, src.map((r) => r.invoice_id));   // REPORTS_TAX_PAY_V1 — способы оплаты счёта
   // Итоги по врачам — примечаниями над таблицей, по убыванию начисленного:
   // строка-подытог внутри таблицы попала бы и в общее «Итого» под ней.
   const perDoctor = new Map();
@@ -3977,9 +4067,9 @@ function inpatientShareReport(db, args, ctx) {
       + pluralRu(d.lines, 'строка', 'строки', 'строк') + ', после скидки и налога '
       + moneyRu(d.net) + ' сум, начислено ' + moneyRu(d.fee) + ' сум.');
   return {
-    columns: [BUILDING_COL, 'Дата выполнения', '№ счёта', 'Оплата', 'Пациент', '№ госпитализации', 'Услуга', 'Кол-во', 'Сумма',
+    columns: [BUILDING_COL, 'Дата выполнения', '№ счёта', 'Оплата', PAY_COLUMN, 'Пациент', '№ госпитализации', 'Услуга', 'Кол-во', 'Сумма',
               'Скидка', 'Налог', 'После скидки и налога', ...VAT_COLUMNS, 'Врач', 'Чей врач', 'Ставка, %', 'Начислено врачу'],
-    rows: src.map((r) => [ctx.label(r.origin), r.date, r.invoice || '', payStateRu(r), r.patient || '', r.admission_no || '',
+    rows: src.map((r) => [ctx.label(r.origin), r.date, r.invoice || '', payStateRu(r), methodsText(payMap, r.invoice_id), r.patient || '', r.admission_no || '',
       r.service || '', r.qty, round2(r.amount), round2(r.discount), round2(r.tax), round2(r.net),
       ...vatCells((r.amount || 0) - (r.discount || 0), r.tax || 0),   // REPORTS_TAX_PAY_V1
       r.doctor || '—', INPATIENT_ROLE_RU[r.doctor_role],
@@ -4402,6 +4492,9 @@ function doctorLinesReport(db, args, ctx) {
   const doctorId = doctorFilterArg(args);
   const lines = doctorLines(db, args, ctx, doctorId);
   const extra = doctorExtraLines(db, args, ctx, doctorId);
+  // REPORTS_TAX_PAY_V1 — способы оплаты счёта строки словами: доля врача
+  // считается по выполненной работе, а не по деньгам, поэтому строка не делится.
+  const payMap = invoicePayMap(db, lines.map((r) => r.invoice_id));
   const list = [...lines, ...extra].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
     || ruCompare(a.doctor, b.doctor)
@@ -4410,16 +4503,16 @@ function doctorLinesReport(db, args, ctx) {
     || (Number(a.line_id) || 0) - (Number(b.line_id) || 0));
   return {
     columns: [BUILDING_COL, 'Дата', 'Врач', 'Пациент', 'Карта', 'Услуга', 'Где', 'Кол-во',
-              'Сумма после скидки', ...VAT_COLUMNS, '№ счёта', 'Статус счёта', 'Оплачено (доля оплаты счёта)', 'Ставка', 'Доля врача'],
+              'Сумма после скидки', ...VAT_COLUMNS, '№ счёта', 'Статус счёта', 'Оплачено (доля оплаты счёта)', PAY_COLUMN, 'Ставка', 'Доля врача'],
     rows: list.map((r) => (r.extra
       ? [ctx.label(r.origin), r.date || '', doctorCell(ctx, r) || '—', r.patient || '', r.mrn || '',
         r.service || '—', EXTRA_WHERE_RU[r.extra], r.extra === 'adj' ? 0 : Number(r.qty) || 1,
-        0, 0, 0, 0, r.invoice || '', r.extra === 'adj' ? '' : (INV_STATUS_RU[r.status] || r.status || ''), 0,
+        0, 0, 0, 0, r.invoice || '', r.extra === 'adj' ? '' : (INV_STATUS_RU[r.status] || r.status || ''), 0, '',
         r.extra === 'adj' ? '—' : rateText(r.rate), round2(r.doctor_fee || 0)]
       : [ctx.label(r.origin), r.date || '', doctorCell(ctx, r) || '—', r.patient || '', r.mrn || '',
         r.service || '—', WHERE_RU[r.kind === 'in' ? 'in' : 'out'], Number(r.qty) || 1,
         round2((r.amount || 0) - (r.discount || 0)), ...vatCells((r.amount || 0) - (r.discount || 0), r.tax || 0),   // REPORTS_TAX_PAY_V1
-        r.invoice || '', payStateRu(r), round2(linePaid(r)),
+        r.invoice || '', payStateRu(r), round2(linePaid(r)), methodsText(payMap, r.invoice_id),
         payRateCell(r), round2(r.doctor_fee || 0)])),
     by_building: summariseByBuilding(ctx, list, {
       total: (r) => (r.amount || 0) - (r.discount || 0),

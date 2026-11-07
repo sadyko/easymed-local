@@ -120,3 +120,96 @@ test('НДС: «Отчёт кассира» — НДС платежа в дол�
   assert.equal(own.kpis.revenue_net, 248560);
   db.close();
 });
+
+// ─── СПОСОБ ОПЛАТЫ ───────────────────────────────────────────────────────────
+
+const byInv = (rows, no) => rows.filter((o) => o['№ счёта'] === no);
+
+test('способ оплаты: «Общая выручка» — смешанная оплата 60 000 + 40 000 — две строки, каждая со своей суммой и кассиром', () => {
+  const { db } = seed();
+  const r = run(db, 'total_revenue');
+  assert.ok(r.columns.includes('Способ оплаты') && r.columns.includes('Кассир'));
+  const rows = objects(r);
+  const i1 = byInv(rows, 'INV-1');
+  assert.deepEqual(i1.map((o) => [o['Способ оплаты'], o['Сумма с НДС'], o['Кассир']]),
+    [['Наличные', 60000, 'Кассир А'], ['Карта', 40000, 'Кассир Б']]);
+  // Количество — у первой части: «Итого» по количеству не удваивается.
+  assert.deepEqual(i1.map((o) => o['Кол-во']), [1, null]);
+  // Доля врача разделена в той же доле и в сумме не изменилась (10 % от 100 000).
+  assert.equal(i1.reduce((n, o) => n + o['Доля врача'], 0), 10000);
+  assert.deepEqual(byInv(rows, 'INV-2').map((o) => [o['Способ оплаты'], o['Сумма с НДС'], o['НДС']]), [['Перевод', 112000, 13440]]);
+  assert.deepEqual(byInv(rows, 'INV-3').map((o) => [o['Способ оплаты'], o['Сумма с НДС'], o['Кассир']]), [['Не оплачено', 50000, '']]);
+  // Деление не меняет итогов.
+  assert.equal(sum(r, 'Сумма с НДС'), 262000);
+  assert.equal(sum(r, 'Сумма'), 262000);
+  assert.equal(sum(r, 'Кол-во'), 3);
+  assert.ok(r.notes.some((n) => n.startsWith('«Способ оплаты»')), 'нет примечания о делении');
+  db.close();
+});
+
+test('способ оплаты: «Счета» — строка на способ; «Оплачено» и «Остаток» по частям, итог счёта сходится', () => {
+  const { db } = seed();
+  const rows = objects(run(db, 'invoices_full'));
+  const i1 = byInv(rows, 'INV-1');
+  assert.deepEqual(i1.map((o) => [o['Способ оплаты'], o['Итого'], o['Оплачено'], o['Остаток / долг'], o['Кассир']]),
+    [['Наличные', 60000, 60000, 0, 'Кассир А'], ['Карта', 40000, 40000, 0, 'Кассир Б']]);
+  assert.deepEqual(byInv(rows, 'INV-3').map((o) => [o['Способ оплаты'], o['Итого'], o['Оплачено'], o['Остаток / долг']]),
+    [['Не оплачено', 50000, 0, 50000]]);
+  db.close();
+});
+
+test('способ оплаты: частично оплаченный счёт — часть способа и часть «Не оплачено»', () => {
+  const { db } = seed();
+  db.prepare("UPDATE invoices SET paid_amount = 20000, status = 'partial' WHERE invoice_number = 'INV-3'").run();
+  db.prepare("INSERT INTO payments (invoice_id, amount, method, cashier_id, paid_at) SELECT id, 20000, 'card', 6, ? FROM invoices WHERE invoice_number = 'INV-3'").run(AT);
+  const rows = objects(run(db, 'total_revenue'));
+  assert.deepEqual(byInv(rows, 'INV-3').map((o) => [o['Способ оплаты'], o['Сумма с НДС']]), [['Карта', 20000], ['Не оплачено', 30000]]);
+  const inv = objects(run(db, 'invoices_full'));
+  assert.deepEqual(byInv(inv, 'INV-3').map((o) => [o['Способ оплаты'], o['Итого'], o['Оплачено'], o['Остаток / долг']]),
+    [['Карта', 20000, 20000, 0], ['Не оплачено', 30000, 0, 30000]]);
+  db.close();
+});
+
+test('способ оплаты: «Рентабельность операций» — операция, оплаченная двумя способами, двумя строками', () => {
+  const { db } = seed();
+  db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (3, 'Аппендэктомия', 1000000, 0, 'other')").run();
+  const v = db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (2, 3, ?, 'arrived')").run(AT).lastInsertRowid;
+  const inv = db.prepare(`INSERT INTO invoices (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
+                          VALUES ('INV-4', ?, 2, 1000000, 0, 1000000, 1000000, 'paid', ?)`).run(v, AT).lastInsertRowid;
+  db.prepare("INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total) VALUES (?, 3, 'Аппендэктомия', 1, 1000000, 1000000)").run(inv);
+  db.prepare("INSERT INTO payments (invoice_id, amount, method, cashier_id, paid_at) VALUES (?, 700000, 'cash', 5, ?), (?, 300000, 'acquiring', 5, ?)").run(inv, AT, inv, AT);
+  const rows = objects(run(db, 'surgery_profit'));
+  assert.deepEqual(rows.map((o) => [o['Способ оплаты'], o['Сумма по счёту']]), [['Наличные', 700000], ['Эквайринг', 300000]]);
+  db.close();
+});
+
+test('способ оплаты: где строка не делится (выплата врачу, стационар, рефералы, реестр) — способы счёта словами', () => {
+  const { db } = seed();
+  const dl = objects(run(db, 'doctor_lines'));
+  assert.equal(dl.find((o) => o['№ счёта'] === 'INV-1')['Способ оплаты'], 'Наличные, Карта');
+  assert.equal(dl.find((o) => o['№ счёта'] === 'INV-3')['Способ оплаты'], '');
+  for (const kind of ['inpatient_share', 'referrals_detail']) {
+    assert.ok(run(db, kind).columns.includes('Способ оплаты'), kind + ': нет «Способа оплаты»');
+  }
+  db.close();
+});
+
+test('«Отчёт кассира»: разрез по способам совпадает с итогом смены кассира', () => {
+  const { db } = seed();
+  // Смена кассира А: его платежи в ней.
+  const sh = db.prepare("INSERT INTO cash_shifts (cashier_id, status, opened_at) VALUES (5, 'open', ?)").run(AT).lastInsertRowid;
+  db.prepare('UPDATE payments SET shift_id = ? WHERE cashier_id = 5').run(sh);
+  const shift = getRpc('cash_shift_summary')(db, {}, { id: 5, role: 'cashier', extra_roles: [] });
+  const cr = getRpc('cashier_report')(db, { from: FROM, to: TO, cashier_id: 5 }, ADMIN);
+  assert.equal(cr.kpi.by_method.cash, shift.totals.cash);
+  assert.equal(cr.kpi.by_method.transfer, shift.totals.transfer);
+  assert.equal(cr.kpi.income, shift.totals.total);
+  // Без фильтра — вся касса периода по способам.
+  const all = getRpc('cashier_report')(db, { from: FROM, to: TO }, ADMIN);
+  assert.deepEqual(all.kpi.by_method, { cash: 60000, card: 40000, transfer: 112000 });
+  // И «Общая выручка» по способам — те же деньги (все счета оплачены в периоде).
+  const rev = objects(run(db, 'total_revenue'));
+  const byM = (m) => rev.filter((o) => o['Способ оплаты'] === m).reduce((n, o) => n + o['Сумма с НДС'], 0);
+  assert.deepEqual([byM('Наличные'), byM('Карта'), byM('Перевод')], [60000, 40000, 112000]);
+  db.close();
+});

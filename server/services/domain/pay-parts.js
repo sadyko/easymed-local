@@ -39,6 +39,8 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 // Порядок способов в отчёте — словарь кассы, «Не оплачено» последним.
 export const PAY_METHOD_ORDER = Object.keys(METHOD_RU);
 export const UNPAID = 'unpaid';
+// Оплачено, но способ не записан (оплата есть в счёте, строк платежей нет).
+export const UNKNOWN = 'unknown';
 // Значения фильтра «Способ оплаты» (пусто — все).
 export const PAY_FILTER_VALUES = [...PAY_METHOD_ORDER, UNPAID];
 
@@ -52,6 +54,7 @@ export function payMethodArgOk(v) {
 export function methodLabel(method) {
   if (method == null || method === '') return '—';
   if (method === UNPAID) return 'Не оплачено';
+  if (method === UNKNOWN) return 'Способ не указан';
   return METHOD_RU[method] || String(method);
 }
 
@@ -62,7 +65,7 @@ export function methodLabel(method) {
  * @param {{method?:string|null, cashierId?:number|null}} filter
  * @returns {Array<{method:string|null, share:number, cashier_ids:number[]}>}
  */
-export function payParts(total, pays, filter = {}) {
+export function payParts(total, pays, filter = {}, paidAmount = null) {
   const T = Number(total) || 0;
   const fm = filter && filter.method ? String(filter.method) : null;
   const fc = filter && filter.cashierId != null ? Number(filter.cashierId) : null;
@@ -72,10 +75,17 @@ export function payParts(total, pays, filter = {}) {
   const list = Array.isArray(pays) ? pays : [];
   let paidAll = 0;
   for (const p of list) paidAll += Number(p.amount) || 0;
-  // Переплата (оплачено больше итога) — части делятся в той же доле, и их
-  // сумма остаётся равной строке, а не больше неё.
-  const scale = paidAll > T ? T / paidAll : 1;
-  const unpaidShare = paidAll < T ? (T - paidAll) / T : 0;
+  // ОПЛАЧЕНО — по счёту (paidAmount = invoices.paid_amount), если его дали: у
+  // счетов, перенесённых из прежней программы, сумма оплаты есть, а строк
+  // платежей нет — такой счёт не должен читаться долгом. Оплаченное, чей
+  // способ не записан, — частью «Способ не указан» (UNKNOWN). Без
+  // paidAmount — сумма платежей. Переплата (оплачено больше итога) — части
+  // делятся в той же доле, и их сумма остаётся равной строке, а не больше неё.
+  const paidRaw = paidAmount != null && Number.isFinite(Number(paidAmount)) ? Number(paidAmount) : paidAll;
+  const paid = Math.min(Math.max(paidRaw, 0), T);
+  const scale = paidAll > paid && paidAll > 0 ? paid / paidAll : 1;
+  const unknownShare = paidAll < paid ? (paid - Math.max(paidAll, 0)) / T : 0;
+  const unpaidShare = paid < T ? (T - paid) / T : 0;
 
   if (fm === UNPAID) {
     return fc == null && unpaidShare > 1e-9 ? [{ method: UNPAID, share: unpaidShare, cashier_ids: [] }] : [];
@@ -95,6 +105,7 @@ export function payParts(total, pays, filter = {}) {
     .filter(([, v]) => Math.abs(v.sum) > 0.004)
     .sort((a, b) => rank(a[0]) - rank(b[0]))
     .map(([m, v]) => ({ method: m, share: (v.sum * scale) / T, cashier_ids: [...v.cashiers].sort((x, y) => x - y) }));
+  if (!filtered && unknownShare > 1e-9) parts.push({ method: UNKNOWN, share: unknownShare, cashier_ids: [] });
   if (!filtered && unpaidShare > 1e-9) parts.push({ method: UNPAID, share: unpaidShare, cashier_ids: [] });
   // Округление долей до 12 знаков: 0,6 должно читаться как 0,6, а не
   // 0,6000000000000001 — доля печатается в тестах и в разрезах.
