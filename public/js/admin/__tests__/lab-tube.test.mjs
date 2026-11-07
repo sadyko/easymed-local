@@ -310,6 +310,7 @@ test('ревью M-3: моча и другой материал на одном 
     assert.equal(d.code, '90000101');
     assert.equal(d.copies, 1, 'ОАК (BC-780) — номер дня');
     assert.deepEqual(d.own.map((o) => [o.code, o.why, o.rowIds]), [['00000101', 'material', [101]], ['00000103', 'material', [103]]]);
+    assert.deepEqual(d.labelTests, ['ОАК'], 'на этикетке дня — только анализы пробирок с номером дня');
     // Материал не указан — тоже «не моча»: строка без материала и моча на одном приборе — разделяются.
     const [n] = dayLabels([line(104, 44, NOMAT), line(103, 43, URINE_M)], { deviceByService: devices, today: TODAY });
     assert.deepEqual([n.copies, n.own.map((o) => o.code)], [0, ['00000103', '00000104']]);

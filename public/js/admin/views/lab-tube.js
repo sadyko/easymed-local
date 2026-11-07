@@ -219,7 +219,8 @@ export function tubeGroups(rows, opts = {}) {
  *                  own:Array<{code:string, why:'repeat'|'material', tests:string[], rowIds:number[], collectedAt:string|null}>}>}
  *          по возрастанию дня; code '' — номер строки не помещается в номер дня
  *          (тогда печатаются прежние этикетки пробирок этого дня: tubes);
- *          own — пробирки со своей этикеткой строки (ревью S3, M-2), copies — без них
+ *          own — пробирки со своей этикеткой (ревью S3, M-2, M-3), copies — без них;
+ *          labelTests, labelCollectedAt — анализы и забор пробирок с номером дня
  */
 export function dayLabels(rows, opts = {}) {
     const rowById = new Map((rows || []).filter((r) => r && r.id != null).map((r) => [Number(r.id), r]));
@@ -254,6 +255,11 @@ export function dayLabels(rows, opts = {}) {
                 d.own.push({ code: t.code, why: 'material', tests: t.tests.slice(), rowIds: t.rowIds.slice(), collectedAt: t.collectedAt });
             }
         }
+        // На этикетке дня — анализы и время забора только тех пробирок, что её получают.
+        const own = new Set(d.own.flatMap((o) => o.rowIds));
+        const dayTubes = d.tubes.filter((t) => !t.rowIds.some((id) => own.has(id)));
+        d.labelTests = [...new Set(dayTubes.flatMap((t) => t.tests))];
+        d.labelCollectedAt = dayTubes.map((t) => t.collectedAt).filter(Boolean).sort()[0] || null;
     }
     return out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.lineId - b.lineId));
 }

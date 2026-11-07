@@ -1399,7 +1399,7 @@ function printDayLabels(days, patient) {
     const list = [];
     for (const d of fresh) {
         if (d.code) {
-            if (d.copies > 0) list.push({ ...who, code: d.code, copies: d.copies, dateStr: tubeLabelStamp(d.collectedAt), tests: d.tests.join(', ') });
+            if (d.copies > 0) list.push({ ...who, code: d.code, copies: d.copies, dateStr: tubeLabelStamp(d.labelCollectedAt || d.collectedAt), tests: (d.labelTests || d.tests).join(', ') });
             for (const o of d.own || []) list.push({ ...who, code: o.code, dateStr: tubeLabelStamp(o.collectedAt), tests: o.tests.join(', ') });   // ревью S3, M-2
         } else {
             for (const t of d.tubes) list.push({ ...who, code: t.code, dateStr: tubeLabelStamp(t.collectedAt), tests: t.tests.join(', ') });
