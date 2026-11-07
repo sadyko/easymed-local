@@ -253,4 +253,25 @@ test('«Без скидки» у группы со ставками — полн
   assert.deepEqual(money().map((m) => [m.discount_amount, m.total_amount]), [[0, 140000]]);
 });
 
+// Ревью S5 L-3 — строка под выбором скидки называет группу со ставками «по услугам», а не
+// только процент по умолчанию; группа с 0 % по умолчанию и ставками — тоже со строкой.
+test('ревью S5 L-3: строка группы в мастере — «по услугам (по умолчанию 20%)»; 0 % со ставками — тоже видна', async () => {
+  seed({ todayOff: false, from: '00:00', to: '23:59' });
+  staffPatient();
+  await openWizard([21, 22]);
+  const note = byAttr(overlay(), 'data-category-note');
+  assert.ok(note, 'нет строки группы');
+  assert.equal(textOf(note).trim(), 'Скидка группы «Сотрудники» — по услугам (по умолчанию 20%) подставлена; можно изменить.');
+  seed({ todayOff: false, from: '00:00', to: '23:59' });
+  staffPatient({ s: { 21: 100 } }, 0);
+  await openWizard([21, 22]);
+  const note0 = byAttr(overlay(), 'data-category-note');
+  assert.ok(note0, 'группа 0 % со ставками — без строки группы');
+  assert.equal(textOf(note0).trim(), 'Скидка группы «Сотрудники» — по услугам (по умолчанию 0%) подставлена; можно изменить.');
+  seed({ todayOff: false, from: '00:00', to: '23:59' });
+  vipPatient(10);
+  await openWizard([21, 22]);
+  assert.equal(textOf(byAttr(overlay(), 'data-category-note')).trim(), 'Скидка группы «VIP» — 10% подставлена; можно изменить.', 'без ставок — как прежде');
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });

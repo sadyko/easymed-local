@@ -425,3 +425,20 @@ test('LAST_VISIT_TRUE_V1: будущая запись, отменённый ви
   assert.equal(Date.parse(out.next_visit_date), Date.parse('2099-03-01T09:00:00Z'));
   db.close();
 });
+
+// Ревью S5 L-3 — шапка карты знает, что у группы пациента ставки по услугам (rated):
+// ярлык говорит «по услугам», а не только процент по умолчанию. Сами ставки — не отдаются.
+test('ревью S5 L-3: карта пациента — category.rated у группы со ставками; без ставок — false', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  try {
+    db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (1,'adm','x','Админ','admin')").run();
+    const rated = db.prepare("INSERT INTO patient_categories (name, discount_percent, active, discount_rates) VALUES ('Сотрудники', 0, 1, '{\"g\":{\"consultation\":100}}')").run().lastInsertRowid;
+    const plain = db.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('VIP', 10, 1)").run().lastInsertRowid;
+    const p1 = db.prepare("INSERT INTO patients (full_name, category_id) VALUES ('А', ?)").run(rated).lastInsertRowid;
+    const p2 = db.prepare("INSERT INTO patients (full_name, category_id) VALUES ('Б', ?)").run(plain).lastInsertRowid;
+    const admin = { id: 1, role: 'admin' };
+    assert.deepEqual(patientCard(db, { patient_id: p1 }, admin).category, { id: Number(rated), name: 'Сотрудники', discount_percent: 0, active: true, rated: true });
+    assert.deepEqual(patientCard(db, { patient_id: p2 }, admin).category, { id: Number(plain), name: 'VIP', discount_percent: 10, active: true, rated: false });
+  } finally { db.close(); }
+});

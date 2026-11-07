@@ -3148,8 +3148,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 discLabelEl, modesEl, discInp),
             // CATEGORY_DISCOUNT_V1 — откуда взялся процент: скидка группы пациента.
             // REFERRAL_BILL_V1 — врачу: её даст сам счёт, менять нечего.
-            wiz.categoryPct > 0 ? h('div', { class: 'muted', 'data-category-note': '', style: { fontSize: '12.5px', marginTop: doctorBill ? '0' : '-4px' } },
-                doctorBill
+            // Ревью S5 L-3 — группа со ставками: «по услугам (по умолчанию N%)», и при 0 % по умолчанию.
+            wiz.categoryPct > 0 || wiz.categoryRates ? h('div', { class: 'muted', 'data-category-note': '', style: { fontSize: '12.5px', marginTop: doctorBill ? '0' : '-4px' } },
+                wiz.categoryRates
+                    ? (doctorBill
+                        ? trf('Скидка группы «{name}» — по услугам (по умолчанию {pct}%): применится в счёте сама.', { name: wiz.categoryName, pct: wiz.categoryPct })
+                        : trf('Скидка группы «{name}» — по услугам (по умолчанию {pct}%) подставлена; можно изменить.', { name: wiz.categoryName, pct: wiz.categoryPct }))
+                    : doctorBill
                     ? trf('Скидка группы «{name}» — {pct}%: применится в счёте сама.', { name: wiz.categoryName, pct: wiz.categoryPct })
                     : trf('Скидка группы «{name}» — {pct}% подставлена; можно изменить.', { name: wiz.categoryName, pct: wiz.categoryPct })) : null,
             doctorBill || !choices.length ? null : promoTick,   // REFERRAL_BILL_V1 · DISCOUNT_V2 — только карты

@@ -607,18 +607,25 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     // сразу называет скидку: она влияет на КАЖДЫЙ счёт этого
                     // пациента, и узнавать о ней в момент оплаты поздно. Без
                     // скидки — просто ярлык группы, без цифры, которой нет.
+                    // Ревью S5 L-3 — группа со ставками по услугам (rated, мигр. 274) — «по
+                    // услугам» у ярлыка: процент по умолчанию — не вся скидка (Консультации
+                    // 100 %), а при 0 % по умолчанию скидка всё равно есть.
                     category ? h('span', {
-                        class: 'pc-cat' + (category.discount_percent > 0 ? ' has-discount' : '')
+                        class: 'pc-cat' + (category.discount_percent > 0 || category.rated ? ' has-discount' : '')
                             + (category.active ? '' : ' is-off'),
                         title: category.active
-                            ? (category.discount_percent > 0
+                            ? (category.rated
+                                ? tr('Скидка этой группы — по услугам: своя ставка у групп, категорий или отдельных услуг; применяется к счетам автоматически')
+                                : category.discount_percent > 0
                                 ? tr('Скидка этой группы применяется к счетам автоматически')
                                 : tr('У этой группы нет скидки'))
                             : tr('Категория снята с учёта — скидка по ней больше не действует'),
                     },
                         Icon('ID', { size: 11 }), ' ', category.name,
-                        category.discount_percent > 0 && category.active
-                            ? h('b', { class: 'pc-cat-pct' }, ' −' + category.discount_percent + '%')
+                        category.active && (category.discount_percent > 0 || category.rated)
+                            ? h('b', { class: 'pc-cat-pct' }, ' '
+                                + (category.discount_percent > 0 ? '−' + category.discount_percent + '%' : '')
+                                + (category.rated ? (category.discount_percent > 0 ? ', ' : '') + tr('по услугам') : ''))
                             : null) : null,
                 ),
                 demo,

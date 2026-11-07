@@ -33,6 +33,7 @@ import {
 import { canRead, canWrite, readableColumns, writableColumns } from '../../db/schema-registry.js';
 import { RpcError } from './crm-config.js';
 import { telegramPatientStatus } from './telegram.js';   // TELEGRAM_PATIENT_BADGE_V1
+import { hasRates } from '../../../public/js/admin/discount-rates.js';   // ревью S5 L-3 — группа со ставками
 import { patientVisitSummary } from '../domain/visit-summary.js';   // LAST_VISIT_TRUE_V1
 // PATIENT_FILE_ATTACH_V1
 import fs from 'node:fs';
@@ -213,11 +214,13 @@ export function patientCard(db, args, user) {
   }
 
   if (seeDetails && full.category_id != null) {
-    const c = db.prepare('SELECT id, name, discount_percent, active FROM patient_categories WHERE id = ?')
+    const c = db.prepare('SELECT id, name, discount_percent, active, discount_rates FROM patient_categories WHERE id = ?')
       .get(full.category_id);
     // Снятая с учёта категория показывается, но помечена: пациент в ней
     // числится, а скидки уже не получает — и это надо видеть, а не гадать.
-    if (c) out.category = { id: c.id, name: c.name, discount_percent: Number(c.discount_percent) || 0, active: !!c.active };
+    // Ревью S5 L-3 — rated: у группы ставки по услугам (мигр. 274) — шапка говорит «по
+    // услугам»; сами ставки карта не получает.
+    if (c) out.category = { id: c.id, name: c.name, discount_percent: Number(c.discount_percent) || 0, active: !!c.active, rated: hasRates(c.discount_rates) };
   }
 
   if (seeDetails && full.payer_id != null && canRead('payers', roles)) {
