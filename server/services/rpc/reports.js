@@ -1175,11 +1175,16 @@ export function invoiceVatMap(db, invoiceIds) {
   const ids = [...new Set((invoiceIds || []).filter((x) => x != null).map(Number))];
   const out = new Map();
   if (!ids.length) return out;
-  for (const r of db.prepare(`SELECT ii.invoice_id AS id,
+  // V3120_PERF — те же соединения денег, что у отчётов (fastMoneySql/moneyJoins):
+  // свои скидки счёта и ставка услуги — колонками, а не подзапросом на строку.
+  const json = JSON.stringify(ids);
+  const sql = fastMoneySql(`SELECT ii.invoice_id AS id,
                                      SUM(${ITEM_AFTER_DISCOUNT_SQL}) AS gross, SUM(${ITEM_TAX_SQL}) AS tax
-                                FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
+                                FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id${moneyJoins('i.id', 'SELECT value FROM json_each(?)')}
                                WHERE ii.invoice_id IN (SELECT value FROM json_each(?))
-                               GROUP BY ii.invoice_id`).all(JSON.stringify(ids))) {
+                               GROUP BY ii.invoice_id`);
+  const n = (sql.match(/json_each\(\?\)/g) || []).length;
+  for (const r of db.prepare(sql).all(...Array(n).fill(json))) {
     out.set(r.id, { gross: Number(r.gross) || 0, tax: Number(r.tax) || 0 });
   }
   return out;

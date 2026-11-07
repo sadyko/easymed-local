@@ -306,3 +306,16 @@ test('списки фильтров (report_choices): кассиры и груп
     (e) => e.status === 403);
   db.close();
 });
+
+test('V3120_PERF: прежний SQL (без выноса подзапросов) даёт те же строки с НДС и частями оплаты', async () => {
+  const { __setReportsPushDown } = await import('./reports.js');
+  const { db } = seed();
+  const kinds = [['total_revenue', {}], ['invoices_full', {}], ['by_services', { pay_method: 'card' }], ['invoices_full', { pay_method: 'cash' }]];
+  const now = kinds.map(([k, x]) => run(db, k, x).rows);
+  __setReportsPushDown(false);
+  try {
+    kinds.forEach(([k, x], i) => assert.deepEqual(run(db, k, x).rows, now[i], k));
+    assert.deepEqual(getRpc('cashier_report')(db, { from: FROM, to: TO }, ADMIN).income.rows.length, 3);
+  } finally { __setReportsPushDown(true); }
+  db.close();
+});
