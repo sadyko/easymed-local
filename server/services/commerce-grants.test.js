@@ -196,3 +196,37 @@ test('M1: ни одна роль после обновления не получ
     assert.deepEqual(diffs.slice(0, 20), [], `расхождений с 3.21.1: ${diffs.length}`);
   } finally { db.close(); }
 });
+
+// РЕВЬЮ 3.22.0 m1 (проба P3) — ЗАЩИТА «РОЛЕЙ» И СВОИ PUSH И ССЫЛКИ ПРАВЯЩЕГО.
+// Заведующая — не администратор, своя роль на основе регистратуры с «Роли»,
+// «Сотрудники» и «Telegram-бот» на «Изменение» — рассылает и правит ссылки
+// (как вчера, по боту). Защита «Ролей» считала её Push и ссылки «Нет»: у строк
+// commerce_* нет старого ключа, и вывод из галочек давал «Нет». В 3.21.1 она
+// назначала сотруднику роль «SMM» с тем же ботом — теперь получала отказ.
+test('m1: заведующая с «Telegram-бот: Изменение» выдаёт Push и ссылки и назначает роль с ботом — как в 3.21.1', async () => {
+  const { roleExceedsActor, permissionExcess } = await import('./role-guard.js');
+  const db = seed();
+  try {
+    db.prepare('INSERT INTO custom_roles (code, name, base_role, active) VALUES (?,?,?,1)').run('mgr', 'mgr', 'registrar');
+    db.prepare('INSERT INTO custom_roles (code, name, base_role, active) VALUES (?,?,?,1)').run('smm', 'smm', 'registrar');
+    const SMM = { sections: ['patients'], levels: { patients: 'editor' }, grants: { 'settings.telegram': 'edit' } };
+    const put = db.prepare('INSERT OR REPLACE INTO role_permissions (role, permissions) VALUES (?, ?)');
+    put.run('mgr', JSON.stringify({ sections: ['patients', 'settings'], levels: { patients: 'editor', settings: 'editor' },
+      grants: { settings: 'edit', 'settings.employees': 'edit', 'settings.roles': 'edit', 'settings.telegram': 'edit' } }));
+    put.run('smm', JSON.stringify(SMM));
+    const mgr = { id: 7, role: 'registrar', extra_roles: [], custom_role_code: 'mgr' };
+    assert.equal(canPush(db, mgr), true, 'стенд неверен');
+    assert.equal(canAdLinks(db, mgr, 'edit'), true, 'стенд неверен');
+    assert.equal(roleExceedsActor(db, mgr, 'smm'), null, 'назначить «SMM» (тот же бот) — как в 3.21.1');
+    assert.equal(permissionExcess(db, mgr, SMM, { ...SMM, grants: { ...SMM.grants, commerce_push: 'edit' } }), null, 'Push «Изменение» — у неё он есть');
+    assert.equal(permissionExcess(db, mgr, SMM, { ...SMM, grants: { ...SMM.grants, commerce_links: 'view' } }), null, 'ссылки «Просмотр» — у неё они есть');
+
+    // А без своего бота — отказ: выдать можно только то, что есть самой.
+    put.run('mgr', JSON.stringify({ sections: ['patients', 'settings'], levels: { patients: 'editor', settings: 'editor' },
+      grants: { settings: 'edit', 'settings.employees': 'edit', 'settings.roles': 'edit', 'settings.telegram': 'view' } }));
+    assert.equal(canPush(db, mgr), false);
+    assert.match(String(permissionExcess(db, mgr, SMM, { ...SMM, grants: { ...SMM.grants, commerce_push: 'edit' } })), /commerce_push/);
+    assert.equal(permissionExcess(db, mgr, SMM, { ...SMM, grants: { ...SMM.grants, commerce_links: 'view' } }), null, 'ссылки «Просмотр» — бот «Просмотр» их даёт');
+    assert.match(String(permissionExcess(db, mgr, SMM, { ...SMM, grants: { ...SMM.grants, commerce_links: 'edit' } })), /commerce_links/);
+  } finally { db.close(); }
+});

@@ -106,9 +106,18 @@ const minLevel = (a, b) => ((RANK[a] || 0) <= (RANK[b] || 0) ? a : b);
 
 // Ревью I3 — свой уровень по НЕНАСТРОЕННОМУ ключу: то, что рисует экран, но не
 // выше того, что дают настоящие ворота ключа (все его ворота этого уровня).
+//
+// Ревью 3.22.0 m1 — у раздела БЕЗ старого ключа (`legacy`: Push и ссылки для
+// рекламы, commerce_*) из галочек выводить нечего: grantsFromLegacy даёт ему
+// «Нет» всегда, и минимум с ним отнимал у правящего то, что ворота ему дают
+// (заведующая с «Telegram-бот: Изменение» рассылает, а выдать Push или
+// назначить роль с ботом не могла). Его уровень — уровень ворот: экран рисует
+// именно его (role_effective_grants).
+const NO_LEGACY_SECTIONS = new Set(catalogRows().filter((r) => r.kind === 'section' && !r.legacy).map((r) => r.key));
 function actorLegacy(db, actor, key) {
-  const derived = derivedLevel(db, actor, key);
   const real = fallbackLevel(db, actor, key, 'all');
+  if (real !== null && NO_LEGACY_SECTIONS.has(key)) return real;
+  const derived = derivedLevel(db, actor, key);
   return real === null ? derived : minLevel(derived, real);
 }
 function actorGrantRank(db, actor, key) {
