@@ -361,6 +361,11 @@ export function cashMove(db, args, user) {
 // (subtotal > 0), закрытые за время смены (paid_at — миг закрытия счёта на 0), которые
 // кассир смены выставил сам или закрыл своей скидкой (журнал счёта, action
 // 'discount'). Это СЧЁТ и сумма скидки — в итоги денег смены они не входят.
+// DISCOUNT_V2 (ревью S1 L-1) — и счета БЕЗ СВОЕГО КАССИРА: регистратура выставила
+// счёт группе «Сотрудники» 100 % — платежа нет, кассир его не трогал, и в отчёт
+// смены он не попадал. Такой счёт (выставил не кассир, у которого в тот миг была
+// открыта смена, и скидку кассы ему никто не давал) считается в каждой смене,
+// открытой в миг его закрытия. Счёт другого кассира в чужую смену не уходит.
 function fullDiscountOfShift(db, shift) {
   const to = shift.closed_at || db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') n").get().n;
   const r = db.prepare(`
@@ -368,7 +373,10 @@ function fullDiscountOfShift(db, shift) {
      WHERE i.total_amount = 0 AND i.subtotal > 0 AND i.discount_amount > 0 AND i.status = 'paid'
        AND i.payer_id IS NULL AND i.paid_at >= ? AND i.paid_at <= ?
        AND (i.created_by = ? OR EXISTS (SELECT 1 FROM invoice_audit_log l
-                                         WHERE l.invoice_id = i.id AND l.action = 'discount' AND l.actor_user_id = ?))`)
+                                         WHERE l.invoice_id = i.id AND l.action = 'discount' AND l.actor_user_id = ?)
+            OR (NOT EXISTS (SELECT 1 FROM invoice_audit_log l WHERE l.invoice_id = i.id AND l.action = 'discount')
+                AND NOT EXISTS (SELECT 1 FROM cash_shifts s2 WHERE s2.cashier_id = i.created_by
+                                   AND s2.opened_at <= i.paid_at AND (s2.closed_at IS NULL OR s2.closed_at >= i.paid_at))))`)
     .get(shift.opened_at, to, shift.cashier_id, shift.cashier_id);
   return { n: Number(r.n) || 0, discount: round2(Number(r.s) || 0) };
 }

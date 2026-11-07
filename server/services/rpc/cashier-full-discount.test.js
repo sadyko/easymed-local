@@ -60,3 +60,32 @@ test('скидка кассы 100 % — в отчёте смены кассир�
   const found = RPC.cashier_invoice_search(db, { invoice_id: inv.id }, cashier);
   assert.ok(JSON.stringify(found).includes(inv.invoice_number), 'поиск не находит счёт со скидкой 100 %: ' + JSON.stringify(found).slice(0, 300));
 });
+
+// DISCOUNT_V2 (ревью S1 L-1, проба G100) — счёт со скидкой 100 %, который выставила РЕГИСТРАТУРА
+// (группа «Сотрудники» 100 %), закрыт без кассира — платежа нет, кассир его не трогал. В отчёт смены
+// он не попадал: считались только счета, выставленные кассиром смены или закрытые его скидкой.
+// Теперь — и счета без своего кассира (выставил не кассир со сменой, скидку кассы никто не давал),
+// закрытые за время смены. Счёт другого кассира в чужую смену не уходит. Деньги смены — прежние.
+test('ревью S1 L-1: группа 100 % — счёт регистратуры в отчёте смены; счёт другого кассира — только в его смене', () => {
+  const db = seed();
+  db.prepare("INSERT INTO users (id, username, password_hash, role, full_name, is_active) VALUES (7,'reg','x','registrar','Регистратор',1), (8,'cash2','x','cashier','Кассир 2',1)").run();
+  const staff = Number(db.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('Сотрудники', 100, 1)").run().lastInsertRowid);
+  RPC.open_cash_shift(db, { opening_float: 0 }, cashier);
+  const cashier2 = { id: 8, role: 'cashier', full_name: 'Кассир 2' };
+  RPC.open_cash_shift(db, { opening_float: 0 }, cashier2);
+  const staffBill = (actor) => {
+    const pid = Number(db.prepare("INSERT INTO patients (full_name, category_id) VALUES ('Сотрудник', ?)").run(staff).lastInsertRowid);
+    const vid = Number(db.prepare('INSERT INTO visits (patient_id, visit_date) VALUES (?, ?)').run(pid, new Date().toISOString()).lastInsertRowid);
+    const vs = Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?, 30, 1, 100000, 100000, 'added')").run(vid).lastInsertRowid);
+    return RPC.create_invoice_for_visit(db, { visit_id: vid, visit_service_ids: [vs], discount_amount: 0 }, actor).invoice;
+  };
+  const reg = staffBill({ id: 7, role: 'registrar' });
+  assert.deepEqual([reg.total_amount, reg.status], [0, 'paid']);
+  assert.deepEqual(RPC.shift_report(db, {}, cashier).full_discount, { n: 1, discount: 100000 }, 'счёт регистратуры не в отчёте смены');
+  // Счёт, выставленный вторым кассиром, — в его смене, а не в смене первого.
+  staffBill(cashier2);
+  assert.deepEqual(RPC.shift_report(db, {}, cashier).full_discount, { n: 1, discount: 100000 }, 'чужой счёт ушёл в смену первого кассира');
+  assert.deepEqual(RPC.shift_report(db, {}, cashier2).full_discount, { n: 2, discount: 200000 });
+  // Деньги смены — прежние: платежей нет.
+  assert.equal(RPC.shift_report(db, {}, cashier).totals.total, 0);
+});
