@@ -544,6 +544,12 @@ export async function mountLabPanels(container) {
             }, s.name + (takenBy[s.id] ? '  — ' + trf('уже занята: {name}', { name: takenBy[s.id] }) : ''));
 
             for (const s of pinned) svcSel.appendChild(opt(s));
+            // Ревью lab2 L-4 (выпуск 3.22.0) — услуга панели выключена: в списке активных её
+            // нет, и выбор молча становился «не привязана» — главное здание тихо отвязывало
+            // панель, филиал получал 409 на каждое сохранение. Привязка остаётся как есть.
+            if (p.service_id && !state.services.some(s => String(s.id) === String(p.service_id))) {
+                svcSel.appendChild(h('option', { value: p.service_id, selected: String(cur) === String(p.service_id) }, tr('Привязанная услуга выключена') + ' (№ ' + p.service_id + ')'));
+            }
             if (lab.length) {
                 const g = h('optgroup', { label: 'Лабораторные услуги' });
                 for (const s of lab) g.appendChild(opt(s));

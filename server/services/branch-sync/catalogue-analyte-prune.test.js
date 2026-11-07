@@ -265,6 +265,9 @@ test('H2 (б): услугу панели главного держит своя 
     const payload = exportCatalogue(main);
     const preview = applyCatalogue(branch, payload, { dryRun: true });
     assert.ok(k === 1 ? preview.changed > 0 : preview.changed === 0, 'холостой прогон ' + k + ': ' + preview.changed);
+    // Ревью lab2 L-5 (выпуск 3.22.0) — и без изменений холостой прогон знает, что панель главного
+    // всё ещё без услуги: rpc/branch-sync.js отдаёт это экрану и на пути «изменений не было».
+    assert.equal(preview.unlinked && preview.unlinked.lab_panels, 1, 'холостой прогон ' + k + ': unlinked');
     const s = commitCatalogue(branch, payload);
     if (k === 1) {
       assert.equal(s.unlinked.lab_panels, 1);

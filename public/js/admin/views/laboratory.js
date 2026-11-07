@@ -1746,12 +1746,16 @@ async function loadPanelSlots(rows) {
         const CH = 150;
         const jobs = [];
         for (let i = 0; i < panelIds.length; i += CH) {
-            jobs.push(supabase.from('lab_panel_analytes').select('id,panel_id,name,group_label')
+            jobs.push(supabase.from('lab_panel_analytes').select('id,panel_id,name,group_label,active')   // active: ревью lab2 L-3
                 .in('panel_id', panelIds.slice(i, i + CH)).limit(100000));
         }
         const byPanel = new Map();
         for (const part of await Promise.all(jobs)) {
             for (const a of ((part && !part.error && part.data) || [])) {
+                // Ревью lab2 L-3 (выпуск 3.22.0) — считаются только активные строки панели,
+                // как у листа ввода: выключенная строка того же имени в другом разделе
+                // добавляла бланку и проверке лишний старый результат.
+                if (a.active === 0 || a.active === false) continue;
                 if (!byPanel.has(a.panel_id)) byPanel.set(a.panel_id, []);
                 byPanel.get(a.panel_id).push(a);
             }
@@ -2482,7 +2486,7 @@ async function labGroupFor(r, patient, allResults) {
     const { codeByName, local, panelList, idx } = await labPanelHints(r);
     // LAB_PANEL_DEDUP_V1 — одна строка бланка на показатель, свежая побеждает;
     // ревью M2 — по строке на каждый раздел, где панель держит это имя (U/V/C).
-    const results = latestPerParameter(allResults, analyteSlots(panelList));
+    const results = latestPerParameter(allResults, analyteSlots(panelList.filter((a) => a.active !== 0 && a.active !== false)));   // ревью lab2 L-3 — как лист ввода: только активные
     const gender = (patient.gender || '').toLowerCase();
     const age = ageYears(patient.date_of_birth);
 

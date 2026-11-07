@@ -13586,5 +13586,6 @@ export const STRINGS = {
   "Обычная — показатели": {"en":"Regular — indicators","ru":"Обычная — показатели","uz":"Oddiy — ko‘rsatkichlar"},   // LAB_MATRIX_PANEL_V1
   "Таблица (бак. посев)": {"en":"Table (bacterial culture)","ru":"Таблица (бак. посев)","uz":"Jadval (bakteriologik ekma)"},   // LAB_MATRIX_PANEL_V1
   "Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».": {"en":"Analyzers do not fill the table — grades are entered by hand in «Enter results».","ru":"Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».","uz":"Analizator jadvalni to‘ldirmaydi — darajalar «Natijalarni kiritish»da qo‘lda kiritiladi."},   // LAB_MATRIX_PANEL_V1
+  "Привязанная услуга выключена": {"en":"The linked service is switched off","ru":"Привязанная услуга выключена","uz":"Bog‘langan xizmat o‘chirilgan"},   // ревью lab2 L-4 (S3 3.22.0)
   // /S3 3.22.0
 };
