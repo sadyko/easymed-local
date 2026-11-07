@@ -13673,4 +13673,19 @@ export const STRINGS = {
   "Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».": {"en":"Analyzers do not fill the table — grades are entered by hand in «Enter results».","ru":"Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».","uz":"Analizator jadvalni to‘ldirmaydi — darajalar «Natijalarni kiritish»da qo‘lda kiritiladi."},   // LAB_MATRIX_PANEL_V1
   "Привязанная услуга выключена": {"en":"The linked service is switched off","ru":"Привязанная услуга выключена","uz":"Bog‘langan xizmat o‘chirilgan"},   // ревью lab2 L-4 (S3 3.22.0)
   // /S3 3.22.0
+  // DISCOUNT_RATES_V1 — S5 3.22.0: скидка по услугам (ставки группы, категории и услуги)
+  "Скидка группы «{name}» — по услугам (по умолчанию {pct}%)": {"en":"Group discount «{name}» — by service (default {pct}%)","ru":"Скидка группы «{name}» — по услугам (по умолчанию {pct}%)","uz":"«{name}» guruhi chegirmasi — xizmatlar bo‘yicha (odatiy {pct}%)"},   // DISCOUNT_RATES_V1
+  "Промокод «{name}» — по услугам (по умолчанию {value}%)": {"en":"Promo code «{name}» — by service (default {value}%)","ru":"Промокод «{name}» — по услугам (по умолчанию {value}%)","uz":"«{name}» promokodi — xizmatlar bo‘yicha (odatiy {value}%)"},   // DISCOUNT_RATES_V1
+  "Скидка по услугам": {"en":"Discount by service","ru":"Скидка по услугам","uz":"Xizmatlar bo‘yicha chegirma"},   // DISCOUNT_RATES_V1
+  "Скидка по услугам (пусто — процент группы)": {"en":"Discount by service (empty — the group percent)","ru":"Скидка по услугам (пусто — процент группы)","uz":"Xizmatlar bo‘yicha chegirma (bo‘sh — guruh foizi)"},   // DISCOUNT_RATES_V1
+  "Своих ставок: {n}": {"en":"Own rates: {n}","ru":"Своих ставок: {n}","uz":"Alohida stavkalar: {n}"},   // DISCOUNT_RATES_V1
+  "по умолч.": {"en":"default","ru":"по умолч.","uz":"odatiy"},   // DISCOUNT_RATES_V1
+  "По умолчанию {pct} %": {"en":"Default {pct} %","ru":"По умолчанию {pct} %","uz":"Odatiy {pct} %"},   // DISCOUNT_RATES_V1
+  "категорий со своей ставкой: {n}": {"en":"categories with their own rate: {n}","ru":"категорий со своей ставкой: {n}","uz":"alohida stavkali toifalar: {n}"},   // DISCOUNT_RATES_V1
+  "услуг со своей ставкой: {n}": {"en":"services with their own rate: {n}","ru":"услуг со своей ставкой: {n}","uz":"alohida stavkali xizmatlar: {n}"},   // DISCOUNT_RATES_V1
+  "Категории и отдельные услуги…": {"en":"Categories and single services…","ru":"Категории и отдельные услуги…","uz":"Toifalar va alohida xizmatlar…"},   // DISCOUNT_RATES_V1
+  "Своих ставок нет — скидка группы на все услуги": {"en":"No own rates — the group discount applies to every service","ru":"Своих ставок нет — скидка группы на все услуги","uz":"Alohida stavkalar yo‘q — guruh chegirmasi barcha xizmatlarga"},   // DISCOUNT_RATES_V1
+  "Своих ставок нет — один процент на все услуги скидки": {"en":"No own rates — one percent for every service of the discount","ru":"Своих ставок нет — один процент на все услуги скидки","uz":"Alohida stavkalar yo‘q — chegirmaning barcha xizmatlariga bitta foiz"},   // DISCOUNT_RATES_V1
+  "Пусто — процент скидки по умолчанию. Действует самая точная ставка: услуга, потом категория, потом группа. 0 % — без скидки, 100 % — бесплатно.": {"en":"Empty — the default discount percent. The most specific rate applies: service, then category, then group. 0 % — no discount, 100 % — free.","ru":"Пусто — процент скидки по умолчанию. Действует самая точная ставка: услуга, потом категория, потом группа. 0 % — без скидки, 100 % — бесплатно.","uz":"Bo‘sh — chegirmaning odatiy foizi. Eng aniq stavka amal qiladi: xizmat, keyin toifa, keyin guruh. 0 % — chegirmasiz, 100 % — bepul."},   // DISCOUNT_RATES_V1
+  // /S5 3.22.0
 };

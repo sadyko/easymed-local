@@ -1640,3 +1640,29 @@ test('DISCOUNT_V2: без выбора по умолчанию — скидка 
   assert.deepEqual([inv.body.discount_choice, inv.body.discount_amount], ['group', 0]);
   dlg.close();
 });
+
+// DISCOUNT_RATES_V1 (3.22.0) — группа со ставками по услугам: в выборе — «по услугам», причина
+// у итога — она же; смета считает строки своей ставкой (приём терапевта 100 % → 0); в счёт
+// уходит выбор группы, деньги считает сервер.
+test('DISCOUNT_RATES_V1: группа «Сотрудники» со ставкой приёма 100 % — «по услугам», смета 0, счёт по выбору группы', async () => {
+  reset();
+  patientRows = [{ ...KARIMOVA, category_id: 3, patient_categories: { id: 3, name: 'Сотрудники', discount_percent: 20, active: 1, discount_rates: '{"s":{"1":100}}' } }];
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  await pickKarimova(dlg);
+  await tick(40);
+  const sel = walk(dlg.card).find((n) => n.tagName === 'SELECT' && n.attrs['data-discount-choice'] !== undefined);
+  const opts = sel.children.filter((o) => o.tagName === 'OPTION').map((o) => textOf(o).trim());
+  assert.deepEqual(opts, ['Без скидки', 'Скидка группы «Сотрудники» — по услугам (по умолчанию 20%)']);
+  assert.equal(sel.value, 'group');
+  const why = walk(dlg.card).find((n) => n.attrs && n.attrs['data-discount-reason'] !== undefined);
+  assert.equal(why._t, 'Скидка группы «Сотрудники» — по услугам (по умолчанию 20%)');
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+  const inv = calls.find((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit');
+  assert.deepEqual([inv.body.discount_choice, inv.body.discount_amount], ['group', 0]);
+  dlg.close();
+});

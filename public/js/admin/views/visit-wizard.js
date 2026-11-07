@@ -39,6 +39,7 @@ import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule
 // они действуют; одно правило на оба мастера.
 import { eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining, serviceScope } from '../discount-rules.js';
 import { groupOf, discountChoiceOptions, keepChoice, choiceArgs, choiceFloorPct, choiceReason } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
+import { ratedOutcome, hasRates } from '../discount-rates.js';   // DISCOUNT_RATES_V1 — скидка по ставкам услуг, как посчитает счёт
 import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
@@ -635,7 +636,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // ---- data ----
     try {
         const [svcRes, docRes, srcRes, refCatRes, payerRes] = await Promise.all([
-            supabase.from('services').select('id, name, price, duration_minutes, requires_doctor, ' + ROUTE_SELECT).eq('active', true).order('name').limit(1000),   // ROUTE_SELECT: DIAG_ROUTE_V1 — маршрут группы «Консультации»
+            supabase.from('services').select('id, name, price, duration_minutes, requires_doctor, category_id, ' + ROUTE_SELECT).eq('active', true).order('name').limit(1000),   // ROUTE_SELECT: DIAG_ROUTE_V1 — маршрут группы «Консультации»
             // SVC_DOCTORS_V1 — назначения услуг. DIAG_ROUTE_V1 (D1) — исполнители — врачи по
             // is_doctor (не по роли: администратор-врач, главный врач) и все, кому отмечена
             // услуга (медсестра на УЗИ) — performerCandidates; прежде только role = 'doctor'.
@@ -659,16 +660,17 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // мастер: без списка скидок смета работает, просто выпадающий список пуст.
         try {
             const [dRes, pRes] = await Promise.all([
-                supabase.from('patient_discounts').select('id, name, kind, percent, amount, remaining, active, valid_from, valid_until, category_id, service_ids').eq('active', 1).order('name'),
-                supabase.from('patients').select('id, category_id, payer_id, patient_categories(id, name, discount_percent, active)').eq('id', patient.id).maybeSingle(),   // payer_id: REFERRAL_BILL_V1 — плательщик в карте
+                supabase.from('patient_discounts').select('id, name, kind, percent, amount, remaining, active, valid_from, valid_until, category_id, service_ids, discount_rates').eq('active', 1).order('name'),
+                supabase.from('patients').select('id, category_id, payer_id, patient_categories(id, name, discount_percent, active, discount_rates)').eq('id', patient.id).maybeSingle(),   // discount_rates: DISCOUNT_RATES_V1   // payer_id: REFERRAL_BILL_V1 — плательщик в карте
             ]);
             wiz.discounts = (!dRes.error && Array.isArray(dRes.data)) ? dRes.data : [];
             const cat = pRes && !pRes.error && pRes.data ? pRes.data.patient_categories : null;
             wiz.cardPayerId = pRes && !pRes.error && pRes.data ? (pRes.data.payer_id ?? null) : null;   // REFERRAL_BILL_V1 (дополнение 29.09)
             wiz.categoryId = pRes && !pRes.error && pRes.data && pRes.data.category_id != null ? Number(pRes.data.category_id) : null;
-            if (cat && cat.active !== 0 && cat.active !== false && Number(cat.discount_percent) > 0) {
+            if (cat && cat.active !== 0 && cat.active !== false && (Number(cat.discount_percent) > 0 || hasRates(cat.discount_rates))) {   // DISCOUNT_RATES_V1 — и группа со ставками при 0 %
                 wiz.categoryName = cat.name || '';
-                wiz.categoryPct = Math.min(100, Number(cat.discount_percent));
+                wiz.categoryPct = Math.min(100, Math.max(0, Number(cat.discount_percent) || 0));
+                wiz.categoryRates = hasRates(cat.discount_rates) ? cat.discount_rates : null;   // DISCOUNT_RATES_V1
                 // Подставляется, только если регистратор ещё ничего не ввёл:
                 // сервер всё равно применит скидку группы как минимум (billing.js).
                 if (!Number(wiz.discountPct) && !Number(wiz.discountAbs)) { wiz.discountMode = 'pct'; wiz.discountPct = wiz.categoryPct; wiz.discountChoice = 'group'; }   // DISCOUNT_V2 — по умолчанию скидка группы
@@ -2480,7 +2482,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const job = visibleCart().some((c) => !isCovered(c));
         if (!job) return 0;
         const cat = floorPctNow();   // DISCOUNT_V2 — пол группы сервера по выбору скидки
-        return r2(Math.min(Math.max(send, r2(room * cat / 100)), room));
+        // DISCOUNT_RATES_V1 — ставки по услугам: что даст счёт, по строкам (своя скидка «вручную» больше — без пола).
+        const rated = ratedNow(restCart().filter((c) => !isCovered(c)), send);
+        if (rated && rated.rated) return r2(Math.min(rated.off, room));
+        return r2(Math.min(Math.max(send, rated ? 0 : r2(room * cat / 100)), room));
     }
     // INVOICE_APPEND_V1 (ревью-2) — СМЕТА НА НЕСКОЛЬКО ДНЕЙ — ЭТО НЕСКОЛЬКО
     // СЧЕТОВ, И СКИДКА СЧИТАЕТСЯ ПО НИМ.
@@ -2516,11 +2521,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const vis = visibleCart();
         const rows = days.map((day) => {
             const mine = rest.filter((c) => lineDay(c) === day);
+            const rated = ratedNow(mine.filter((c) => !isCovered(c)), 0);   // DISCOUNT_RATES_V1 — пол дня по ставкам услуг
             const room = money(mine.filter((c) => !isCovered(c)));   // база сервера: строки счёта пациента без своей скидки
             return {
                 day, room,
                 pct: Math.round(money(mine) * pct / 100),
-                floor: r2(room * cat / 100),
+                floor: rated ? rated.off : r2(room * cat / 100),
+                fixed: !!rated && ratedFixed(),   // DISCOUNT_RATES_V1 — группа / промокод со ставками: счёт даёт ровно их
                 job: vis.some((c) => lineDay(c) === day && !isCovered(c)),   // счёт пациента этого дня будет
                 promoMiss: promoMissesLines(vis.filter((c) => lineDay(c) === day && !isCovered(c))),   // ревью S1 M-1 — день «Без скидки»
             };
@@ -2538,7 +2545,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         }
         let left = carry, total = 0;
         for (const r of rows) {
-            const got = r.job && !r.promoMiss ? r2(Math.min(Math.max(dayDiscountSend(r, left), r.floor), r.room)) : 0;
+            const got = r.job && !r.promoMiss ? (r.fixed ? r2(Math.min(r.floor, r.room)) : r2(Math.min(Math.max(dayDiscountSend(r, left), r.floor), r.room))) : 0;   // DISCOUNT_RATES_V1 — fixed
             left = dayDiscountLeft(r, left, got);
             total += got;
         }
@@ -2554,7 +2561,19 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     }
     // DISCOUNT_V2 — группа пациента со скидкой ({ name, pct } или null) и пол группы,
     // который сервер положит при выбранной скидке (группа и «вручную» — да).
-    function wizGroup() { return groupOf(wiz.categoryName, wiz.categoryPct); }
+    function wizGroup() { return groupOf(wiz.categoryName, wiz.categoryPct, wiz.categoryRates); }   // DISCOUNT_RATES_V1 — со ставками
+    // DISCOUNT_RATES_V1 — скидка по ставкам услуг на строки (discount-rates.js — зеркало сервера):
+    // null — ставок нет (прежний расчёт); { rated, off } — что даст счёт. Врач скидку не выбирает:
+    // сервер считает по правилу «без выбора» (ставки группы).
+    function ratedNow(lines, sent) {
+        return ratedOutcome({ key: doctorBill ? null : wiz.discountChoice, group: wizGroup(), promo: wiz.promo, sent,
+            lines: (lines || []).map((c) => ({ service: c.svc, total: cartLinePrice(c) * c.qty })) });
+    }
+    /** DISCOUNT_RATES_V1 — выбор, при котором счёт даёт ровно скидку по ставкам (присланное не важно). */
+    function ratedFixed() {
+        const k = doctorBill ? '' : String(wiz.discountChoice || '');
+        return k === 'group' || k.startsWith('promo:') || doctorBill;
+    }
     function floorPctNow() { return choiceFloorPct(wiz.discountChoice, wizGroup()); }
     // DISCOUNT_V2 (ревью S1 M-1) — ПРОМОКОД НА ЧАСТЬ УСЛУГ И СМЕТА НА НЕСКОЛЬКО ДНЕЙ. Выбор
     // скидки один на смету, а счёт — на каждый день. Счёт дня, среди строк которого (без своей
@@ -3631,7 +3650,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         // и вычитание их съедало бы ручную скидку следующих дней.
                         if (job.payer === null) {
                             const applied = iRes && Number.isFinite(Number(iRes.rest_discount))
-                                ? Number(iRes.rest_discount)
+                                ? Number(iRes.rest_discount) + (Number(iRes.rated_discount) || 0)   // DISCOUNT_RATES_V1 — и скидка по ставкам
                                 : Math.max(0, (Number(iRes && iRes.invoice && iRes.invoice.discount_amount) || 0)
                                     - ((iRes && iRes.items) || []).reduce((s, it) => s + (Number(it.discount_amount) || 0), 0));
                             if (dayRow) dayApplied += applied;   // ревью-2 — перенос считается после дня

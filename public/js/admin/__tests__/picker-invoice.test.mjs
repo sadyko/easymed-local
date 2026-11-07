@@ -975,3 +975,20 @@ test('INVOICE_APPEND_V1: калькулятор и «Счёт визита» —
   const vb = fs.readFileSync(new URL('../views/visit-bill.js', import.meta.url), 'utf8');
   assert.match(vb, /toast\(isAppended\(data\) \? invoiceAppendNote\(data\) : 'Счёт выставлен', 'ok'\);/, '«Счёт визита» молчит о дописывании');
 });
+
+// DISCOUNT_RATES_V1 (3.22.0) — калькулятор: группа со ставками по услугам. Смета = счёт:
+// МРТ — своя ставка 50 % (450 000), строка пакета — только своя скидка (20 000), к оплате 530 000.
+test('DISCOUNT_RATES_V1: калькулятор — ставка услуги группы в смете и в счёте одна (530 000)', async () => {
+  seed({ categoryPct: 20 });
+  DB.prepare('UPDATE patient_categories SET discount_rates = ? WHERE id = 5').run('{"s":{"21":50}}');
+  const group = { name: 'VIP', pct: 20, rates: { s: { 21: 50 } } };
+  const d = pickerDiscount(LINES, { pct: 0, promo: null, categoryPct: 20, group, choice: 'group' });
+  assert.deepEqual([d.packageOff, d.restOff, d.payable], [20000, 450000, 530000]);
+  const out = await invoicePickerLines({ visitId: 40, lines: LINES, pct: 0, promo: null, categoryPct: 20, group, choice: 'group' });
+  assert.equal(out.error, null, 'сервер отказал: ' + (out.error && out.error.message));
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  assert.equal(inv.total_amount, out.payable, 'смета ' + out.payable + ' ≠ счёт ' + inv.total_amount);
+  assert.equal(out.data.rated_discount, 450000);
+  assert.deepEqual(DB.prepare('SELECT service_id, discount_amount, discount_rate FROM invoice_items WHERE invoice_id = ? ORDER BY id').all(inv.id).map((r) => [r.service_id, r.discount_amount, r.discount_rate]),
+    [[21, 450000, 50], [22, 20000, null]], 'строка пакета ставку группы не получает');
+});
