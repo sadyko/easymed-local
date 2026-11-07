@@ -42,7 +42,8 @@ import { BRANCH_BUCKET, uploadFile, signedUrl } from '../storage.js?v=aurora20b'
 // импорта убран намеренно — документ пациента теперь отзывается, а не
 // удаляется, и файл с диска не стирается (см. кнопку «Отозвать» ниже).
 import { patientFileRefusal } from '../../shared/patient-file-limits.js?v=pfa1';
-import { printableSheet } from './doc-settings.js?v=noqr1';   // PATIENT_DOCS_CLINICAL_V1 — заключения/результаты открываются брендированным бланком
+import { printableSheet } from './doc-settings.js?v=noqr1';
+import { doctorPoolFor, performerCandidates, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (3.22.0, ревью L-6) — пул «Сменить врача», как у записи   // PATIENT_DOCS_CLINICAL_V1 — заключения/результаты открываются брендированным бланком
 // PATIENT_EDIT_REG_V1 — редактирование карты в стиле формы регистрации: те же
 // контролы (флаг-телефон, чипы пола, email с иконкой). Тот же ?v=, что в
 // admin.js → один экземпляр модуля; цикл registration↔patient-card безопасен,
@@ -71,6 +72,25 @@ export function unpaidServiceErrorText(error) {
 // (registration.js -> openCreateVisitModal, service-workspace.js -> openVitalsDialog).
 // An ESM import of a missing name is a FATAL module-load error that blanks the
 // whole app, so these inert no-ops keep those imports resolving.
+/**
+ * DIAG_ROUTE_V1 (3.22.0, ревью L-6) — КОГО ПРЕДЛАГАТЬ В «СМЕНИТЬ ВРАЧА» КАРТЫ ПАЦИЕНТА.
+ * Пул был users.role = 'doctor' и только отмеченные услуге в «Услугах и ставках», без
+ * запасного: главного врача, администратора-врача и медсестру выбрать было нельзя, а
+ * услуге кабинета без отметок отвечало «не назначен ни один врач» — это и есть дверь,
+ * которой клиника чинит строки без исполнителя. Теперь — правило записи (doctor-pool.js):
+ * кандидаты — врачи по флагу is_doctor и все, кому услуга отмечена; отмеченные услуге,
+ * иначе (услуге кабинета) — все врачи. Консультации по виду приёма — все врачи.
+ * line — строка вкладки «Услуги» (serviceId, consultTypeId); users — живые сотрудники
+ * (id, full_name, is_doctor, service_rates); serviceOf(id) — строка услуги с маршрутом.
+ */
+export async function cardPerformerPool(line, { users, serviceOf }) {
+    const cands = performerCandidates(users || []);
+    let svc = null;
+    if (line && line.serviceId != null) svc = await serviceOf(line.serviceId);
+    else if (line && line.consultTypeId != null) svc = { id: 'c|' + line.consultTypeId, requires_doctor: 1 };
+    return svc ? doctorPoolFor(cands, svc) : [];
+}
+
 export function openCreateVisitModal() { /* replaced by the per-patient Book visit flow */ }
 export function openVitalsDialog() { /* vitals UI is not part of the local patient view yet */ }
 
@@ -377,6 +397,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // обязана её и ОТЛИЧАТЬ: товар не меняют на услугу, и убирают его
             // другими словами — товар возвращается держателю.
             clinicItemId:  r.clinic_item_id || null,
+            consultTypeId: r.consultation_type_id || null,   // DIAG_ROUTE_V1 (ревью L-6) — «Сменить врача» консультации
             doctorId:      r.doctor_id,
             doctorName:    (r.users && r.users.full_name) || '',
             invoiceItemId: r.invoice_item_id,
@@ -978,15 +999,23 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     //   удалить  — пока услуга НЕ в счёте (invoice_item_id пуст); выставленная
     //              в счёт строка заблокирована (сначала отмените счёт);
     //   сменить врача — пока услугу не начали/не оказали (added/queued);
-    //              кандидаты — только врачи, назначенные на услугу
-    //              (users.service_rates, как в мастере).
-    let _svcDocPool = null;   // ленивый кэш врачей с назначениями
+    //              кандидаты — как у записи (DIAG_ROUTE_V1, ревью L-6:
+    //              cardPerformerPool): отмеченные услуге, иначе все врачи.
+    let _svcDocPool = null;   // ленивый кэш сотрудников-кандидатов
     async function svcDoctorPool() {
         if (_svcDocPool) return _svcDocPool;
         const { data } = await supabase.from('users')
-            .select('id, full_name, service_rates').eq('role', 'doctor').eq('is_active', true).order('full_name');
+            .select('id, full_name, is_doctor, service_rates').eq('is_active', true).order('full_name');
         _svcDocPool = data || [];
         return _svcDocPool;
+    }
+    const _svcRoute = new Map();   // DIAG_ROUTE_V1 (ревью L-6) — маршрут услуги для пула, по одному запросу
+    async function svcRouteRow(id) {
+        if (_svcRoute.has(String(id))) return _svcRoute.get(String(id));
+        const { data } = await supabase.from('services').select('id, requires_doctor, ' + ROUTE_SELECT).eq('id', id).limit(1);
+        const row = (data && data[0]) || { id };
+        _svcRoute.set(String(id), row);
+        return row;
     }
 
     // SVC_PAGE_SEARCH_V1 — у постоянного пациента список услуг вырастает в
@@ -1084,10 +1113,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 onclick: async (ev) => {
                     const btn = ev.currentTarget;
                     btn.disabled = true;
-                    const pool = (await svcDoctorPool()).filter(d => Array.isArray(d.service_rates)
-                        && d.service_rates.some(r => r && String(r.service_id) === String(s.serviceId)));
+                    const pool = await cardPerformerPool(s, { users: await svcDoctorPool(), serviceOf: svcRouteRow });   // DIAG_ROUTE_V1 (ревью L-6)
                     btn.disabled = false;
-                    if (!pool.length) { toast('На эту услугу не назначен ни один врач (Сотрудники → «Услуги и ставки»).', 'info'); return; }
+                    if (!pool.length) { toast(tr('Нет сотрудников, которые оказывают эту услугу.'), 'info'); return; }
                     const sel = h('select', { style: { padding: '5px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', maxWidth: '180px' } },
                         ...(s.doctorId && !pool.some(d => String(d.id) === String(s.doctorId))
                             ? [h('option', { value: s.doctorId, selected: true }, s.doctorName || trf('Врач #{id}', { id: s.doctorId }))] : []),
