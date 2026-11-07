@@ -460,3 +460,51 @@ test('ревью M-1: результаты анализа без флага «л
   assert.ok(html.includes('Лейкоциты'), 'ОАК на бланке');
   assert.ok(html.includes('Флора'), 'результат «Мазка» пропал с бланка');
 });
+
+// Ревью S3, L-3 — бланк анализов из карты пациента печатал lab_results.value как
+// записано: строки до 3.22 — полными (7.2549), хотя лаборатория и раздел
+// «Документы» показывают 7.25; при выключенной настройке строки, записанные при
+// включённой, — округлёнными. Теперь — то же правило (shared/lab-round.js labShownValue).
+async function printCardLab(lab_results, round) {
+  const lines = [labLine(101, 'ОАК', 'completed', T1)];
+  calls = []; opened = [];
+  payload = { ...payloadWith([]), services: lines, lab_orders: lines, lab_results };
+  setFullAccess('Администратор');
+  const printed = [];
+  const prevOpen = globalThis.window.open;
+  globalThis.window.open = () => ({ document: { open() {}, write(s) { printed.push(String(s)); }, close() {} }, focus() {}, print() {} });
+  document.body.children.length = 0;
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (!String(url).startsWith('/api/db')) return prevFetch(url, opts);
+    const b = JSON.parse(opts.body);
+    return { ok: true, status: 200, json: async () => ({ data: b.table === 'doc_settings' ? { lab_round_analyzer: round } : [] }) };
+  };
+  try {
+    const box = mk('div');
+    renderPatientCard(box, { onNavigate() {}, payload: { id: 1 } });
+    await tick();
+    openDocsTab(box);
+    await tick();
+    walk(box).find((n) => n.tagName === 'BUTTON' && n.hasAttribute('data-docs-print')).click();
+    await tick();
+    const dlg = walk(document.body).find((n) => n.hasAttribute && n.hasAttribute('data-lab-print-pick'));
+    walk(dlg).filter((n) => n.tagName === 'BUTTON').find((b) => textOf(b).includes('Печать')).click();
+    await tick(80);
+  } finally {
+    globalThis.window.open = prevOpen;
+    globalThis.fetch = prevFetch;
+  }
+  assert.equal(printed.length, 1);
+  return printed[0].replace(/<style[\s\S]*?<\/style>/g, '');
+}
+const anRes = (id, parameter, value, raw_value, source = 'analyzer') => ({ ...labRes(id, 101, parameter, value), raw_value, source });
+
+test('ревью L-3: бланк из карты — значение прибора по настройке округления, ручной ввод — как набран', async () => {
+  const on = await printCardLab([anRes(1, 'Лейкоциты', '7.2549', null), anRes(2, 'Гемоглобин', '4.1567', '7.2549'), anRes(3, 'СОЭ', '12.345', null, 'manual')], 1);
+  assert.ok(on.includes('7.25') && !on.includes('7.2549'), 'строка до 3.22 при включённой — 7.25');
+  assert.ok(on.includes('4.1567'), 'набранное поверх значения прибора — как набрано (L-1)');
+  assert.ok(on.includes('12.345'), 'ручной ввод — как набран');
+  const off = await printCardLab([anRes(1, 'Лейкоциты', '7.25', '7.2549')], 0);
+  assert.ok(off.includes('7.2549'), 'выключено — полное значение прибора');
+});

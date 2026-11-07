@@ -19,6 +19,7 @@ import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERF
 import { labDocBatches } from '../../shared/lab-doc-batches.js';   // LAB_DOC_SPLIT_V1 — подтверждённые вместе — один документ
 import { openLabPrintPick } from './lab-print-pick.js';   // LAB_PRINT_PICK_V1 — «Печать…» с выбором документов
 import { panelMatrix, matrixGrid } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 — таблица посева на бланке
+import { labShownValue, labRoundOn } from '../../shared/lab-round.js';   // LAB_ROUND_V1 (ревью S3, L-3) — значение прибора по настройке клиники
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, StatusTag, fmtDate, fmtDateTime, field, Avatar, avColor, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
@@ -462,6 +463,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 verifiedBy: lr.verified_by || null,   // PRINT_PERFORMER_V1 — кто подтвердил
                 visitId:   vs ? vs.visit_id : null,
                 value:     lr.value,
+                source:    lr.source || null,                                 // ревью S3, L-3 — для labShownValue на бланке
+                rawValue:  lr.raw_value == null ? null : lr.raw_value,       // ревью S3, L-3
                 unit:      lr.unit || (svc && svc.result_unit) || '',
                 reference: reference || '—',
                 flag:      lr.flag || null,
@@ -1749,6 +1752,14 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // остальные по порядку. Правка имён в справочнике больше не
             // оставляет старые документы без норм — ровно как в лаборатории.
             const svcByVs = new Map((services || []).map((x) => [x.id, x.serviceId]));
+            // LAB_ROUND_V1 (ревью S3, L-3) — значение прибора — по настройке «Округлять результаты
+            // анализаторов до 2 знаков», как в лаборатории и в разделе «Документы»; ручной ввод — как набран.
+            let roundOn = true;
+            try {
+                const { data } = await supabase.from('doc_settings').select('lab_round_analyzer').eq('id', 1).single();
+                roundOn = labRoundOn(data && data.lab_round_analyzer);
+            } catch (e) { roundOn = true; }
+            const shownOf = (r) => labShownValue({ value: r.value, raw_value: r.rawValue, source: r.source }, roundOn);
             // LAB_MATRIX_PANEL_V1 — панель-таблица печатается таблицей посева.
             const matrices = new Map();
             try {
@@ -1771,7 +1782,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     return {
                         name: r.name,
                         code: '',
-                        value: r.value == null || r.value === '' ? '—' : String(r.value),
+                        value: shownOf(r) == null || shownOf(r) === '' ? '—' : String(shownOf(r)),   // shownOf: ревью S3, L-3
                         unit: r.unit || (analyte && analyte.unit) || '',
                         ref: labRefText(analyte, named.marked ? '' : gender, r.reference, named.texts),
                         flag: manyRanges ? '' : labFlagCell(r),
