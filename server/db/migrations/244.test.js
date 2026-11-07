@@ -101,7 +101,11 @@ test('244: счета и позиции счёта не тронуты; цена
   const money = () => [db.prepare('SELECT * FROM invoices ORDER BY id').all(), db.prepare('SELECT * FROM invoice_items ORDER BY id').all()];
   const before = money();
   migrate(db);
-  assert.deepEqual(money(), before);
+  // DISCOUNT_V2 (мигр. 273, 3.22.0) — более поздние миграции ДОБАВЛЯЮТ счёту колонки со
+  // значениями по умолчанию; «не тронуты» — прежние колонки и их значения.
+  const sameCols = (rows, ref) => rows.map((r, i) => Object.fromEntries(Object.keys(ref[i] || {}).map((k) => [k, r[k]])));
+  const after = money();
+  assert.deepEqual([sameCols(after[0], before[0]), sameCols(after[1], before[1])], before);
   const billed = db.prepare(`SELECT vs.package_full, vs.package_price, vs.quantity, ii.unit_price, ii.total, ii.discount_amount
                                FROM visit_services vs JOIN invoice_items ii ON ii.id = vs.invoice_item_id
                               WHERE vs.package_full IS NOT NULL`).all();
