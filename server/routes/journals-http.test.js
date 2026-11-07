@@ -136,7 +136,8 @@ test('HTTP: реестр — оплата, тип палаты, итог тол�
   assert.equal(row['Тип палаты'], 'Полулюкс');
   assert.equal(row['Дата оплаты'], '2026-03-12');
   assert.equal(row['Паспорт'], 'AA1234567');
-  assert.deepEqual(r.json.data.summable_columns, ['Сумма оплаты']);
+  // REPORTS_TAX_PAY_V1 — и три колонки НДС оплаченного (в конце реестра).
+  assert.deepEqual(r.json.data.summable_columns, ['Сумма оплаты', 'Сумма без НДС', 'НДС', 'Сумма с НДС']);
   assert.equal(r.json.data.total_label, 'Сумма оплаты');
 });
 
