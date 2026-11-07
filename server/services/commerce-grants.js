@@ -28,11 +28,14 @@ export function canPush(db, user) {
   return grantAllowsOr(db, user, 'commerce_push', 'edit', () => botLevel(db, user, 'edit'));
 }
 
-/** Ссылки для рекламы: 'view' — таблица и счётчики, 'edit' — завести, править, удалить. */
+/**
+ * Ссылки для рекламы: 'view' — таблица и счётчики, 'edit' — завести, править, удалить.
+ * Ревью 3.22.0 n1 — других уровней у строки нет: незнакомый (будущее «delete»)
+ * не пускает, а не проверяется молча воротами «Просмотра».
+ */
 export function canAdLinks(db, user, need = 'view') {
-  return need === 'edit'
-    ? grantAllowsOr(db, user, 'commerce_links', 'edit', () => botLevel(db, user, 'edit'))
-    : grantAllowsOr(db, user, 'commerce_links', 'view', () => botLevel(db, user, 'view'));
+  if (need !== 'view' && need !== 'edit') return false;
+  return grantAllowsOr(db, user, 'commerce_links', need, () => botLevel(db, user, need));
 }
 
 /** Для gate-fallbacks.js: то же прежнее правило, по которому решают ворота выше. */

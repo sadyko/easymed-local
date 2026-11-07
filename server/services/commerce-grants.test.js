@@ -230,3 +230,26 @@ test('m1: заведующая с «Telegram-бот: Изменение» выд
     assert.match(String(permissionExcess(db, mgr, SMM, { ...SMM, grants: { ...SMM.grants, commerce_links: 'edit' } })), /commerce_links/);
   } finally { db.close(); }
 });
+
+// Ревью 3.22.0 n1, n2 — уровни ссылок только «Просмотр» и «Изменение»;
+// отказ окна рассылки говорит про рассылку, а не про отчёт бота.
+test('n1: canAdLinks знает только «Просмотр» и «Изменение» — незнакомый уровень не пускает', () => {
+  const db = seed();
+  try {
+    setGrants(db, 'registrar', { commerce_links: 'edit' });
+    assert.equal(canAdLinks(db, REG, 'view'), true);
+    assert.equal(canAdLinks(db, REG, 'edit'), true);
+    for (const need of ['delete', '', 'admin']) assert.equal(canAdLinks(db, REG, need), false, `уровень «${need}»`);
+    assert.equal(canAdLinks(db, ADMIN, 'delete'), false, 'и администратору незнакомый уровень не открывает молча');
+  } finally { db.close(); }
+});
+
+test('n2: окно рассылки отказывает словами про рассылку', async () => {
+  const { telegramBroadcastPreview, telegramBroadcastHistory } = await import('./rpc/telegram.js');
+  const db = seed();
+  try {
+    for (const fn of [() => telegramBroadcastPreview(db, { filters: {} }, REG), () => telegramBroadcastHistory(db, {}, REG)]) {
+      assert.throws(fn, (e) => e && e.status === 403 && /Окно рассылки/.test(e.message) && /Push-уведомления/.test(e.message), 'отказ — про отчёт бота');
+    }
+  } finally { db.close(); }
+});

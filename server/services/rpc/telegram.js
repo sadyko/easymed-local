@@ -51,9 +51,12 @@ function requireReach(db, user) {
 // COMMERCE_BLOCK_V1 — окно рассылки: число получателей, фильтры, ход и
 // история. Пускает охват бота (как раньше) или своё право «Push-уведомления»:
 // тот, кому выдали рассылку без настроек бота, должен видеть, кому шлёт.
+// Ревью 3.22.0 n2 — отказ говорит про окно рассылки и называет строку, которая
+// его открывает, а не «Отчёт по Telegram-боту».
 function requirePushReach(db, user) {
   if (canPush(db, user)) return;
-  requireReach(db, user);
+  if (grantAllowsAdminOr(db, user, 'reports.telegram', 'view') || grantAllowsAdminOr(db, user, 'settings.telegram', 'view')) return;
+  throw new RpcError('Окно рассылки недоступно вашей роли. Права выдаёт администратор в «Настройки → Роли» (строка «Push-уведомления»).', 403);
 }
 // COMMERCE_BLOCK_V1 — отправка: строка «Push-уведомления»; пока её не
 // настроили — «Telegram-бот: Изменение», как до этого выпуска.

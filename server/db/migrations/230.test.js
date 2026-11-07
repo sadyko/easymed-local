@@ -16,7 +16,7 @@ import { hashPassword } from '../../services/auth.js';
 import { createApp } from '../../app.js';
 import { licensedDataDir } from '../../services/control/licensed-fixture.js';
 import { listen } from '../../../control-plane/server/test-helpers/listen.js';
-import { GATE_FALLBACK, FALLBACK_FN_KEYS, fallbackLevel } from '../../services/gate-fallbacks.js';
+import { GATE_FALLBACK, fallbackLevel } from '../../services/gate-fallbacks.js';
 import { VALID_ROLES } from '../../services/roles.js';
 import { pseudoUserOfRole } from '../../services/rpc/roles-effective.js';
 import { MAIN_CLINIC_TABLES } from '../schema-registry.js';
