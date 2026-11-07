@@ -237,11 +237,15 @@ test('invoices_full: способ оплаты — наличные, карта,
   const at = cols.indexOf('Способ оплаты');
   assert.ok(at > -1, 'колонка «Способ оплаты» должна быть в отчёте');
 
-  const by = (num) => r.rows.find((x) => x[cols.indexOf('№ счёта')] === num);
-  assert.equal(by('INV-1')[at], 'Наличные');
-  assert.equal(by('INV-C')[at], 'Карта');
-  assert.equal(by('INV-S')[at], 'Карта, Эквайринг');   // порядок словаря, не порядок строк
-  assert.equal(by('INV-U')[at], '');
+  // REPORTS_TAX_PAY_V1 (владелец, 07.11) — счёт делится по способам: строка на
+  // способ со своей суммой, неоплаченный остаток — строкой «Не оплачено».
+  const parts = (num) => r.rows.filter((x) => x[cols.indexOf('№ счёта')] === num)
+    .map((x) => [x[at], x[cols.indexOf('Итого')], x[cols.indexOf('Оплачено')]]);
+  assert.deepEqual(parts('INV-1'), [['Наличные', 60000, 60000], ['Не оплачено', 40000, 0]]);
+  assert.deepEqual(parts('INV-C'), [['Карта', 50000, 50000]]);
+  assert.deepEqual(parts('INV-S'), [['Карта', 50000, 50000], ['Эквайринг', 40000, 40000]]);   // порядок словаря, не порядок строк
+  // Неоплаченный — «Не оплачено», а не «Наличные» по умолчанию.
+  assert.deepEqual(parts('INV-U'), [['Не оплачено', 30000, 0]]);
 });
 
 test('procurement: receive movements only, with line sum', () => {

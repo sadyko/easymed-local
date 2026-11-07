@@ -96,7 +96,9 @@ const YM_RE = /\b(\d{4})-(0[1-9]|1[0-2])\b(?!-\d)/g;
 // JOURNALS_V1 — у журналов «Пол» («Муж.»/«Жен.»), «Тип палаты» (Люкс /
 // Полулюкс / Обычная) и «Кто направил» («Стационар», «сам»; имена врачей и
 // источников tr() оставляет как есть) — тоже слова словаря.
-export const ENUM_COLS = new Set(['Где', 'Вид', 'Статус', 'Статус счёта', 'Режим ставок', 'Оплата', 'Роль', 'Категория', 'Ставка НДС', 'Пол', 'Тип палаты', 'Кто направил']);
+// REPORTS_TAX_PAY_V1 — «Способ оплаты» (Наличные, Карта, Не оплачено…) — тоже
+// слова словаря; список способов словами («Наличные, Карта») tr() оставит как есть.
+export const ENUM_COLS = new Set(['Где', 'Вид', 'Статус', 'Статус счёта', 'Режим ставок', 'Оплата', 'Роль', 'Категория', 'Ставка НДС', 'Пол', 'Тип палаты', 'Кто направил', 'Способ оплаты']);
 
 export function localizeReport(r, tx) {
     const res = r || {};
@@ -111,11 +113,15 @@ export function localizeReport(r, tx) {
     const cols = res.columns || [];
     const cellT = new Map((res.cells_t || []).map(([ri, ci, template, params]) => [ri + ':' + ci, { template, params }]));
     const enumCol = cols.map((c) => ENUM_COLS.has(c));
+    // REPORTS_TAX_PAY_V1 — «Способ оплаты» бывает списком («Наличные, Карта» —
+    // там, где строка не делится): переводится каждое слово списка.
+    const listCol = cols.map((c) => c === 'Способ оплаты');
     return {
         columns: cols.map((c) => tx.tr(c)),
         rows: (res.rows || []).map((row, ri) => row.map((v, ci) => {
             const t = cellT.get(ri + ':' + ci);
             if (t) return viaT(v, t);
+            if (listCol[ci] && typeof v === 'string' && v.includes(', ')) return v.split(', ').map((x) => tx.tr(x)).join(', ');
             return enumCol[ci] && typeof v === 'string' ? tx.tr(v) : v;
         })),
         notes: (res.notes || []).map((n, i) => viaT(n, res.notes_t && res.notes_t[i])),

@@ -146,3 +146,11 @@ test('JOURNALS_V1: «Пол», «Тип палаты», «Кто направи�
   assert.deepEqual(localizeReport(r, tx).rows[0].slice(0, 4), ['Азизов', 'Male', 'Semi-lux', 'self-referred']);
   assert.equal(reportSheets(r, tx).report[1][4].length, 400);
 });
+
+// REPORTS_TAX_PAY_V1 — «Способ оплаты»: одно слово и список способов — на языке экрана.
+test('REPORTS_TAX_PAY_V1: «Способ оплаты» переводится и словом, и списком', () => {
+  const r = { columns: ['Пациент', 'Способ оплаты'], rows: [['Азизов', 'Карта'], ['Бобров', 'Наличные, Карта'], ['Ким', 'Не оплачено']] };
+  const en = localizeReport(r, txFor('en'));
+  assert.deepEqual(en.rows.map((x) => x[1]), [STRINGS['Карта'].en, STRINGS['Наличные'].en + ', ' + STRINGS['Карта'].en, STRINGS['Не оплачено'].en]);
+  assert.equal(localizeReport(r, txFor('ru')).rows[1][1], 'Наличные, Карта');
+});
