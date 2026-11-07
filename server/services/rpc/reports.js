@@ -2585,7 +2585,8 @@ function hasUnattributed(ctx, rows) {
 
 function totalRevenueReport(db, args, ctx) {
   const f = reportFilters(args);   // REPORTS_TAX_PAY_V1
-  const lines = itemRowsQuery(db, args, ctx);
+  // Врач строки, группа услуги, группа пациента — до деления по оплате.
+  const lines = itemRowsQuery(db, args, ctx).filter(lineFilter(db, f));
   // REPORTS_TAX_PAY_V1 — строка счёта, оплаченного несколькими способами, —
   // строкой на способ, со своей долей денег (domain/pay-parts.js).
   const src = splitByPayment(db, lines, f, ['amount', 'discount', 'tax', 'doctor_fee']);
@@ -3139,6 +3140,15 @@ function referralNotes(db, lines) {
 // (itemRowsQuery, ITEM_TAX_SQL); у строки стационара и у записанной строки
 // закрытого месяца его может не быть — тогда по ставке услуги, тем же
 // правилом (после скидки × ставка / 100). Корректировка — не услуга, НДС 0.
+// REPORTS_TAX_PAY_V1 — «Рефералы» по группе услуг и группе пациентов. Врач у
+// «Рефералов» — направивший (свой фильтр «Направившие»), поэтому «Врач» здесь
+// не отбирает. Корректировки — не услуги: при этих фильтрах их нет.
+function referralFiltered(db, args, lines) {
+  const f = reportFilters(args);
+  if (!f.group && f.patientGroup == null) return lines;
+  const keep = lineFilter(db, f, { doctor: false });
+  return lines.filter((r) => r.where !== 'adj' && keep(r));
+}
 function referralTaxer(db) {
   let rates = null;
   return (r) => {
@@ -3161,7 +3171,7 @@ function referralsReport(db, args, ctx) {
   //
   // INPATIENT_BONUS_V1 — стационар идёт СВОЕЙ строкой того же направившего
   // («Где»), а направивший врач госпитализации — строкой сотрудника.
-  const lines = referralReportLines(db, args, ctx);   // V3120_FIX — закрытые месяцы из записи
+  const lines = referralFiltered(db, args, referralReportLines(db, args, ctx));   // V3120_FIX — закрытые месяцы из записи; REPORTS_TAX_PAY_V1 — фильтры
   const taxOf = referralTaxer(db);   // REPORTS_TAX_PAY_V1
   const buckets = new Map();
   for (const r of lines) {
@@ -3209,7 +3219,7 @@ function referralsReport(db, args, ctx) {
 // показывает плоскую таблицу и выгружает её в Excel как есть, и детализация
 // должна выгружаться так же.
 function referralsDetailReport(db, args, ctx) {
-  const lines = referralReportLines(db, args, ctx);   // INPATIENT_BONUS_V1 — и стационар; V3120_FIX — закрытые месяцы
+  const lines = referralFiltered(db, args, referralReportLines(db, args, ctx));   // INPATIENT_BONUS_V1 — и стационар; V3120_FIX — закрытые месяцы; REPORTS_TAX_PAY_V1
   const taxOf = referralTaxer(db);   // REPORTS_TAX_PAY_V1
   const payMap = invoicePayMap(db, lines.map((r) => r.invoice_id));   // REPORTS_TAX_PAY_V1 — способы оплаты счёта
   return {
@@ -3348,10 +3358,14 @@ function invoicesFullReport(db, args, ctx) {
   // у части «Не оплачено» — наоборот. Части одного счёта в сумме дают счёт.
   // Бесплатный счёт — одна строка, как прежде.
   const f = reportFilters(args);
-  const payMap = invoicePayMap(db, rows.map((r) => r.id));
+  // Врач, группа услуг, группа пациентов — счёт целиком, если в нём есть такая
+  // строка и пациент этой группы (invoiceMatcher).
+  const match = invoiceMatcher(db, rows.map((r) => r.id), f);
+  const picked = match ? rows.filter((r) => match(r.id)) : rows;
+  const payMap = invoicePayMap(db, picked.map((r) => r.id));
   const names = userNames(db);
   const parts = [];
-  for (const r of rows) {
+  for (const r of picked) {
     const ps = payParts(r.total, payMap.get(r.id) || [], { method: f.method, cashierId: f.cashierId }, r.paid);
     if (!ps.length) continue;
     const shares = ps.map((p) => p.share);
@@ -3802,7 +3816,8 @@ function surgeryProfitReport(db, args, ctx) {
   // SQLite lower() doesn't fold Cyrillic, so the «хирургия» match runs in JS.
   // REPORTS_TAX_PAY_V1 — операция, оплаченная несколькими способами, — строкой
   // на способ; расходники ниже делятся по суммам частей так же, как по строкам.
-  const src = splitByPayment(db, itemRowsQuery(db, args, ctx).filter(isSurgeryLine), reportFilters(args),
+  const f = reportFilters(args);
+  const src = splitByPayment(db, itemRowsQuery(db, args, ctx).filter(isSurgeryLine).filter(lineFilter(db, f)), f,
     ['amount', 'discount', 'tax', 'doctor_fee']);
   // Ключ расходников строки: госпитализация счёта, иначе его визит.
   const keyOf = (r) => (r.admission_id != null ? 'a' + r.admission_id : r.visit_id != null ? 'v' + r.visit_id : null);
@@ -3908,7 +3923,9 @@ function doctorSalariesReport(db, args, ctx) {
   //
   // PAY_BASIS_PERFORMED_V1 — строки — ВЫПОЛНЕННАЯ работа (performedPayLines),
   // оплачена она или нет; прежде — только полностью оплаченные счета периода.
-  const lines = performedPayLines(db, { from, to, args, ctx, foreign: true });
+  // REPORTS_TAX_PAY_V1 — фильтр «Врач»: строки, вознаграждения и корректировки одного врача.
+  const doctorId = doctorFilterArg(args);
+  const lines = performedPayLines(db, { from, to, args, ctx, foreign: true, doctorId });
   const groups = new Map();
   for (const r of lines) {
     const key = r.origin + '\u0000' + (r.doctor_id == null ? '' : r.doctor_id);
@@ -3958,13 +3975,13 @@ function doctorSalariesReport(db, args, ctx) {
     }
     return g;
   };
-  for (const r of doctorReferralEarnings(db, { from, to, args, ctx })) {
+  for (const r of doctorReferralEarnings(db, { from, to, args, ctx, doctorId })) {
     if (!r.fee) continue;
     const g = groupOf(r.origin, r.doctor_id);
     if (r.kind === 'ref_in') g.referral_in = (g.referral_in || 0) + r.fee;
     else g.referral = (g.referral || 0) + r.fee;
   }
-  const adjustments = payAdjustments(db, { from, to, args, ctx });
+  const adjustments = payAdjustments(db, { from, to, args, ctx, doctorId });
   for (const a of adjustments) {
     const g = groupOf(a.origin, a.doctor_id);
     g.adj = (g.adj || 0) + a.fee;
@@ -4051,7 +4068,10 @@ function inpatientShareReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
   // PAY_BASIS_PERFORMED_V1 — выполненные строки стационара (с отметкой
   // «Выполнено»), со счётом или без; период — по дню выполнения.
-  const src = performedPayLines(db, { from, to, kinds: ['in'], args, ctx });
+  // REPORTS_TAX_PAY_V1 — врач (в SQL), группа услуг и группа пациентов.
+  const f = reportFilters(args);
+  const src = performedPayLines(db, { from, to, kinds: ['in'], args, ctx, doctorId: f.doctorId })
+    .filter(lineFilter(db, f, { doctor: false }));
   const noRate = inpatientNoRateNote(src);
   const payMap = invoicePayMap(db, src.map((r) => r.invoice_id));   // REPORTS_TAX_PAY_V1 — способы оплаты счёта
   // Итоги по врачам — примечаниями над таблицей, по убыванию начисленного:
@@ -4238,14 +4258,26 @@ function linePaid(r) {
 }
 // PAY_BASIS_PERFORMED_V1 — «Оплачено» остаётся колонкой СВЕДЕНИЙ: доля врача
 // от оплаты больше не зависит.
+// REPORTS_TAX_PAY_V1 — «Оплачено» части оплаты: часть способа оплачена целиком,
+// часть «Не оплачено» — нет; строка без деления — как прежде (linePaid).
+function partPaid(r) {
+  if (r.pay_method === undefined) return linePaid(r);
+  if (r.pay_method === UNPAID) return 0;
+  return (r.amount || 0) - (r.discount || 0);
+}
 const LINE_PAID_NOTE = '«Оплачено (доля оплаты счёта)» — оплата счёта, разнесённая по его строкам пропорционально сумме строки; у частично оплаченного счёта это часть строки. Это сведения: доля врача от оплаты не зависит.';
 
 function byServicesReport(db, args, ctx) {
   const scope = paidScope(args);
   const group = groupFilter(args);
-  const src = itemRowsQuery(db, args, ctx)
+  // REPORTS_TAX_PAY_V1 — врач, группа пациентов; способ оплаты и кассир —
+  // доля строки этим способом / этого кассира (строки делятся по оплате).
+  const f = reportFilters(args);
+  let src = itemRowsQuery(db, args, ctx)
     .filter((r) => scope === 'all' || r.status === 'paid')
-    .filter((r) => !group || lineGroup(r) === group);
+    .filter((r) => !group || lineGroup(r) === group)
+    .filter(lineFilter(db, f));
+  if (payFiltered(f)) src = splitByPayment(db, src, f, ['amount', 'discount', 'tax', 'net', 'doctor_fee']);
   const buckets = new Map();
   for (const r of src) {
     const where = isInpatientLine(r) ? 'in' : 'out';
@@ -4261,7 +4293,7 @@ function byServicesReport(db, args, ctx) {
     b.tax += r.tax || 0;
     b.net += r.net || 0;
     b.fee += r.doctor_fee || 0;
-    b.paid += linePaid(r);   // ревью M7
+    b.paid += partPaid(r);   // ревью M7; REPORTS_TAX_PAY_V1 — у части оплаты — её деньги
     buckets.set(key, b);
   }
   const order = (g) => { const i = CAT_ORDER.indexOf(g); return i < 0 ? CAT_ORDER.length : i; };
@@ -4351,9 +4383,20 @@ function doctorNotes(db, args, ctx, lines, doctorId = null) {
   return notes;
 }
 const doctorKey = (ctx, origin, doctorId) => ctx.keyOf(origin) + '\u0000' + (doctorId == null ? '' : doctorId);
+// REPORTS_TAX_PAY_V1 — строки работы врача по группе услуг и группе пациентов
+// (врач уже отобран в SQL). Все строки периода едут рядом (allLines), как у
+// doctorLines: примечанию о строках без стационарной ставки они нужны.
+function workFilter(db, args, lines) {
+  const f = reportFilters(args);
+  if (!f.group && f.patientGroup == null) return lines;
+  const out = lines.filter(lineFilter(db, f, { doctor: false }));
+  Object.defineProperty(out, 'allLines', { value: lines.allLines || lines, enumerable: false });
+  return out;
+}
 
 function byDoctorsReport(db, args, ctx) {
-  const lines = doctorLines(db, args, ctx);
+  const doctorId = doctorFilterArg(args);   // REPORTS_TAX_PAY_V1 — фильтр «Врач» и у сводки
+  const lines = doctorLines(db, args, ctx, doctorId);
   const names = new Map(db.prepare('SELECT id, full_name, username FROM users').all()
     .map((u) => [u.id, u.full_name || u.username]));
   const buckets = new Map();
@@ -4389,18 +4432,18 @@ function byDoctorsReport(db, args, ctx) {
   // стационара, которые идут сотруднику (направивший врач госпитализации).
   // PAY_PERIOD_CLOSE_V1 — у закрытого месяца — из записи месяца.
   const { from, to } = resolveRange(db, args);
-  for (const r of doctorReferralEarnings(db, { from, to, args, ctx })) {
+  for (const r of doctorReferralEarnings(db, { from, to, args, ctx, doctorId })) {
     if (!r.fee) continue;
     if (r.kind === 'ref_in') bucket(r.origin, r.doctor_id, null).referral_in += r.fee;
     else bucket(r.origin, r.doctor_id, null).referral += r.fee;
   }
   // PAY_PERIOD_CLOSE_V1 — корректировки закрытых месяцев.
-  for (const a of payAdjustments(db, { from, to, args, ctx })) bucket(a.origin, a.doctor_id, null).adj += a.fee;
+  for (const a of payAdjustments(db, { from, to, args, ctx, doctorId })) bucket(a.origin, a.doctor_id, null).adj += a.fee;
   const payOf = (b) => b.fee_out + b.fee_in + b.referral + b.referral_in + b.adj;
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
     || payOf(b) - payOf(a) || b.billed - a.billed);
-  const notes = doctorNotes(db, args, ctx, lines);
+  const notes = doctorNotes(db, args, ctx, lines, doctorId);
   return {
     columns: [BUILDING_COL, 'Врач', 'Пациентов', 'Визитов', 'Госпитализаций', 'Услуг', 'Выставлено', ...VAT_COLUMNS,
 'Оплачено (доля оплаты счёта)', 'Доля за услуги', 'Стационарная доля', 'Вознаграждение за направления',
@@ -4421,7 +4464,7 @@ function byDoctorsReport(db, args, ctx) {
 // услуги» + «Стационарной доле» его строки в 'by_doctors'.
 function doctorServicesReport(db, args, ctx) {
   const doctorId = doctorFilterArg(args);   // DOCTOR_LINES_SPECIALTY_V1
-  const lines = doctorLines(db, args, ctx, doctorId);
+  const lines = workFilter(db, args, doctorLines(db, args, ctx, doctorId));   // REPORTS_TAX_PAY_V1
   const buckets = new Map();
   for (const r of lines) {
     const where = r.kind === 'in' ? 'in' : 'out';
@@ -4490,8 +4533,11 @@ function doctorExtraLines(db, args, ctx, doctorId) {
 
 function doctorLinesReport(db, args, ctx) {
   const doctorId = doctorFilterArg(args);
-  const lines = doctorLines(db, args, ctx, doctorId);
-  const extra = doctorExtraLines(db, args, ctx, doctorId);
+  const lines = workFilter(db, args, doctorLines(db, args, ctx, doctorId));   // REPORTS_TAX_PAY_V1
+  // Вознаграждения и корректировки — не услуги: при отборе по группе услуг или
+  // группе пациентов их нет (у них нет ни группы, ни одного пациента).
+  const wf = reportFilters(args);
+  const extra = wf.group || wf.patientGroup != null ? [] : doctorExtraLines(db, args, ctx, doctorId);
   // REPORTS_TAX_PAY_V1 — способы оплаты счёта строки словами: доля врача
   // считается по выполненной работе, а не по деньгам, поэтому строка не делится.
   const payMap = invoicePayMap(db, lines.map((r) => r.invoice_id));
@@ -4541,7 +4587,9 @@ const SPECIALTY_BASIS_NOTE = 'Специальность — основная у
 
 function bySpecialtyReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
-  const lines = performedPayLines(db, { from, to, args, ctx, foreign: true, withoutDoctor: true });
+  // REPORTS_TAX_PAY_V1 — врач, группа услуг, группа пациентов.
+  const lines = performedPayLines(db, { from, to, args, ctx, foreign: true, withoutDoctor: true })
+    .filter(lineFilter(db, reportFilters(args)));
   const users = new Map(db.prepare("SELECT id, COALESCE(NULLIF(full_name, ''), username) AS name, specialty FROM users").all()
     .map((u) => [u.id, u]));
   const specOf = (r) => {
@@ -5047,11 +5095,31 @@ const REPORT_CHOICES = {
         OR id IN (SELECT DISTINCT supplier_id FROM purchase_orders WHERE supplier_id IS NOT NULL)
   `).all().sort((a, b) => ruCompare(a.name, b.name))
     .map((s) => [String(s.id), s.name || '—']),
+  // REPORTS_TAX_PAY_V1 — кассиры: роль «Кассир» (основная или дополнительная)
+  // и все, кто принимал платежи (администратор у кассы, уволенный кассир — в
+  // истории его деньги остаются).
+  cashier_id: (db) => db.prepare(`
+    SELECT id, COALESCE(NULLIF(full_name, ''), username) AS name FROM users
+     WHERE role = 'cashier'
+        OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(extra_roles) THEN extra_roles ELSE '[]' END) er WHERE er.value = 'cashier')
+        OR id IN (SELECT DISTINCT cashier_id FROM payments WHERE cashier_id IS NOT NULL)
+  `).all().sort((a, b) => ruCompare(a.name, b.name))
+    .map((u) => [String(u.id), u.name || '—']),
+  // REPORTS_TAX_PAY_V1 — группы пациентов («Настройки → Группы пациентов»):
+  // действующие и те, в которых есть пациенты (отключённая группа в истории остаётся).
+  patient_group: (db) => db.prepare(`
+    SELECT id, name FROM patient_categories
+     WHERE active = 1 OR id IN (SELECT DISTINCT category_id FROM patients WHERE category_id IS NOT NULL)
+  `).all().sort((a, b) => ruCompare(a.name, b.name))
+    .map((c) => [String(c.id), c.name || '—']),
 };
+// REPORTS_TAX_PAY_V1 — «Отчёт кассира» — свой RPC (cashier_report), не вид
+// run_report, но фильтры у него те же: списки отдаются за его воротами.
+const CHOICE_KINDS_EXTRA = new Set(['cashier']);
 export function reportChoices(db, args, user) {
   const kind = args && args.kind;
   const arg = args && args.arg;
-  if (!Object.prototype.hasOwnProperty.call(REPORTS_RU, kind)) throw rpcT(RpcError, 'Неизвестный отчёт: {kind}. Обновите страницу.', { kind: String(kind) }, 400);
+  if (!Object.prototype.hasOwnProperty.call(REPORTS_RU, kind) && !CHOICE_KINDS_EXTRA.has(kind)) throw rpcT(RpcError, 'Неизвестный отчёт: {kind}. Обновите страницу.', { kind: String(kind) }, 400);
   if (!Object.prototype.hasOwnProperty.call(REPORT_CHOICES, arg)) throw rpcT(RpcError, 'Неизвестный фильтр отчёта: {arg}.', { arg: String(arg) }, 400);
   requireReportKind(db, user, kind);
   // JOURNALS_V1_RJ1 (ревью, п. 10c) — журналы фильтров-списков не берут: роль

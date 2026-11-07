@@ -95,10 +95,11 @@ test('«По врачам»: три вида — врачи, врачи × ус�
 
 // DOCTOR_LINES_SPECIALTY_V1 — фильтр «Врач» — выпадающий список (type 'select'):
 // первый вариант «все» (пусто — аргумент не уезжает), остальные — от сервера.
-test('«По врачам»: фильтр врача — выпадающий список у «Врачей и услуг» и детализации, не у сводки', () => {
+// REPORTS_TAX_PAY_V1 (владелец, 07.11) — фильтр «Врач» и у сводки «Врачи».
+test('«По врачам»: фильтр врача — выпадающий список у всех трёх видов', () => {
   const d = def('by_doctors');
-  assert.deepEqual(optionsFor(d, 'by_doctors').map((o) => o.arg), []);
-  for (const kind of ['doctor_services', 'doctor_lines']) {
+  assert.deepEqual(optionsFor(d, 'by_doctors').map((o) => o.arg), ['doctor_id']);
+  for (const kind of ['by_doctors', 'doctor_services', 'doctor_lines']) {
     const o = optionsFor(d, kind).find((x) => x.arg === 'doctor_id');
     assert.ok(o, kind + ': нет фильтра врача');
     assert.equal(o.type, 'select');
@@ -107,7 +108,7 @@ test('«По врачам»: фильтр врача — выпадающий с
   assert.equal(defaultReportOptions(d).doctor_id, '');
   assert.deepEqual(reportArgs(d, 'doctor_lines', { doctor_id: '' }), {});
   assert.deepEqual(reportArgs(d, 'doctor_lines', { doctor_id: '7' }), { doctor_id: '7' });
-  assert.deepEqual(reportArgs(d, 'by_doctors', { doctor_id: '7' }), {});
+  assert.deepEqual(reportArgs(d, 'by_doctors', { doctor_id: '7' }), { doctor_id: '7' });
   const o = optionsFor(d, 'doctor_lines')[0];
   assert.deepEqual(selectChoices(o, [['7', 'Иванов'], ['', 'дубль']]), [['', 'Все врачи'], ['7', 'Иванов']]);
   assert.deepEqual(selectChoices(o, null), [['', 'Все врачи']]);

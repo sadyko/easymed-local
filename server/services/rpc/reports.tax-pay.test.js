@@ -213,3 +213,96 @@ test('«Отчёт кассира»: разрез по способам совп
   assert.deepEqual([byM('Наличные'), byM('Карта'), byM('Перевод')], [60000, 40000, 112000]);
   db.close();
 });
+
+// ─── ФИЛЬТРЫ (до выгрузки в Excel) ───────────────────────────────────────────
+
+test('фильтр «Карта» (пример владельца): «Общая выручка» — только карточная часть, 40 000', () => {
+  const { db, vip } = seed();
+  const card = run(db, 'total_revenue', { pay_method: 'card' });
+  assert.deepEqual(objects(card).map((o) => [o['№ счёта'], o['Способ оплаты'], o['Сумма с НДС']]), [['INV-1', 'Карта', 40000]]);
+  assert.equal(sum(card, 'Сумма с НДС'), 40000);
+  assert.equal(sum(run(db, 'total_revenue', { pay_method: 'cash' }), 'Сумма с НДС'), 60000);
+  assert.equal(sum(run(db, 'total_revenue', { pay_method: 'unpaid' }), 'Сумма с НДС'), 50000);
+  assert.equal(sum(run(db, 'total_revenue', { cashier_id: 6 }), 'Сумма с НДС'), 40000);
+  assert.equal(sum(run(db, 'total_revenue', { cashier_id: '5' }), 'Сумма с НДС'), 172000);
+  assert.equal(sum(run(db, 'total_revenue', { cashier_id: 5, pay_method: 'transfer' }), 'Сумма с НДС'), 112000);
+  // Врач, группа услуг, группа пациентов.
+  assert.deepEqual(objects(run(db, 'total_revenue', { doctor_id: 3 })).map((o) => o['№ счёта']), ['INV-2']);
+  assert.equal(sum(run(db, 'total_revenue', { group: 'lab' }), 'Сумма с НДС'), 150000);
+  assert.deepEqual([...new Set(objects(run(db, 'total_revenue', { patient_group: vip })).map((o) => o['№ счёта']))], ['INV-1']);
+  // Фильтры складываются: VIP + карта.
+  assert.equal(sum(run(db, 'total_revenue', { patient_group: vip, pay_method: 'card' }), 'Сумма с НДС'), 40000);
+  db.close();
+});
+
+test('фильтры: «Счета», «По услугам», «Рентабельность» — те же правила', () => {
+  const { db, vip } = seed();
+  const inv = objects(run(db, 'invoices_full', { pay_method: 'card' }));
+  assert.deepEqual(inv.map((o) => [o['№ счёта'], o['Итого'], o['Оплачено'], o['Кассир']]), [['INV-1', 40000, 40000, 'Кассир Б']]);
+  assert.deepEqual([...new Set(objects(run(db, 'invoices_full', { doctor_id: 3 })).map((o) => o['№ счёта']))], ['INV-2']);
+  assert.deepEqual([...new Set(objects(run(db, 'invoices_full', { patient_group: vip })).map((o) => o['№ счёта']))], ['INV-1']);
+  assert.deepEqual([...new Set(objects(run(db, 'invoices_full', { group: 'consultation' })).map((o) => o['№ счёта']))], ['INV-2']);
+  const bs = objects(run(db, 'by_services', { pay_method: 'card' }));
+  assert.deepEqual(bs.map((o) => [o['Услуга'], o['Сумма'], o['Сумма с НДС'], o['Оплачено (доля оплаты счёта)']]), [['Анализ крови', 40000, 40000, 40000]]);
+  assert.deepEqual(objects(run(db, 'by_services', { doctor_id: 3 })).map((o) => o['Услуга']), ['Консультация']);
+  assert.deepEqual(objects(run(db, 'by_services', { patient_group: vip })).map((o) => [o['Услуга'], o['Сумма']]), [['Анализ крови', 100000]]);
+  assert.deepEqual(run(db, 'surgery_profit', { doctor_id: 2, pay_method: 'card' }).rows, []);
+  db.close();
+});
+
+test('фильтры: выплата врачам — врач; работа — группа услуг и группа пациентов', () => {
+  const { db, vip } = seed();
+  assert.deepEqual(objects(run(db, 'doctor_salaries', { doctor_id: 3 })).map((o) => o['Врач']), ['Терапевтов']);
+  assert.deepEqual(objects(run(db, 'by_doctors', { doctor_id: 2 })).map((o) => o['Врач']), ['Лабов']);
+  assert.deepEqual(objects(run(db, 'doctor_lines', { group: 'lab' })).map((o) => o['№ счёта']).sort(), ['INV-1', 'INV-3']);
+  assert.deepEqual(objects(run(db, 'doctor_lines', { patient_group: vip })).map((o) => o['№ счёта']), ['INV-1']);
+  assert.deepEqual(objects(run(db, 'doctor_services', { group: 'consultation' })).map((o) => o['Услуга']), ['Консультация']);
+  assert.deepEqual(objects(run(db, 'by_specialty', { group: 'consultation' })).map((o) => o['Услуга']), ['Консультация']);
+  assert.equal(sum(run(db, 'by_specialty', { doctor_id: 2 }), 'Сумма после скидки'), 150000);
+  for (const [kind, extra] of [['inpatient_share', { doctor_id: 2, group: 'lab', patient_group: vip }], ['referrals', { group: 'lab', patient_group: vip }],
+    ['referrals_detail', { group: 'lab' }]]) {
+    assert.doesNotThrow(() => run(db, kind, extra), kind);
+  }
+  db.close();
+});
+
+test('фильтры: «Отчёт кассира» — карта 40 000; группа пациентов, врач и группа услуг — по счёту платежа', () => {
+  const { db, vip } = seed();
+  const sh = db.prepare("INSERT INTO cash_shifts (cashier_id, status, opened_at) VALUES (5, 'open', ?)").run(AT).lastInsertRowid;
+  db.prepare("INSERT INTO cash_movements (shift_id, kind, amount, article, note, created_by, created_at) VALUES (?, 'out', 5000, 'purchase', 'Бумага', 5, ?)").run(sh, AT);
+  const cr = (extra) => getRpc('cashier_report')(db, { from: FROM, to: TO, ...extra }, ADMIN);
+  const card = cr({ pay_method: 'card' });
+  assert.equal(card.kpi.income, 40000);
+  assert.deepEqual(card.kpi.by_method, { card: 40000 });
+  assert.equal(card.kpi.expense, 0, 'расход кассы — наличные: у фильтра «Карта» его нет');
+  assert.equal(cr({ pay_method: 'cash' }).kpi.expense, 5000);
+  assert.equal(cr({ patient_group: vip }).kpi.income, 100000);
+  assert.equal(cr({ doctor_id: 3 }).kpi.income, 112000);
+  assert.equal(cr({ group: 'lab' }).kpi.income, 100000);
+  // Плоская выгрузка — те же строки.
+  assert.equal(card.rows.length, 1);
+  db.close();
+});
+
+test('фильтры: мусор — отказ по-русски, а не молча «все»', () => {
+  const { db } = seed();
+  assert.throws(() => run(db, 'total_revenue', { pay_method: 'bitcoin' }), /Способ оплаты указан неверно/);
+  assert.throws(() => run(db, 'total_revenue', { cashier_id: 'x' }), /Кассир указан неверно/);
+  assert.throws(() => run(db, 'invoices_full', { patient_group: -1 }), /Группа пациентов указана неверно/);
+  assert.throws(() => getRpc('cashier_report')(db, { from: FROM, to: TO, pay_method: 'x' }, ADMIN), /Способ оплаты указан неверно/);
+  db.close();
+});
+
+test('списки фильтров (report_choices): кассиры и группы пациентов — за воротами отчёта', () => {
+  const { db } = seed();
+  const choices = (kind, arg, user = ADMIN) => getRpc('report_choices')(db, { kind, arg }, user).choices;
+  assert.deepEqual(choices('total_revenue', 'cashier_id'), [['5', 'Кассир А'], ['6', 'Кассир Б']]);
+  assert.ok(choices('total_revenue', 'patient_group').some((c) => c[1] === 'VIP'));
+  assert.deepEqual(choices('cashier', 'cashier_id').map((c) => c[1]), ['Кассир А', 'Кассир Б']);
+  assert.ok(choices('invoices_full', 'doctor_id').some((c) => c[1] === 'Терапевтов'));
+  // Без доступа к отчёту — и списка нет (медсестре «Отчёты» не выданы).
+  db.prepare("INSERT INTO users (id, username, password_hash, role, full_name) VALUES (9, 'nur', 'x', 'nurse', 'Сестра')").run();
+  assert.throws(() => getRpc('report_choices')(db, { kind: 'total_revenue', arg: 'cashier_id' }, { id: 9, role: 'nurse', extra_roles: [] }),
+    (e) => e.status === 403);
+  db.close();
+});

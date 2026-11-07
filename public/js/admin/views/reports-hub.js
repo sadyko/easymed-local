@@ -41,11 +41,16 @@ const reportTx = () => ({ tr, trf, lang: getLang(), monthName });
 import { freshnessState, freshnessWorthShowing } from './report-buildings.js?v=fresh1';
 // PROCUREMENT_FILTERS_V1 — подписи категорий закупок те же, что на экранах склада.
 import { CATEGORY_LABEL } from './inventory-shared.js';
+// REPORTS_TAX_PAY_V1 — способы оплаты словами кассы (разрез «Отчёта кассира»).
+import { METHOD_RU as PAY_METHOD_RU } from '../../shared/payment-methods.js';
 // ROLE_REPORTS_SETTINGS_V1 — плитка видна, если её группа отчётов выдана роли.
 import { reportKindAllowed } from '../permissions.js';
 // JOURNALS_V1_SERVICE — окно выбора услуг журнала и запомненный выбор.
 import { openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText, currentUserId } from './report-service-picker.js?v=jrn4';   // JOURNALS_V1 — jrn2 поиск во всю ширину; JOURNALS_V1_RJ2C — jrn3 предел у галочки и «Готово», выбор у каждого сотрудника свой; JOURNALS_V1_ALL — jrn4 «Все услуги» / «Выбрано услуг: N»
-import { reportPrintHtml } from './report-print.js?v=jrn4';   // JOURNALS_V1_PRINT — печатная страница отчёта (jrn2 — перенос без разрыва слов); JOURNALS_V1_RJ2C — jrn3 не больше 5000 строк, jrn4 «Итого — по всем строкам»
+import { reportPrintHtml } from './report-print.js?v=jrn4';
+// REPORTS_TAX_PAY_V1 — общие фильтры окна отчёта (способ оплаты, кассир, врач,
+// группа услуг, группа пациентов), строка выбранных и имя файла Excel.
+import { F_PAY, F_CASHIER, F_DOCTOR, F_GROUP, F_PATIENT_GROUP, activeFilters, filterFileSuffix, isStaticOption } from './report-filters.js?v=rtp1';   // JOURNALS_V1_PRINT — печатная страница отчёта (jrn2 — перенос без разрыва слов); JOURNALS_V1_RJ2C — jrn3 не больше 5000 строк, jrn4 «Итого — по всем строкам»
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
 // проверить тестом — страница целиком без DOM не поднимается.
@@ -55,6 +60,8 @@ export const REPORT_DEFS = [
         icon:  'Chart',
         title: 'Общая выручка',
         desc:  'Каждая строка счёта: пациент, услуга, цена, скидка и налог, доля врача, филиал, регистратор, реферал и выплата.',
+        // REPORTS_TAX_PAY_V1 — фильтры до выгрузки (отбор — на сервере).
+        options: [F_PAY, F_CASHIER, F_DOCTOR, F_GROUP, F_PATIENT_GROUP],
     },
     // REPORTS_V2 — «Рефералы» по тому, кто направил: внутренние врачи и внешние
     // партнёры, сводка или детализация по строкам. Вид и фильтр — общими
@@ -70,6 +77,7 @@ export const REPORT_DEFS = [
         ],
         options: [
             { arg: 'referrer', label: 'Направившие', choices: [['all', 'Все'], ['internal', 'Внутренние'], ['external', 'Внешние']] },
+            F_GROUP, F_PATIENT_GROUP,   // REPORTS_TAX_PAY_V1
         ],
     },
     {
@@ -77,6 +85,7 @@ export const REPORT_DEFS = [
         icon:  'Receipt',
         title: 'Счета',
         desc:  'Все счета за период: суммы, скидки, оплачено, остаток/долг, статус, плательщик и регистратор.',
+        options: [F_PAY, F_CASHIER, F_DOCTOR, F_GROUP, F_PATIENT_GROUP],   // REPORTS_TAX_PAY_V1
     },
     // REPORTS_V2 — «Закупки и склад»: четыре вида (владелец выбрал все четыре).
     // Прежняя карточка «Закупки» — это первый вид; в колонке поставщика у неё
@@ -117,12 +126,16 @@ export const REPORT_DEFS = [
         icon:  'Activity',
         title: 'Рентабельность операций',
         desc:  'По каждой операции: сумма счёта, налог, гонорар хирурга, израсходованные товары (в счёте и вне его), прибыль клиники и маржа %.',
+        options: [F_PAY, F_CASHIER, F_DOCTOR, F_PATIENT_GROUP],   // REPORTS_TAX_PAY_V1
     },
     {
         kind:  'doctor_salaries',
         icon:  'Stethoscope',
         title: 'Зарплаты врачей',
         desc:  'По каждому врачу: выполненные услуги, сумма после скидки, средний % и доля врача (гонорар), стационарная доля, вознаграждения за направления, корректировки и итог к выплате — все начисления. Здесь же закрывается месяц оплаты врачей.',
+        // REPORTS_TAX_PAY_V1 — выплата считается по работе, а не по деньгам:
+        // способа оплаты и кассира у неё нет; врач — есть.
+        options: [F_DOCTOR],
     },
     // INPATIENT_SHARE_V1 — стационарная доля врачей: строка на каждую оплаченную
     // медицинскую строку стационара (койко-дни и медикаменты не входят).
@@ -131,6 +144,7 @@ export const REPORT_DEFS = [
         icon:  'Bed',
         title: 'Стационар: доля врачей',
         desc:  'Оплаченные услуги стационара: пациент, госпитализация, услуга, сумма после скидки и налога, врач (исполнитель или назначивший), его стационарный % и начисленная доля. Итоги по врачам. Койко-дни и медикаменты не входят.',
+        options: [F_DOCTOR, F_GROUP, F_PATIENT_GROUP],   // REPORTS_TAX_PAY_V1
     },
     // REPORTS_V2 — «По услугам»: строка на услугу и место оказания, деньги теми
     // же выражениями, что «Общая выручка» и «Зарплаты врачей».
@@ -142,6 +156,7 @@ export const REPORT_DEFS = [
         options: [
             { arg: 'paid',  label: 'Счета',  choices: [['all', 'Все счета'], ['paid', 'Только оплаченные']] },
             { arg: 'group', label: 'Группа', choices: [['all', 'Все группы'], ['consultation', 'Консультации'], ['lab', 'Лаборатория'], ['imaging', 'Диагностика'], ['procedure', 'Процедуры'], ['other', 'Хирургия']] },
+            F_PAY, F_CASHIER, F_DOCTOR, F_PATIENT_GROUP,   // REPORTS_TAX_PAY_V1
         ],
     },
     // REPORTS_V2 — «По врачам»: выплата и работа; второй вид — врач × услуга.
@@ -159,9 +174,12 @@ export const REPORT_DEFS = [
         // DOCTOR_LINES_SPECIALTY_V1 — выбор врача: выпадающий список (type
         // 'select'). Первый вариант — «все», остальные приходят от сервера
         // (report_choices) за воротами самого отчёта; отбор делает SQL.
+        // REPORTS_TAX_PAY_V1 — «Врач» теперь и у сводки «Врачи»; группа услуг и
+        // группа пациентов — у видов с услугами (сводка — выплата целиком).
         options: [
-            { arg: 'doctor_id', label: 'Врач', type: 'select', kinds: ['doctor_services', 'doctor_lines'],
-              choices: [['', 'Все врачи']] },
+            F_DOCTOR,
+            { ...F_GROUP, kinds: ['doctor_services', 'doctor_lines'] },
+            { ...F_PATIENT_GROUP, kinds: ['doctor_services', 'doctor_lines'] },
         ],
     },
     // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям»: основная специальность
@@ -171,6 +189,7 @@ export const REPORT_DEFS = [
         icon:  'Grid',
         title: 'По специальностям',
         desc:  'Какие услуги оказывает каждая специальность: количество, пациенты, сумма после скидки, оплачено и доля врачей. Специальность — основная у врача-исполнителя; услуги без врача и врачи без специальности — отдельными группами.',
+        options: [F_DOCTOR, F_GROUP, F_PATIENT_GROUP],   // REPORTS_TAX_PAY_V1
     },
     // JOURNALS_V1 (владелец, 02.10) — журналы прежней программы: «один журнал,
     // где выбирают услуги из списка и тип — стационар или амбулатория», и
@@ -226,7 +245,10 @@ export const REPORT_DEFS = [
         mode:  'charts',
         rpc:   'cashier_report',
         exports: true,
-        render: (el, data, st) => renderCashierReport(el, data, st ? st.from + '_' + st.to : ''),
+        // REPORTS_TAX_PAY_V1 — фильтры кассы (отбор на сервере), разрез по
+        // способам оплаты; в имени файла таблиц — выбранные фильтры.
+        options: [F_PAY, F_CASHIER, F_DOCTOR, F_GROUP, F_PATIENT_GROUP],
+        render: (el, data, st) => renderCashierReport(el, data, st ? st.from + '_' + st.to + filterFileSuffix(st.resultFilters || [], reportTx()) : ''),
     },
     // TELEGRAM_BROADCAST_V1 — не отчёт в смысле Excel-выгрузки, поэтому у
     // карточки собственный обработчик (`open`), а не общий конструктор
@@ -766,7 +788,8 @@ async function openReportBuilder(rep) {
                     ns['!cols'] = [{ wch: 120 }];
                     XLSX.utils.book_append_sheet(wb, ns, tr('Примечания').slice(0, 31));
                 }
-                XLSX.writeFile(wb, `${st.kind}_${st.from}_${st.to}.xlsx`);
+                // REPORTS_TAX_PAY_V1 — в имени файла — выбранные фильтры запроса.
+                XLSX.writeFile(wb, `${st.kind}_${st.from}_${st.to}${filterFileSuffix(st.resultFilters || [], reportTx())}.xlsx`);
                 toast('Файл скачан', 'ok');
             } catch (e) {
                 console.error('[reports-hub] download:', e);
@@ -779,7 +802,8 @@ async function openReportBuilder(rep) {
     // JOURNALS_V1_PRINT — заголовок печати: отчёт и вид, если видов несколько.
     function printTitle() {
         const v = Array.isArray(rep.views) && rep.views.length > 1 ? rep.views.find((x) => x.kind === st.kind) : null;
-        return v ? tr(rep.title) + ' · ' + tr(v.label) : tr(rep.title);
+        // REPORTS_TAX_PAY_V1 — и выбранные фильтры: печать говорит, по каким строкам она.
+        return (v ? tr(rep.title) + ' · ' + tr(v.label) : tr(rep.title)) + filtersTitle();
     }
     // JOURNALS_V1_PRINT — здания или филиалы на печати: только если выбрано
     // собственное подмножество (все или ни одного — фильтра нет).
@@ -790,6 +814,15 @@ async function openReportBuilder(rep) {
         }
         if (!st.branchIds.size || st.branchIds.size >= st.branches.length) return { kind: 'branches', list: [] };
         return { kind: 'branches', list: st.branches.filter((b) => st.branchIds.has(b.id)).map((b) => b.name) };
+    }
+    // REPORTS_TAX_PAY_V1 — выбранные фильтры словами на языке экрана: «Способ
+    // оплаты: Карта; Врач: Иванов И.» (для строки над таблицей и печати).
+    function filtersText() {
+        return (st.resultFilters || []).map((x) => tr(x.label) + ': ' + tr(x.value)).join('; ');
+    }
+    function filtersTitle() {
+        const t = filtersText();
+        return t ? ' · ' + t : '';
     }
     // JOURNALS_V1_PRINT — «Печать» любого табличного отчёта: страница строится
     // из уже полученного ответа (все строки, итог), второго запроса нет.
@@ -824,6 +857,7 @@ async function openReportBuilder(rep) {
         const token = ++st.reqSeq;
         const reqKind = st.kind;
         const reqArgs = reportArgs(rep, reqKind, st.opts);
+        const reqFilters = activeFilters(rep, reqKind, st.opts, st.loaded);   // REPORTS_TAX_PAY_V1
         paintChoices();
         generateBtn.disabled = true;
         generateBtn.querySelector('.gen-lbl').textContent = tr(' Формируем…');
@@ -843,13 +877,16 @@ async function openReportBuilder(rep) {
             const places = chosenPlaces();   // JOURNALS_V1_PRINT — что выбрано в момент запроса
             // CALLCENTER_REPORT_V1 — режим «графики» больше не привязан к отчёту
             // владельца: определение отчёта само называет свой RPC и рисовалку.
+            // REPORTS_TAX_PAY_V1 — фильтры уезжают и в RPC отчёта-графиков
+            // (у кассы они есть; у владельца и колл-центра их нет — пусто).
             const { data, error } = rep.mode === 'charts'
-                ? await supabase.rpc(rep.rpc || 'owner_report', args)
+                ? await supabase.rpc(rep.rpc || 'owner_report', { ...args, ...reqArgs })
                 : await supabase.rpc('run_report', { kind: reqKind, ...args, ...reqArgs });
             if (token !== st.reqSeq || st.kind !== reqKind) return;   // устаревший ответ
             if (error) throw new Error(error.message || String(error));
             st.result = data;
             st.resultMeta = { from: args.from, to: args.to, places };   // JOURNALS_V1_PRINT
+            st.resultFilters = reqFilters;   // REPORTS_TAX_PAY_V1 — фильтры, по которым посчитан ответ
             // Отчёт с графиками МОЖЕТ отдавать и плоские строки (колл-центр отдаёт
             // по строке на заявку) — тогда выгрузка работает как у табличных.
             downloadBtn.disabled = !data || !Array.isArray(data.rows) || data.rows.length === 0;
@@ -928,7 +965,9 @@ async function openReportBuilder(rep) {
             },
         }, ...selectChoices(o, st.loaded[o.arg]).map(([value, text]) => h('option', { value }, text)));
         sel.value = st.opts[o.arg] == null ? '' : String(st.opts[o.arg]);
-        if (!st.loaded[o.arg] && !st.loading.has(o.arg)) {
+        // REPORTS_TAX_PAY_V1 — у статического списка (способ оплаты, группа
+        // услуг) варианты известны браузеру: сервер не спрашивается.
+        if (!isStaticOption(o) && !st.loaded[o.arg] && !st.loading.has(o.arg)) {
             st.loading.add(o.arg);
             supabase.rpc('report_choices', { kind: st.kind, arg: o.arg }).then(({ data, error }) => {
                 if (error) throw new Error(error.message || String(error));
@@ -969,6 +1008,7 @@ async function openReportBuilder(rep) {
         downloadBtn.disabled = true;
         printBtn.disabled = true;   // JOURNALS_V1_PRINT
         st.resultMeta = null;   // JOURNALS_V1_PRINT
+        st.resultFilters = null;   // REPORTS_TAX_PAY_V1
         paintPreviewEmpty();
     }
     function paintChoices() {
@@ -1137,6 +1177,20 @@ async function openReportBuilder(rep) {
     function paintPreview() {
         clear(previewEl);
         if (rep.kind === 'doctor_salaries' || rep.kind === 'by_doctors') previewEl.appendChild(payPeriodBar());   // PAY_PERIOD_CLOSE_V1
+        // REPORTS_TAX_PAY_V1 — какие фильтры применены: таблица, «Итого» и
+        // Excel — по ним (отбор сделал сервер).
+        const ft = filtersText();
+        if (ft) {
+            previewEl.appendChild(h('div', {
+                class: 'report-filters-line',
+                style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', marginBottom: '10px', padding: '8px 12px',
+                         border: '1px solid var(--primary-200, #cfe6df)', borderRadius: '10px', background: 'var(--primary-50)',
+                         color: 'var(--primary-700)', fontSize: '12.5px' },
+            },
+                Icon('Filter', { size: 13 }),
+                h('span', { style: { fontWeight: 700 } }, trf('Фильтры: {list}', { list: ft })),
+                h('span', { class: 'muted' }, tr('Показаны строки по выбранным фильтрам; «Итого» и выгрузка в Excel — по ним же.'))));
+        }
         paintBuildingSummary(previewEl, st.result);
         if (rep.mode === 'charts') {
             const body = h('div', null);
@@ -1700,6 +1754,17 @@ function renderCashierReport(el, d, period) {
         // они уже вычтены, а в списке поступлений стоят строками «Возврат».
         d.kpi.refunds > 0 ? ccrTile(tr('Возвраты'), d.kpi.refunds, 'out') : null,
         ccrTile(multi ? tr('Итого по этому зданию (доход − расход)') : tr('Итого (доход − расход)'), d.kpi.net, 'net')));
+    // REPORTS_TAX_PAY_V1 — приход по способам оплаты: то же правило, что итог
+    // смены (возвраты — минусом), сверяется с «Касса → Смены».
+    const byMethod = Object.entries((d.kpi && d.kpi.by_method) || {});
+    if (byMethod.length) {
+        el.appendChild(h('div', { class: 'cashier-by-method', style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', marginTop: '12px' } },
+            h('span', { style: { fontSize: '12.5px', fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--ink-500)' } }, 'По способам оплаты'),
+            ...byMethod.map(([m, v]) => h('span', {
+                style: { padding: '5px 11px', borderRadius: '999px', fontSize: '12.5px', background: 'var(--white, #fff)',
+                         border: '1px solid var(--ink-100)', fontVariantNumeric: 'tabular-nums' },
+            }, tr(PAY_METHOD_RU[m] || m) + ': ' + ccrMoney(v)))));
+    }
 
     // REPORTS_TAX_PAY_V1 — колонка суммы — по названию, а не по номеру: номера
     // 5 и 3 остались с тех пор, как первой колонкой не стояло «Здание», и итог
