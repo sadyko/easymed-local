@@ -95,6 +95,9 @@ export function resolveDiscountChoice(db, a) {
       reducesFloor: group ? group.reduces : 1, reducesChosen: 1, group };
   }
   // promo
+  // DISCOUNT_V2 (ревью S1 L-5) — счёт плательщику скидок пациента не получает (BILLING_AUDIT_FIX_V1 B5):
+  // промокод пациента туда не кладётся. Ручная сумма — как в 3.21 (выше), «группа» — без скидки.
+  if (a.payerSet) throw new DiscountChoiceError('Промокод пациента на счёт плательщика не ложится — выберите «Без скидки» или скидку суммой.');
   const id = Number(a.discountId);
   if (!Number.isInteger(id) || id <= 0) throw new DiscountChoiceError('Промокод не выбран.');
   const row = db.prepare('SELECT * FROM patient_discounts WHERE id = ?').get(id);

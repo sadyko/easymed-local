@@ -163,3 +163,19 @@ test('дописывание в счёт визита: часть «группа
   assert.ok(!r3.appended);
   assert.deepEqual(money(r3.invoice), [50000, 7500, 42500]);
 });
+
+// DISCOUNT_V2 (ревью S1 L-5, проба A10) — счёт плательщику (страховая, организация) скидок пациента не
+// получает (B5). Промокод выбором в такой счёт ложился: 100 000 → 85 000 у страховой. Теперь — отказ
+// словами; ручная сумма — как в 3.21; «группа» — без скидки (тест выше).
+test('ревью S1 L-5: счёт плательщику с выбором «промокод» — отказ; без выбора и «вручную» — как в 3.21', () => {
+  const db = seed();
+  const pid = patient(db);
+  const payer = Number(db.prepare("INSERT INTO payers (name, kind, active) VALUES ('Страховая', 'insurance', 1)").run().lastInsertRowid);
+  const id = promo(db, { name: 'ЛЕТО', percent: 15 });
+  const a = visitWith(db, pid, [30]);
+  assert.throws(() => call('create_invoice_for_visit', db, { visit_id: a.vid, visit_service_ids: a.ids, discount_amount: 15000, payer_id: payer, discount_choice: 'promo', discount_id: id }),
+    (e) => e.status === 400 && /Промокод пациента на счёт плательщика не ложится/.test(e.message));
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM invoices').get().n, 0, 'счёт выставлен');
+  const inv = call('create_invoice_for_visit', db, { visit_id: a.vid, visit_service_ids: a.ids, discount_amount: 0, payer_id: payer }).invoice;
+  assert.deepEqual(money(inv), [100000, 0, 100000]);
+});
