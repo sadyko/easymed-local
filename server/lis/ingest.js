@@ -46,7 +46,7 @@ import { refundedWithoutResult } from '../services/domain/pay-releases.js';   //
 import { specimenKey } from '../../public/js/shared/specimen-key.js';   // LAB_TUBE_LABEL_V1 — одно правило материала для приёма и этикетки
 import { BARE_ID_MAX_AGE_DAYS } from '../../public/js/shared/lab-label-age.js';   // LAB_TUBE_LABEL_V1 (ревью U11, L6) — один срок голого номера для приёма и этикетки
 import { dayLabelLine, dayLabelValue } from '../../public/js/shared/lab-day-label.js';   // LAB_ONE_BARCODE_V1 — один номер на день визита
-import { roundHalfUp2, labRoundOn } from '../../public/js/shared/lab-round.js';   // LAB_ROUND_V1 — до 2 знаков, полное — в raw_value
+import { roundHalfUp2, labRoundOn, labReadingOf } from '../../public/js/shared/lab-round.js';   // LAB_ROUND_V1 — до 2 знаков, полное — в raw_value; labReadingOf — ревью S3, L-2
 import { noReadSample } from '../../public/js/shared/lab-scan.js';   // LAB_SCAN_BIND_V1 — «Inv.…»: штрихкод не прочитан (общее с лотком)
 
 /**
@@ -509,12 +509,13 @@ function takeBackFrom(db, msg, oid, fromId) {
     const panel = order && db.prepare('SELECT * FROM lab_panels WHERE service_id = ? AND active = 1 ORDER BY id LIMIT 1').get(order.service_id);
     const analytes = panel ? db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = ? AND active = 1 ORDER BY sort_order, id').all(panel.id) : [];
     let others = null;
+    const roundOn = labRoundSetting(db);   // ревью S3, L-2 — бланк и чтение сравниваются при одной настройке
     for (const row of mine) {
       if (released) { out.kept.push({ name: row.parameter, why: 'выдан' }); out.stays++; continue; }
       const a = analytes.find((x) => x.name === row.parameter);
       const sent = a ? deliveredValue(db, msg, a) : null;
       // Ревью R3, п. 10 — «390.10» и «390.1» — одно значение.
-      if (row.source !== 'analyzer' || sent == null || !sameValue(row.value, sent)) {
+      if (row.source !== 'analyzer' || sent == null || !sameValue(labReadingOf(row.value, row.raw_value, roundOn), sent)) {   // labReadingOf: ревью S3, L-2
         out.kept.push({ name: row.parameter, why: sent == null && row.source === 'analyzer' ? 'не удалось сверить с сообщением' : 'изменено после прибора' });
         out.stays++;
         continue;
@@ -708,12 +709,15 @@ function readObs(db, raw, wire) {
  * только записанные не раньше суток назад (ревью R3, п. 6): ими судится «бланк
  * полон»; «повтор» — против любого значения прибора в бланке.
  */
-function analyzerValuesOf(db, orderId, { fresh = false } = {}) {
-  return new Map(db.prepare(`SELECT parameter, value FROM lab_results
+function analyzerValuesOf(db, orderId, { fresh = false, reading = false } = {}) {
+  // Ревью S3, L-2 — reading: значения так, как их прочитал бы приём при нынешней
+  // настройке округления (labReadingOf) — для сравнения с новым чтением.
+  const roundOn = reading ? labRoundSetting(db) : true;
+  return new Map(db.prepare(`SELECT parameter, value, raw_value FROM lab_results
                               WHERE visit_service_id = ? AND source = 'analyzer' AND TRIM(COALESCE(value, '')) <> ''
                                 AND (? = 0 OR entered_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?))
                               ORDER BY id`)   // LAB_PANEL_DEDUP_V1 (ревью L2) — у повторов имени в Map остаётся самая новая строка
-    .all(orderId, fresh ? 1 : 0, sinceArg(SERIES_FORM_MAX_AGE_MS)).map((r) => [r.parameter, r.value]));
+    .all(orderId, fresh ? 1 : 0, sinceArg(SERIES_FORM_MAX_AGE_MS)).map((r) => [r.parameter, reading ? labReadingOf(r.value, r.raw_value, roundOn) : r.value]));
 }
 
 const codeKey = (s) => String(s == null ? '' : s).trim().toUpperCase();
@@ -1224,7 +1228,8 @@ function closeStaleRows(db, { sides, k, deviceId, msgId, profile }) {
   if (!rows.length) return;
   // Заказы — как у самой пробы: этот первым, потом другие заказы визита.
   const order = [target, ...sides.filter((s, i) => i !== k)];
-  const inBlank = db.prepare('SELECT value FROM lab_results WHERE visit_service_id = ? AND parameter = ? ORDER BY id DESC LIMIT 1');   // LAB_PANEL_DEDUP_V1 (ревью L2) — та строка, что на бланке
+  const inBlank = db.prepare('SELECT value, raw_value FROM lab_results WHERE visit_service_id = ? AND parameter = ? ORDER BY id DESC LIMIT 1');   // LAB_PANEL_DEDUP_V1 (ревью L2) — та строка, что на бланке; raw_value — ревью S3, L-2
+  const roundOn = labRoundSetting(db);
   for (const r of rows) {
     const d = String(r.detail || '');
     if (d.startsWith(SERIES_PENDING_PREFIX) || d.includes('повтор:') || d.includes('не подтверждено')
@@ -1238,7 +1243,7 @@ function closeStaleRows(db, { sides, k, deviceId, msgId, profile }) {
     if (t.ambiguous.length || !fills.length) continue;
     const same = fills.every(({ orderId, f }) => {
       const b = inBlank.get(orderId, f.analyte.name);
-      return !!b && String(b.value == null ? '' : b.value).trim() !== '' && sameValue(b.value, valueOf(f.obs));
+      return !!b && String(b.value == null ? '' : b.value).trim() !== '' && sameValue(labReadingOf(b.value, b.raw_value, roundOn), valueOf(f.obs));
     });
     if (!same) continue;
     const note = closedNote(target.order.id, msgId);
@@ -1659,16 +1664,17 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       const dupes = [];
       if (!seriesOn && !manual) {
         const now = analyzerValuesOf(db, O.id);
+        const read = analyzerValuesOf(db, O.id, { reading: true });   // ревью S3, L-2 — полное 3.21 против округлённого чтения
         for (const f of plan.fills) {
           if (!now.has(f.analyte.name)) continue;
           const was = now.get(f.analyte.name);
-          if (sameValue(was, valueOf(f.obs))) dupes.push(f);
+          if (sameValue(read.get(f.analyte.name), valueOf(f.obs))) dupes.push(f);
           else held.push({ obs: f.obs, analyte: f.analyte, was: String(was).trim(), now: valueOf(f.obs) });
         }
       }
       // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 5) — значения прибора в бланке ДО
       // записи: против них судится «повтор» серии — в любом окне.
-      const before = seriesOn ? analyzerValuesOf(db, O.id) : null;
+      const before = seriesOn ? analyzerValuesOf(db, O.id, { reading: true }) : null;   // reading: ревью S3, L-2
       // LIS_MINDRAY_CODES_V1 — какая строка прибора ложится в какую строку
       // бланка, решает planObservations (match.js): компонент 1 ИЛИ 2 поля
       // OBX-3, только подтверждённые сопоставления (D4), пустое значение — не
