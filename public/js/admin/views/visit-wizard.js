@@ -32,6 +32,7 @@ import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — пе�
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageSplit, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';   // PACKAGES_V1 — «скидка 20 % · до 30.09.2026»
 import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
+import { isOn } from '../../shared/flags.js';   // DIAG_ROUTE_V1 (ревью S4 H-1) — флаг is_doctor из базы: 1/«1»/true
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';   // OWN_PRICE_REPEAT_V1 — одно правило с сервером
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
@@ -1879,8 +1880,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // нужен (needsPerformer), — как в быстрой регистрации. Анализ, отмеченный одному лаборанту,
         // и процедура, отмеченная одной медсестре, молча исполнителя не получают: процедуру берёт
         // тот, кто её делает (PROC_SCOPE_V1), а талон не уходит в линию одной медсестры.
+        // DIAG_ROUTE_V1 (ревью S4 H-1) — но ВРАЧ, единственный отмеченный процедуре или анализу
+        // (ЛОР «Кукушка»), ставится сам, как во всех релизах до 3.21.1: его своя цена, его дверь
+        // (QUEUE_ONE_DOCTOR_LINE_V1), его доля. Выбора исполнителя у такой строки нет — без этого
+        // регистратор не смог бы его поставить.
         const pool = doctorsForService(svc.id);
-        if (pool.length === 1 && needsPerformer(svc)) {
+        if (pool.length === 1 && (needsPerformer(svc) || isOn(pool[0].is_doctor))) {
             line.doctorId = pool[0].id;
             // DIAG_ROUTE_V1 (D1) — у строки «на дату» день остаётся и у врача живой очереди.
             if (isLiveQueueDoc(line.doctorId)) { if (!line.dateOnly) line.when = null; repaintRail(); }

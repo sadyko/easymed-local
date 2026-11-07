@@ -137,14 +137,15 @@ const WH = JSON.stringify(Object.fromEntries(WD.map((k) => [k, { enabled: true, 
  * performers — [{id, role, is_doctor}]: им отмечена услуга 31. В клинике ещё врачи 7 и 8
  * (терапевты, им услуга не отмечена).
  */
-function seed({ req = 0, type = 'imaging', performers = [] } = {}) {
+function seed({ req = 0, type = 'imaging', performers = [], ownPrice = null } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (1,'reg','x','Регистратор','registrar',0)").run();
   const U = db.prepare('INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours, service_rates) VALUES (?,?,?,?,?,?,?,?,?)');
   U.run(7, 'ter', 'x', 'Терапевт А', 'doctor', 1, 'терапевт', WH, '[]');
   U.run(8, 'ter2', 'x', 'Терапевт Б', 'doctor', 1, 'терапевт', WH, '[]');
-  const rates = JSON.stringify([{ service_id: 31, percentage: 0 }]);
+  // ownPrice — своя цена исполнителя в «Услугах и ставках» (ревью S4 H-1).
+  const rates = JSON.stringify([{ service_id: 31, percentage: 0, ...(ownPrice != null ? { price: ownPrice } : {}) }]);
   for (const p of performers) U.run(p.id, 'u' + p.id, 'x', 'Исполнитель-' + p.id, p.role, p.is_doctor, 'УЗИ', WH, rates);
   db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Тест-Пациент')").run();
   db.prepare('INSERT INTO services (id, name, price, duration_minutes, type, requires_doctor) VALUES (31,?,100000,20,?,?)').run('Svc-УЗИ', type, req);
@@ -262,6 +263,25 @@ test('ревью I-1: анализ, отмеченный одному лабор
     assert.equal(perfSelect(ov), null, type + ': выбор исполнителя у анализа/процедуры');
     await pressUntilCreate(ov);
     assert.equal(lineDoctor(), null, type + ': единственный отмеченный поставлен сам');
+  }
+});
+
+// DIAG_ROUTE_V1 (3.22.0, ревью S4 H-1) — правка I-1 заодно перестала ставить процедуру и анализ,
+// отмеченные ОДНОМУ ВРАЧУ (ЛОР «Кукушка»), этому врачу: строка уходила без исполнителя — по цене
+// каталога вместо его своей цены и в процедурный кабинет вместо его двери (QUEUE_ONE_DOCTOR_LINE_V1).
+// До 3.21.1 включительно мастер ставил такого врача сам. I-1 остаётся для не-врачей (тест выше).
+test('ревью S4 H-1: процедура и анализ, отмеченные одному ВРАЧУ, — его строка, его цена; процедура — талон к нему', async () => {
+  for (const type of ['procedure', 'lab']) {
+    const ov = await open({ type, performers: [D(21)], ownPrice: 150000 });
+    await pressUntilCreate(ov);
+    const row = DB.prepare('SELECT id, doctor_id, unit_price FROM visit_services WHERE service_id = 31').get();
+    assert.ok(row, type + ': строка не записана: ' + JSON.stringify(TOASTS.slice(-3)));
+    assert.equal(row.doctor_id, 21, type + ': единственный отмеченный врач не поставлен сам');
+    assert.equal(Number(row.unit_price), 150000, type + ': цена не его своя');
+    await getRpc('issue_queue_numbers')(DB, { p_ids: [row.id] }, USER);
+    const k = DB.prepare('SELECT queue_key FROM visit_services WHERE id = ?').get(row.id).queue_key;
+    if (type === 'procedure') assert.match(String(k), /^doc:21:/, 'процедура: талон не к его двери');
+    else assert.match(String(k), /^lab:/, 'анализ: талон не в окно забора');
   }
 });
 
