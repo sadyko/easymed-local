@@ -5,7 +5,7 @@
 // ADVERSARIAL REVIEW (funnel lens) — batch E: C′ on a visit the patient has ALREADY paid today (visits.status stays 'scheduled').
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startCrmApp, localDay, at, daysAgoIso, addLead } from '../test-helpers/crm-unify-app.js';
+import { startCrmApp, localDay, at, daysAgoIso, addLead, earlierToday } from '../test-helpers/crm-unify-app.js';
 import { link, vsOf, cardLines, addVisitLine } from '../test-helpers/crm-link-all.js';
 import { crmNoShowSweep, crmArrivalCatchUp } from '../services/crm/no-show.js';
 
@@ -15,10 +15,11 @@ test('CRM_ONE_WAY_V1 (повтор r2) — E1: patient already here and paid; re
   const t = await startCrmApp();
   try {
     // morning: walk-in through the wizard path before the card existed / unlinked; visit paid
-    const vid = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'scheduled', 2)").run(new Date(Date.now() - 2 * 3600e3).toISOString()).lastInsertRowid);
+    // ревью 3.22.0 — «2 ч назад» и «1 ч назад», но СЕГОДНЯ (до 02:00 ночи это было вчера — тест падал)
+    const vid = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'scheduled', 2)").run(earlierToday(2 * 3600e3)).lastInsertRowid);
     t.db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, 30, 10, 1, 100000, 100000, 'queued', 2)").run(vid);
     t.db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES (1, 'INV-1', ?, 77, 100000, 100000, 100000, 'paid')").run(vid);
-    t.db.prepare("INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (1, 100000, 'cash', ?)").run(new Date(Date.now() - 3600e3).toISOString());
+    t.db.prepare("INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (1, 100000, 'cash', ?)").run(earlierToday(3600e3));
     const rid = addLead(t.db, { status: 'recall', updated: daysAgoIso(14), assigned: 3 });
     // registrar adds an analysis through the wizard: ensure_visit (no desk, no book) then /api/db line
     const ev = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: new Date().toISOString(), doctor_id: 10, visit_type: 'outpatient' });

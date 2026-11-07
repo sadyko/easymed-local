@@ -6,7 +6,7 @@
 // SAFE / specified behaviour; a FAIL = the suspected problem is real.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startCrmApp, localDay, at, daysAgoIso, addLead, addLine, linesOf } from '../test-helpers/crm-unify-app.js';
+import { startCrmApp, localDay, at, daysAgoIso, addLead, addLine, linesOf, earlierToday } from '../test-helpers/crm-unify-app.js';
 import { link, vsOf, cardLines, addVisitLine, calendarBook, callcenterBook, deskRegister } from '../test-helpers/crm-link-all.js';
 import { crmNoShowSweep } from '../services/crm/no-show.js';
 
@@ -196,7 +196,8 @@ test('CRM_ONE_WAY_V1 (повтор r2) — F-8: patient without any card — reg
 test('CRM_ONE_WAY_V1 (повтор r2) — F-4a: P-5 — phone-only lead, today\'s visit already PAID today → ensure_visit (no desk) → card «Пришёл»', async () => {
   const t = await startCrmApp();
   try {
-    const vid = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'scheduled', 2)").run(new Date(Date.now() - 3600e3).toISOString()).lastInsertRowid);
+    // ревью 3.22.0 — «час назад», но СЕГОДНЯ (до 01:00 ночи это было вчера — тест падал)
+    const vid = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'scheduled', 2)").run(earlierToday(3600e3)).lastInsertRowid);
     t.db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, 30, 10, 1, 100000, 100000, 'added', 2)").run(vid);
     t.db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES (1, 'INV-1', ?, 77, 100000, 100000, 100000, 'paid')").run(vid);
     t.db.prepare("INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (1, 100000, 'cash', ?)").run(new Date().toISOString());

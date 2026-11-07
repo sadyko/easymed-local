@@ -42,6 +42,15 @@ export function at(dayIso, hh, mm = 0) {
   return new Date(y, m - 1, d, hh, mm, 0, 0).toISOString();
 }
 export const daysAgoIso = (n) => new Date(Date.now() - n * 86400000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+/**
+ * Ревью 3.22.0 — «ms назад», но не раньше начала СЕГОДНЯШНЕГО местного дня → ISO (UTC).
+ * «Сейчас − 2 ч» ночью (до 02:00) — это вчера: тест «визит сегодня, уже оплачен» падал
+ * каждую ночь. Так момент всегда сегодня и не позже «сейчас».
+ */
+export function earlierToday(ms) {
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  return new Date(Math.max(start.getTime(), Date.now() - ms)).toISOString();
+}
 
 // id, логин, имя, роль, своя роль клиники
 export const USERS = [
