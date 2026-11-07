@@ -442,3 +442,44 @@ test('ревью L-4: удалена строка ДРУГОГО дня визи
   assert.match(lastRow(db).detail, /не найден/);
   db.close();
 });
+
+// Ревью S3 (проба probe-ingest, «конец в конец») — номера печатает НАСТОЯЩИЙ клиент
+// (lab-tube.js dayLabels), пробы присылают три анализатора по своим проводам, кладёт
+// настоящий приём. Визит: «Время свертываемости» (без панели), «Биохимия» BS-200
+// (сыворотка), «ОАК» BC-780 (третий в списке), «Белок мочи» BS-200 (моча), «Витамин
+// B12» и «ТТГ» на A1000 (через переадресатор: номер — в Patient ID, OBR-3). После M-3
+// у BS-200 (сыворотка и моча в один день) — свои этикетки пробирок; у BC-780 и A1000 —
+// номер дня. Каждая строка заполнена своим прибором.
+test('ревью S3, конец в конец: номера карточки → BC-780, BS-200 (сыворотка, моча), A1000 ×2 — каждая строка дня заполнена', async () => {
+  const { dayLabels, tubeDeviceMap } = await import('../../public/js/admin/views/lab-tube.js');
+  const db = clinic([[100, 45], [101, 42], [102, 41], [103, 43]]);
+  db.exec(`INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, discovered, added, model_confirmed)
+             VALUES (5, 'A1000', 'autobio-autolumo-a1000', 'mllp', '10.0.0.60', NULL, 1, 0, 1, 1);
+           INSERT INTO services (id, name, is_lab, specimen) VALUES (46, 'Витамин B12', 1, 'Сыворотка'), (47, 'ТТГ', 1, 'Сыворотка');
+           INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (104, 20, 46, 'queued', ${NOW}), (105, 20, 47, 'queued', ${NOW});`);
+  bindPanel(db, { id: 46, serviceId: 46, deviceId: 5, name: 'B12', lines: [['B12', 'Витамин B12', '206']] });
+  bindPanel(db, { id: 47, serviceId: 47, deviceId: 5, name: 'ТТГ', lines: [['TSH', 'ТТГ', '201']] });
+  const rows = db.prepare(`SELECT vs.id, vs.status, vs.service_id, vs.created_at, vs.scheduled_at, vs.sample_collected_at, s.name, s.specimen, s.is_lab
+                             FROM visit_services vs JOIN services s ON s.id = vs.service_id WHERE vs.visit_id = 20 ORDER BY vs.id`).all()
+    .map((r) => ({ ...r, services: { name: r.name, specimen: r.specimen, is_lab: r.is_lab } }));
+  const days = dayLabels(rows, { deviceByService: tubeDeviceMap(db.prepare('SELECT id, service_id, device_id, active FROM lab_panels').all()),
+    visitDate: db.prepare('SELECT visit_date FROM visits WHERE id = 20').get().visit_date });
+  assert.equal(days.length, 1);
+  const [d] = days;
+  assert.equal(d.code, '90000100');
+  const own = Object.fromEntries(d.own.map((o) => [o.rowIds[0], o.code]));
+  assert.deepEqual(own, { 101: '00000101', 103: '00000103' }, 'BS-200: сыворотка и моча — свои этикетки');
+  const A1000 = (sample, code, value) => ['MSH|^~\\&|AutoLumo A1000|LabPC|||20261107101600||ORU^R01|' + code + '|P|2.3.1',
+    `OBR|1||${sample}|`, `OBX|1|NM|${code}^^AUTOBIO|T${code}|${value}|u|||||F`].join('\r');
+  bc(db, d.code, [['6690-2^WBC^LN', '7.25']]);
+  bs(db, own[101], 'GLU', '5.1', 'serum');
+  bs(db, own[101], 'CREA', '80', 'serum');
+  bs(db, own[103], 'UPRO', '0.1', 'urine');
+  ingestMessage(db, A1000(d.code, '206', '390.946'), '10.0.0.60', 5);
+  ingestMessage(db, A1000(d.code, '201', '2.1'), '10.0.0.60', 5);
+  assert.deepEqual(Object.fromEntries([101, 102, 103, 104, 105].map((id) => [id, blank(db, id)])), {
+    101: { 'Глюкоза': '5.1', 'Креатинин': '80' }, 102: { 'Лейкоциты': '7.25' }, 103: { 'Белок мочи': '0.1' },
+    104: { 'Витамин B12': '390.95' }, 105: { 'ТТГ': '2.1' },
+  });
+  db.close();
+});
