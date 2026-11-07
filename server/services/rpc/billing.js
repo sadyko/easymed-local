@@ -1579,12 +1579,13 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
       const oldOwn = invoiceOwnDiscount(db, inv.id);   // PACKAGES_V1 — ДО правки строки
       const oldBase = invoiceRestBase(db, inv.id);      // V3120_FIX (FATAL-1) — тоже ДО
       const group = patientGroupDiscount(db, inv.patient_id);
+      const rateSrc = invoiceRateSource(db, inv, group);   // ревью S5 M-2 — ДО сброса строки
       const desk = deskPartOf(db, inv, group, item);   // ревью S5 H-1 — часть кассы на строке, ДО сброса
       db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = 0, discount_rate = NULL, discount_doctor_share = NULL WHERE id = ?')
         .run(newServiceId, svc.name || '', unit, lineTotal, item.id);
       // DISCOUNT_RATES_V1 — ставка группы по НОВОЙ услуге (Консультации 100 % → УЗИ 20 %);
       // ревью S5 H-1 — и та же доля скидки кассы от нового остатка строки.
-      rerateChangedLine(db, inv, group, item.id, desk);
+      rerateChangedLine(db, inv, group, item.id, desk, rateSrc);
       invoice = repriceUnpaidInvoice(db, inv, oldOwn, { oldBase, absolute: true });   // V3120_FIX (FATAL-1); CASHIER_HEAD_V1 (I3)
       lineAudit(db, {
         inv: invoice, number: inv.invoice_number, visitId: vs.visit_id, action: 'line_change_service',
@@ -2256,13 +2257,14 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
   // Ревью S5 H-1 — часть скидки кассы на строке по ставкам, ДО сброса строки.
   const group = serviceChanges ? patientGroupDiscount(db, inv.patient_id) : null;
   const desk = serviceChanges ? deskPartOf(db, inv, group, item) : null;
+  const rateSrc = serviceChanges ? invoiceRateSource(db, inv, group) : null;   // ревью S5 M-2 — ДО сброса строки
   db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = ? WHERE id = ?')
     .run(serviceChanges ? newServiceId : item.service_id, description, unit, lineTotal, own, item.id);
   // DISCOUNT_RATES_V1 — другая услуга — и ставка группы другая (своя скидка строки снята выше);
   // ревью S5 H-1 — часть кассы — той же долей от нового остатка (возврат 36 000, не 24 000).
   if (serviceChanges) {
     db.prepare('UPDATE invoice_items SET discount_rate = NULL, discount_doctor_share = NULL WHERE id = ?').run(item.id);
-    rerateChangedLine(db, inv, group, item.id, desk);
+    rerateChangedLine(db, inv, group, item.id, desk, rateSrc);
   }
 
   // 2. Сумма счёта: без скидки после продажи, потом она ложится в той же доле

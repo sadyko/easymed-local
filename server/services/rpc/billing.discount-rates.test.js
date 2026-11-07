@@ -324,3 +324,49 @@ test('ревью S5 M-1: часть по ставкам группы по-пре
   assert.equal(res.invoice.id, first.id);
   assert.deepEqual(money(res.invoice), [240000, 48000, 192000]);
 });
+
+// ─── Ревью S5 M-2 — «ВРУЧНУЮ» СВЕРХ СТАВОК: ПРАВКА КАССЫ НЕ КЛАДЁТ СТАВКИ СВЕРХУ ─────
+//
+// «Вручную» 200 000 на консультацию + УЗИ (300 000) больше скидки по ставкам (140 000) —
+// своя скидка регистратора, как прежде (ставки не ложатся). Касса добавляла услугу или
+// меняла её — invoiceRateSource отдавал ставки группы, и новая строка получала их поверх
+// ручной скидки: две скидки сразу (правило «одна скидка») и копейки в счёте. Теперь у
+// такого счёта правка — правилом без ставок, ровно как у группы без ставок.
+function manualOver(db, rates) {
+  const pid = patient(db, group(db, { rates }));
+  const { vid, ids } = visitWith(db, pid, [30, 31]);
+  const inv = call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: ids, discount_amount: 200000, discount_choice: 'manual' }).invoice;
+  assert.deepEqual(money(inv), [300000, 200000, 100000]);
+  return { ids, inv };
+}
+
+test('ревью S5 M-2: «вручную» сверх ставок, касса добавила ЭКГ — 150 000, как без ставок (не 140 000 со ставкой сверху)', () => {
+  for (const rates of [STAFF, {}]) {
+    const db = seed();
+    const { inv } = manualOver(db, rates);
+    call('cashier_line_add', db, { invoice_id: inv.id, service_id: 41, doctor_id: 20 });
+    // ручные 200 000 (база выросла — не больше данной суммы), пол 20 % от 350 000 = 70 000 меньше
+    assert.deepEqual(money(invOf(db, inv.id)), [350000, 200000, 150000], 'ставки: ' + JSON.stringify(rates));
+    assert.deepEqual(items(db, inv.id).map((r) => [r[2], r[3]]), [[0, null], [0, null], [0, null]]);
+  }
+});
+
+test('ревью S5 M-2: «вручную» сверх ставок, касса заменила консультацию на ОАК — 80 000 без копеек, как без ставок', () => {
+  for (const rates of [STAFF, {}]) {
+    const db = seed();
+    const { ids, inv } = manualOver(db, rates);
+    call('change_unpaid_service', db, { visit_service_id: ids[0], new_service_id: 40 });
+    // ручные 200 000 × 240 000 / 300 000 = 160 000
+    assert.deepEqual(money(invOf(db, inv.id)), [240000, 160000, 80000], 'ставки: ' + JSON.stringify(rates));
+  }
+});
+
+test('ревью S5 M-2: «вручную» не больше ставок — счёт по ставкам, касса добавляет строку своей ставкой (как прежде)', () => {
+  const db = seed();
+  const pid = patient(db, group(db, { rates: STAFF }));
+  const { vid, ids } = visitWith(db, pid, [30, 31]);
+  const inv = call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: ids, discount_amount: 140000, discount_choice: 'manual' }).invoice;
+  assert.deepEqual(money(inv), [300000, 140000, 160000]);
+  call('cashier_line_add', db, { invoice_id: inv.id, service_id: 41, doctor_id: 20 });
+  assert.deepEqual(money(invOf(db, inv.id)), [350000, 150000, 200000]);
+});

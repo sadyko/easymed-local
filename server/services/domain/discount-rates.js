@@ -118,10 +118,19 @@ export function ratedChoice(db, choice, a) {
  * новые строки ставок не получают (промокод на новые строки не расширяется — как и
  * сумма промокода без ставок).
  */
+//
+// Ревью S5 M-2 — счёт «вручную» (или по правилу 3.21) со СВОЕЙ скидкой регистратора и без
+// единой строки по ставкам выставлен прежним правилом: присланная скидка больше скидки по
+// ставкам (manualOver) или ставок тогда не было. Его правка — тем же прежним правилом,
+// ставки на новые строки не ложатся: иначе ставка группы ложилась ПОВЕРХ ручной скидки
+// (две скидки сразу, вопреки «одна скидка»; копейки в счёте): 200 000 вручную на 300 000,
+// касса заменила консультацию на ОАК — 98 666,67 к оплате вместо 80 000.
 export function invoiceRateSource(db, inv, group) {
   if (!inv || inv.payer_id || inv.admission_id) return null;
   const s = inv.discount_source;
   if (!(s == null || s === '' || s === 'group' || s === 'manual')) return null;
+  if ((s == null || s === '' || s === 'manual') && Number(inv.manual_discount) > 0
+      && !db.prepare('SELECT 1 FROM invoice_items WHERE invoice_id = ? AND discount_rate IS NOT NULL LIMIT 1').get(inv.id)) return null;   // ревью S5 M-2
   return groupRateSource(group);
 }
 
@@ -192,13 +201,15 @@ export function deskPartOf(db, inv, group, item) {
 
 /**
  * Ставка строки после замены услуги (строка уже сброшена: discount_amount 0,
- * discount_rate NULL) и часть кассы обратно (deskPartOf). Ставки группы на счёт не
+ * discount_rate NULL) и часть кассы обратно (deskPartOf). rateSrc — invoiceRateSource,
+ * взятый ДО сброса строки (ревью S5 M-2 смотрит, есть ли в счёте строки по ставкам,
+ * и сброшенная строка их не прячет). Ставки группы на счёт не
  * ложатся (промокод, «Без скидки», ставки у группы сняли), а часть кассы была — строка
  * получает процент, который лёг бы на неё полом группы (0 % там, где пола нет), и
  * часть кассы: иначе она пропала бы, а пол группы лёг бы на строку дважды.
  */
-export function rerateChangedLine(db, inv, group, itemId, desk) {
-  let src = invoiceRateSource(db, inv, group);
+export function rerateChangedLine(db, inv, group, itemId, desk, rateSrc = invoiceRateSource(db, inv, group)) {
+  let src = rateSrc;
   if (!src && desk) {
     src = { kind: 'flat', pct: floorApplies(inv) && group ? Number(group.pct) || 0 : 0, rates: null,
       reduces: group && Number(group.reduces) === 0 ? 0 : 1, scope: [] };
