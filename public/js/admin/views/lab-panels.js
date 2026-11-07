@@ -34,6 +34,8 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_SERVICE_ROUTING_V1 — one shared definition of 'lab service'
+import { matrixEditor, editorMatrix, matrixPayload } from './lab-matrix-editor.js';   // LAB_MATRIX_PANEL_V1 — конструктор таблицы
+import { MATRIX_KIND, normalizeMatrix } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1
 import { codeChoices, TYPE_OWN, namedModel } from './lab-device-codes.js?v=codes3';   // LIS_MINDRAY_CODES_V1 — присланные коды, типовые, свой код · LIS_REAL_ANALYZERS_V1 — «12 · GLU»; namedModel — ревью R5, п. 5
 
 const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагностика' };
@@ -542,6 +544,12 @@ export async function mountLabPanels(container) {
             }, s.name + (takenBy[s.id] ? '  — ' + trf('уже занята: {name}', { name: takenBy[s.id] }) : ''));
 
             for (const s of pinned) svcSel.appendChild(opt(s));
+            // Ревью lab2 L-4 (выпуск 3.22.0) — услуга панели выключена: в списке активных её
+            // нет, и выбор молча становился «не привязана» — главное здание тихо отвязывало
+            // панель, филиал получал 409 на каждое сохранение. Привязка остаётся как есть.
+            if (p.service_id && !state.services.some(s => String(s.id) === String(p.service_id))) {
+                svcSel.appendChild(h('option', { value: p.service_id, selected: String(cur) === String(p.service_id) }, tr('Привязанная услуга выключена') + ' (№ ' + p.service_id + ')'));
+            }
             if (lab.length) {
                 const g = h('optgroup', { label: 'Лабораторные услуги' });
                 for (const s of lab) g.appendChild(opt(s));
@@ -587,7 +595,19 @@ export async function mountLabPanels(container) {
                 h('div', { class: 'field' }, h('label', null, tr('Состояние')),
                     h('div', { class: 'row', style: { gap: '8px' } },
                         h('label', { class: 'lp-check' + (p.active !== false ? ' on' : '') }, activeChk, ' Активна'),
-                        h('label', { class: 'lp-check' }, narrChk, ' Текстовое заключение'))))));
+                        h('label', { class: 'lp-check' }, narrChk, ' Текстовое заключение')))),
+            // LAB_MATRIX_PANEL_V1 (решение владельца п. 7) — вид панели: обычная (показатели)
+            // или таблица бак. посева (разделы, графы, строки, степени). Смена вида
+            // перерисовывает редактор; сохранённые показатели обычной панели не трогаются,
+            // пока панель не сохранили таблицей.
+            fld(tr('Вид панели'), h('select', { style: { width: '100%' }, 'data-panel-kind': '',
+                onchange: (e) => {
+                    p.kind = e.target.value === MATRIX_KIND ? MATRIX_KIND : '';
+                    if (p.kind === MATRIX_KIND && !p.matrix) p.matrix = editorMatrix(p);
+                    paintEditor();
+                } },
+                h('option', { value: '', selected: p.kind !== MATRIX_KIND }, tr('Обычная — показатели')),
+                h('option', { value: MATRIX_KIND, selected: p.kind === MATRIX_KIND }, tr('Таблица (бак. посев)'))))));
 
         // Says plainly whether the link is actually wired up. Without this the two
         // failure modes are silent: an unlinked panel is never ordered by anyone, and
@@ -625,6 +645,14 @@ export async function mountLabPanels(container) {
                             : tr('Приборов пока нет. Запустите пробу на анализаторе — он появится во вкладке «Анализаторы» → «Добавить прибор».'))),
             linkLine));
 
+        // LAB_MATRIX_PANEL_V1 — у таблицы вместо списка показателей — конструктор таблицы.
+        if (p.kind === MATRIX_KIND) {
+            if (!p.matrix) p.matrix = editorMatrix(p);
+            body.appendChild(h('h4', { style: { margin: '4px 0 6px', fontSize: '13.5px' } }, tr('Таблица')));
+            body.appendChild(h('div', { class: 'lp-note' }, Icon('Info', { size: 12 }), ' ',
+                tr('Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».')));
+            body.appendChild(matrixEditor(p.matrix));
+        } else {
         // ── analyte table ──
         // Sex-specific ranges and the analyzer column only when they carry
         // something: nine columns did not fit a laptop and the actions were
@@ -666,6 +694,7 @@ export async function mountLabPanels(container) {
                 tb));
         }
         body.appendChild(tblWrap);
+        }   // LAB_MATRIX_PANEL_V1 — конец обычной панели
 
         body.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '16px', justifyContent: 'flex-end' } },
             // LAB_PANEL_DEDUP_V1 — кнопка неактивна, ПОКА ИДЁТ ЛЮБАЯ запись панели
@@ -1142,6 +1171,14 @@ export async function mountLabPanels(container) {
 
     async function savePanel(fields) {
         if (!fields.name) { toast('Укажите название панели', 'warn'); return; }
+        // LAB_MATRIX_PANEL_V1 — таблица проверяется здесь тем же правилом, что на
+        // сервере (shared/lab-matrix.js): ошибка — словами, до записи.
+        const sel = state.selected || {};
+        const isMatrix = sel.kind === MATRIX_KIND;
+        if (isMatrix) {
+            const m = normalizeMatrix(matrixPayload(sel.matrix || editorMatrix(sel)));
+            if (!m.ok) { toast(trf(m.error.text, m.error.params || {}), 'fail'); return; }
+        }
         // LIS_INGEST_V1 / решение владельца D4 — ЕДИНСТВЕННОЕ место, где запрет
         // на тихое применение держится технически, а не на дисциплине. Панель с
         // непроверенными подсказками сохранить нельзя: иначе «предложено» молча
@@ -1253,7 +1290,10 @@ export async function mountLabPanels(container) {
             // ref_ranges — колонка из самой первой схемы (мигр. 025), поэтому
             // прежний повтор вставки «без ref_ranges» (LAB_MULTI_REF_V1, база
             // без мигр. 121 облачной сборки) здесь не нужен.
-            const { data, error } = await supabase.rpc('lab_panel_save', { panel, analytes: ins });
+            // LAB_MATRIX_PANEL_V1 — таблица: вид и устройство; показатели соберёт сервер.
+            panel.kind = isMatrix ? MATRIX_KIND : '';
+            if (isMatrix) panel.matrix = matrixPayload(sel.matrix || editorMatrix(sel));
+            const { data, error } = await supabase.rpc('lab_panel_save', { panel, analytes: isMatrix ? [] : ins });
             if (error) throw error;
             toast('Панель сохранена');
             state.selected = { ...p, id: data.id, ...row };

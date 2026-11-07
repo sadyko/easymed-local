@@ -10,6 +10,10 @@
 // Поддельный DOM и /api/db — те же, что в lab-card.test.mjs; плюс панели
 // (lab_panels.device_id — какой прибор кормит услугу) и окно печати, которое
 // запоминает написанный в него HTML.
+//
+// LAB_ONE_BARCODE_V1 (решение владельца 2026-11-07, п. 10) — «Штрих-код» печатает
+// ОДИН номер на день визита (одну и ту же этикетку на каждую пробирку); этикетка
+// строки («Печать этикетки», «Забор пробы») — номер строки, как прежде.
 import { test } from 'node:test';
 import assert from 'node:assert';
 
@@ -174,78 +178,76 @@ const labelsOf = (html) => html.split('<div class="lbl">').slice(1).map((part) =
   tests: (/class="tests">([^<]*)</.exec(part) || [])[1] || '',
 }));
 
-// ═══ Карточка: этикетка на каждую пробирку ══════════════════════════════════
+// ═══ Карточка: один номер на день визита, этикетка на каждую пробирку ═════════
+// LAB_ONE_BARCODE_V1 (решение владельца 2026-11-07, п. 10) — «Штрих-код» печатает
+// ОДИН номер (90000000 + самая старая открытая оплаченная строка дня) — одну и ту же
+// этикетку столько раз, сколько у дня пробирок (lab-tube.js tubeGroups). Приём по
+// этому номеру заполняет каждую строку дня, которую кормит прибор.
 
-test('снимок владельца (до забора): «Штрих-код» — этикетка на каждую пробирку одним окном; кровь двух счетов — № 00000028', async () => {
+test('снимок владельца (до забора): «Штрих-код» — один номер дня (90000028) на каждую пробирку, одним окном', async () => {
   const c = await mount(PHOTO_QUEUED());
   const btn = barcodeBtn(c);
   assert.ok(btn, 'кнопка «Штрих-код» пропала');
-  assert.strictEqual(btn.getAttribute('title'), 'Этикетки на пробирки — по одной на пробирку');
+  assert.strictEqual(btn.getAttribute('title'), 'Один номер на все пробирки дня визита — этикетка на каждую пробирку');
   btn.click();
   await tick();
   assert.strictEqual(opened, 1, 'этикетки визита — одним окном печати');
   const labels = labelsOf(printed[0]);
-  assert.deepStrictEqual(labels.map((l) => l.code), ['00000028', '00000029', '00000032']);
-  assert.deepStrictEqual(labels.map((l) => l.tests), ['Анализ крови', 'Анализ мочи', 'Анализ мочи']);
-  for (const l of labels) assert.match(l.date, /^\d\d\.\d\d\.\d{4}, \d\d:\d\d$/, 'проба не взята — время печати, числом');
+  assert.deepStrictEqual(labels.map((l) => l.code), ['90000028', '90000028', '90000028'], 'три пробирки (кровь двух счетов — одна) — три копии одного номера');
+  for (const l of labels) {
+    assert.strictEqual(l.tests, 'Анализ крови, Анализ мочи');
+    assert.match(l.date, /^\d\d\.\d\d\.\d{4}, \d\d:\d\d$/, 'проба не взята — время печати, числом');
+  }
   assert.ok(printed[0].includes(PATIENT.full_name), 'на этикетке нет пациента');
 });
 
-// Ревью U11, M1 — кровь № 28 уже взята, а № 31 ждёт забора: это новый забор, у
-// него своя этикетка (одна пробирка на обе дала бы новой пробирке номер взятой, и
-// её значения легли бы в черновик № 28). У взятой — время забора, местное.
-test('ревью U11, M1: № 31 ждёт забора, № 28 уже взята — своя этикетка у каждой; у взятой — 19:06', async () => {
+test('проба № 28 уже взята — номер дня прежний, копий по числу пробирок; время — забора, местное (19:06)', async () => {
   const c = await mount(PHOTO());
   barcodeBtn(c).click();
   await tick();
   const labels = labelsOf(printed[0]);
-  assert.deepStrictEqual(labels.map((l) => [l.code, l.tests]), [
-    ['00000028', 'Анализ крови'], ['00000029', 'Анализ мочи'], ['00000031', 'Анализ крови'], ['00000032', 'Анализ мочи'],
-  ]);
+  assert.deepStrictEqual(labels.map((l) => l.code), ['90000028', '90000028', '90000028', '90000028']);
   assert.strictEqual(labels[0].date, '02.11.2026, 19:06', 'забор в 14:06 UTC — на этикетке 19:06 по Ташкенту');
 });
 
-test('номер пробы на карточке — номер первой пробирки (как на её этикетке), а не самой новой строки', async () => {
+test('номер пробы на карточке — номер дня визита (как на этикетке), а не строки', async () => {
   const c = await mount(PHOTO());
   const acc = textOf(byClass(c, 'lq-acc')[0]);
-  assert.ok(acc.includes('LAB-000028'), acc);
-  assert.ok(!acc.includes('LAB-000032'), acc);
+  assert.ok(acc.includes('90000028'), acc);
+  assert.ok(!acc.includes('LAB-0000'), acc);
 });
 
-test('добавили анализ крови до забора — номер пробирки крови тот же; после забора — у нового своя этикетка', async () => {
+test('добавили анализ до или после забора — номер дня тот же (90000028)', async () => {
   const c = await mount([line(35, BLOOD, 'queued'), ...PHOTO_QUEUED()]);
   barcodeBtn(c).click();
   await tick();
-  const labels = labelsOf(printed[0]);
-  assert.deepStrictEqual(labels.map((l) => l.code), ['00000028', '00000029', '00000032']);
-  assert.strictEqual(labels[0].tests, 'Анализ крови');
-  // № 28 уже взята: № 31 и № 35 ждут забора — одна новая пробирка, номер № 31.
+  assert.deepStrictEqual([...new Set(labelsOf(printed[0]).map((l) => l.code))], ['90000028']);
   const after = await mount([line(35, BLOOD, 'queued'), ...PHOTO()]);
   barcodeBtn(after).click();
   await tick();
-  assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['00000028', '00000029', '00000031', '00000032']);
+  assert.deepStrictEqual([...new Set(labelsOf(printed[0]).map((l) => l.code))], ['90000028']);
 });
 
-test('номер не зависит от вкладки: под «В работе» видна одна строка, пробирки — те же', async () => {
+test('номер не зависит от вкладки: под «В работе» видна одна строка, номер и копии — те же', async () => {
   const c = await mount(PHOTO(), { filter: 'В работе' });
   assert.strictEqual(byClass(c, 'lq-item').length, 1, 'под «В работе» — только взятая проба № 28');
   barcodeBtn(c).click();
   await tick();
-  assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['00000028', '00000029', '00000031', '00000032']);
+  assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['90000028', '90000028', '90000028', '90000028']);
 });
 
-test('панель без прибора — пробирка по материалу (не указан — этикетка на строку); выданный визит — этикеток нет', async () => {
+test('панель без прибора — номер дня тот же, копий по числу пробирок; выданный визит — этикеток нет', async () => {
   const c = await mount(PHOTO(), { panels: [] });
   barcodeBtn(c).click();
   await tick();
-  assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['00000028', '00000029', '00000031', '00000032']);
+  assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['90000028', '90000028', '90000028', '90000028']);
 
   const done = await mount([line(28, BLOOD, 'completed', { sample_collected_at: '2026-11-02T14:06:00Z' })], { filter: 'Все' });
-  assert.ok(!barcodeBtn(done), 'открытых пробирок нет — клеить нечего (голый номер выданного заказа приём не примет)');
+  assert.ok(!barcodeBtn(done), 'открытых пробирок нет — клеить нечего');
 });
 
-test('К4: строка «услуга возвращена» в пробирку не идёт — номер пробирки крови даёт следующая строка', async () => {
-  // № 28: результат внесён, потом касса вернула деньги — строка видна с пометкой, но пробирки у неё нет.
+test('К4: строка «услуга возвращена» номер дня не даёт — номер даёт следующая открытая строка (90000029)', async () => {
+  // № 28: результат внесён, потом касса вернула деньги — строка видна с пометкой, но номера дня она не даёт.
   REFUNDED = [28];
   LAB_RESULTS = [{ id: 1, visit_service_id: 28, parameter: 'Лейкоциты', value: '6.2', unit: '', flag: 'normal', notes: null, entered_at: '2026-11-02T14:30:00Z' }];
   try {
@@ -254,11 +256,25 @@ test('К4: строка «услуга возвращена» в пробирк�
     assert.strictEqual(byClass(c, 'lq-refunded').length, 1, 'возвращённая строка с результатом видна с пометкой');
     barcodeBtn(c).click();
     await tick();
-    assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['00000029', '00000031', '00000032']);
+    assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['90000029', '90000029', '90000029']);
   } finally {
     REFUNDED = [];
     LAB_RESULTS = [];
   }
+});
+
+test('скан этикетки дня в поиске очереди находит визит', async () => {
+  VISIT_SERVICES = PHOTO();
+  LAB_PANELS = PANELS;
+  const root = mk('div');
+  await renderLaboratory(root, { tabId: 't-1' });
+  await tick();
+  const search = walk(root).find((n) => n.tagName === 'INPUT' && (n.attrs.type === 'search' || /Поиск|поиск/.test(n.attrs.placeholder || '')));
+  assert.ok(search, 'нет поля поиска');
+  search.value = '90000028';
+  search.dispatchEvent({ type: 'input', target: search, currentTarget: search });
+  await tick();
+  assert.strictEqual(byClass(root, 'lq-card').length, 1, 'карточка визита по номеру дня');
 });
 
 // ═══ Строка: «Печать этикетки» и «Забор пробы» ═════════════════════════════
@@ -309,47 +325,50 @@ async function worksheetHead(c) {
 }
 
 // M2 (проба P5a): шапка окна «Внести результаты» показывала g.accession — самую
-// новую видимую строку (на снимке — LAB-000032, моча), а карточка — первую
-// пробирку (LAB-000028). Номер набирают в анализатор, когда не читается этикетка,
-// и в «Привязать»: номер мочи на пробирке сыворотки увёл бы креатинин в «Креатинин
-// мочи». Теперь пробирки считаются один раз, и оба экрана показывают одни и те же
-// номера — по кнопке на пробирку: номер и что в ней.
-test('ревью U11, M2: карточка и «Внести результаты» — одни и те же номера проб, по кнопке на пробирку', async () => {
-  for (const [rows, want] of [
-    [PHOTO_QUEUED(), [['LAB-000028', 'Анализ крови'], ['LAB-000029', 'Анализ мочи'], ['LAB-000032', 'Анализ мочи']]],
-    [PHOTO(), [['LAB-000028', 'Анализ крови'], ['LAB-000029', 'Анализ мочи'], ['LAB-000031', 'Анализ крови'], ['LAB-000032', 'Анализ мочи']]],
-  ]) {
+// новую видимую строку, а карточка — другое. LAB_ONE_BARCODE_V1 — теперь оба экрана
+// показывают номер дня визита — тот, что на этикетке «Штрих-код».
+test('ревью U11, M2 + LAB_ONE_BARCODE_V1: карточка и «Внести результаты» — один и тот же номер дня', async () => {
+  for (const rows of [PHOTO_QUEUED(), PHOTO()]) {
     const c = await mount(rows);
-    assert.deepStrictEqual(chips(c), want, 'карточка: кнопка на каждую пробирку');
-    assert.ok(textOf(headAcc(c)[0]).includes('LAB-000028'), 'строка очереди: ' + textOf(headAcc(c)[0]));
+    assert.deepStrictEqual(chips(c), [], 'день один — ряда номеров нет, номер один');
+    assert.ok(textOf(headAcc(c)[0]).includes('90000028'), 'строка очереди: ' + textOf(headAcc(c)[0]));
     const ws = await worksheetHead(c);
-    assert.deepStrictEqual(chips(ws), want, 'окно «Внести результаты» — те же номера, что на карточке');
+    assert.strictEqual(byClass(ws, 'lq-acc').length, 1);
+    assert.ok(textOf(ws).includes('90000028'), 'окно «Внести результаты» — тот же номер: ' + textOf(ws));
   }
 });
 
-test('ревью U11, M2: в строке очереди место на один номер — первая пробирка, которую кормит прибор; кнопка копирует свой номер', async () => {
-  // № 27 — моча без прибора — самая старая пробирка; в строке очереди — кровь № 28 (BC-780).
+test('номер дня — самая старая открытая строка дня, какой бы прибор её ни кормил; кнопка копирует номер дня', async () => {
+  // № 27 — моча без прибора — самая старая строка; номер дня — 90000027.
   const c = await mount([line(28, BLOOD, 'queued'), line(27, URINE, 'queued')]);
   assert.strictEqual(headAcc(c).length, 1);
-  assert.ok(textOf(headAcc(c)[0]).includes('LAB-000028'), textOf(headAcc(c)[0]));
-  assert.deepStrictEqual(chips(c).map(([n]) => n), ['LAB-000027', 'LAB-000028']);
+  assert.ok(textOf(headAcc(c)[0]).includes('90000027'), textOf(headAcc(c)[0]));
   const copied = [];
   const saved = navigator.clipboard.writeText;
   navigator.clipboard.writeText = async (v) => { copied.push(v); };
   try {
-    byClass(c, 'lq-tube')[0].click();
+    headAcc(c)[0].click();
     await tick();
-    assert.deepStrictEqual(copied, ['LAB-000027']);
+    assert.deepStrictEqual(copied, ['90000027']);
     assert.strictEqual(toastMsg, 'Номер пробы скопирован');
   } finally { navigator.clipboard.writeText = saved; }
-  // Одна пробирка — одна кнопка, как было: второго ряда нет, и в окне — та же одна.
-  const one = await mount([line(31, BLOOD, 'queued'), line(28, BLOOD, 'queued')]);
-  assert.strictEqual(byClass(one, 'lq-tube').length, 0);
-  assert.strictEqual(byClass(one, 'lq-acc').length, 1);
-  const ws = await worksheetHead(one);
-  assert.strictEqual(byClass(ws, 'lq-acc').length, 1);
-  assert.ok(textOf(ws).includes('LAB-000028'), textOf(ws));
 });
+
+test('стационар: два дня визита — по номеру на день (кнопкой на карточке), в строке очереди — сегодняшний', async () => {
+  const visit = VISITS[0].visit_date;
+  VISITS[0].visit_date = daysAgoNoon(1);
+  try {
+    const c = await mount([line(31, BLOOD, 'queued'), line(28, BLOOD, 'queued', { created_at: daysAgoNoon(1) })]);
+    assert.deepStrictEqual(chips(c).map(([n]) => n), ['90000028', '90000031']);
+    assert.ok(textOf(headAcc(c)[0]).includes('90000031'), textOf(headAcc(c)[0]));
+    barcodeBtn(c).click();
+    await tick();
+    assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['90000028', '90000031']);
+  } finally {
+    VISITS[0].visit_date = visit;
+  }
+});
+
 
 // L4 (проба P5b): rpc refunded_lines не ответил — список «услуга возвращена»
 // пуст, и возвращённая строка № 28 становилась номером пробирки. Теперь, пока
@@ -381,21 +400,21 @@ test('ревью U11, L4: возвраты кассы не прочиталис�
   }
 });
 
-// L6 (проба P2e, 9 дней): голый номер заказа старше 7 дней приём отказывает —
-// карточка печатала такую этикетку (забытая строка стационара). Теперь не печатает
-// и говорит почему; срок — та же константа, что у приёма.
-test('ревью U11, L6: пробирку старше 7 дней карточка не печатает — приём её номер не примет; остальные печатаются, сказано почему', async () => {
+// L6 (проба P2e, 9 дней): номер старше 7 дней приём отказывает — карточка его не
+// печатает и говорит почему; срок — та же константа, что у приёма. LAB_ONE_BARCODE_V1 —
+// срок судится у дня визита (номер дня старой строки стационара — свой, старый).
+test('ревью U11, L6: день старше 7 дней карточка не печатает — приём его номер не примет; сегодняшний печатается, сказано почему', async () => {
   const visit = VISITS[0].visit_date;
   VISITS[0].visit_date = daysAgoNoon(9);   // стационар: визит начался 9 дней назад
   try {
     const c = await mount([line(31, BLOOD, 'queued'), line(28, BLOOD, 'queued', { created_at: daysAgoNoon(9) })]);
-    assert.ok(textOf(headAcc(c)[0]).includes('LAB-000031'), 'в строке очереди — пробирка, которую печатают: ' + textOf(headAcc(c)[0]));
+    assert.ok(textOf(headAcc(c)[0]).includes('90000031'), 'в строке очереди — номер дня, который печатают: ' + textOf(headAcc(c)[0]));
     barcodeBtn(c).click();
     await tick();
     assert.strictEqual(opened, 1);
-    assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['00000031']);
+    assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['90000031']);
     assert.match(String(toastMsg), /старше 7 дней/);
-    // Только старая пробирка — окна нет, сказано почему.
+    // Только старый день — окна нет, сказано почему.
     const old = await mount([line(28, BLOOD, 'queued', { created_at: daysAgoNoon(9) })]);
     barcodeBtn(old).click();
     await tick();

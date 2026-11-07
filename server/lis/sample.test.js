@@ -146,7 +146,8 @@ test('autobio-hl7: номер — OBR-2, код — OBX-4, значение — 
     'OBX|1|NM|1^Vitamin B12|206|5981666^390.946|pg/mL|||||F',
   ), '10.0.0.41', 1, { wire: 'autobio-hl7' });
   assert.equal(last(db).status, 'applied', last(db).detail);
-  assert.equal(results(db)[0].value, '390.946', 'RLU (компонент 1) в бланк не идёт');
+  assert.equal(results(db)[0].value, '390.95', 'RLU (компонент 1) в бланк не идёт (LAB_ROUND_V1 — до 2 знаков)');
+  assert.equal(results(db)[0].raw_value, '390.946', 'LAB_ROUND_V1 — полное значение прибора');
   db.close();
 });
 
@@ -159,7 +160,7 @@ test('переадресатор (MSH-4 = LabPC) читается проводо
     'OBX|1|NM|206^^AUTOBIO|Vitamin B12|390.946||||||F',
   ), '10.0.0.50', 1);
   assert.equal(last(db).status, 'applied', last(db).detail);
-  assert.equal(results(db)[0].value, '390.946');
+  assert.equal(results(db)[0].value, '390.95');   // LAB_ROUND_V1 — до 2 знаков
   db.close();
 });
 
@@ -341,7 +342,7 @@ test('профиль A1000: номер — OBR-2, код — OBX-4, значен
     'OBX|1|NM|1^Vitamin B12|206|5981666^390.946|pg/mL|||||F',
   ), '10.0.0.41', 1);
   assert.equal(last(db).status, 'applied', last(db).detail);
-  assert.equal(results(db)[0].value, '390.946');
+  assert.equal(results(db)[0].value, '390.95');   // LAB_ROUND_V1 — до 2 знаков
   db.close();
 });
 
@@ -353,7 +354,7 @@ test('профиль A1000, сообщение переадресателя (MSH
     'OBX|1|NM|206^^AUTOBIO|Vitamin B12|390.946||||||F',
   ), '10.0.0.50', 1);
   assert.equal(last(db).status, 'applied', last(db).detail);
-  assert.equal(results(db)[0].value, '390.946', 'сетевой провод Autobio взял бы компонент 2 «390.946» → пусто');
+  assert.equal(results(db)[0].raw_value, '390.946', 'сетевой провод Autobio взял бы компонент 2 «390.946» → пусто (LAB_ROUND_V1 — в бланке 390.95)');
   db.close();
 });
 
@@ -670,7 +671,8 @@ test('D2: BS-240 — номер пробы из OBR-2 (штрихкод), вну
   assert.equal(ingestMessage(db, BS240('000123', '1'), '10.0.0.42', 1), 'AA');
   const m = last(db);
   assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['applied', 123, '000123'], m.detail);
-  assert.equal(results(db)[0].value, '5.12345', 'mindray-chem: хвостовые нули срезаны, число не округлено');
+  assert.equal(results(db)[0].raw_value, '5.12345', 'mindray-chem: хвостовые нули срезаны, провод число не округляет');
+  assert.equal(results(db)[0].value, '5.12', 'LAB_ROUND_V1 — в бланке до 2 знаков (настройка клиники)');
   assert.equal(results(db, 1).length, 0, 'заказ № 1 чужого пациента не тронут');
 
   // Этикетка Easy-Med в OBR-2 и приманка «2» в OBR-3 — проба заказа 123.

@@ -38,6 +38,7 @@ import { specimenKey } from '../../shared/specimen-key.js';
 import { labBarcodeValue } from './lab-doc.js?v=labshared1';   // тот же адрес, что у laboratory.js — один экземпляр модуля
 import { dateNumeric } from '../../shared/date-words.js';
 import { BARE_ID_MAX_AGE_DAYS } from '../../shared/lab-label-age.js';   // LAB_TUBE_LABEL_V1 (ревью U11, L6) — срок голого номера, общий с приёмом
+import { dayLabelValue } from '../../shared/lab-day-label.js';   // LAB_ONE_BARCODE_V1 — номер этикетки дня визита
 
 export { BARE_ID_MAX_AGE_DAYS };
 export const TUBE_STATUSES = Object.freeze(['queued', 'collected', 'in_progress', 'resulted']);
@@ -186,6 +187,42 @@ export function tubeGroups(rows, opts = {}) {
         if (c && (!g.collectedAt || c < g.collectedAt)) g.collectedAt = c;
     }
     return [...byKey.values()];
+}
+
+/**
+ * LAB_ONE_BARCODE_V1 (решение владельца 2026-11-07, п. 10) — ЭТИКЕТКА ДНЯ ВИЗИТА.
+ * Один номер на все анализы дня визита (shared/lab-day-label.js: 90000000 + самая
+ * старая открытая оплаченная строка дня) — одна и та же этикетка на каждую
+ * пробирку: копий столько, сколько пробирок (tubeGroups этого дня). Приём по этому
+ * номеру заполняет каждую строку дня, которую кормит прибор (ingest.js dayAnchor),
+ * — порядок анализов и материал услуги больше не решают. Дней обычно один; у
+ * стационарного визита — свой номер на каждый день.
+ * @returns {Array<{day:string, lineId:number, code:string, copies:number, tests:string[],
+ *                  rowIds:number[], collectedAt:string|null, recent:boolean, tubes:object[]}>}
+ *          по возрастанию дня; code '' — номер строки не помещается в номер дня
+ *          (тогда печатаются прежние этикетки пробирок этого дня: tubes)
+ */
+export function dayLabels(rows, opts = {}) {
+    const byDay = new Map();
+    for (const t of tubeGroups(rows, opts)) {
+        let d = byDay.get(t.day);
+        if (!d) {
+            d = { day: t.day, lineId: t.labelId, code: '', copies: 0, tests: [], rowIds: [], collectedAt: null, recent: t.recent, tubes: [] };
+            byDay.set(t.day, d);
+        }
+        d.lineId = Math.min(d.lineId, t.labelId);
+        d.copies += 1;
+        d.tubes.push(t);
+        for (const x of t.tests) if (!d.tests.includes(x)) d.tests.push(x);
+        d.rowIds.push(...t.rowIds);
+        if (t.collectedAt && (!d.collectedAt || t.collectedAt < d.collectedAt)) d.collectedAt = t.collectedAt;
+    }
+    const out = [...byDay.values()];
+    for (const d of out) {
+        d.rowIds.sort((a, b) => a - b);
+        d.code = dayLabelValue(d.lineId);
+    }
+    return out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.lineId - b.lineId));
 }
 
 /**

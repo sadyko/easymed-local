@@ -53,6 +53,7 @@
 // (приём её выключил и отвязал), — уже своя: её удалить можно.
 import { tableWriteAllowed } from '../../db/write-grant.js';
 import { rpcT } from '../server-message.js';
+import { MATRIX_KIND, normalizeMatrix, matrixAnalytes } from '../../../public/js/shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1
 import { readIdentity } from '../branch-sync/identity.js';
 
 export class RpcError extends Error {
@@ -187,7 +188,23 @@ export function labPanelSave(db, args, user) {
     active: flag(p.active, 1),
     device_id: refId(p.device_id, 'Анализатор указан неверно.'),
   };
-  const analytes = cleanAnalytes(a.analytes);
+  // LAB_MATRIX_PANEL_V1 (решение владельца п. 7) — панель-таблица (бак. посев):
+  // устройство таблицы проверяется здесь (shared/lab-matrix.js), хранится в
+  // matrix_json, а показатели панели — ячейки «строка · графа» раздела со списком
+  // степеней — собираются из него же (присланные браузером строки не читаются).
+  // Обычная панель — как прежде; kind = '', matrix_json = NULL.
+  let analytes;
+  if (p.kind === MATRIX_KIND) {
+    const m = normalizeMatrix(p.matrix);
+    if (!m.ok) throw rpcT(RpcError, m.error.text, m.error.params || {}, 400);
+    panel.kind = MATRIX_KIND;
+    panel.matrix_json = JSON.stringify(m.matrix);
+    analytes = cleanAnalytes(matrixAnalytes(m.matrix));
+  } else {
+    panel.kind = '';
+    panel.matrix_json = null;
+    analytes = cleanAnalytes(a.analytes);
+  }
 
   const insAnalyte = db.prepare(`INSERT INTO lab_panel_analytes
       (panel_id, code, name, unit, value_type, value_options, decimals,
@@ -213,11 +230,12 @@ export function labPanelSave(db, args, user) {
       // вкладка, открытая до «Удалить», её не оживляет (иначе невидимая панель
       // снова заняла бы услугу).
       const res = db.prepare(`UPDATE lab_panels SET name = @name, modality = @modality, has_narrative = @has_narrative,
-          service_id = @service_id, active = @active, device_id = @device_id WHERE id = @id AND retired_at IS NULL`).run({ ...panel, id: panelId });
+          service_id = @service_id, active = @active, device_id = @device_id, kind = @kind, matrix_json = @matrix_json
+          WHERE id = @id AND retired_at IS NULL`).run({ ...panel, id: panelId });   // kind, matrix_json: LAB_MATRIX_PANEL_V1
       if (!res.changes) throw new RpcError('Панель не найдена — обновите страницу.', 404);
     } else {
-      const info = db.prepare(`INSERT INTO lab_panels (name, code, modality, has_narrative, service_id, core_panel_id, active, device_id)
-          VALUES (@name, @code, @modality, @has_narrative, @service_id, @core_panel_id, @active, @device_id)`)
+      const info = db.prepare(`INSERT INTO lab_panels (name, code, modality, has_narrative, service_id, core_panel_id, active, device_id, kind, matrix_json)
+          VALUES (@name, @code, @modality, @has_narrative, @service_id, @core_panel_id, @active, @device_id, @kind, @matrix_json)`)   // kind, matrix_json: LAB_MATRIX_PANEL_V1
         .run({ ...panel, code: textOrNull(p.code), core_panel_id: intOrNull(p.core_panel_id) });
       panelId = Number(info.lastInsertRowid);
     }

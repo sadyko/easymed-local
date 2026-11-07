@@ -15,6 +15,10 @@
 // is patients.notes (edited via the «Отметки» modal). Production-only tabs
 // (Рекомендации, Назначения, Документы, Лояльность, Чат) are not ported.
 
+import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1 — подпись бланка анализов — подтвердивший
+import { labDocBatches } from '../../shared/lab-doc-batches.js';   // LAB_DOC_SPLIT_V1 — подтверждённые вместе — один документ
+import { openLabPrintPick } from './lab-print-pick.js';   // LAB_PRINT_PICK_V1 — «Печать…» с выбором документов
+import { panelMatrix, matrixGrid } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 — таблица посева на бланке
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, StatusTag, fmtDate, fmtDateTime, field, Avatar, avColor, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
@@ -405,6 +409,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             qty:    r.quantity,
             total:  r.total,
             status: r.status,
+            verifiedAt: r.verified_at || null,   // LAB_DOC_SPLIT_V1 — подтверждённые вместе — один документ
             // LAB_DOC_PENDING_V1 — «это лабораторный заказ?». Определение то же,
             // что у lab-service.js: флаг is_lab ИЛИ тип услуги 'lab'.
             visitId: r.visit_id,
@@ -454,6 +459,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 vsId:      lr.visit_service_id,
                 enteredAt: lr.entered_at || null,
                 verifiedAt: lr.verified_at || null,
+                verifiedBy: lr.verified_by || null,   // PRINT_PERFORMER_V1 — кто подтвердил
                 visitId:   vs ? vs.visit_id : null,
                 value:     lr.value,
                 unit:      lr.unit || (svc && svc.result_unit) || '',
@@ -1538,6 +1544,13 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
         wrap.appendChild(h('div', { class: 'card-header' },
             h('h3', null, Icon('Doc', { size: 15 }), ' Документы'),
+            // LAB_PRINT_PICK_V1 — «Печать…»: окно с галочками — какие документы анализов
+            // (и какие анализы в них) напечатать одним бланком; отмечены все готовые.
+            h('button', {
+                class: 'btn btn-outline btn-sm', type: 'button', 'data-docs-print': '',
+                title: tr('Выбрать документы анализов и напечатать одним бланком'),
+                onclick: () => openDocsPrintPick(),
+            }, Icon('Print', { size: 14 }), ' ', tr('Печать…')),
             tabEdit('docs') ? h('button', {
                 class: 'btn btn-primary btn-sm', type: 'button',
                 onclick: () => fileInp.click(),
@@ -1636,21 +1649,38 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 take(key, day).rows.push(r);
             }
 
-            return [...byVisit.entries()].map(([key, g]) => {
-                // В заголовке — число НАЗНАЧЕННЫХ АНАЛИЗОВ, а не показателей: «28
-                // тестов» для одного ОАК читалось бы как 28 назначений.
-                const total = g.orders.length || new Set(g.rows.map(r => r.vsId)).size || 1;
-                const ready = g.orders.length
-                    ? g.orders.filter(o => (resultsByVs.get(o.id) || []).length).length
-                    : total;
-                return {
-                    _lab: true, id: 'lab:' + key, doc_type: 'lab',
-                    title: trf('Результаты анализов · {n} анализ(ов)', { n: total }),
-                    created_at: (g.day || '') + 'T12:00:00Z',
-                    rows: g.rows,
-                    ready, total, st: labDocStatus(g.orders, ready, total),
-                };
-            });
+            // LAB_DOC_SPLIT_V1 (решение владельца 2026-11-07, п. 8) — визит делится на
+            // документы по подтверждению (shared/lab-doc-batches.js): анализы,
+            // подтверждённые вместе, — отдельный выданный документ; ещё не подтверждённые —
+            // свой документ «готовится», пока их не подтвердят. Каждый анализ — ровно в
+            // одном документе. Строки без заказа (старые) — прежним документом визита/дня.
+            const out = [];
+            for (const [key, g] of byVisit.entries()) {
+                if (!g.orders.length) {
+                    const total = new Set(g.rows.map(r => r.vsId)).size || 1;
+                    out.push({ _lab: true, id: 'lab:' + key, doc_type: 'lab',
+                        title: trf('Результаты анализов · {n} анализ(ов)', { n: total }),
+                        created_at: (g.day || '') + 'T12:00:00Z', rows: g.rows, orders: [],
+                        ready: total, total, complete: true, st: labDocStatus([], total, total) });
+                    continue;
+                }
+                const byId = new Map(g.orders.map(o => [Number(o.id), o]));
+                for (const b of labDocBatches(g.orders.map(o => ({ id: o.id, visitId: key, status: o.status, verifiedAt: o.verifiedAt })),
+                    { hasResult: (id) => (resultsByVs.get(id) || []).length > 0 })) {
+                    const orders = b.orderIds.map(id => byId.get(id)).filter(Boolean);
+                    // В заголовке — число НАЗНАЧЕННЫХ АНАЛИЗОВ, а не показателей: «28
+                    // тестов» для одного ОАК читалось бы как 28 назначений.
+                    out.push({
+                        _lab: true, id: 'lab:' + b.key, doc_type: 'lab',
+                        title: trf('Результаты анализов · {n} анализ(ов)', { n: b.total }),
+                        created_at: b.kind === 'issued' && b.verifiedAt ? b.verifiedAt : (g.day || '') + 'T12:00:00Z',
+                        rows: orders.flatMap(o => resultsByVs.get(o.id) || []),
+                        orders, ready: b.ready, total: b.total, complete: b.complete,
+                        st: labDocStatus(orders, b.ready, b.total),
+                    });
+                }
+            }
+            return out;
         }
 
         // Состояние документа целиком. Пока хоть один назначенный анализ без
@@ -1702,6 +1732,12 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // остальные по порядку. Правка имён в справочнике больше не
             // оставляет старые документы без норм — ровно как в лаборатории.
             const svcByVs = new Map((services || []).map((x) => [x.id, x.serviceId]));
+            // LAB_MATRIX_PANEL_V1 — панель-таблица печатается таблицей посева.
+            const matrices = new Map();
+            try {
+                const { data } = await supabase.from('lab_panels').select('service_id, kind, matrix_json').eq('active', true).limit(5000);
+                for (const pp of data || []) { const m = panelMatrix(pp); if (m && pp.service_id != null) matrices.set(pp.service_id, m); }
+            } catch (e) { /* бланк — списком */ }
             const groups = [...byPanel.values()].map(({ panel, list }) => {
                 const vsId = list.length ? list[0].vsId : null;
                 const panelList = analytesForService(idx, svcByVs.get(vsId));
@@ -1710,6 +1746,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 // LAB_SHEET_HEAD_V1 — «· № LAB-…» как на бланке лаборатории:
                 // номер образца стоит у своей таблицы, где бы бланк ни печатали.
                 title: (panel || 'Анализ') + (vsId != null ? ' · № ' + labAccession(vsId) : ''),
+                ...(matrices.has(svcByVs.get(vsId)) ? { matrix: matrixGrid(matrices.get(svcByVs.get(vsId)), list.map((r) => ({ parameter: r.name, value: r.value }))) } : {}),   // LAB_MATRIX_PANEL_V1
                 tests: list.map((r, ri) => {
                     const analyte = byOrder[ri] || resolveAnalyte(idx, r.name, null);
                     const named = namedRangeCell(analyte, gender, age);
@@ -1755,6 +1792,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     dob: fmtDMY(patient.date_of_birth),
                     sex: labSexRu(patient.gender),
                     mrn: patient.mrn || '',
+                    // PRINT_PERFORMER_V1 — подпись — тот, кто подтвердил анализы («Врач-лаборант»).
+                    ...labSignerData(await labSignerNames(doc.rows.map((r) => r.verifiedBy))),
                     groups,
                 },
             });
@@ -1787,6 +1826,28 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 diagnoses: d.diagnoses || [], prescriptions: d.prescriptions || [],
             });
             printableSheet({ type: 'conclusion', title: d.title, data, ...view });   // PRINT_AUTO_V1
+        }
+        // LAB_PRINT_PICK_V1 (решение владельца 2026-11-07, п. 8) — «Печать…» вкладки:
+        // готовые документы анализов (выданные и полностью внесённые) с их анализами,
+        // все отмечены; печатаются отмеченные — одним бланком (printLabDay).
+        function openDocsPrintPick() {
+            const ready = labDayRows().filter(d => d.complete && (d.orders || []).length)
+                .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+            const pick = openLabPrintPick({
+                title: 'Что напечатать',
+                docs: ready.map(d => ({
+                    key: d.id,
+                    title: d.title,
+                    subtitle: [d.st && d.st.label, d.created_at ? fmtDateTime(d.created_at) : ''].filter(Boolean).join(' · '),
+                    orders: d.orders.map(o => ({ id: o.id, name: o.name })),
+                })),
+                onPrint: (ids) => {
+                    const want = new Set(ids.map(Number));
+                    const rows = ready.flatMap(d => d.rows).filter(r => want.has(Number(r.vsId)));
+                    printLabDay({ rows });
+                },
+            });
+            if (!pick) toast('Готовых документов анализов нет — печатать нечего.', 'info');
         }
         // PATIENT_TAB_ACCESS_V1 — список документов приезжает вместе с картой
         // (rpc patient_card), через дверь вкладки «Документы»; отдельного

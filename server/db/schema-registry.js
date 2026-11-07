@@ -421,7 +421,7 @@ export const REGISTRY = {
     // LIS_INGEST_V1 — source ('manual' | 'analyzer') стоит ТОЛЬКО в чтении: его
     // ставит сервер при приёме с прибора, и браузер не должен уметь объявить
     // машинное значение набранным руками или наоборот.
-    read:  { roles: ALL_STAFF, columns: ['id','visit_service_id','parameter','value','numeric_value','unit','reference_range','flag','notes','entered_by','entered_at','verified_by','verified_at','created_at','ref_low','ref_high','sync_origin','source'] },   // ref_low/high: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083); source: LIS_INGEST_V1 (mig 123)
+    read:  { roles: ALL_STAFF, columns: ['id','visit_service_id','parameter','value','numeric_value','unit','reference_range','flag','notes','entered_by','entered_at','verified_by','verified_at','created_at','ref_low','ref_high','sync_origin','source','raw_value'] },   // ref_low/high: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083); source: LIS_INGEST_V1 (mig 123); raw_value: LAB_ROUND_V1 (mig 279) — только чтение, пишет приём
     write: { insert: { roles: ['admin','lab'], columns: ['visit_service_id','parameter','value','numeric_value','unit','reference_range','flag','notes','entered_by','ref_low','ref_high'] },
              update: { roles: ['admin','lab'], columns: ['parameter','value','numeric_value','unit','reference_range','flag','notes','verified_by','verified_at','ref_low','ref_high'] },
              delete: { roles: ['admin'] } },
@@ -683,10 +683,10 @@ export const REGISTRY = {
   // печатают прежние clinic_name и address; новое идёт наружу (API) и в
   // предпросмотр «Компании». Пишет тот же ключ «Компания».
   doc_settings: {
-    read:  { roles: ALL_STAFF, columns: ['id','clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope','updated_at',
+    read:  { roles: ALL_STAFF, columns: ['id','clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope','lab_round_analyzer','updated_at',
                                          'name_uz','name_en','about_ru','about_uz','about_en','country_code','region_code','district_code','street_ru','street_uz','street_en','website','telegram_bot','telegram_channel','instagram','maps_url','logo_square_path','logo_portrait_path'] },   // CLINIC_PROFILE_V1 (mig 240) — профиль клиники
     write: { grant:'settings.company', insert: { roles: [] },
-             update: { roles: ['admin'], columns: ['clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope',
+             update: { roles: ['admin'], columns: ['clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope','lab_round_analyzer',
                                                    'name_uz','name_en','about_ru','about_uz','about_en','country_code','region_code','district_code','street_ru','street_uz','street_en','website','telegram_bot','telegram_channel','instagram','maps_url','logo_square_path','logo_portrait_path'] },   // CLINIC_PROFILE_V1 (mig 240) — профиль клиники
              delete: { roles: [] } },
     filters: ['id'],
@@ -1375,7 +1375,7 @@ export const REGISTRY = {
   lab_panels: {
     // LAB_PANEL_DEDUP_V1 (мигр. 272, ревью M1) — retired_at: панель СПИСАНА «Удалить» главного
     // здания с филиалами (rpc/lab-panels.js); экран её не показывает. Пишет только сервер.
-    read:  { roles: ALL_STAFF, columns: ['id','name','code','modality','has_narrative','service_id','core_panel_id','active','created_at','device_id','retired_at'] },
+    read:  { roles: ALL_STAFF, columns: ['id','name','code','modality','has_narrative','service_id','core_panel_id','active','created_at','device_id','retired_at','kind','matrix_json'] },   // kind, matrix_json: LAB_MATRIX_PANEL_V1 (мигр. 280) — пишет только lab_panel_save
     write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','core_panel_id','active','device_id'] },
              update: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','active','device_id'] },
              delete: { roles: LAB_SECTION_ROLES } },

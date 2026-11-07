@@ -511,7 +511,12 @@ export function readResult(raw, wire = 'default') {
     } else if (seg.startsWith('OBR')) {
       // Первый OBR задаёт пробу, как в parseMessage.
       if (!obr) obr = { placer: comp(f[2])[0].trim(), filler: comp(f[3])[0].trim() };
-      obrs.push({ placer: t(f[2]), filler: t(f[3]), compSep });
+      // LAB_ONE_BARCODE_V1 — specimen: OBR-15, материал пробы, как его назвал прибор
+      // (BS-200: serum / urine); только если он есть. По номеру этикетки дня
+      // материал не узнать — номер один на все пробирки, а моча и сыворотка одного
+      // прибора различаются только им (ingest.js materialHint).
+      const specimen = comp(f[15])[0].trim();
+      obrs.push({ placer: t(f[2]), filler: t(f[3]), compSep, ...(specimen ? { specimen } : {}) });
     } else if (seg.startsWith('OBX')) {
       const obx3 = comp(f[3]);
       const o = {

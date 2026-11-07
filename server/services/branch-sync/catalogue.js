@@ -53,6 +53,7 @@ export const DOC_SETTINGS_COLUMNS = [
   'clinic_name', 'license', 'logo_data_url', 'accent_color',
   'paper_size', 'show_watermark', 'footer_note', 'legal_note',
   'lab_scope',
+  'lab_round_analyzer',   // LAB_ROUND_V1 (мигр. 279) — округление результатов анализаторов: настройка клиники, как lab_scope
   // CLINIC_PROFILE_V1 (мигр. 240) — профиль КЛИНИКИ: названия и описание на
   // трёх языках, сайт, Telegram, Instagram. Адрес здания (коды, улица, адрес
   // для документов, карта) — свой у каждого здания, как address/phone/email
@@ -143,7 +144,9 @@ export const TABLES = [
     // здания с филиалами: едет обычной правкой строки (выключена, без услуги),
     // и филиал 3.21 тоже прячет её с экрана. Филиал старше 272 колонку не знает
     // (её нет в его перечне) — выключение и отвязку он всё равно принимает.
-    columns: ['name', 'code', 'modality', 'has_narrative', 'service_id', 'core_panel_id', 'active', 'retired_at'],
+    // LAB_MATRIX_PANEL_V1 (мигр. 280) — kind и matrix_json: панель-таблица едет со своим
+    // устройством; филиал до 280 их пропускает (колонки нет — ключ не пишется).
+    columns: ['name', 'code', 'modality', 'has_narrative', 'service_id', 'core_panel_id', 'active', 'retired_at', 'kind', 'matrix_json'],
     refs: { service_id: 'services' },
     natural: ['code', 'name'],
     // LAB_PANEL_DEDUP_V1 — панель, которую главное здание УДАЛИЛО (её нет в

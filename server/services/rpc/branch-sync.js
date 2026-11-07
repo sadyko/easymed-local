@@ -2089,6 +2089,10 @@ async function syncCatalogue(db, dataDir, {
   if (!preview.changed) {
     return { result: {
       ok: true, changed: 0, created: {}, updated: {}, adopted: {}, settings: false, route, relayed_at: relayedAt,
+      // Ревью lab2 L-5 (выпуск 3.22.0) — «приехало без услуги» говорится при КАЖДОЙ
+      // синхронизации, пока панель главного здания здесь без услуги, а не только при
+      // первой: без изменений экран писал «Изменений не было», и причина пропадала.
+      ...(preview.unlinked ? { unlinked: preview.unlinked } : {}),
     } };
   }
 
