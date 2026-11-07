@@ -125,3 +125,47 @@ test('CSP и X-Frame-Options у приложения', async (t) => {
   const api = await fetch(s.base + '/api/health');
   assert.equal(api.headers.get('x-frame-options'), 'SAMEORIGIN');
 });
+
+// Ревью 3.22.0 m2 — свои права «Push-уведомления» и «Ссылки для рекламы» открывают
+// в корзине telegram-media только СВОЮ папку: картинку рассылки (broadcast/,
+// views/commerce-push.js) и файл ссылки (deeplinks/, telegram/deeplinks.js
+// FILE_DIR). Вложения переписки (chat/…) — результаты и направления пациентов —
+// остаются за чатом и ботом, как до 3.22.0: маркетолог со «Ссылками: Просмотр»
+// их не читает, с «Push» — не стирает.
+test('m2: Push и ссылки для рекламы открывают в telegram-media только свои папки', async (t) => {
+  const s = await start(t);
+  const setGrants = (grants) => {
+    const row = s.db.prepare("SELECT permissions FROM role_permissions WHERE role = 'inventory'").get();
+    const p = row && row.permissions ? JSON.parse(row.permissions) : { sections: [], levels: {} };
+    p.grants = { ...(p.grants || {}), ...grants };
+    s.db.prepare("INSERT OR REPLACE INTO role_permissions (role, permissions) VALUES ('inventory', ?)").run(JSON.stringify(p));
+  };
+  const del = (st, who, obj) => fetch(st.base + '/api/storage/' + obj, { method: 'DELETE', headers: { Cookie: st.cookie[who] } });
+  plant(s, 'telegram-media/chat/1/a.jpg', 'jpg');
+  plant(s, 'telegram-media/broadcast/1-a.jpg', 'jpg');
+  plant(s, 'telegram-media/deeplinks/1/f.pdf', '%PDF');
+
+  setGrants({ commerce_push: 'edit' });
+  assert.equal((await put(s, 'inventory', 'telegram-media/broadcast/2-b.jpg', 'jpg')).status, 200, 'картинку рассылки кладёт тот, кто рассылает');
+  assert.equal((await get(s, 'inventory', 'telegram-media/broadcast/1-a.jpg')).status, 200);
+  assert.equal((await get(s, 'inventory', 'telegram-media/chat/1/a.jpg')).status, 403, 'Push не читает вложения переписки');
+  assert.equal((await put(s, 'inventory', 'telegram-media/chat/1/b.jpg', 'jpg')).status, 403);
+  assert.equal((await del(s, 'inventory', 'telegram-media/chat/1/a.jpg')).status, 403, 'Push не стирает вложения переписки');
+  assert.equal((await get(s, 'inventory', 'telegram-media/deeplinks/1/f.pdf')).status, 403, 'Push — не ссылки');
+
+  setGrants({ commerce_push: 'none', commerce_links: 'view' });
+  assert.equal((await get(s, 'inventory', 'telegram-media/deeplinks/1/f.pdf')).status, 200, 'файл ссылки видит тот, кто видит ссылки');
+  assert.equal((await put(s, 'inventory', 'telegram-media/deeplinks/1/g.pdf', '%PDF')).status, 403, '«Просмотр» не кладёт');
+  assert.equal((await get(s, 'inventory', 'telegram-media/chat/1/a.jpg')).status, 403, 'ссылки не читают вложения переписки');
+  assert.equal((await get(s, 'inventory', 'telegram-media/broadcast/1-a.jpg')).status, 403);
+
+  setGrants({ commerce_links: 'edit' });
+  assert.equal((await put(s, 'inventory', 'telegram-media/deeplinks/1/h.pdf', '%PDF')).status, 200);
+  assert.equal((await del(s, 'inventory', 'telegram-media/deeplinks/1/h.pdf')).status, 200);
+  assert.equal((await del(s, 'inventory', 'telegram-media/chat/1/a.jpg')).status, 403);
+
+  // Как вчера: «Telegram-бот: Изменение» — вся корзина, и переписка тоже.
+  setGrants({ commerce_links: 'none', settings: 'edit', 'settings.telegram': 'edit' });
+  assert.equal((await get(s, 'inventory', 'telegram-media/chat/1/a.jpg')).status, 200);
+  assert.equal((await put(s, 'inventory', 'telegram-media/chat/1/c.jpg', 'jpg')).status, 200);
+});

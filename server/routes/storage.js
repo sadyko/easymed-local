@@ -6,6 +6,9 @@ import { canViewSection, canEditSection, canViewPatientTab, canEditPatientTab } 
 import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, photoRefusal, refusalText, ALLOWED_PATIENT_FILE_EXT, ALLOWED_PHOTO_EXT } from '../../public/js/shared/patient-file-limits.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
 import { grantAllowsAdminOr, isAdminUser } from '../services/grants.js';   // V3120_FIX (M7) — корзина Telegram по праву бота
 import { canPush, canAdLinks } from '../services/commerce-grants.js';   // COMMERCE_BLOCK_V1
+import { FILE_DIR as DEEPLINK_DIR } from '../services/telegram/deeplinks.js';   // ревью 3.22.0 m2 — папка файлов ссылок для рекламы
+// Ревью 3.22.0 m2 — папка картинок рассылки в telegram-media (views/commerce-push.js кладёт `broadcast/<время>-<код>.jpg`).
+const PUSH_DIR = 'broadcast';
 import { LOGO_BUCKET, LOGO_KINDS, logoRefusal } from '../../public/js/shared/clinic-logo-rules.js';   // CLINIC_PROFILE_V1
 import { readIdentity } from '../services/branch-sync/identity.js';   // CLINIC_PROFILE_V1
 import { tableWriteAllowed } from '../db/write-grant.js';   // CLINIC_PROFILE_V1 — логотип пишет тот, кто вправе записать doc_settings
@@ -232,16 +235,23 @@ export function storageRoutes(storageDir, db = null) {
     if (!db) return 'Хранилище Telegram недоступно.';
     const user = req.user;
     if (!user) return 'Требуется вход.';
+    // Ревью 3.22.0 m2 — свои права Push и ссылок открывают только СВОЮ папку
+    // корзины. Вложения переписки (chat/…: результаты и направления пациентов,
+    // миграция 072) остаются за чатом и ботом, как до 3.22.0: маркетолог со
+    // «Ссылками: Просмотр» их не читает, с «Push» — не стирает.
+    const top = segmentsOf(req.params.rest)[0] || '';
     try {
       if (write) {
+        if (canEditSection(db, user, 'telegram-chat') || grantAllowsAdminOr(db, user, 'settings.telegram', 'edit')) return null;
         // COMMERCE_BLOCK_V1 — картинку рассылки кладёт тот, кто рассылает; файл
         // ссылки для рекламы — тот, кто правит ссылки (свои строки «Ролей»).
-        if (canEditSection(db, user, 'telegram-chat') || grantAllowsAdminOr(db, user, 'settings.telegram', 'edit')
-            || canPush(db, user) || canAdLinks(db, user, 'edit')) return null;
-      } else if (canViewSection(db, user, 'telegram-chat') || grantAllowsAdminOr(db, user, 'settings.telegram', 'view')
-          || grantAllowsAdminOr(db, user, 'reports.telegram', 'view')
-          || canPush(db, user) || canAdLinks(db, user, 'view')) {   // COMMERCE_BLOCK_V1
-        return null;
+        if (top === PUSH_DIR && canPush(db, user)) return null;
+        if (top === DEEPLINK_DIR && canAdLinks(db, user, 'edit')) return null;
+      } else {
+        if (canViewSection(db, user, 'telegram-chat') || grantAllowsAdminOr(db, user, 'settings.telegram', 'view')
+            || grantAllowsAdminOr(db, user, 'reports.telegram', 'view')) return null;
+        if (top === PUSH_DIR && canPush(db, user)) return null;   // COMMERCE_BLOCK_V1
+        if (top === DEEPLINK_DIR && canAdLinks(db, user, 'view')) return null;
       }
     } catch { /* права не прочитались — отказ */ }
     return 'Файлы Telegram-бота недоступны вашей роли. Права выдаёт администратор в «Настройки → Роли».';
