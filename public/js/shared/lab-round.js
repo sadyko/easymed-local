@@ -53,6 +53,9 @@ export function labRoundOn(setting) {
  * Что показывать в графе «Результат» у строки lab_results ({value, raw_value, source}).
  * Включено — значение прибора до 2 знаков (у уже округлённого — то же; у строк,
  * записанных до обновления или при выключенной настройке, — округлённое).
+ * Ревью S3, L-1 — округляется только то, что записал ПРИБОР: raw_value пуст или
+ * value — его округление. Лаборант набрал своё поверх значения прибора (строка
+ * остаётся 'analyzer', raw_value — прибора) — показывается как набрано.
  * Выключено — полное значение прибора (raw_value), если бланк держит именно его
  * округление (строку не правили руками); иначе — как записано. Ручной ввод — как есть.
  */
@@ -60,8 +63,26 @@ export function labShownValue(row, roundOn = true) {
     if (!row) return null;
     const v = row.value;
     if (row.source !== 'analyzer') return v;
-    if (roundOn) return roundHalfUp2(v);
     const raw = row.raw_value;
+    if (roundOn) {
+        const typedOver = raw != null && String(raw).trim() !== '' && String(roundHalfUp2(raw)) !== String(v == null ? '' : v).trim();   // ревью S3, L-1
+        return typedOver ? v : roundHalfUp2(v);
+    }
     if (raw != null && String(raw).trim() !== '' && String(roundHalfUp2(raw)) === String(v == null ? '' : v).trim()) return raw;
     return v;
+}
+
+/**
+ * Ревью S3, L-2 — значение прибора в бланке ({value, raw_value}) в том виде, в каком
+ * его прочитал бы приём при нынешней настройке: включено — записанное полным (до
+ * обновления или при выключенной; raw_value пуст) — округлённое; выключено —
+ * округлённое прибором (raw_value есть, value — его округление) — полное. Иначе — как
+ * записано (правку руками это не трогает). Им приём сравнивает «то же значение»:
+ * «повтор», повторная передача, серия, «Привязать» (снять своё значение).
+ */
+export function labReadingOf(value, raw, roundOn = true) {
+    const v = value == null ? value : String(value).trim();
+    const r = raw == null ? '' : String(raw).trim();
+    if (roundOn) return r === '' ? roundHalfUp2(v) : v;
+    return r !== '' && String(roundHalfUp2(r)) === v ? r : v;
 }

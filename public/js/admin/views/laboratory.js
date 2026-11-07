@@ -1384,6 +1384,11 @@ function visitDays(g, byVisit, info) {
 // возвраты кассы не прочитались — не печатаем (возвращённая строка стала бы
 // номером); день старше срока голого номера — не печатаем, говорим почему.
 // Номер строки не помещается в номер дня — этикетки пробирок этого дня, как в 3.21.
+// Ревью S3, M-2 — пробирка повторного забора того же анализа (lab-tube.js dayLabels,
+// own) — со своей этикеткой строки: номер дня приём между двумя открытыми заказами
+// одного анализа не разложит. Человеку сказано почему.
+// Ревью S3, M-3 — и пробирки прибора, который в этот день кормит мочу и другой
+// материал (LIS Proxy материал пробы не передаёт): свои этикетки пробирок 3.21.
 function printDayLabels(days, patient) {
     if (!state.refundedKnown) {
         toast(tr('Не удалось проверить возвраты кассы — этикетки пробирок не печатаются. Этикетку строки печатают «Забор пробы» и «Печать этикетки».'), 'warn');
@@ -1394,15 +1399,26 @@ function printDayLabels(days, patient) {
     const list = [];
     for (const d of fresh) {
         if (d.code) {
-            list.push({ ...who, code: d.code, copies: d.copies, dateStr: tubeLabelStamp(d.collectedAt), tests: d.tests.join(', ') });
+            if (d.copies > 0) list.push({ ...who, code: d.code, copies: d.copies, dateStr: tubeLabelStamp(d.labelCollectedAt || d.collectedAt), tests: (d.labelTests || d.tests).join(', ') });
+            for (const o of d.own || []) list.push({ ...who, code: o.code, dateStr: tubeLabelStamp(o.collectedAt), tests: o.tests.join(', ') });   // ревью S3, M-2
         } else {
             for (const t of d.tubes) list.push({ ...who, code: t.code, dateStr: tubeLabelStamp(t.collectedAt), tests: t.tests.join(', ') });
         }
     }
     if (list.length) printBarcodeLabels(list);
-    if (fresh.length < days.length) {
-        toast(trf('Пробирки старше {days} дней не напечатаны: результат анализатора по такому номеру не принимается — привяжите его кнопкой «Привязать».', { days: BARE_ID_MAX_AGE_DAYS }), 'warn');
+    const notes = [];
+    const repeats = fresh.filter((d) => d.code).flatMap((d) => (d.own || []).filter((o) => o.why === 'repeat'));   // ревью S3, M-2
+    if (repeats.length) {
+        notes.push(trf('Повторный забор того же анализа в этот день — у его пробирки своя этикетка (номер заказа {codes}): по общему номеру дня анализатор не понял бы, в какой из заказов писать.', { codes: repeats.map((o) => o.code).join(', ') }));
     }
+    // Ревью S3, M-3 — моча и другой материал на одном приборе: у его пробирок свои этикетки.
+    if (fresh.some((d) => d.code && (d.own || []).some((o) => o.why === 'material'))) {
+        notes.push(tr('Моча и другой материал на одном анализаторе — у его пробирок свои этикетки (номера пробирок): по общему номеру дня анализатор, который не называет материал пробы, их не разделил бы.'));
+    }
+    if (fresh.length < days.length) {
+        notes.push(trf('Пробирки старше {days} дней не напечатаны: результат анализатора по такому номеру не принимается — привяжите его кнопкой «Привязать».', { days: BARE_ID_MAX_AGE_DAYS }));
+    }
+    if (notes.length) toast(notes.join(' '), fresh.length < days.length ? 'warn' : 'info');
 }
 
 function printLabel(r, patient) {
@@ -2001,16 +2017,25 @@ const askUser = (q) => (typeof window !== 'undefined' && window && typeof window
 // Набрано и не сохранено: значение строки отличается от сохранённого, или
 // написано заключение по панели. Очищенное сохранённое значение — не ввод:
 // «Сохранить всё» пустые строки и так не пишет.
-function entryUnsaved(e) {
+// Ревью S3, H-1 — кроме таблицы посева (matrix): там очищенная ячейка — правка
+// (снятая степень), и «Сохранить всё» её пишет пустой.
+function entryUnsaved(e, matrix = false) {
     const cur = String((e.input && e.input.value) || '').trim();
-    if (cur === '') return false;
+    if (cur === '') return matrix && clearedMatrixCell(e);
     if (cur !== String((e.prev && e.prev.value) || '').trim()) return true;
     // Ревью L5 — у сохранённого значения поправлена одна «Оценка» (флаг листа):
     // «Сохранить всё» её запишет, а закрытие без вопроса молча теряло.
     return !!e.prev && e.flag != null && String(e.flag || 'normal') !== String(e.prev.flag || 'normal');
 }
 function worksheetUnsaved(sections) {
-    return (sections || []).some((s) => (s.interpEl && String(s.interpEl.value || '').trim() !== '') || (s.entries || []).some(entryUnsaved));
+    return (sections || []).some((s) => (s.interpEl && String(s.interpEl.value || '').trim() !== '') || (s.entries || []).some((e) => entryUnsaved(e, !!s.matrix)));
+}
+// Ревью S3, H-1 — ячейка таблицы посева, у которой была сохранённая степень, а
+// сейчас пусто: лаборант степень СНЯЛ (перенёс «++» из «Резистентный» в
+// «Чувствительный»). Без записи пустого старое «++» оставалось в lab_results, и
+// бланк печатал отметку в обеих графах.
+function clearedMatrixCell(e) {
+    return String((e.input && e.input.value) || '').trim() === '' && !!e.prev && String(e.prev.value == null ? '' : e.prev.value).trim() !== '';
 }
 
 function wsRowPayload(e) {
@@ -2135,6 +2160,7 @@ function wsAnalyteLine(e, onRemove) {
 
 // LAB_MATRIX_PANEL_V1 — лист ввода панели-таблицы: по таблице на раздел.
 function wsMatrixSection(section, matrix) {
+    section.matrix = true;   // ревью S3, H-1 — «Сохранить всё» пишет и очищенные ячейки
     const p = section.panel;
     const svc = p.services || {};
     const byCell = new Map();
@@ -2321,8 +2347,10 @@ async function openPatientWorksheet(g, patient, tubes = [], days = []) {   // tu
         let saved = 0;
         try {
             for (const section of sections) {
+                // Ревью S3, H-1 — у таблицы посева и очищенная ячейка с прежней
+                // степенью: уходит value '' (сервер её принимает, бланк печатает пустую графу).
                 const rows = section.entries
-                    .filter(e => String((e.input && e.input.value) || '').trim() !== '')
+                    .filter(e => String((e.input && e.input.value) || '').trim() !== '' || (section.matrix && clearedMatrixCell(e)))
                     .map(wsRowPayload);
                 if (!rows.length) continue;
                 await saveAnalyteRows(section.panel, rows, section.interpEl ? section.interpEl.value.trim() : '');

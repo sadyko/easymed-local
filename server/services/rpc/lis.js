@@ -10,7 +10,7 @@
 import { listProfiles, getProfile, aliasesOf } from '../../lis/profiles/index.js';   // getProfile, aliasesOf: LIS_REAL_ANALYZERS_V1_PROFILES
 import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { startLisListeners, listenerStatus } from '../../lis/index.js';
-import { ingestMessage, takeBackValues } from '../../lis/ingest.js';   // takeBackValues: LIS_REAL_ANALYZERS_V1, ревью R2, п. 2
+import { ingestMessage, takeBackValues, scannedLabel } from '../../lis/ingest.js';   // takeBackValues: LIS_REAL_ANALYZERS_V1, ревью R2, п. 2; scannedLabel: LAB_SCAN_BIND_V1
 import { resolveMessage, OVERSIZE_DETAIL_PREFIX } from '../../lis/inbox.js';
 import { ABANDONED_DETAIL_PREFIX } from '../../lis/inbox.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 10
 import { mshOf } from '../../lis/hl7.js';   // LIS_REAL_ANALYZERS_V1_WIRE — тип и MSH-4 без исключений
@@ -152,8 +152,16 @@ export function lisMessageAttach(db, args, user) {
   // нуля: голый Number() принимал true, «0x7b», [123] и «1e0». У заказа можно
   // с этикетки: «LAB-000123».
   const id = positiveIntArg(args && args.id);
-  const vsId = positiveIntArg(args && args.visit_service_id, { label: true });
-  if (!id || !vsId) throw new LisError('Нужны номер сообщения и номер заказа');
+  // LAB_SCAN_BIND_V1 (решение владельца 2026-11-07) — { label }: этикетку пробирки
+  // отсканировали сканером (или набрали 8 цифр под штрихкодом) — проба идёт в приём
+  // так, как будто этот номер прислал анализатор (ingest.js scanLabel). Без label —
+  // номер заказа, прежняя ручная привязка.
+  const scan = args && args.label !== undefined;
+  if (scan && (typeof args.label !== 'string' || !scannedLabel(args.label))) {
+    throw new LisError('Отсканируйте этикетку пробирки: 8 цифр под штрихкодом, например 00000123.');
+  }
+  const vsId = scan ? null : positiveIntArg(args && args.visit_service_id, { label: true });
+  if (!id || (!scan && !vsId)) throw new LisError('Нужны номер сообщения и номер заказа');
 
   const msg = db.prepare('SELECT * FROM lab_device_messages WHERE id = ?').get(id);
   if (!msg) throw new LisError('Сообщение не найдено', 404);
@@ -238,7 +246,8 @@ export function lisMessageAttach(db, args, user) {
     // тогда, а нажал человек сейчас; прибор, выключенный неделю назад, после
     // разбора лотка иначе выглядел бы «на связи».
     const report = {};
-    const code = ingestMessage(db, msg.raw, msg.peer, msg.device_id, { touch: false, sampleIdOverride: vsId, report });
+    const code = ingestMessage(db, msg.raw, msg.peer, msg.device_id,
+      { touch: false, ...(scan ? { scanLabel: args.label, scanFrom: msg.sample_id || '' } : { sampleIdOverride: vsId }), report });   // LAB_SCAN_BIND_V1
     const accepted = report.status === 'applied' || (report.status === 'unmapped' && report.written > 0);
     // LAB_TUBE_ANCHOR_V1 (ревью выпуска 3.17.1, L1) — человек набрал номер «Проба»
     // карточки (номер первой услуги визита), а приём положил пробу в заказ

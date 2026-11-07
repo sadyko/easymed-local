@@ -26,6 +26,7 @@ import { peerNotes, hasUnreadableText } from './lab-devices-lists.js?v=lists4';
 // LIS_PROXY_V1 — карточка «LIS Proxy».
 import { mountProxyCard } from './lab-proxy-card.js';
 import { mountRoundCard } from './lab-round-card.js';   // LAB_ROUND_V1 — «Округлять результаты анализаторов до 2 знаков»
+import { noReadSample, attachInput } from '../../shared/lab-scan.js';   // LAB_SCAN_BIND_V1 — «Inv.…» и скан этикетки в «Привязать»
 import { isProxyDevice, proxyAddress, bothPaths, groupProxyTray } from './lab-devices-lists.js?v=lists4';   // LIS_PROXY_V1
 import { PROXY_MODELS } from '../../shared/lisproxy-models.js';   // LIS_PROXY_V1
 
@@ -1406,9 +1407,12 @@ export async function mountLabDevices(container) {
             // дошла до конца: не пришли: …», а слова «ждём» к старой строке нет.
             const staleRest = staleSeriesRest(m, serverNow());
 
+            // LAB_SCAN_BIND_V1 — анализатор не прочитал штрихкод («Inv.114220_2-1»): где пробирка.
+            const place = noReadSample(m.sample_id);
             tb.appendChild(h('tr', null,
                 h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtDateTime(m.received_at)),
-                h('td', { class: 'cell-mono' }, m.sample_id || '—'),
+                h('td', { class: 'cell-mono' }, m.sample_id || '—',
+                    place ? h('div', { class: 'muted', style: { fontSize: '12.5px', fontFamily: 'inherit' } }, trf('штатив {rack}, место {pos}', place)) : null),
                 h('td', null, Tag(tr(STATUS_RU[m.status] || m.status), { kind: m.status === 'superseded' ? 'warn' : '' })),
                 h('td', { class: 'muted', style: { fontSize: '12.5px' } },
                     staleRest != null ? trf('серия не дошла до конца: {rest}', { rest: staleRest }) : (m.detail || '—'),
@@ -1451,24 +1455,34 @@ export async function mountLabDevices(container) {
     }
 
     async function attach(m) {
+        // LAB_SCAN_BIND_V1 (решение владельца 2026-11-07) — «Привязать» — поле для
+        // сканера компьютера: отсканированная этикетка пробирки (8 цифр под
+        // штрихкодом — строки или дня визита) уходит ЭТИКЕТКОЙ, и приём кладёт пробу
+        // так, как будто этот номер прислал анализатор (те же строки дня, ворота,
+        // срок, «повтор»). Номер заказа без нулей или «LAB-000123» — прежняя ручная
+        // привязка. У «Inv.…» (штрихкод не прочитан) поле пустое — сканер пишет в
+        // него сразу; над полем — штатив и место пробирки.
+        const place = noReadSample(m.sample_id);
+        const sid = String(m.sample_id || '').trim();
+        const numeric = /^(?:lab[-_ ]?)?\d+$/i.test(sid);
         const answer = window.prompt(
-            tr('Номер заказа — цифры со штрихкода пробирки (00000123 или LAB-000123)'),
-            String(m.sample_id || '').replace(/^lab[-_ ]?/i, '').replace(/^0+/, ''));
+            (place ? trf('Штатив {rack}, место {pos}.', place) + ' ' : '')
+                + tr('Отсканируйте этикетку пробирки сканером или наберите 8 цифр под штрихкодом (00000123) — проба ляжет так, как будто её прислал анализатор. Номер заказа без нулей (123) или LAB-000123 — привязка вручную.'),
+            numeric ? sid.replace(/^lab[-_ ]?/i, '').replace(/^0+/, '') : '');
         if (answer == null) return;
         // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 10) — номер или этикетка целиком
         // («LAB-000123»), как принимает сервер; прочее — не номер.
         // LAB_BARCODE_DIGITS_V1 — и прежняя этикетка, отсканированная на русской раскладке («ДФИ-000123»).
-        const typed = String(answer).trim();
-        const fromLabel = /^(?:lab|дфи)-(\d+)$/iu.exec(typed);
-        const vsId = fromLabel ? Number(fromLabel[1]) : (/^\d+$/.test(typed) ? Number(typed) : 0);
-        if (!vsId) { toast(tr('Нужен номер заказа'), 'warn'); return; }
+        const typed = attachInput(answer);   // LAB_SCAN_BIND_V1 — { label } или { orderId }
+        if (!typed) { toast(tr('Нужен номер заказа'), 'warn'); return; }
+        const attachArgs = (id) => (typed.label ? { id, label: typed.label } : { id, visit_service_id: typed.orderId });
 
         // LIS_PROXY_V1 (Р22) — группа строк прибора LIS Proxy: номер один, строки — по очереди.
         const ids = Array.isArray(m.ids) && m.ids.length ? m.ids : [m.id];
         if (ids.length > 1) {
             let ok = 0;
             for (const id of ids) {
-                const r = await supabase.rpc('lis_message_attach', { id, visit_service_id: vsId });
+                const r = await supabase.rpc('lis_message_attach', attachArgs(id));
                 if (r.error) { toast(r.error.message || String(r.error.code || r.error), 'warn'); break; }
                 if (r.data && r.data.ok) ok += 1;
             }
@@ -1476,7 +1490,7 @@ export async function mountLabDevices(container) {
             await reload();
             return;
         }
-        const { data, error } = await supabase.rpc('lis_message_attach', { id: ids[0], visit_service_id: vsId });
+        const { data, error } = await supabase.rpc('lis_message_attach', attachArgs(ids[0]));
         if (error) {
             // LIS_DISCOVERY_FIX_V1 (экран) — отказ по правилу, а не сбой: сообщение,
             // пришедшее не целиком, сервер не привязывает (409 — иначе в бланк

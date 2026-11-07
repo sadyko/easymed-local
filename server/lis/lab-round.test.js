@@ -102,3 +102,74 @@ test('лист «Внести результаты»: значение приб�
   assert.deepEqual([r['Эритроциты'].value, r['Эритроциты'].raw], ['5.2', null]);
   db.close();
 });
+
+// Ревью S3, L-1 — лаборант набрал своё значение поверх значения прибора (строка
+// остаётся source = 'analyzer', raw_value — прибора): «4.1567» показывалось и
+// печаталось «4.16». Округляется только то, что записал прибор: raw_value пуст
+// (записано до обновления или при выключенной настройке) или value — его округление.
+test('ревью L-1: ручная правка поверх значения прибора не округляется при показе; значение прибора — округляется', () => {
+  assert.equal(labShownValue({ value: '4.1567', raw_value: '7.2549', source: 'analyzer' }, true), '4.1567', 'правка руками — как набрана');
+  assert.equal(labShownValue({ value: '7.25', raw_value: '7.2549', source: 'analyzer' }, true), '7.25');
+  assert.equal(labShownValue({ value: '7.2549', raw_value: null, source: 'analyzer' }, true), '7.25', 'до обновления — округляется, как прежде');
+  assert.equal(labShownValue({ value: '7.2549', raw_value: '', source: 'analyzer' }, true), '7.25');
+  // Настоящий путь: прибор записал 7.2549 → 7.25, лаборант набрал 4.1567 «Сохранить всё».
+  const db = clinic();
+  ingestMessage(db, BC780('00000100', [['WBC', '7.2549']]), '10.0.0.50', 3);
+  const id = db.prepare("SELECT id FROM lab_results WHERE parameter = 'Лейкоциты'").get().id;
+  saveLabResults(db, { visit_service_id: 100, rows: [{ id, parameter: 'Лейкоциты', value: '4.1567', flag: 'normal' }] }, { id: 1, role: 'admin' });
+  const r = db.prepare('SELECT value, raw_value, source FROM lab_results WHERE id = ?').get(id);
+  assert.equal(labShownValue(r, true), '4.1567');
+  assert.equal(labShownValue(r, false), '4.1567');
+  db.close();
+});
+
+// Ревью S3, L-2 — первая повторная передача после обновления: в черновике полное
+// значение 3.21 («7.2549»), прибор шлёт ту же пробу снова — приём читает 7.25. Это не
+// «повтор: значения отличаются (7.2549 → 7.25)», а повторная передача. То же у серии.
+test('ревью L-2: в бланке полное значение (до обновления), прибор прислал то же — «повторная передача», а не «повтор»; другое — «повтор»', () => {
+  const db = clinic();
+  db.exec(`INSERT INTO lab_results (visit_service_id, parameter, value, numeric_value, flag, source) VALUES (100, 'Лейкоциты', '7.2549', 7.2549, 'high', 'analyzer');
+           UPDATE visit_services SET status = 'resulted' WHERE id = 100;`);
+  ingestMessage(db, BC780('00000100', [['WBC', '7.2549']]), '10.0.0.50', 3);
+  let m = lastRow(db);
+  assert.doesNotMatch(String(m.detail), /повтор:/, m.detail);
+  assert.match(String(m.detail), /повторная передача/);
+  assert.equal(rowsOf(db)['Лейкоциты'].value, '7.2549', 'бланк не тронут');
+  ingestMessage(db, BC780('00000100', [['WBC', '7.31']]), '10.0.0.50', 3);
+  m = lastRow(db);
+  assert.match(String(m.detail), /повтор: значения отличаются от уже записанных \(Лейкоциты 7\.2549 → 7\.31\)/);
+  db.close();
+});
+
+test('ревью L-2: выключено, в бланке округлённое (записано при включённой) — то же сообщение снова — «повторная передача»', () => {
+  const db = clinic();
+  const msg = BC780('00000100', [['WBC', '7.2549']]);
+  ingestMessage(db, msg, '10.0.0.50', 3);
+  db.exec('UPDATE doc_settings SET lab_round_analyzer = 0 WHERE id = 1');
+  ingestMessage(db, msg, '10.0.0.50', 3);
+  const m = lastRow(db);
+  assert.doesNotMatch(String(m.detail), /повтор:/, m.detail);
+  assert.equal(rowsOf(db)['Лейкоциты'].value, '7.25');
+  db.close();
+});
+
+// Ревью S3, L-2 — «Привязать» снимает значение прибора из прежнего бланка, только
+// если там всё ещё ЕГО значение. Записано полным (настройка была выключена или до
+// обновления), а сравнивалось с округлённым чтением — значение оставалось в чужом
+// бланке как «изменено после прибора».
+test('ревью L-2: «Привязать» к другому заказу снимает из прежнего бланка значение прибора, записанное полным', async () => {
+  const { lisMessageAttach } = await import('../services/rpc/lis.js');
+  const db = clinic();
+  db.exec(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (101, 20, 41, 'queued', ${NOW})`);
+  db.exec('UPDATE doc_settings SET lab_round_analyzer = 0 WHERE id = 1');
+  ingestMessage(db, BC780('00000100', [['WBC', '7.2549']]), '10.0.0.50', 3);
+  const m = lastRow(db);
+  assert.equal(m.status, 'unmapped', 'бланк не весь — строка в лотке, её можно «Привязать»');
+  assert.equal(rowsOf(db)['Лейкоциты'].value, '7.2549');
+  db.exec('UPDATE doc_settings SET lab_round_analyzer = 1 WHERE id = 1');
+  const r = lisMessageAttach(db, { id: m.id, visit_service_id: 101 }, { id: 1, role: 'admin' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.doesNotMatch(r.detail, /изменено после прибора/, r.detail);
+  assert.deepEqual(rowsOf(db), {}, 'из бланка № 100 значения прибора сняты');
+  db.close();
+});

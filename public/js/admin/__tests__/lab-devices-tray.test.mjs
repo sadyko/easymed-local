@@ -371,3 +371,54 @@ test('C4: изменилось видимое — перерисована то�
     DEVICES = []; RECENT = [];
   }
 });
+
+// ── LAB_SCAN_BIND_V1 (решение владельца 2026-11-07) — привязка сканером ──────
+// BC-780 не прочитал штрихкод: проба «Inv.114220_2-1» (штатив 2, место 1). В лотке
+// видно, где пробирка; «Привязать» — поле для сканера: отсканированная этикетка
+// (8 цифр) уходит как этикетка — приём кладёт пробу как будто её прислал прибор;
+// номер заказа без нулей — прежняя ручная привязка.
+test('LAB_SCAN_BIND_V1: строка «Inv.» — штатив и место; «Привязать» — скан этикетки уходит этикеткой', async () => {
+  const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+  MESSAGES = [row(70, 'unmatched', 1, { sample_id: 'Inv.114220_2-1', detail: 'анализатор не прочитал штрихкод пробирки' })];
+  attachAnswer = { ok: true, code: 'AA', status: 'applied', detail: '' };
+  const prevPrompt = window.prompt;
+  const asked = [];
+  try {
+    for (const [typed, args] of [['90000100', { id: 70, label: '90000100' }], [' 00000101 ', { id: 70, label: '00000101' }], ['101', { id: 70, visit_service_id: 101 }]]) {
+      window.prompt = (text, def) => { asked.push([text, def]); return typed; };
+      rpcCalls = []; toastMsg = null;
+      const root = await mount();
+      const tr0 = trWith(root, 'Inv.114220_2-1');
+      assert.ok(tr0, 'строка «Inv.» в лотке');
+      assert.ok(textOf(tr0).includes('штатив 2, место 1'), 'где пробирка — видно в строке: ' + textOf(tr0));
+      buttonIn(tr0, 'Привязать').click();
+      await tick();
+      const call = rpcCalls.find((x) => x.name === 'lis_message_attach');
+      assert.deepStrictEqual(call && call.args, args, typed);
+      assert.strictEqual(toastMsg, 'Сообщение применено');
+      stopLabDevicesLive();
+    }
+  } finally { window.prompt = prevPrompt; }
+  const [text, def] = asked[0];
+  assert.strictEqual(def, '', 'для сканера поле пустое: «Inv.…» не номер');
+  assert.ok(text.startsWith('Штатив 2, место 1.'), text);
+  assert.match(text, /Отсканируйте этикетку пробирки/);
+});
+
+test('LAB_SCAN_BIND_V1: обычная строка — подсказка прежняя (номер без нулей), 8 цифр — этикетка', async () => {
+  const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+  MESSAGES = [row(71, 'unmatched', 1, { sample_id: '00000123', detail: 'заказ ещё не оплачен — результат прибора можно «Привязать» после оплаты' })];
+  attachAnswer = { ok: true, code: 'AA', status: 'applied', detail: '' };
+  const prevPrompt = window.prompt;
+  let def = null;
+  try {
+    window.prompt = (_t, d) => { def = d; return '00000123'; };
+    rpcCalls = [];
+    const root = await mount();
+    buttonIn(trWith(root, '00000123'), 'Привязать').click();
+    await tick();
+    assert.strictEqual(def, '123', 'по-прежнему подставлен номер заказа');
+    assert.deepStrictEqual(rpcCalls.find((x) => x.name === 'lis_message_attach').args, { id: 71, label: '00000123' });
+    assert.ok(!textOf(trWith(root, '00000123')).includes('штатив'), 'у обычного номера штатива нет');
+  } finally { window.prompt = prevPrompt; stopLabDevicesLive(); }
+});

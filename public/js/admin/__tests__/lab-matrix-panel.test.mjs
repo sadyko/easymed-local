@@ -128,3 +128,60 @@ test('бланк без таблицы — как прежде; разделы �
     ] } }] } });
   assert.match(html, /<td class="pname">y<\/td><td class="c mx-v">\+\+<\/td><td><\/td>/);
 });
+
+// Ревью S3, H-1 — степень в ячейке можно СНЯТЬ. Лаборатория внесла «Ампициллин ·
+// Резистентный = ++», увидела ошибку, очистила ячейку и поставила «Чувствительный
+// = ++». «Сохранить всё» пропускал пустые ячейки, старое «++» оставалось в базе, и
+// бланк печатал «++» в ОБЕИХ графах — противоречивая антибиограмма на руках у пациента.
+test('ревью H-1: очищенная ячейка таблицы сохраняется пустой — бланк печатает отметку только в новой графе', async (t) => {
+  const app = await startApp(seedVisit);
+  const root = body.appendChild(document.createElement('div'));
+  t.after(() => { for (const m of byClass(body, 'modal')) m.remove(); root.remove(); app.close(); });
+  await renderLaboratory(root, { tabId: 't-1' });
+  await settle(16);
+  const open = async () => { buttonByText(root, 'Внести результаты').click(); await settle(16); return byClass(body, 'modal').pop(); };
+  const cell = (m, name) => walk(m).find((n) => n.tagName === 'SELECT' && n.getAttribute('data-matrix-cell') === name);
+  let modal = await open();
+  change(cell(modal, 'Ампициллин · Резистентный'), '++');
+  buttonByText(modal, 'Сохранить всё').click();
+  await settle(24);
+  modal = await open();
+  assert.equal(cell(modal, 'Ампициллин · Резистентный').value, '++', 'сохранённая степень видна в сетке');
+  change(cell(modal, 'Ампициллин · Резистентный'), '');
+  change(cell(modal, 'Ампициллин · Чувствительный'), '++');
+  toasts.length = 0;
+  buttonByText(modal, 'Сохранить всё').click();
+  await settle(24);
+  assert.ok(toasts.some((x) => x.includes('Результаты сохранены')), JSON.stringify(toasts));
+  const rows = app.db.prepare("SELECT parameter, value FROM lab_results WHERE visit_service_id = 3001 AND TRIM(COALESCE(value, '')) <> '' ORDER BY id").all();
+  assert.deepEqual(rows.map((r) => [r.parameter, r.value]), [['Ампициллин · Чувствительный', '++']], 'снятая степень осталась в базе');
+  printed.length = 0;
+  buttonByText(root, 'Бланк').click();
+  await settle(24);
+  const html = printed[printed.length - 1] || '';
+  assert.match(html, /<td class="pname">Ампициллин<\/td><td class="c mx-v"><\/td><td class="c mx-v">\+\+<\/td>/);
+
+  // Снять ВСЕ отметки и сохранить — тоже правка, а не «добавьте хотя бы один результат».
+  modal = await open();
+  change(cell(modal, 'Ампициллин · Чувствительный'), '');
+  toasts.length = 0;
+  buttonByText(modal, 'Сохранить всё').click();
+  await settle(24);
+  assert.equal(app.db.prepare("SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = 3001 AND TRIM(COALESCE(value, '')) <> ''").get().c, 0);
+});
+
+test('ревью H-1: пустая ячейка, у которой не было значения, не пишется (строк-пустышек нет)', async (t) => {
+  const app = await startApp(seedVisit);
+  const root = body.appendChild(document.createElement('div'));
+  t.after(() => { for (const m of byClass(body, 'modal')) m.remove(); root.remove(); app.close(); });
+  await renderLaboratory(root, { tabId: 't-1' });
+  await settle(16);
+  buttonByText(root, 'Внести результаты').click();
+  await settle(16);
+  const modal = byClass(body, 'modal').pop();
+  change(walk(modal).find((n) => n.tagName === 'SELECT' && n.getAttribute('data-matrix-cell') === 'E. coli · Положительный'), '+');
+  buttonByText(modal, 'Сохранить всё').click();
+  await settle(24);
+  assert.deepEqual(app.db.prepare('SELECT parameter, value FROM lab_results WHERE visit_service_id = 3001').all().map((r) => [r.parameter, r.value]),
+    [['E. coli · Положительный', '+']]);
+});

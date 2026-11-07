@@ -59,6 +59,10 @@ export const TABLE_PLAN = Object.freeze({
   // ── лаборатория ────────────────────────────────────────────────────────
   lab_results: del('lab'),
   lab_device_messages: del('lab'),
+  // LAB_ONE_BARCODE_V1 (ревью S3, L-4, мигр. 281) — след удалённых строк визита для
+  // этикетки дня: учебные визиты уходят — их следы тоже (удаление строк визитов
+  // само пишет сюда — поэтому в WIPE_ORDER эта таблица после visit_services).
+  lab_line_gone: del('lab'),
 
   // ── документы визитов (файлы — test-data-wipe.js removeVisitDocFiles) ─
   visit_documents: del('documents'),
@@ -349,7 +353,7 @@ export const WIPE_ORDER = Object.freeze([
   'card_ledger', 'patient_discounts',
   'pay_refund_releases', 'pay_period_lines', 'pay_period_log', 'pay_periods', 'money_idempotency',
   'patient_deposits', 'payments', 'cash_movements', 'cash_shifts',
-  'visit_services', 'invoice_audit_log', 'invoice_items', 'admissions', 'invoices', 'visits',
+  'visit_services', 'lab_line_gone', 'invoice_audit_log', 'invoice_items', 'admissions', 'invoices', 'visits',
   'invoice_counters', 'deposit_counters', 'card_sale_counters',
 ]);
 
@@ -373,10 +377,13 @@ export const GUARD_TRIGGERS = Object.freeze({
 //   admission_services_pending_cancel (мигр. 226) — отменяет ждущие списания
 //     в stock_pending_writeoffs; их удаление уносит раньше (WIPE_ORDER),
 //     менять уже нечего;
-//   patient_deposits_no_delete (мигр. 160) — запрет, GUARD_TRIGGERS выше.
+//   patient_deposits_no_delete (мигр. 160) — запрет, GUARD_TRIGGERS выше;
+//   visit_services_lab_gone (мигр. 281, ревью S3 L-4) — пишет след удалённой
+//     строки в lab_line_gone; её удаление идёт ПОСЛЕ visit_services (WIPE_ORDER)
+//     и уносит и эти следы.
 export const DELETE_TRIGGERS = Object.freeze({
   visits: Object.freeze(['visits_journal_del']),
-  visit_services: Object.freeze(['visit_services_journal_del']),
+  visit_services: Object.freeze(['visit_services_journal_del', 'visit_services_lab_gone']),
   lab_results: Object.freeze(['lab_results_journal_del']),
   invoices: Object.freeze(['invoices_journal_del', 'invoices_minted_del']),
   invoice_items: Object.freeze(['invoice_items_journal_del']),

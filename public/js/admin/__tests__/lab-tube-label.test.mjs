@@ -201,12 +201,14 @@ test('снимок владельца (до забора): «Штрих-код»
   assert.ok(printed[0].includes(PATIENT.full_name), 'на этикетке нет пациента');
 });
 
+// Ревью S3, M-2 — № 28 взята, а «Анализ крови» второго счёта (№ 31) ждёт: это
+// второй забор того же анализа — его пробирке своя этикетка строки (00000031).
 test('проба № 28 уже взята — номер дня прежний, копий по числу пробирок; время — забора, местное (19:06)', async () => {
   const c = await mount(PHOTO());
   barcodeBtn(c).click();
   await tick();
   const labels = labelsOf(printed[0]);
-  assert.deepStrictEqual(labels.map((l) => l.code), ['90000028', '90000028', '90000028', '90000028']);
+  assert.deepStrictEqual(labels.map((l) => l.code), ['90000028', '90000028', '90000028', '00000031']);
   assert.strictEqual(labels[0].date, '02.11.2026, 19:06', 'забор в 14:06 UTC — на этикетке 19:06 по Ташкенту');
 });
 
@@ -225,7 +227,8 @@ test('добавили анализ до или после забора — но
   const after = await mount([line(35, BLOOD, 'queued'), ...PHOTO()]);
   barcodeBtn(after).click();
   await tick();
-  assert.deepStrictEqual([...new Set(labelsOf(printed[0]).map((l) => l.code))], ['90000028']);
+  // Ревью S3, M-2 — после забора № 28 ждущая кровь (№ 31, 35) — второй забор: своя этикетка строки.
+  assert.deepStrictEqual([...new Set(labelsOf(printed[0]).map((l) => l.code))], ['90000028', '00000031']);
 });
 
 test('номер не зависит от вкладки: под «В работе» видна одна строка, номер и копии — те же', async () => {
@@ -233,7 +236,7 @@ test('номер не зависит от вкладки: под «В работ
   assert.strictEqual(byClass(c, 'lq-item').length, 1, 'под «В работе» — только взятая проба № 28');
   barcodeBtn(c).click();
   await tick();
-  assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['90000028', '90000028', '90000028', '90000028']);
+  assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['90000028', '90000028', '90000028', '00000031']);   // ревью S3, M-2
 });
 
 test('панель без прибора — номер дня тот же, копий по числу пробирок; выданный визит — этикеток нет', async () => {
@@ -429,4 +432,33 @@ test('ревью U11, L6: день старше 7 дней карточка не
   } finally {
     VISITS[0].visit_date = visit;
   }
+});
+
+// Ревью S3, M-2 — повторный забор того же анализа в тот же день: утренняя кровь
+// (№ 28) взята, вечерняя (№ 31) ждёт. Номер дня приём не разложил бы между двумя
+// открытыми «Анализ крови» — у вечерней пробирки своя этикетка строки, и карточка
+// говорит почему.
+test('ревью M-2: повторный забор — номер дня утренней пробирке, вечерней — этикетка её строки; сказано почему', async () => {
+  const c = await mount([line(31, BLOOD, 'queued'), line(29, URINE, 'queued'),
+    line(28, BLOOD, 'collected', { sample_collected_at: '2026-11-02T14:06:00Z' })]);
+  barcodeBtn(c).click();
+  await tick();
+  assert.strictEqual(opened, 1, 'одним окном');
+  assert.deepStrictEqual(labelsOf(printed[0]).map((l) => [l.code, l.tests]),
+    [['90000028', 'Анализ крови, Анализ мочи'], ['90000028', 'Анализ крови, Анализ мочи'], ['00000031', 'Анализ крови']]);
+  assert.match(String(toastMsg), /Повторный забор/);
+  assert.ok(String(toastMsg).includes('00000031'), String(toastMsg));
+});
+
+// Ревью S3, M-3 — один анализатор кормит и кровь, и мочу (панели обеих услуг — на
+// приборе 3): через LIS Proxy материал пробы не приходит, и номер дня не разделил бы
+// пробирки. У обеих — свои этикетки пробирок (номер — самая старая строка пробирки).
+test('ревью M-3: моча и кровь на одном анализаторе — у его пробирок свои этикетки, номера дня нет; сказано почему', async () => {
+  const URINE_M = { ...URINE, specimen: 'Моча' };
+  const panels = [...PANELS, { id: 8, name: 'Моча', code: '', service_id: 41, has_narrative: 0, device_id: 3 }];
+  const c = await mount([line(29, URINE_M, 'queued'), line(28, BLOOD, 'queued')], { panels });
+  barcodeBtn(c).click();
+  await tick();
+  assert.deepStrictEqual(labelsOf(printed[0]).map((l) => [l.code, l.tests]), [['00000028', 'Анализ крови'], ['00000029', 'Анализ мочи']]);
+  assert.match(String(toastMsg), /Моча и другой материал на одном анализаторе/);
 });
