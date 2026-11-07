@@ -445,6 +445,8 @@ function cashierRowSelect(idsSql) {
   return `
     SELECT i.id, i.invoice_number, i.status, i.subtotal, i.discount_amount,
            i.total_amount, i.paid_amount, i.created_at, i.paid_at,
+           -- DISCOUNT_V2 · CASHIER_DISCOUNT_V1 — причина скидки (группа, промокод, касса): окно оплаты и история.
+           i.discount_note AS discount_note,
            pt.full_name AS patient_name, pt.mrn AS mrn, pt.phone AS phone,
            -- DEPOSIT_WALLET_V1 — окно оплаты спрашивает баланс пациента.
            i.patient_id AS patient_id,

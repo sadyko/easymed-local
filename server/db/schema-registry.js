@@ -431,7 +431,7 @@ export const REGISTRY = {
   invoices: {
     // payer_id: COVERAGE_SPLIT_V1 (mig 054) — кому выставлен счёт (null = пациенту)
     read:  { roles: ALL_STAFF, columns: ['id','invoice_number','visit_id','patient_id','branch_id','subtotal','discount_amount','post_sale_discount','total_amount','paid_amount','status','created_by','created_at','voided_at','paid_at','admission_id','payer_id',
-             'sync_origin'] },   // admission_id: BED_CONSOLE_V1 (mig 040); sync_origin: BUILDING_REPORTS_V1 — из какого ЗДАНИЯ счёт (мигр. 087); ставится только приёмом порции, поэтому не writable
+             'sync_origin','discount_source','discount_note','doctor_discount_share'] },   // DISCOUNT_V2 (мигр. 273) — какая скидка, почему, доля скидки, уменьшающая долю врача   // admission_id: BED_CONSOLE_V1 (mig 040); sync_origin: BUILDING_REPORTS_V1 — из какого ЗДАНИЯ счёт (мигр. 087); ставится только приёмом порции, поэтому не writable
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // invoices are created/updated ONLY via billing RPCs (server-computed money)
     // created_at/created_by: REPORT_PERIOD_V1 — выручка и «мои счета» считаются
     // ЗА ПЕРИОД и ПО КАССИРУ. Обе колонки и так читаются (см. read выше); без них
@@ -734,8 +734,8 @@ export const REGISTRY = {
   // CATEGORY_DISCOUNT_V1 (миграция 107) — discount_percent: скидка группы.
   // Читают все (карта пациента показывает её рядом с категорией), пишет только
   // администратор — это деньги клиники, а не оформление.
-  patient_categories: { read:{roles:ALL_STAFF,columns:['id','name','tier','discount_percent','active','created_at']},
-    write:{ grant:'settings.patient_categories',insert:{roles:['admin'],columns:['name','tier','discount_percent','active']},update:{roles:['admin'],columns:['name','tier','discount_percent','active']},delete:{roles:[]}},
+  patient_categories: { read:{roles:ALL_STAFF,columns:['id','name','tier','discount_percent','active','created_at','reduces_doctor_share']},   // DISCOUNT_V2 (мигр. 273) — «Скидка уменьшает долю врача»
+    write:{ grant:'settings.patient_categories',insert:{roles:['admin'],columns:['name','tier','discount_percent','active','reduces_doctor_share']},update:{roles:['admin'],columns:['name','tier','discount_percent','active','reduces_doctor_share']},delete:{roles:[]}},
     filters:['id','active','name'], embed:{} },
   floors: { read:{roles:ALL_STAFF,columns:['id','name','level','active','created_at']},
     write:{ grant:'settings.rooms',insert:{roles:['admin'],columns:['name','level','active']},update:{roles:['admin'],columns:['name','level','active']},delete:{roles:[]}},
@@ -880,9 +880,9 @@ export const REGISTRY = {
   // чтение: пишет его сервер (domain/cards.js) и триггеры миграции 158.
   // CARD_SALE_V1 (mig 166) — sale_invoice_id / sale_number: счёт продажи карты
   // в кассе (NULL — выдана без оплаты). Только чтение: пишет rpc/card-sales.js.
-  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note','remaining','sale_invoice_id','sale_number']},
-    write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
-      update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},delete:{roles:[]}},
+  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note','remaining','sale_invoice_id','sale_number','reduces_doctor_share']},   // DISCOUNT_V2 (мигр. 273)
+    write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note','reduces_doctor_share']},
+      update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note','reduces_doctor_share']},delete:{roles:[]}},
     filters:['id','active','kind','category_id'], json:['service_ids'],
     embed:{ patient_categories:{table:'patient_categories',fk:'category_id',columns:['id','name']} } },
   // CHRONIC_REF_V1 (mig 129) — the clinic's list of chronic conditions the

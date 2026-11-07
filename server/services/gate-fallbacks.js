@@ -59,7 +59,19 @@ const FALLBACK_FN = {
     view: (db, u) => hasAnyRole(u, ['admin']) || canViewSection(db, u, 'reports-hub'),
     edit: (db, u) => hasAnyRole(u, ['admin']),
   },
+  // CASHIER_DISCOUNT_V1 (решение владельца 2026-11-07, п. 2) — «Кассир может давать
+  // скидку»: пока роль строку не настраивала — любой, кто принимает оплату (касса и
+  // администратор, своя роль на их основе), любую сумму. Владелец выключает
+  // строку у роли в «Настройки → Роли».
+  'cashier.discount': {
+    edit: (db, u) => cashierDiscountByRole(db, u),
+  },
 };
+
+/** CASHIER_DISCOUNT_V1 — прежнее правило строки «Кассир может давать скидку» (ворота rpc/billing.js). */
+export function cashierDiscountByRole(db, u) {
+  return hasAnyRole(u, ['admin', 'cashier']);   // те же роли, что принимают оплату (billing.js PAYMENT_ROLES)
+}
 
 /** Ворота ключа — прежняя галочка раздела (FALLBACK_FN), а не список ролей. */
 export function isFnGate(key) { return Object.prototype.hasOwnProperty.call(FALLBACK_FN, key); }
