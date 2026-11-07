@@ -319,3 +319,18 @@ test('V3120_PERF: прежний SQL (без выноса подзапросов
   } finally { __setReportsPushDown(true); }
   db.close();
 });
+
+// REPORTS_TAX_PAY_V1 (ревью S2 M1) — «По услугам» с фильтром «Кассир»: один кассир принял одну
+// услугу двумя способами (60 000 наличными + 40 000 картой) — обе части его, и «Кол-во» считало
+// услугу дважды: splitByPayment оставляет количество только первой части (у остальных null), а
+// `Number(null) || 1` возвращало единицу.
+test('ревью S2 M1: «По услугам» + «Кассир» — услуга, оплаченная одним кассиром двумя способами, — «Кол-во» 1', () => {
+  const { db } = seed();
+  db.prepare("UPDATE payments SET cashier_id = 5 WHERE method = 'card'").run();   // INV-1: обе части — кассир А
+  const pick = (r) => objects(r).map((o) => [o['Услуга'], o['Кол-во'], o['Сумма']]);
+  assert.deepEqual(pick(run(db, 'by_services', { cashier_id: 5 })), [['Консультация', 1, 112000], ['Анализ крови', 1, 100000]]);
+  assert.deepEqual(pick(run(db, 'by_services', { pay_method: 'card' })), [['Анализ крови', 1, 40000]]);
+  // Без фильтра — как прежде: два анализа (INV-1 и неоплаченный INV-3), одна консультация.
+  assert.deepEqual(pick(run(db, 'by_services')), [['Консультация', 1, 112000], ['Анализ крови', 2, 150000]]);
+  db.close();
+});

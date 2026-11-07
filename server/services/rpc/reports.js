@@ -4326,7 +4326,9 @@ function byServicesReport(db, args, ctx) {
       origin: r.origin, group: lineGroup(r), service: r.service || '—', where,
       qty: 0, gross: 0, discount: 0, tax: 0, net: 0, fee: 0, paid: 0,
     };
-    b.qty += Number(r.qty) || 1;
+    // REPORTS_TAX_PAY_V1 (ревью S2 M1) — количество — только у первой части оплаты (splitByPayment):
+    // у остальных null, и `Number(null) || 1` считало услугу ещё раз (кассир с двумя способами).
+    if (r.qty !== null) b.qty += Number(r.qty) || 1;
     b.gross += r.amount || 0;
     b.discount += r.discount || 0;
     b.tax += r.tax || 0;
