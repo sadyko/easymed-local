@@ -289,3 +289,38 @@ test('ревью S5 H-1: промокод по ставкам — замена �
   assert.deepEqual(money(invOf(db, inv.id)), [250000, 70000, 180000]);
   assert.deepEqual(items(db, inv.id)[1].slice(0, 4), [32, 150000, 15000, 0]);
 });
+
+// ─── Ревью S5 M-1 — «БЕЗ СКИДКИ» НЕ ДОПИСЫВАЕТСЯ В СЧЁТ ПО СТАВКАМ ГРУППЫ ────────────
+//
+// УЗИ выставлено «Скидкой группы» по ставкам (160 000). Тот же день ОАК «Без скидки»:
+// у счёта по ставкам остаток скидки 0 и пол 0 — часть дописывалась в него, счёт оставался
+// «группа», и следующая правка кассы клала пол группы на ОАК (8 000 = 20 % на «Без
+// скидки»). Без ставок такая часть — своим счётом. Теперь и со ставками — своим счётом.
+test('ревью S5 M-1: «Без скидки» после счёта по ставкам группы — отдельный счёт; правка кассы скидку на него не кладёт', () => {
+  const db = seed();
+  const pid = patient(db, group(db, { rates: STAFF }));
+  const { vid, ids } = visitWith(db, pid, [31]);
+  const first = call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: ids, discount_amount: 0, discount_choice: 'group' }).invoice;
+  assert.deepEqual(money(first), [200000, 40000, 160000]);
+  const oak = addLines(db, vid, [40]);
+  const res = call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: oak, discount_amount: 0, discount_choice: 'none' });
+  assert.ok(!res.appended, '«Без скидки» дописана в счёт по ставкам группы');
+  assert.notEqual(res.invoice.id, first.id);
+  assert.deepEqual(money(res.invoice), [40000, 0, 40000]);
+  // касса добавляет ЭКГ в счёт «Без скидки» — скидки нет ни на ОАК, ни на ЭКГ
+  call('cashier_line_add', db, { invoice_id: res.invoice.id, service_id: 41, doctor_id: 20 });
+  assert.deepEqual(money(invOf(db, res.invoice.id)), [90000, 0, 90000]);
+  // и счёт группы не тронут
+  assert.deepEqual(money(invOf(db, first.id)), [200000, 40000, 160000]);
+});
+
+test('ревью S5 M-1: часть по ставкам группы по-прежнему дописывается в счёт по ставкам (без изменений)', () => {
+  const db = seed();
+  const pid = patient(db, group(db, { rates: STAFF }));
+  const { vid, ids } = visitWith(db, pid, [31]);
+  const first = call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: ids, discount_amount: 0 }).invoice;
+  const res = call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: addLines(db, vid, [40]), discount_amount: 0 });
+  assert.equal(res.appended, true);
+  assert.equal(res.invoice.id, first.id);
+  assert.deepEqual(money(res.invoice), [240000, 48000, 192000]);
+});

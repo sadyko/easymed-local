@@ -709,7 +709,8 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
     //     пола на 0,05, допуск не пускает, и выходит новый счёт, как в 3.20.0
     //     (безопасно: деньги — как у двух отдельных счетов).
     if (append && payerRaw === null && total > 0 && restDiscount <= categoryDiscount + 0.005 && (choice.choice !== 'promo')) {
-      const target = appendTargetInvoice(db, visitId, appendPct != null ? appendPct : categoryPercent);   // DISCOUNT_RATES_V1
+      const target = appendTargetInvoice(db, visitId, appendPct != null ? appendPct : categoryPercent,
+        { rated: !!(rated && !rated.manualOver) });   // DISCOUNT_RATES_V1; ревью S5 M-1
       if (target) {
         return appendToVisitInvoice(db, target, {
           visitId, priced, subtotal, restSubtotal,
@@ -852,7 +853,12 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
 //     убирала добавленное, repriceUnpaidInvoice(absolute) давал 135 000 к
 //     оплате вместо 125 000 у двух счетов — пациент переплачивал 10 000.
 // Самый новый — как у cashier_line_add; не годится он — новый счёт.
-function appendTargetInvoice(db, visitId, pct) {
+// Ревью S5 M-1 — `rated`: новая часть посчитана ставками. Часть БЕЗ ставок («Без
+// скидки», «вручную» сверх ставок) в счёт со строками по ставкам не дописывается: у
+// такого счёта остаток скидки и пол — 0, и «Без скидки» сливалась с ним, а счёт
+// оставался «группа» — следующая правка кассы клала пол группы на её строки (ОАК
+// 40 000 «Без скидки» → 32 000). Своим счётом, как без ставок.
+function appendTargetInvoice(db, visitId, pct, { rated = false } = {}) {
   const target = db.prepare(`
     SELECT i.* FROM invoices i
      WHERE i.visit_id = ?
@@ -868,7 +874,8 @@ function appendTargetInvoice(db, visitId, pct) {
      LIMIT 1`).get(visitId) || null;
   if (!target) return null;
   if (db.prepare(`SELECT ${localDate('?')} AS d`).get(target.created_at).d !== today(db)) return null;   // ревью m2
-  const rest = Math.max(round2((Number(target.discount_amount) || 0) - invoiceOwnDiscount(db, target.id)), 0);
+  if (!rated && db.prepare('SELECT 1 FROM invoice_items WHERE invoice_id = ? AND discount_rate IS NOT NULL LIMIT 1').get(target.id)) return null;   // ревью S5 M-1
+  const rest =Math.max(round2((Number(target.discount_amount) || 0) - invoiceOwnDiscount(db, target.id)), 0);
   // DISCOUNT_RATES_V1 — пол группы — только на строки без ставок (у строк по ставкам скидка своя).
   const floor = round2(invoiceFloorBase(db, target.id) * (Number(pct) || 0) / 100);
   if (Math.abs(rest - floor) > 0.01 + 1e-9) return null;   // ревью C1, m1
