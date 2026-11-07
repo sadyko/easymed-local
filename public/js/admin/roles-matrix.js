@@ -491,12 +491,12 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
                 h('span', { class: 'rm-chev' }, Icon('ChevronRight', { size: 14 })),
                 Icon(GROUP_ICON[group] || 'Folder', { size: 14 }), h('span', { class: 'rm-group-name' }, tr(group)), g.countEl);
             const groupName = group;
-            g.head.addEventListener('click', () => {
-                const collapse = g.head.getAttribute('aria-expanded') === 'true';
+            g.setCollapsed = (collapse) => {
                 g.head.setAttribute('aria-expanded', collapse ? 'false' : 'true');
                 g.head.classList.toggle('is-collapsed', collapse);
                 for (const b of blocks) if (b.group === groupName) b.el.classList.toggle('is-group-collapsed', collapse);
-            });
+            };
+            g.head.addEventListener('click', () => g.setCollapsed(g.head.getAttribute('aria-expanded') === 'true'));
             host.appendChild(g.head);
         }
         const sectionLvl = grants[s.key] || 'none';
@@ -672,7 +672,14 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
             if (hit) { shownGroups.add(b.group); any = true; }
             if (q && hit && b.hasInner && !b.ownWord.includes(q)) b.open(true);
         }
-        for (const [name, g] of groups) if (g.head) g.head.hidden = !shownGroups.has(name);
+        for (const [name, g] of groups) {
+            if (!g.head) continue;
+            g.head.hidden = !shownGroups.has(name);
+            // Ревью 3.22.0 m3 — найденное в свёрнутой группе: группа раскрывается,
+            // как раздел с найденным окном строкой выше. Иначе заголовок виден,
+            // «Ничего не найдено.» спрятано, а сам раздел — нет.
+            if (q && shownGroups.has(name) && g.head.getAttribute('aria-expanded') === 'false') g.setCollapsed(false);
+        }
         nothing.hidden = any;
     });
     return controls;

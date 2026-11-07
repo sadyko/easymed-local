@@ -392,3 +392,23 @@ test('сводка роли: «Настройки: Нет» называет з�
   const open = roleReach(savedRole('registrar', REGISTRAR, { settings: 'view' }), ['patients'], (id) => id);
   assert.ok(!reachSentences(open).some((x) => /закрывает и страницы/.test(x.template)));
 });
+
+// Ревью 3.22.0 m3 — поиск по свёрнутой группе. Группа «Настройки» свёрнута
+// (заголовок-кнопка), ищем её окно: раздел обязан показаться, а не остаться
+// скрытым свёрнутостью, пока «Ничего не найдено.» спрятано.
+test('ревью 3.22.0 m3: поиск находит окно внутри свёрнутой группы — группа раскрывается', () => {
+  const host = mk('div');
+  paintCatalog(host, grantsFromLegacy({ sections: ['settings'], levels: { settings: 'viewer' } }), {});
+  const head = walk(host).find((n) => n.tagName === 'BUTTON' && n.dataset && n.dataset.group === 'Настройки');
+  const section = walk(host).find((n) => n.dataset && n.dataset.section === 'settings');
+  const search = walk(host).find((n) => n.tagName === 'INPUT' && n.getAttribute('type') === 'search');
+  assert.ok(head && section && search, 'стенд неверен');
+  head.click();
+  assert.equal(section.classList.contains('is-group-collapsed'), true, 'группа не свернулась');
+  search.value = 'telegram-бот';
+  search.dispatchEvent({ type: 'input' });
+  assert.equal(section.hidden, false, 'раздел не найден');
+  assert.equal(section.classList.contains('is-group-collapsed'), false, 'найденный раздел спрятан свёрнутой группой');
+  assert.equal(head.getAttribute('aria-expanded'), 'true', 'заголовок группы говорит «свёрнуто», а внутри — найденное');
+  assert.equal(head.classList.contains('is-collapsed'), false);
+});
