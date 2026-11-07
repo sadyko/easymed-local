@@ -47,6 +47,8 @@ import { serviceRoute } from '../../shared/service-route.js';   // DIAG_ROUTE_V1
 // пул исполнителей — тот же, что у записи; дверь — та же, что «Сменить врача» карты.
 import { doctorPoolFor, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';
 import { setLinePerformer } from './booked-rows.js';
+// MY_REFERRALS_V1 (3.22.0) — вкладка «Мои направления»: что врач направил и что с этим стало.
+import { myReferralsView, loadMyReferrals, resetMyReferrals, canSeeMyReferrals, state as referralsState } from './my-referrals.js';
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -154,8 +156,8 @@ const LINE_NOTES = new Map();   // id строки → { status, seq }
 // зарплата — нижняя часть той же страницы, что дашборд. Адрес
 // '#consultation/pay' из закладок и ссылок продолжает работать: он открывает
 // эту страницу и прокручивает к зарплате (state.scrollToPay).
-const SUB_TO_TAB = { work: 'appointments', inpatients: 'inpatients', pay: 'dashboard', profile: 'profile' };
-const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', profile: 'profile' };
+const SUB_TO_TAB = { work: 'appointments', inpatients: 'inpatients', pay: 'dashboard', profile: 'profile', referrals: 'referrals' };   // MY_REFERRALS_V1 — '#consultation/referrals'
+const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', profile: 'profile', referrals: 'referrals' };
 
 export async function renderConsultation(container, { onNavigate, payload, tabId, onPayload, onShow } = {}) {
     stopAutoFresh();   // DIAG_ROUTE_V1 (D6) — новый экран — свой таймер (один на модуль)
@@ -166,6 +168,8 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // пересылку ссылки, а голый '#consultation' открывает дашборд.
     const sub = payload && typeof payload.sub === 'string' ? payload.sub : null;
     state.tab = SUB_TO_TAB[sub] || 'dashboard';
+    if (state.tab === 'referrals' && !canSeeMyReferrals()) state.tab = 'dashboard';   // MY_REFERRALS_V1 — вкладка только врачу
+    resetMyReferrals();   // MY_REFERRALS_V1 — каждое открытие кабинета: последние 30 дней, без фильтров
     state.scrollToPay = sub === 'pay';   // CABINET_DASH_PAY_ONE_V1 — старый адрес зарплаты
     if (cabinetHero) cabinetHero.stop();
     cabinetHero = null;   // SECTION_HERO_V1 — новый вход в раздел — новый баннер
@@ -743,11 +747,13 @@ function paint() {
             topTab('dashboard',    'Дашборд · Зарплата', 'Dashboard'),
             topTab('appointments', 'Мои приёмы',  'Activity'),
             topTab('inpatients',   'Стационар',    'Bed', inpatientWaiting()),   // INPATIENT_TAB_V1 / ADMITTING_DOCTOR_CABINET_V1
+            canSeeMyReferrals() ? topTab('referrals', 'Мои направления', 'Send') : null,   // MY_REFERRALS_V1
             topTab('profile',      'Мой профиль',  'User'),
         )),
         state.tab === 'profile' ? profileView()
             : state.tab === 'inpatients' ? inpatientsView()
             : state.tab === 'appointments' ? appointmentsView()
+            : state.tab === 'referrals' ? myReferralsView(() => { if (state.tab === 'referrals') paint(); })   // MY_REFERRALS_V1
             : dashboardAndPayView(),
     ));
     // The appointments table body is painted into a slot by id — only meaningful
@@ -1122,6 +1128,7 @@ function ensureTabData(id) {
             .then(() => loadDashboardData())
             .then(() => { state.dash.loading = false; });
     }
+    if (id === 'referrals' && !referralsState.loaded) return loadMyReferrals();   // MY_REFERRALS_V1
     if (id === 'inpatients' && !state.inpt.loaded) {   // INPATIENT_TAB_V1
         state.inpt.loading = true;
         return loadInpatients().then(() => { state.inpt.loading = false; });

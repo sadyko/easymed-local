@@ -114,6 +114,8 @@ const READ_ONLY_RPCS = new Set([
   // DOCTOR_REFERRAL_DESK_V1 — направления врача пациента у стойки и метка «от врача»
   // календаря — чтения. Привязка рекомендации к строке (referral_recommendation_attach) — запись.
   'patient_referral_orders', 'referral_visit_links',
+  // MY_REFERRALS_V1 — «Мои направления» кабинета врача: что врач направил и что с этим стало. Чтение.
+  'my_referrals',
   // CRM_LINK_ALL_V1 (редакция 2) — «Записи пациента» карточки (crm_card_bookings) — чтение.
   'crm_card_bookings',
   // CUSTDEV_V1 — доска и отчёт по обзвону. Чистое чтение. Клиника с

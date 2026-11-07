@@ -13543,5 +13543,16 @@ export const STRINGS = {
   // /DOCTOR_REFERRAL_DESK_V1
   // ── S4 · 3.22.0 — кабинет врача, процедуры, остатки 3.21.2 (MY_REFERRALS_V1 · PROC_SCOPE_V1 · DIAG_ROUTE_V1) ──
   "Все исполнители": {"en":"All performers","ru":"Все исполнители","uz":"Barcha bajaruvchilar"},   // PROC_SCOPE_V1
+  "Мои направления": {"en":"My referrals","ru":"Мои направления","uz":"Mening yo‘llanmalarim"},   // MY_REFERRALS_V1
+  "Возвращено": {"en":"Refunded","ru":"Возвращено","uz":"Qaytarilgan"},   // MY_REFERRALS_V1
+  "Поиск: пациент, услуга, исполнитель…": {"en":"Search: patient, service, performer…","ru":"Поиск: пациент, услуга, исполнитель…","uz":"Qidiruv: bemor, xizmat, bajaruvchi…"},   // MY_REFERRALS_V1
+  "Показаны последние направления периода — сузьте период, чтобы увидеть остальные.": {"en":"The latest referrals of the period are shown — narrow the period to see the rest.","ru":"Показаны последние направления периода — сузьте период, чтобы увидеть остальные.","uz":"Davrdagi oxirgi yo‘llanmalar ko‘rsatilgan — qolganlarini ko‘rish uchun davrni qisqartiring."},   // MY_REFERRALS_V1
+  "За этот период вы никого не направляли.": {"en":"You have not referred anyone in this period.","ru":"За этот период вы никого не направляли.","uz":"Bu davrda siz hech kimni yo‘llamagansiz."},   // MY_REFERRALS_V1
+  "визит {day}": {"en":"visit {day}","ru":"визит {day}","uz":"tashrif {day}"},   // MY_REFERRALS_V1
+  "рекомендация": {"en":"recommendation","ru":"рекомендация","uz":"tavsiya"},   // MY_REFERRALS_V1
+  "Документ не найден — откройте карту пациента.": {"en":"Document not found — open the patient card.","ru":"Документ не найден — откройте карту пациента.","uz":"Hujjat topilmadi — bemor kartasini oching."},   // MY_REFERRALS_V1
+  "«Мои направления» — у врача.": {"en":"“My referrals” are available to doctors.","ru":"«Мои направления» — у врача.","uz":"«Mening yo‘llanmalarim» — shifokor uchun."},   // MY_REFERRALS_V1
+  "Период указан неверно.": {"en":"Invalid period.","ru":"Период указан неверно.","uz":"Davr noto‘g‘ri ko‘rsatilgan."},   // MY_REFERRALS_V1
+  "Период — не длиннее года.": {"en":"The period must not exceed one year.","ru":"Период — не длиннее года.","uz":"Davr — bir yildan oshmasin."},   // MY_REFERRALS_V1
   // /S4 · 3.22.0
 };
