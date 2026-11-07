@@ -122,11 +122,21 @@ export function ratedDiscount(discount, lines) {
     return { total: r2(out.reduce((s, l) => s + l.off, 0)), lines: out };
 }
 
+/**
+ * Ревью S5 L-2 — действуют ли у скидки клиники ставки по услугам: только у промокода
+ * С ПРОЦЕНТОМ (вид не выбран — тоже промокод). У подарочной карты и сертификата (это
+ * деньги) и у промокода суммой счёт ставок не видит — настройки их поле не показывают.
+ */
+export function promoRatesApply(row) {
+    if (!row || ['gift_card', 'certificate'].includes(row.kind)) return false;
+    return (Number(row.percent) || 0) > 0;
+}
+
 /** Источник ставок промокода: { pct, rates, scope } или null (сумма, карта, без ставок). */
 export function promoRateSource(row) {
-    if (!row || ['gift_card', 'certificate'].includes(row.kind)) return null;
+    if (!promoRatesApply(row)) return null;
     const pct = Number(row.percent) || 0;
-    if (!(pct > 0) || !hasRates(row.discount_rates)) return null;
+    if (!hasRates(row.discount_rates)) return null;
     const scope = Array.isArray(row.service_ids) ? row.service_ids
         : (() => { try { const a = JSON.parse(row.service_ids || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } })();
     return { pct: Math.min(pct, 100), rates: row.discount_rates, scope };

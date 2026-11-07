@@ -57,6 +57,7 @@ import { prepareConsultTypeSave } from '../../shared/consultation-price.js';   /
 // карточку связи зданий он монтирует над списком, как раньше.
 import { renderBranchesEditor } from './branches-editor.js';
 import { discountServicesField, discountRatesField, ratesSummaryText } from './discount-service-picker.js';   // DISCOUNT_V2 — «Только на эти услуги»: окно выбора   // BRANCH_PROFILE_V1 · DISCOUNT_RATES_V1 — ставки по услугам
+import { promoRatesApply } from '../discount-rates.js';   // ревью S5 L-2
 
 let state = { section: null, readOnly: false };   // null = hub; else one of LOOKUP_CONFIG's keys
 
@@ -739,7 +740,8 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
             { key: 'patient_categories', label: 'Группа', embed: true },
             { key: 'service_ids', label: 'Услуги', format: (row) => discountScopeText(row) },
             // DISCOUNT_RATES_V1 — сводка ставок по услугам.
-            { key: 'discount_rates', label: 'По услугам', format: (row) => ratesSummaryText(Number(row && row.percent) || 0, row && row.discount_rates) || '—' },
+            // Ревью S5 L-2 — только там, где ставки действуют (промокод с процентом).
+            { key: 'discount_rates', label: 'По услугам', format: (row) => (promoRatesApply(row) && ratesSummaryText(Number(row && row.percent) || 0, row && row.discount_rates)) || '—' },
         ],
         fields: [
             { key: 'name', label: 'Название', type: 'text', required: true },
@@ -751,7 +753,8 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
             { key: 'valid_from', label: 'Действует с (пусто — сразу)', type: 'date' },
             { key: 'valid_until', label: 'Действует по (пусто — бессрочно)', type: 'date' },
             { key: 'category_id', label: 'Только для группы пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name' },
-            { key: 'service_ids', label: 'Только на эти услуги (ничего не отмечено — на весь счёт)', type: 'services', full: true, ratesKey: 'discount_rates' },   // ratesKey: DISCOUNT_RATES_V1 — ставки в том же окне
+            { key: 'service_ids', label: 'Только на эти услуги (ничего не отмечено — на весь счёт)', type: 'services', full: true, ratesKey: 'discount_rates',   // ratesKey: DISCOUNT_RATES_V1 — ставки в том же окне
+              ratesWhen: (v) => promoRatesApply(v) },   // ревью S5 L-2 — ставки видны только у промокода с процентом
             // DISCOUNT_V2 (решение владельца 2026-11-07, п. 5) — снята: доля врача — от цены до скидки (клиника берёт скидку на себя).
             { key: 'reduces_doctor_share', label: 'Скидка уменьшает долю врача', type: 'checkbox', checkedValue: 1, uncheckedValue: 0, default: 1, full: true },
             { key: 'note', label: 'Примечание', type: 'text', full: true },
@@ -1477,10 +1480,13 @@ async function renderEditor(container, key) {
         function syncConditional() {
             const v = formValues();
             for (const { f, el } of conditional) el.hidden = !f.visibleWhen(v);
+            // Ревью S5 L-2 — ставки по услугам у поля услуг — только когда действуют.
+            for (const f of fields) if (f.ratesWhen && controls[f.key] && controls[f.key].setRatesShown) controls[f.key].setRatesShown(!!f.ratesWhen(v));
         }
         for (const f of fields) {
             const c = controls[f.key];
             if (c && c.addEventListener) c.addEventListener('change', syncConditional);
+            if (c && c.addEventListener && f.type === 'number') c.addEventListener('input', syncConditional);   // ревью S5 L-2 — процент набирают
         }
         syncConditional();
         const activeChk = h('input', { type: 'checkbox', checked: row ? !!row.active : true });

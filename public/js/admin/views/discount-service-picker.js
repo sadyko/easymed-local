@@ -156,16 +156,29 @@ export function discountServicesField(initialIds, emptyHint = 'Ничего не
           onclick: () => { picked = picked.filter((x) => x !== id); paint(); } }, '×')));
     }
   };
+  // Ревью S5 L-2 — ставки видны, только когда действуют (промокод с процентом): форма зовёт
+  // setRatesShown при смене вида и процента. Скрытые — не в окне и не в записи (.rates —
+  // undefined): сохранённые остаются как есть и вернутся, когда снова промокод с процентом.
+  let ratesShown = withRates;
   const openBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-discount-services-open': '',
     onclick: () => openDiscountServicePicker({ selected: picked, groups: groupServicesForPicker(services, { types, categories }),
-      ...(withRates ? { rates: r } : {}),
-      onApply: (ids, nr) => { picked = ids; if (withRates && nr) { r = parseRates(nr); rebuildQuick(); } paint(); } }) },
+      ...(ratesShown ? { rates: r } : {}),
+      onApply: (ids, nr) => { picked = ids; if (ratesShown && nr) { r = parseRates(nr); rebuildQuick(); } paint(); } }) },
   Icon('Plus', { size: 13 }), ' ', tr('Выбрать услуги…'));
   const quickHost = h('div', null);
+  const offHint = withRates ? h('div', { class: 'muted', 'data-rates-off': '', hidden: true, style: { fontSize: '12.5px' } },
+    tr('Ставки по услугам — только у промокода с процентом скидки')) : null;
   function rebuildQuick() { if (!withRates) return; clear(quickHost); quickHost.appendChild(groupRateRows(r, paintSummary)); paintSummary(); }
   const el = h('div', { style: { display: 'grid', gap: '6px' } }, h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } }, openBtn, countEl), chips,
-    withRates ? quickHost : null, summaryEl);
+    withRates ? quickHost : null, summaryEl, offHint);
   rebuildQuick();
+  el.setRatesShown = (on) => {
+    if (!withRates) return;
+    ratesShown = !!on;
+    quickHost.hidden = !ratesShown;
+    summaryEl.hidden = !ratesShown;
+    offHint.hidden = ratesShown;
+  };
   el.load = async () => {
     try {
       const [s, t, c] = await Promise.all([
@@ -180,7 +193,7 @@ export function discountServicesField(initialIds, emptyHint = 'Ничего не
     paint();
   };
   Object.defineProperty(el, 'value', { get: () => [...picked] });
-  if (withRates) Object.defineProperty(el, 'rates', { get: () => cleanRates(r) });   // DISCOUNT_RATES_V1
+  if (withRates) Object.defineProperty(el, 'rates', { get: () => (ratesShown ? cleanRates(r) : undefined) });   // DISCOUNT_RATES_V1; ревью S5 L-2
   paint();
   return el;
 }

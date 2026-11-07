@@ -129,3 +129,42 @@ test('настройки: поле «Скидка по услугам» у гр�
   assert.equal(disc.fields.find((x) => x.key === 'service_ids').ratesKey, 'discount_rates');
   assert.equal(disc.columns.find((x) => x.key === 'discount_rates').format({ percent: 10, discount_rates: { c: { 7: 50 } } }), 'По умолчанию 10 %, категорий со своей ставкой: 1');
 });
+
+// Ревью S5 L-2 — ставки по услугам действуют только у промокода С ПРОЦЕНТОМ (сервер:
+// domain/discount-rates.js promoRateSource). У подарочной карты, сертификата и промокода
+// суммой их поле не показывается — что бы там ни поставили, счёт их не видит.
+test('ревью S5 L-2: ставки — только у промокода с процентом; карта, сертификат, сумма — без поля ставок', async () => {
+  const { promoRatesApply } = await import('../discount-rates.js');
+  assert.equal(promoRatesApply({ kind: 'promo', percent: '10' }), true);
+  assert.equal(promoRatesApply({ kind: '', percent: 5 }), true, 'вид не выбран — промокод');
+  assert.equal(promoRatesApply({ kind: 'promo', percent: '0', amount: '50000' }), false, 'промокод суммой');
+  assert.equal(promoRatesApply({ kind: 'promo', percent: '' }), false);
+  assert.equal(promoRatesApply({ kind: 'gift_card', percent: '10' }), false);
+  assert.equal(promoRatesApply({ kind: 'certificate', percent: '10' }), false);
+
+  const { LOOKUP_CONFIG } = await import('../views/settings-hub.js');
+  const disc = LOOKUP_CONFIG.patient_discounts;
+  const f = disc.fields.find((x) => x.key === 'service_ids');
+  assert.equal(typeof f.ratesWhen, 'function', 'поле услуг промокода не знает, когда ставки действуют');
+  assert.equal(f.ratesWhen({ kind: 'gift_card', percent: '10' }), false);
+  assert.equal(f.ratesWhen({ kind: 'promo', percent: '15' }), true);
+  const col = disc.columns.find((x) => x.key === 'discount_rates');
+  assert.equal(col.format({ kind: 'certificate', percent: 10, discount_rates: { c: { 7: 50 } } }), '—', 'сводка ставок у сертификата');
+  assert.equal(col.format({ kind: 'promo', percent: 0, amount: 50000, discount_rates: { c: { 7: 50 } } }), '—', 'сводка ставок у промокода суммой');
+
+  document.body.children.length = 0;
+  const el = discountServicesField([3], undefined, { rates: { s: { 3: 50 } } });
+  await el.load();
+  assert.equal(typeof el.setRatesShown, 'function');
+  el.setRatesShown(false);
+  assert.equal(byAttr(el, 'data-rate-groups').parentNode.hidden, true, 'пять групп видны у карты');
+  assert.equal(byAttr(el, 'data-rates-summary').hidden, true);
+  assert.equal(el.rates, undefined, 'скрытые ставки не уходят в запись — сохранённые остаются как есть');
+  byAttr(el, 'data-discount-services-open').click();
+  const dlg = byAttr(document.body, 'data-discount-services-picker');
+  assert.equal(byAttr(dlg, 'data-rate-service', 3), undefined, 'в окне — поля ставок у карты');
+  byAttr(dlg, 'data-picker-apply').click();
+  el.setRatesShown(true);
+  assert.equal(byAttr(el, 'data-rate-groups').parentNode.hidden, false);
+  assert.deepEqual(el.rates, { s: { 3: 50 } }, 'ставки вернулись, когда снова промокод с процентом');
+});
