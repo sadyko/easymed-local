@@ -411,3 +411,34 @@ test('ревью L-5: проба мочи по номеру дня — не в �
   assert.deepEqual(blank(db2, 100), { 'Креатинин': '9000' });
   db2.close();
 });
+
+// Ревью S3, L-4 — строку, чей номер стал номером дня (самая старая строка дня), потом
+// удалили (счёт аннулировали, строку сняли). На уже наклеенных пробирках — её номер
+// дня, и приём отвечал «заказ по номеру пробы не найден». Теперь след удалённой
+// строки (мигр. 281, lab_line_gone: визит и даты) называет день визита, и ключом дня
+// становится другая строка того же визита и дня.
+test('ревью L-4: строку номера дня удалили — проба по наклеенному номеру ложится в строки того же дня; рабочий список тоже', () => {
+  const db = clinic([[100, 42], [101, 41], [102, 44]]);
+  db.exec('DELETE FROM visit_services WHERE id = 100');
+  bc(db, dayLabelValue(100), [['6690-2^WBC^LN', '7.1'], ['RET', '1.2']]);
+  const m = lastRow(db);
+  assert.equal(m.status, 'applied', m.detail);
+  assert.deepEqual([blank(db, 101), blank(db, 102)], [{ 'Лейкоциты': '7.1' }, { 'Ретикулоциты': '1.2' }]);
+  assert.equal(m.sample_id, '90000100', 'в журнале — номер, как прислан');
+  assert.deepEqual(worklistLines(db, { deviceId: 3, orderId: DAY_LABEL_BASE + 100, bare: true, shown: '90000100' }).codes, ['WBC', 'RET']);
+  db.close();
+});
+
+test('ревью L-4: удалена строка ДРУГОГО дня визита (стационар) — сегодняшние строки её номером не заполняются; номера нигде не было — «не найден»', () => {
+  const db = clinic([[100, 41]]);
+  db.exec(`UPDATE visits SET visit_date = strftime('%Y-%m-%dT07:00:00Z', 'now', 'localtime', '-1 days') WHERE id = 20;
+           UPDATE visit_services SET created_at = strftime('%Y-%m-%dT07:00:00Z', 'now', 'localtime', '-1 days') WHERE id = 100;
+           INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (110, 20, 41, 'queued', ${NOW});
+           DELETE FROM visit_services WHERE id = 100;`);
+  bc(db, dayLabelValue(100));
+  assert.equal(resultsOf(db), 0, 'вчерашний номер не заполнил сегодняшний ОАК');
+  assert.match(lastRow(db).detail, /не найден/);
+  bc(db, dayLabelValue(777));
+  assert.match(lastRow(db).detail, /не найден/);
+  db.close();
+});

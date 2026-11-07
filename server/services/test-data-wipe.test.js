@@ -63,6 +63,8 @@ function seeded() {
   p.vs = ins(db, "INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (?, ?, 5, 1, 100000, 100000, 'added')", p.visit, p.svc);
   ins(db, "INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (?, 'HGB', '140')", p.vs);
   ins(db, "INSERT INTO lab_device_messages (raw, status, visit_service_id) VALUES ('MSH|...', 'applied', ?)", p.vs);
+  // LAB_ONE_BARCODE_V1 (ревью S3, L-4, мигр. 281) — след удалённой (снятой) учебной строки визита.
+  ins(db, "INSERT INTO lab_line_gone (line_id, visit_id, created_at) VALUES (900001, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))", p.visit);
   ins(db, "INSERT INTO service_queue_tickets (visit_service_id, visit_id, service_id, number) VALUES (?, ?, ?, 1)", p.vs, p.visit, p.svc);
   ins(db, 'INSERT INTO recommended_services (patient_id, service_id, source_visit_id) VALUES (?, ?, ?)', p.patient, p.svc, p.visit);
   ins(db, 'INSERT INTO patient_vitals (patient_id, visit_id, pulse_bpm) VALUES (?, ?, 72)', p.patient, p.visit);
@@ -178,7 +180,10 @@ test('каждая удаляемая таблица наполнена до у�
   assert.equal(patientAfter.photo_url, patientBefore.photo_url);
   assert.equal(patientAfter.allergies, 'пенициллин');
   assert.equal(patientAfter.chronic_conditions, 'гипертония');
-  for (const t of tablesBy('delete')) assert.equal(r.deleted[t], gone[t], `итог ${t} — сколько строк было`);
+  // lab_line_gone (мигр. 281) пополняет само удаление: каждая удалённая строка визита
+  // оставляет след (триггер), и следы уходят следом (WIPE_ORDER) — итог больше.
+  for (const t of tablesBy('delete')) if (t !== 'lab_line_gone') assert.equal(r.deleted[t], gone[t], `итог ${t} — сколько строк было`);
+  assert.equal(r.deleted.lab_line_gone, gone.lab_line_gone + r.deleted.visit_services, 'следы удалённых строк визита — тоже удалены');
   assert.equal(r.deleted.visits, 1);
   assert.equal(r.deleted.invoices, 4, 'счёт визита, квитанция депозита, продажа карты, счёт выписки');
   assert.equal(r.deleted.visit_documents, 2, 'документ визита и скан в карте без визита (поправка 6)');

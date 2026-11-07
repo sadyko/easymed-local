@@ -1079,6 +1079,30 @@ const DAY_NO_DEVICE = 'номер пробы — этикетка дня виз�
   + ' по такому номеру строку визита выбирает прибор — значения не записаны; пробу привяжите кнопкой «Привязать»';
 
 /**
+ * LAB_ONE_BARCODE_V1 (ревью S3, L-4) — строку номера дня потом удалили (счёт
+ * аннулировали, строку сняли), а номер уже наклеен на пробирки. След удалённой
+ * строки (мигр. 281, lab_line_gone: визит и даты; пишет триггер) называет визит и
+ * день — так же, как orderAge у живой строки; ключом дня становится другая строка
+ * того же визита и того же дня (лабораторная первой, по возрастанию номера).
+ * null — следа нет (номер чужой или до мигр. 281) или у дня не осталось строк.
+ */
+function goneDayKey(db, lineId) {
+  let g = null;
+  try {
+    g = db.prepare(`SELECT g.visit_id, ${localDate('g.created_at')} AS c, ${localDate('g.scheduled_at')} AS s, ${localDate('v.visit_date')} AS v
+                      FROM lab_line_gone g LEFT JOIN visits v ON v.id = g.visit_id WHERE g.line_id = ?`).get(lineId);
+  } catch { return null; }   // таблицы нет (база старее мигр. 281)
+  if (!g) return null;
+  const t = today(db);
+  const day = [g.c, g.s, g.v].filter((d) => d && d <= t).sort().pop() || '';
+  if (!day) return null;
+  const rows = db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
+                             JOIN services s ON s.id = vs.service_id
+                            WHERE vs.visit_id = ? ORDER BY s.is_lab DESC, vs.id ASC LIMIT ?`).all(g.visit_id, SIBLINGS_MAX);
+  return rows.find((r) => orderAge(db, r.id).day === day) || null;
+}
+
+/**
  * LAB_ONE_BARCODE_V1 — строки дня визита, в которые идёт проба по номеру этикетки
  * дня. line — строка номера (ключ: визит и день, orderAge). observations — строки
  * прибора; null — сообщения нет (рабочий список). hint — materialHint.
@@ -1433,6 +1457,8 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
                     JOIN services s ON s.id = vs.service_id
                    WHERE vs.id = ?`).get(dayLine != null ? dayLine : vsId)   // service_specimen: LIS_PROXY_V1 (ревью C1) — материал пробирки для D3
     : null;
+  // Ревью S3, L-4 — строку номера дня удалили: ключ дня — другая строка того же визита и дня.
+  if (!order && dayLine != null) order = goneDayKey(db, dayLine);
 
   if (!order) {
     record({ ...base, status: 'unmatched', detail: 'заказ по номеру пробы не найден' });
@@ -1837,6 +1863,7 @@ export function worklistLines(db, { deviceId, orderId, bare = false, shown = '' 
   const dayLine = dayLabelLine(orderId);   // LAB_ONE_BARCODE_V1 — номер этикетки дня визита
   let order = orderId ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name, s.specimen AS service_specimen FROM visit_services vs
                                       JOIN services s ON s.id = vs.service_id WHERE vs.id = ?`).get(dayLine != null ? dayLine : orderId) : null;
+  if (!order && dayLine != null) order = goneDayKey(db, dayLine);   // ревью S3, L-4 — строку номера дня удалили
   if (!order) return { ok: false, why: 'заказ по номеру пробы не найден' };
   // LAB_TUBE_ANCHOR_V1 — прибор, orderSide и пробирка визита — до правила голых
   // цифр и ворот (только чтение), как у приёма.
