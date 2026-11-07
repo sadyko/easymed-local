@@ -13673,4 +13673,13 @@ export const STRINGS = {
   "Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».": {"en":"Analyzers do not fill the table — grades are entered by hand in «Enter results».","ru":"Анализатор таблицу не заполняет — степени вносятся вручную в «Внести результаты».","uz":"Analizator jadvalni to‘ldirmaydi — darajalar «Natijalarni kiritish»da qo‘lda kiritiladi."},   // LAB_MATRIX_PANEL_V1
   "Привязанная услуга выключена": {"en":"The linked service is switched off","ru":"Привязанная услуга выключена","uz":"Bog‘langan xizmat o‘chirilgan"},   // ревью lab2 L-4 (S3 3.22.0)
   // /S3 3.22.0
+  // FIX 3.22.0 — исправления по ревью потоков (easymed.api5, rc/3.22.0)
+  "Изменить услугу · {name}": {"en":"Change service · {name}","ru":"Изменить услугу · {name}","uz":"Xizmatni o‘zgartirish · {name}"},   // CASHIER_LINE_EDIT_V1
+  "Выберите исполнителя": {"en":"Choose the performer","ru":"Выберите исполнителя","uz":"Ijrochini tanlang"},   // CASHIER_LINE_EDIT_V1
+  "Исполнитель не нужен: {where}.": {"en":"No performer needed: {where}.","ru":"Исполнитель не нужен: {where}.","uz":"Ijrochi kerak emas: {where}."},   // CASHIER_LINE_EDIT_V1
+  "Цена: {sum} сум": {"en":"Price: {sum} UZS","ru":"Цена: {sum} сум","uz":"Narx: {sum} so‘m"},   // CASHIER_LINE_EDIT_V1
+  "Скидка 100 % · к оплате 0 сум": {"en":"100 % discount · 0 UZS due","ru":"Скидка 100 % · к оплате 0 сум","uz":"100 % chegirma · to‘lovga 0 so‘m"},   // CASHIER_LINE_EDIT_V1
+  "Итого {total} сум · оплачено {paid} сум · к оплате {due} сум": {"en":"Total {total} UZS · paid {paid} UZS · due {due} UZS","ru":"Итого {total} сум · оплачено {paid} сум · к оплате {due} сум","uz":"Jami {total} so‘m · to‘langan {paid} so‘m · to‘lovga {due} so‘m"},   // CASHIER_LINE_EDIT_V1
+  "Услуга и врач заменены.": {"en":"Service and doctor changed.","ru":"Услуга и врач заменены.","uz":"Xizmat va shifokor almashtirildi."},   // CASHIER_LINE_EDIT_V1
+  // /FIX 3.22.0
 };

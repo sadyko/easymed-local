@@ -151,10 +151,16 @@ function world(inv = PAID) {
             ? { changed: true, refunded: 0, due: 50000, refund_plan: [], invoice: { ...inv, total_amount: 200000, status: 'partial' }, line_before: 'Приём', line_after: 'КТ' }
             : { ...QUOTE_CHEAPER(b.to_balance), preview: undefined, to_balance: !!b.to_balance, invoice: { ...inv, total_amount: 80000, paid_amount: 80000 } }),
         deposit_balance: { balance: 0, debt: 0 },
+        // CASHIER_LINE_EDIT_V1 — исполнитель новой услуги: врач Первый, единственный отмеченный — выбран сам.
+        cashier_line_performers: (b) => ({ performers: [{ id: 20, full_name: 'Врач Первый', assigned: true, unit_price: b.service_id === 3 ? 200000 : 80000 }],
+            requires_doctor: false, needs_performer: true, route: 'cabinet', catalog_price: 80000 }),
     };
 }
+// CASHIER_LINE_EDIT_V1 — «Изменить» строки и выбор услуги в том же окне.
+const editLine = async () => { byAttr(byAttr(lastModal(), 'data-line', '101'), 'data-line-edit', '101').click(); await tick(80); };
+const pickSvc = async (id) => { byAttr(lastModal(), 'data-service-id', String(id)).click(); await tick(120); };
 
-test('оплаченный счёт: у кассира с правом — «Заменить услугу» и «Сменить врача», без «Убрать»', async () => {
+test('оплаченный счёт: у кассира с правом — «Изменить» (услуга и врач в одном окне), без «Убрать»', async () => {
     asRole('cashier');
     world();
     closeAll();
@@ -162,7 +168,7 @@ test('оплаченный счёт: у кассира с правом — «З�
     const m = lastModal();
     assert.match(textOf(m), /разницу касса сразу вернёт/);
     const row = byAttr(m, 'data-line', '101');
-    assert.ok(byAttr(row, 'data-swap', 'service') && byAttr(row, 'data-swap', 'doctor'));
+    assert.ok(byAttr(row, 'data-line-edit', '101'));
     assert.equal(buttonByText(row, 'Убрать'), undefined, 'оплаченное снимает «Вернуть услугу»');
 });
 
@@ -173,7 +179,7 @@ test('оплаченный счёт у регистратуры — замены
     assert.equal(perms.canSwapPaidLines(), false);
     await fix.openLineFix(PAID);
     const row = byAttr(lastModal(), 'data-line', '101');
-    assert.equal(byAttr(row, 'data-swap', 'service'), undefined);
+    assert.equal(byAttr(row, 'data-line-edit', '101'), undefined);
 });
 
 test('дешевле: окно показывает сумму и куда; выбор «на баланс» пересчитывает; квитанция «Возврат разницы»', async () => {
@@ -182,17 +188,16 @@ test('дешевле: окно показывает сумму и куда; вы
     closeAll();
     const slips = [];
     await fix.openLineFix(PAID, { printSlip: (d) => slips.push(d) });
-    byAttr(byAttr(lastModal(), 'data-line', '101'), 'data-swap', 'service').click();
-    await tick();
-    byAttr(lastModal(), 'data-service-id', '2').click();
-    await tick(80);
+    await editLine();
+    assert.equal(rpcCalls('cashier_line_swap_quote').length, 0, 'ничего не выбрано — расчёта нет');
+    await pickSvc(2);
     const conf = lastModal();
-    assert.match(textOf(conf), /Замена в оплаченном счёте/);
+    assert.match(textOf(conf), /Изменить услугу · Приём терапевта/);   // CASHIER_LINE_EDIT_V1 — разница в том же окне
     assert.equal(byAttr(conf, 'data-swap-refund', '70000') != null, true);
     assert.match(textOf(conf), /Вернуть пациенту/);
     assert.match(textOf(conf), /Карта — 50 000 сум/);
     assert.match(textOf(conf), /Наличные — 20 000 сум/);
-    assert.deepEqual(rpcCalls('cashier_line_swap_quote')[0][1], { visit_service_id: 101, new_service_id: 2, to_balance: false, card_fallback: 'cash' });
+    assert.deepEqual(rpcCalls('cashier_line_swap_quote')[0][1], { visit_service_id: 101, new_service_id: 2, doctor_id: 20, to_balance: false, card_fallback: 'cash' });
     // «На баланс пациента» — предпросмотр заново.
     const radio = walk(byAttr(conf, 'data-swap-dest', 'balance')).find((e) => e.tagName === 'INPUT');
     radio.fire('change');
@@ -222,10 +227,8 @@ test('дороже: окно говорит «К доплате», после з
     const row = desk.__test_invoiceRow(PAID, mkEl('div'));
     fixButton(row).click();
     await tick(80);
-    byAttr(byAttr(lastModal(), 'data-line', '101'), 'data-swap', 'service').click();
-    await tick();
-    byAttr(lastModal(), 'data-service-id', '3').click();
-    await tick(80);
+    await editLine();
+    await pickSvc(3);
     const conf = lastModal();
     assert.equal(byAttr(conf, 'data-swap-due', '50000') != null, true);
     assert.match(textOf(conf), /К доплате/);
@@ -335,7 +338,7 @@ test('«Выставить заново»: строки визита без сч
     assert.ok(byAttr(dlg, 'data-rebill-line', '201'), 'невыставленная строка показана');
     assert.equal(byAttr(dlg, 'data-rebill-line', '202'), undefined, 'строка в другом счёте — нет');
     assert.match(textOf(dlg), /возвращено/);
-    assert.ok(buttonByText(byAttr(dlg, 'data-rebill-line', '201'), 'Заменить услугу'));
+    assert.ok(byAttr(byAttr(dlg, 'data-rebill-line', '201'), 'data-line-edit', '201'), 'нет «Изменить»');   // CASHIER_LINE_EDIT_V1
     buttonByText(dlg, 'Выставить счёт и принять оплату').click();
     await tick(120);
     assert.deepEqual(rpcCalls('create_invoice_for_visit')[0][1], { visit_id: 41, visit_service_ids: [201], rebill_refunded: true });

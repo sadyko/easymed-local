@@ -128,9 +128,12 @@ test('DUP_STOP_V1 (ревью m5): «Заменить услугу» знает 
 test('DUP_STOP_V1 (ревью m5): окна замены услуги передают врача строки', () => {
   const HERE = path.dirname(fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(HERE, '..', 'views', 'cashier-line-fix.js'), 'utf8').replace(/\/\/[^\n]*/g, '');
-  const swaps = [...src.matchAll(/pickService\(tr\('Заменить услугу'\), \{([^\n]*)\}\)/g)].map((m) => m[1]);
-  assert.equal(swaps.length, 3, 'окон «Заменить услугу» не три: ' + swaps.length);
-  for (const c of swaps) assert.match(c, /doctorId: lineDoctorId\(/, 'окно замены без врача строки: ' + c);
+  // CASHIER_LINE_EDIT_V1 — замена услуги — окно «Изменить» (openLineEdit): погашенные услуги — с врачом строки.
+  assert.ok(src.includes('const oldDoc = line ? lineDoctorId(line) : null;'), 'окно «Изменить» не знает врача строки');
+  assert.ok(src.includes('orderedMatch(row, ordered, oldDoc)'), 'окно «Изменить» гасит услуги без врача строки');
+  const edits = [...src.matchAll(/openLineEdit\(\{ mode: ([^\n]*)\}\)/g)].map((m) => m[1]).filter((c) => !/'add'/.test(c));
+  assert.equal(edits.length, 2, 'окон «Изменить» у строки не два: ' + edits.length);
+  for (const c of edits) assert.match(c, /\bline\b/, 'окно «Изменить» без строки: ' + c);
 });
 
 test('DUP_STOP_V1 (К1): без визита окно выбора ничего не гасит (как прежде)', async () => {
@@ -145,6 +148,11 @@ test('DUP_STOP_V1 (К1): все окна кассы передают визит 
   const HERE = path.dirname(fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(HERE, '..', 'views', 'cashier-line-fix.js'), 'utf8').replace(/\/\/[^\n]*/g, '');
   const callsOf = [...src.matchAll(/pickService\(tr\('[^']+'\)([^)]*\))/g)].map((m) => m[1]);
-  assert.equal(callsOf.length, 5, 'окон выбора услуги в кассе не пять: ' + callsOf.length);
+  // CASHIER_LINE_EDIT_V1 — «Исправить услуги», «Выставить заново» и «+ Добавить услугу» выбирают услугу в окне «Изменить».
+  assert.equal(callsOf.length, 1, 'окон выбора услуги в кассе не одно («Платежи»): ' + callsOf.length);
   for (const c of callsOf) assert.match(c, /visitId:/, 'окно выбора без визита: ' + c);
+  const edits = [...src.matchAll(/openLineEdit\(\{ mode: ([^\n]*)\}\)/g)].map((m) => m[1]);
+  assert.equal(edits.length, 3, 'окон «Изменить» / «Добавить» не три: ' + edits.length);
+  for (const c of edits) assert.match(c, /visitId:/, 'окно «Изменить» без визита: ' + c);
+  assert.ok(src.includes("loadVisitOrders({ visitId, door: 'cashier' })"), 'окно «Изменить» не гасит назначенное в визите');
 });

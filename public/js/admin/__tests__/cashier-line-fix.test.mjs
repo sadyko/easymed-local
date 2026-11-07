@@ -126,23 +126,32 @@ function asCashier(grants = null) {
 
 const INV = {
     id: 5, invoice_number: 'INV-A-26-00005', visit_id: 40, patient_id: 3, patient_name: 'Рахимов Жасур', mrn: '0024815',
-    status: 'unpaid', subtotal: 230000, discount_amount: 0, total_amount: 230000, paid_amount: 0, first_item: 'Приём терапевта', items_count: 2,
+    status: 'unpaid', subtotal: 265000, discount_amount: 0, total_amount: 265000, paid_amount: 0, first_item: 'Приём терапевта', items_count: 3,
     created_at: '2026-09-28T05:00:00Z',
 };
 const ITEMS = [
     { id: 71, invoice_id: 5, description: 'Приём терапевта', total: 150000, discount_amount: 0 },
     { id: 72, invoice_id: 5, description: 'УЗИ', total: 80000, discount_amount: 0 },
+    { id: 73, invoice_id: 5, description: 'CRP', total: 35000, discount_amount: 0 },   // CASHIER_LINE_EDIT_V1 — анализ
 ];
 const LINES = [
     { id: 101, invoice_item_id: 71, service_id: 1, status: 'added', total: 150000, clinic_item_id: null, doctor_id: { id: 20, full_name: 'Врач Первый' } },
     { id: 102, invoice_item_id: 72, service_id: 2, status: 'in_progress', total: 80000, clinic_item_id: null, doctor_id: null },
+    { id: 103, invoice_item_id: 73, service_id: 4, status: 'added', total: 35000, clinic_item_id: null, doctor_id: null, services: { name: 'CRP', is_lab: 0, type: 'lab' } },
 ];
 function world(inv = INV) {
     tables = { invoices: [inv], invoice_items: ITEMS, visit_services: LINES,
-        services: [{ id: 1, name: 'Приём терапевта', price: 100000, requires_doctor: 0, active: 1 }, { id: 3, name: 'ЭКГ', price: 35000, requires_doctor: 0, active: 1, type: 'procedure' }] };   // DIAG_ROUTE_V1 (I-4, 3.22.0) — «Без врача» только у услуги, которой исполнитель не нужен (процедура); услуге кабинета — обязателен (cashier-performer-required.test.mjs)
+        services: [{ id: 1, name: 'Приём терапевта', price: 100000, requires_doctor: 0, active: 1 }, { id: 3, name: 'ЭКГ', price: 35000, requires_doctor: 0, active: 1, type: 'procedure' },
+            { id: 4, name: 'CRP', price: 35000, requires_doctor: 0, active: 1, type: 'lab' }, { id: 5, name: 'УЗИ брюшной полости', price: 90000, requires_doctor: 0, active: 1, type: 'imaging' }] };   // CASHIER_LINE_EDIT_V1   // DIAG_ROUTE_V1 (I-4, 3.22.0) — «Без врача» только у услуги, которой исполнитель не нужен (процедура); услуге кабинета — обязателен (cashier-performer-required.test.mjs)
     calls.length = 0;
     rpcAnswers = {
-        cashier_line_performers: { performers: [{ id: 20, full_name: 'Врач Первый', unit_price: 150000 }, { id: 21, full_name: 'Врач Второй', specialty: 'Терапевт', unit_price: 120000 }], requires_doctor: false, catalog_price: 100000 },
+        // CASHIER_LINE_EDIT_V1 — сервер говорит, нужен ли исполнитель и куда идёт услуга.
+        cashier_line_performers: (b) => {
+            const sid = b.service_id != null ? b.service_id : 1;
+            if (sid === 3 || sid === 4) return { performers: [{ id: 20, full_name: 'Врач Первый', unit_price: 35000 }], requires_doctor: false, needs_performer: false, route: sid === 4 ? 'lab' : 'procedure', catalog_price: 35000 };
+            if (sid === 5) return { performers: [{ id: 22, full_name: 'Узист', assigned: true, unit_price: 90000 }, { id: 20, full_name: 'Врач Первый', unit_price: 90000 }], requires_doctor: false, needs_performer: true, route: 'cabinet', catalog_price: 90000 };
+            return { performers: [{ id: 20, full_name: 'Врач Первый', unit_price: 150000, assigned: true }, { id: 21, full_name: 'Врач Второй', specialty: 'Терапевт', unit_price: 120000, assigned: true }], requires_doctor: false, needs_performer: true, route: 'cabinet', catalog_price: 100000 };
+        },
         cashier_line_set_doctor: { changed: true },
         cashier_line_change_service: { changed: true },
         cashier_line_remove: { removed: true },
@@ -172,7 +181,9 @@ test('право включено: кнопка есть у счёта визи�
     }
 });
 
-test('окно: у неначатой строки — «Заменить услугу», «Сменить врача», «Убрать»; у начатой — ничего; внизу «+ Добавить услугу»', async () => {
+// CASHIER_LINE_EDIT_V1 (владелец, 2026-11-07) — у строки одна «Изменить» (услуга и исполнитель в одном
+// окне) и «Убрать»; у анализа и процедуры вместо «Без врача» — куда они идут; внизу «+ Добавить услугу».
+test('окно: у неначатой строки — «Изменить» и «Убрать»; у начатой — ничего; анализ — «Лаборатория», а не «Без врача»; внизу «+ Добавить услугу»', async () => {
     asCashier({ 'cashier.lines': 'edit' });
     world();
     closeAll();
@@ -182,66 +193,118 @@ test('окно: у неначатой строки — «Заменить усл
     assert.match(textOf(m), /Исправить услуги · INV-A-26-00005/);
     const rowOf = (id) => walk(m).find((e) => e.attrs && e.attrs['data-line'] === String(id));
     const first = rowOf(101);
-    assert.ok(buttonByText(first, 'Заменить услугу') && buttonByText(first, 'Сменить врача') && buttonByText(first, 'Убрать'));
+    assert.ok(buttonByText(first, 'Изменить') && buttonByText(first, 'Убрать'));
+    assert.equal(buttonByText(first, 'Заменить услугу'), undefined, 'прежние три кнопки остались');
+    assert.equal(buttonByText(first, 'Сменить врача'), undefined);
     assert.match(textOf(first), /Врач Первый/);
     const started = rowOf(102);
     assert.equal(buttons(started).length, 0, 'у начатой работы кнопок нет');
     assert.match(textOf(started), /Работа уже начата/);
+    const lab = rowOf(103);
+    assert.match(textOf(walk(lab).find((e) => e.attrs && e.attrs['data-line-where'] !== undefined)), /Лаборатория/);
+    assert.doesNotMatch(textOf(lab), /Без врача/);
     assert.ok(buttonByText(m, '+ Добавить услугу'));
-    assert.match(textOf(m), /К оплате по счёту: 230 000 сум/);
+    assert.match(textOf(m), /К оплате по счёту: 265 000 сум/);
 });
 
-test('«Сменить врача» — список исполнителей с ценами, выбор уходит на сервер', async () => {
+const editOf = (id) => walk(lastModal()).find((e) => e.attrs && e.attrs['data-line-edit'] === String(id));
+const pickSvc = async (id) => { walk(lastModal()).find((e) => e.attrs && e.attrs['data-service-id'] === String(id)).click(); await tick(60); };
+const perfSelect = () => walk(lastModal()).find((e) => e.attrs && e.attrs['data-performer-select'] !== undefined);
+const saveBtn = () => walk(lastModal()).find((e) => e.attrs && e.attrs['data-line-save'] !== undefined);
+
+test('«Изменить» → только врач: окно на услуге строки, исполнители с ценами, «Сохранить» — cashier_line_set_doctor', async () => {
     asCashier({ 'cashier.lines': 'edit' });
     world();
     closeAll();
     let changed = 0;
     await fix.openLineFix(INV, { onChanged: () => { changed++; } });
-    const m = lastModal();
-    buttonByText(walk(m).find((e) => e.attrs && e.attrs['data-line'] === '101'), 'Сменить врача').click();
-    await tick(60);
-    const picker = lastModal();
-    assert.match(textOf(picker), /Врач Второй/);
-    assert.match(textOf(picker), /120 000/);
+    editOf(101).click();
+    await tick(80);
+    const dlg = lastModal();
+    assert.match(textOf(dlg), /Изменить услугу · Приём терапевта/);
+    assert.equal(textOf(walk(dlg).find((e) => e.attrs && e.attrs['data-chosen-service'] !== undefined)).trim(), 'Приём терапевта');
     assert.deepEqual(rpcCalls('cashier_line_performers')[0][1], { visit_service_id: 101 });
-    walk(picker).find((e) => e.attrs && e.attrs['data-performer'] === '21').click();
-    await tick(60);
+    const sel = perfSelect();
+    assert.ok(sel, 'услуге кабинета нет выбора исполнителя');
+    assert.equal(sel.value, '20', 'прежний врач строки не выбран');
+    assert.match(textOf(sel), /Врач Второй · Терапевт — 120 000 сум/);
+    sel.value = '21'; sel.fire('change');
+    await tick(20);
+    assert.match(textOf(walk(dlg).find((e) => e.attrs && e.attrs['data-new-price'] !== undefined)), /Цена: 120 000 сум/);
+    saveBtn().click();
+    await tick(80);
     assert.deepEqual(rpcCalls('cashier_line_set_doctor')[0][1], { visit_service_id: 101, doctor_id: 21 });
+    assert.equal(rpcCalls('cashier_line_change_service').length, 0);
     assert.equal(changed, 1, 'касса перерисована');
 });
 
-test('«Заменить услугу» и «Убрать» зовут свои двери', async () => {
+test('«Изменить» → анализ и процедура: врача не спрашивает — «без исполнителя» одной дверью; «Убрать» — своей', async () => {
     asCashier({ 'cashier.lines': 'edit' });
-    world();
-    closeAll();
-    await fix.openLineFix(INV);
-    const line = () => walk(lastModal()).find((e) => e.attrs && e.attrs['data-line'] === '101');
-    buttonByText(line(), 'Заменить услугу').click();
-    await tick(60);
-    const picker = lastModal();
-    walk(picker).find((e) => e.attrs && e.attrs['data-service-id'] === '3').click();
-    await tick(60);
-    assert.deepEqual(rpcCalls('cashier_line_change_service')[0][1], { visit_service_id: 101, new_service_id: 3 });
+    for (const [sid, where] of [[4, 'Лаборатория'], [3, 'Процедурный кабинет']]) {
+        world();
+        closeAll();
+        await fix.openLineFix(INV);
+        editOf(101).click();
+        await tick(80);
+        await pickSvc(sid);
+        assert.equal(perfSelect(), undefined, 'анализу/процедуре предложен выбор врача');
+        assert.match(textOf(walk(lastModal()).find((e) => e.attrs && e.attrs['data-no-performer'] !== undefined)), new RegExp('Исполнитель не нужен: ' + where));
+        assert.match(textOf(walk(lastModal()).find((e) => e.attrs && e.attrs['data-new-price'] !== undefined)), /Цена: 35 000 сум/);
+        saveBtn().click();
+        await tick(80);
+        assert.deepEqual(rpcCalls('cashier_line_change_service')[0][1], { visit_service_id: 101, new_service_id: sid, no_doctor: true });
+    }
     buttonByText(walk(modals()[0]).find((e) => e.attrs && e.attrs['data-line'] === '101'), 'Убрать').click();
     await tick(60);
     assert.deepEqual(rpcCalls('cashier_line_remove')[0][1], { visit_service_id: 101 });
 });
 
-test('«+ Добавить услугу»: услуга, врач (или «Без врача»), в этот счёт', async () => {
+test('«Изменить» → услуга кабинета: единственный отмеченный исполнитель выбран сам — его цена; услуга и врач — одной дверью', async () => {
+    asCashier({ 'cashier.lines': 'edit' });
+    world();
+    closeAll();
+    await fix.openLineFix(INV);
+    editOf(101).click();
+    await tick(80);
+    await pickSvc(5);
+    assert.equal(perfSelect().value, '22', 'единственный не выбран сам');
+    assert.match(textOf(walk(lastModal()).find((e) => e.attrs && e.attrs['data-new-price'] !== undefined)), /Цена: 90 000 сум/);
+    saveBtn().click();
+    await tick(80);
+    assert.deepEqual(rpcCalls('cashier_line_change_service')[0][1], { visit_service_id: 101, new_service_id: 5, doctor_id: 22 });
+});
+
+test('«+ Добавить услугу»: то же окно — анализ без врача; услуга кабинета — только с исполнителем', async () => {
     asCashier({ 'cashier.lines': 'edit' });
     world();
     closeAll();
     await fix.openLineFix(INV);
     buttonByText(lastModal(), '+ Добавить услугу').click();
     await tick(60);
-    walk(lastModal()).find((e) => e.attrs && e.attrs['data-service-id'] === '3').click();
+    await pickSvc(4);
+    assert.equal(perfSelect(), undefined, 'анализу предложен выбор врача');
+    assert.deepEqual(rpcCalls('cashier_line_performers')[0][1], { service_id: 4, visit_id: 40 });
+    saveBtn().click();
+    await tick(80);
+    assert.deepEqual(rpcCalls('cashier_line_add')[0][1], { invoice_id: 5, service_id: 4, doctor_id: null });
+    // Услуга кабинета с двумя кандидатами — без выбора «Добавить» не идёт.
+    buttonByText(modals()[0], '+ Добавить услугу').click();
     await tick(60);
-    const who = lastModal();
-    assert.ok(walk(who).find((e) => e.attrs && e.attrs['data-performer'] === 'none'), 'услуге врач не нужен — есть «Без врача»');
-    assert.deepEqual(rpcCalls('cashier_line_performers')[0][1], { service_id: 3, visit_id: 40 });
-    walk(who).find((e) => e.attrs && e.attrs['data-performer'] === 'none').click();
+    await pickSvc(1);
+    assert.equal(perfSelect().value, '', 'исполнитель выбран сам из двух');
+    saveBtn().click();
     await tick(60);
-    assert.deepEqual(rpcCalls('cashier_line_add')[0][1], { invoice_id: 5, service_id: 3, doctor_id: null });
+    assert.equal(rpcCalls('cashier_line_add').length, 1, 'ушло без исполнителя');
+    perfSelect().value = '21'; perfSelect().fire('change');
+    saveBtn().click();
+    await tick(80);
+    assert.deepEqual(rpcCalls('cashier_line_add')[1][1], { invoice_id: 5, service_id: 1, doctor_id: 21 });
+});
+
+test('итог окна: скидка 100 % — «Скидка 100 % · к оплате 0 сум»; частично оплаченный — к оплате остаток', () => {
+    assert.equal(fix.invoiceDueText({ subtotal: 115000, discount_amount: 115000, total_amount: 0, paid_amount: 0 }), 'Скидка 100 % · к оплате 0 сум');
+    assert.equal(fix.invoiceDueText({ subtotal: 230000, discount_amount: 0, total_amount: 230000, paid_amount: 100000 }), 'Итого 230 000 сум · оплачено 100 000 сум · к оплате 130 000 сум');
+    assert.equal(fix.invoiceDueText({ subtotal: 230000, discount_amount: 0, total_amount: 230000, paid_amount: 0 }), 'К оплате по счёту: 230 000 сум');
 });
 
 test('оплаченный счёт: без правки строк у регистратуры; у кассы — только замена с расчётом (CASHIER_PAID_SWAP_V1), без «Убрать»; добавление — отдельным счётом', async () => {
@@ -253,7 +316,7 @@ test('оплаченный счёт: без правки строк у реги�
     closeAll();
     await fix.openLineFix(paid);
     let m = lastModal();
-    assert.equal(buttonByText(m, 'Заменить услугу'), undefined);
+    assert.equal(walk(m).find((e) => e.attrs && e.attrs['data-line-edit'] !== undefined), undefined);   // CASHIER_LINE_EDIT_V1
     assert.equal(buttonByText(m, 'Убрать'), undefined);
     assert.match(textOf(m), /Новая услуга будет выставлена отдельным счётом/);
     assert.ok(buttonByText(m, '+ Добавить услугу'));
@@ -263,7 +326,7 @@ test('оплаченный счёт: без правки строк у реги�
     closeAll();
     await fix.openLineFix(paid);
     m = lastModal();
-    assert.ok(buttonByText(m, 'Заменить услугу'));
+    assert.ok(walk(m).find((e) => e.attrs && e.attrs['data-line-edit'] === '101'));   // CASHIER_LINE_EDIT_V1 — «Изменить»
     assert.equal(buttonByText(m, 'Убрать'), undefined);
     assert.match(textOf(m), /разницу касса сразу вернёт/);
     assert.match(textOf(m), /Новая услуга будет выставлена отдельным счётом/);

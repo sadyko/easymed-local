@@ -170,8 +170,8 @@ function world({ lineStatus = 'queued', performed = false, lab = false, kind = '
         ],
         services: [
             { id: 1, name: 'Приём терапевта', price: 100000, requires_doctor: 0, active: 1, is_lab: 0, type: 'consultation' },
-            { id: 2, name: 'УЗИ', price: 80000, requires_doctor: 0, active: 1, is_lab: 0, type: 'procedure' },
-            { id: 3, name: 'КТ', price: 200000, requires_doctor: 0, active: 1, is_lab: 0, type: 'procedure' },
+            { id: 2, name: 'УЗИ', price: 80000, requires_doctor: 0, active: 1, is_lab: 0, type: 'imaging' },   // CASHIER_LINE_EDIT_V1 — УЗИ — кабинет врача: исполнитель нужен
+            { id: 3, name: 'КТ', price: 200000, requires_doctor: 0, active: 1, is_lab: 0, type: 'imaging' },
             { id: 4, name: 'Глюкоза крови', price: 30000, requires_doctor: 0, active: 1, is_lab: 1, type: 'lab' },
             { id: 5, name: 'Общий анализ крови', price: 40000, requires_doctor: 0, active: 1, is_lab: 1, type: 'lab' },
         ],
@@ -184,7 +184,12 @@ function world({ lineStatus = 'queued', performed = false, lab = false, kind = '
             { invoice_item_id: 72, kind: 'visit', status: 'completed', product: true, sample: false, result: false, document: false, performed: true },
         ] },
         cashier_invoice_search: (b) => ({ q: null, rows: Number(b.invoice_id) === 5 ? [PAID] : [], offset: 0, has_more: false }),
-        cashier_line_performers: { performers: [{ id: 20, full_name: 'Врач Первый', unit_price: 80000 }, { id: 21, full_name: 'Врач Второй', specialty: 'Терапевт', unit_price: 80000 }], requires_doctor: false, catalog_price: 80000 },
+        // CASHIER_LINE_EDIT_V1 — сервер говорит, нужен ли исполнитель: анализу — нет.
+        cashier_line_performers: (b) => {
+            const labSvc = b.service_id != null ? [4, 5].includes(Number(b.service_id)) : lab;
+            return { performers: [{ id: 20, full_name: 'Врач Первый', unit_price: 80000 }, { id: 21, full_name: 'Врач Второй', specialty: 'Терапевт', unit_price: 80000 }],
+                requires_doctor: false, needs_performer: !labSvc, route: labSvc ? 'lab' : 'cabinet', catalog_price: 80000 };
+        },
         cashier_line_swap_quote: (b) => (b.new_service_id === 3 ? DEARER : CHEAPER(b)),
         cashier_line_swap_paid: (b) => (b.new_service_id === 3
             ? { ...DEARER, preview: undefined, invoice: { ...PAID, total_amount: 205000, paid_amount: 155000, status: 'partial' } }
@@ -202,7 +207,9 @@ async function pickIn(win, serviceId, performer) {
     await tick();
     byAttr(lastModal(), 'data-service-id', String(serviceId)).click();
     await tick(60);
-    byAttr(lastModal(), 'data-performer', String(performer)).click();
+    // CASHIER_LINE_EDIT_V1 — анализу и процедуре исполнитель не нужен: окна выбора врача нет.
+    const p = byAttr(lastModal(), 'data-performer', String(performer));
+    if (p) p.click();
     await tick(80);
 }
 async function openAndPick(serviceId, performer) {
@@ -330,15 +337,15 @@ test('работа начата — по слову сервера (invoice_line
     // В очереди, но документ уже есть: сервер говорит performed — сразу возврат с новой.
     world({ lineStatus: 'queued', performed: true });
     closeAll();
-    const win = await openAndPick(2, 'none');
+    const win = await openAndPick(2, 21);   // CASHIER_LINE_EDIT_V1 — УЗИ — кабинет врача: «Без врача» ему не предлагается
     assert.match(textOf(win), /уже начата работа/);
     assert.equal(rpcCalls('cashier_line_swap_quote').length, 0, 'обычная замена не спрашивается');
-    assert.deepEqual(rpcCalls('cashier_line_rebill_quote')[0][1], { visit_service_id: 101, new_service_id: 2, no_doctor: true, card_fallback: 'cash' });
-    assert.match(textOf(byAttr(win, 'data-picked-performer', 'none')), /Без врача/);
+    assert.deepEqual(rpcCalls('cashier_line_rebill_quote')[0][1], { visit_service_id: 101, new_service_id: 2, doctor_id: 21, card_fallback: 'cash' });
+    assert.match(textOf(byAttr(win, 'data-picked-performer', '21')), /Врач Второй/);
     buttonByText(win, 'Вернуть эту услугу и выставить новую').click();
     await tick(150);
     const sent = rpcCalls('cashier_line_rebill_paid')[0][1];
-    assert.equal(sent.no_doctor, true);
+    assert.equal(sent.doctor_id, 21);
     assert.ok(typeof sent.idempotency_key === 'string' && sent.idempotency_key.length >= 8);
     assert.equal(rpcCalls('cashier_line_swap_paid').length, 0);
     // Ревью: одно уведомление — сумма и слова о прежней услуге вместе; второе
@@ -716,16 +723,20 @@ test('К4 (поправка): «Исправить услуги» — замен
         assert.equal(rpcCalls('cashier_line_swap_paid').length, 1, 'замена не ушла на сервер');
         return TOASTS.at(-1) || '';
     };
+    // CASHIER_LINE_EDIT_V1 — одно окно «Изменить»: услуга; исполнитель — если он ей нужен.
     const service = (id) => async (row) => {
-        byAttr(row, 'data-swap', 'service').click();
-        await tick();
+        byAttr(row, 'data-line-edit', '101').click();
+        await tick(80);
         byAttr(lastModal(), 'data-service-id', String(id)).click();
         await tick(80);
+        const sel = walk(lastModal()).find((e) => e.attrs && e.attrs['data-performer-select'] !== undefined);
+        if (sel && !sel.value) { sel.value = '20'; sel.fire('change'); await tick(80); }
     };
     const doctor = async (row) => {
-        byAttr(row, 'data-swap', 'doctor').click();
-        await tick(60);
-        byAttr(lastModal(), 'data-performer', '21').click();
+        byAttr(row, 'data-line-edit', '101').click();
+        await tick(80);
+        const sel = walk(lastModal()).find((e) => e.attrs && e.attrs['data-performer-select'] !== undefined);
+        sel.value = '21'; sel.fire('change');
         await tick(80);
     };
     // Анализ → анализ: номер строки тот же, в пробирке другой анализ.
@@ -738,8 +749,15 @@ test('К4 (поправка): «Исправить услуги» — замен
     assert.equal(await swap(() => world({ lab: true }), service(2)), 'Пациенту возвращено 70 000 сум.' + REPRINT, TOASTS.join(' | '));
     // Не анализ → не анализ — как было.
     assert.equal(await swap(() => world(), service(2)), 'Пациенту возвращено 70 000 сум.', TOASTS.join(' | '));
-    // Смена врача у анализа: тот же анализ в той же пробирке — этикетка верна.
-    assert.equal(await swap(() => world({ lab: true }), doctor), 'Пациенту возвращено 70 000 сум.', TOASTS.join(' | '));
+    // Смена врача у приёма: этикетки нет. Анализу врача не меняют вовсе (CASHIER_LINE_EDIT_V1): выбора исполнителя нет.
+    assert.equal(await swap(() => world(), doctor), 'Пациенту возвращено 70 000 сум.', TOASTS.join(' | '));
+    world({ lab: true });
+    closeAll();
+    await fix.openLineFix(PAID);
+    byAttr(byAttr(lastModal(), 'data-line', '101'), 'data-line-edit', '101').click();
+    await tick(80);
+    assert.equal(walk(lastModal()).find((e) => e.attrs && e.attrs['data-performer-select'] !== undefined), undefined, 'анализу предложен врач');
+    assert.match(textOf(byAttr(lastModal(), 'data-no-performer', 'lab')), /Исполнитель не нужен: Лаборатория/);
     closeAll();
 });
 
@@ -792,13 +810,17 @@ test('ревью U11, M3: «Вернуть услугу» открытого а�
 test('ревью U11, L5: «Исправить услуги» до денег и «Выставить заново» — замена анализа тоже напоминает перепечатать этикетку', async () => {
     asRole('cashier');
     const ZERO = { ...PAID, status: 'paid', subtotal: 0, total_amount: 0, paid_amount: 0 };
+    // CASHIER_LINE_EDIT_V1 — «Изменить» → анализ → «Сохранить»; врач прежней услуги с анализа снимается.
     const pick = async (row) => {
-        buttonByText(row, 'Заменить услугу').click();
-        await tick();
+        byAttr(row, 'data-line-edit', '101').click();
+        await tick(80);
         byAttr(lastModal(), 'data-service-id', '5').click();
+        await tick(80);
+        byAttr(lastModal(), 'data-line-save', '').click();
         await tick(150);
         assert.equal(rpcCalls('cashier_line_change_service').length, 1, 'замена не ушла: ' + TOASTS.join(' | '));
-        return TOASTS.find((t) => t.startsWith('Услуга заменена.')) || '(нет уведомления: ' + TOASTS.join(' | ') + ')';
+        assert.equal(rpcCalls('cashier_line_change_service')[0][1].no_doctor, true, 'анализу оставлен врач');
+        return TOASTS.find((t) => t.startsWith('Услуга')) || '(нет уведомления: ' + TOASTS.join(' | ') + ')';
     };
     const lineFix = async (world_, inv) => {
         world_();
@@ -808,15 +830,16 @@ test('ревью U11, L5: «Исправить услуги» до денег и
         await fix.openLineFix(inv);
         const row = byAttr(lastModal(), 'data-line', '101');
         assert.ok(row, 'строки 101 нет в «Исправить услуги»');
-        assert.equal(byAttr(row, 'data-swap', 'service'), undefined, 'это дверь без денег, не замена в оплаченном счёте');
+        assert.ok(byAttr(row, 'data-line-edit', '101'), 'нет «Изменить»');
         return pick(row);
     };
     // Счёт на ноль: анализ уже ждёт забора — та же строка, другой анализ.
-    assert.equal(await lineFix(() => world({ lab: true }), ZERO), 'Услуга заменена. · Перепечатайте этикетку пробирки.');
+    // (врач Первый стоял на строке — с анализа он снимается: «Услуга и врач заменены.»)
+    assert.equal(await lineFix(() => world({ lab: true }), ZERO), 'Услуга и врач заменены. · Перепечатайте этикетку пробирки.');
     // Приём → анализ в строке, уже отпущенной в лабораторию: новый анализ встаёт в пробирку.
-    assert.equal(await lineFix(() => world(), ZERO), 'Услуга заменена. · Перепечатайте этикетку пробирки.');
+    assert.equal(await lineFix(() => world(), ZERO), 'Услуга и врач заменены. · Перепечатайте этикетку пробирки.');
     // Неоплаченный счёт: анализ ждёт оплаты — в лабораторию не уходил.
-    assert.equal(await lineFix(() => world({ lab: true, lineStatus: 'added' }), { ...ZERO, status: 'unpaid' }), 'Услуга заменена.');
+    assert.equal(await lineFix(() => world({ lab: true, lineStatus: 'added' }), { ...ZERO, status: 'unpaid' }), 'Услуга и врач заменены.');
 
     const rebill = async (refundedIds) => {
         world({ lab: true, lineStatus: 'added' });
@@ -830,9 +853,9 @@ test('ревью U11, L5: «Исправить услуги» до денег и
         return pick(row);
     };
     // Возвращённый анализ, оставленный в визите: этикетка с его номером могла остаться на пробирке.
-    assert.equal(await rebill([101]), 'Услуга заменена. · Перепечатайте этикетку пробирки.');
+    assert.equal(await rebill([101]), 'Услуга и врач заменены. · Перепечатайте этикетку пробирки.');
     // Строка, за которую денег не брали (ждёт счёта), — без напоминания.
-    assert.equal(await rebill([]), 'Услуга заменена.');
+    assert.equal(await rebill([]), 'Услуга и врач заменены.');
     // Окно «Выставить заново» знает, анализ ли строка: services(is_lab, type) в чтении.
     assert.ok(calls.some(([n, b]) => n === 'db:visit_services' && /services\([^)]*is_lab[^)]*\)/.test(String(b.columns || '')) && (b.filters || []).some((f) => f.col === 'visit_id')),
         '«Выставить заново» читает строки без services(is_lab)');

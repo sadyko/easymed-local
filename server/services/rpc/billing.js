@@ -52,6 +52,7 @@ import { PERFORMED_LINE_STATUSES, lineHasWork } from '../domain/line-work.js';  
 // INPATIENT_MONEY_FIX_V1 — строку проживания счёт узнаёт по той же метке, что
 // акт и проживание (одна копия на сервер и браузер).
 import { ACCOMMODATION_NOTE_PREFIX, ACCOMMODATION_LABEL } from '../../../public/js/shared/accommodation-line.js';
+import { serviceRoute } from '../../../public/js/shared/service-route.js';   // CASHIER_LINE_EDIT_V1 — маршрут услуги у дверей кассы
 import { actingActorName } from '../../../public/js/shared/act-as.js';   // ADMIN_ACT_AS_V1 — «сотрудник (от имени: адм. …)» в журнале счёта
 
 export class RpcError extends Error {
@@ -1461,6 +1462,14 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
   const newServiceId = args && args.new_service_id;
   if (!isPositiveInt(vsId)) throw new RpcError('Строка услуги указана неверно.', 400);
   if (!isPositiveInt(newServiceId)) throw new RpcError('Новая услуга указана неверно.', 400);
+  // CASHIER_LINE_EDIT_V1 — исполнитель новой услуги в той же двери: doctor_id — выбранный (его цена),
+  // no_doctor — без исполнителя (анализ, процедура: врач прежней услуги на строке не остаётся). Ни
+  // того ни другого — как прежде: исполнитель строки остаётся.
+  const rawDoc = args ? args.doctor_id : undefined;
+  const pickDoctor = rawDoc === undefined || rawDoc === null || rawDoc === '' ? null : rawDoc;
+  if (pickDoctor !== null && !isPositiveInt(pickDoctor)) throw new RpcError('Исполнитель указан неверно.', 400);
+  const dropDoctor = !!(args && (args.no_doctor === true || args.no_doctor === 1));
+  if (dropDoctor && pickDoctor !== null) throw new RpcError('Укажите исполнителя или «Без врача» — не то и другое сразу.', 400);
   { const seen = idemReplay(db, rpc, args); if (seen) return seen; }   // CASHIER_HEAD_V1 — ключ повтора
 
   const run = db.transaction(() => {
@@ -1491,8 +1500,12 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
     if (!svc) throw new RpcError('новая услуга не найдена или неактивна.', 400);
     // CASHIER_HEAD_V1 (ревью I4) — хирургию без койки не подставить и заменой.
     { const r = surgeryWithoutBedRefusal(db, newServiceId, vs.visit_id); if (r) throw new RpcError(r, 400); }
+    // CASHIER_LINE_EDIT_V1 — исполнитель строки после замены.
+    const newDoctor = pickDoctor !== null ? Number(pickDoctor) : (dropDoctor ? null : vs.doctor_id);
+    if (pickDoctor !== null) assertPerformer(db, newDoctor, newServiceId);
+    else if (dropDoctor && cashierRequiresDoctor(db, svc)) throw new RpcError('Для этой услуги нужен врач — выберите исполнителя.', 400);
     // DUP_STOP_V1 — новая услуга уже назначена в этом визите — отказ (или обход с причиной).
-    const orders = assertChangedOrder(db, vs, { ...vs, service_id: newServiceId, consultation_type_id: null }, { user, reason: repeatReasonArg(args) });
+    const orders = assertChangedOrder(db, vs, { ...vs, service_id: newServiceId, consultation_type_id: null, doctor_id: newDoctor }, { user, reason: repeatReasonArg(args) });
 
     const item = vs.invoice_item_id != null
       ? db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(vs.invoice_item_id)
@@ -1513,7 +1526,7 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
     // скидкой тарифа (OWN_PRICE_TIER_RATIO_V1). Одно правило с кассой и выплатой врачу.
     const visitRow = db.prepare('SELECT patient_id, visit_date FROM visits WHERE id = ?').get(vs.visit_id);
     const tier = quoteTier(db, visitRow, vs.visit_id, newServiceId, user);
-    const unit = round2(lineUnitPrice(db, { ...vs, service_id: newServiceId, clinic_item_id: null, consultation_type_id: null, price_tier: tier, package_full: null, package_price: null }, { service: svc }));   // SERVICES_PACKAGES_V1 — у новой услуги цены пакета нет
+    const unit = round2(lineUnitPrice(db, { ...vs, doctor_id: newDoctor, service_id: newServiceId, clinic_item_id: null, consultation_type_id: null, price_tier: tier, package_full: null, package_price: null }, { service: svc }));   // SERVICES_PACKAGES_V1 — у новой услуги цены пакета нет; CASHIER_LINE_EDIT_V1 — цена исполнителя после замены
     const lineTotal = round2(unit * qty);
     const before = item ? lineLabel(db, vs, item) + ' · ' + moneyWords(item.total) : null;   // CASHIER_HEAD_V1 — для журнала
     // PACKAGES_V1 — другая услуга уже не услуга пакета: строка теряет пакет и
@@ -1523,8 +1536,8 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
     // CASHIER_HEAD_V1 (ревью I5) — номер очереди прежней услуги снимается:
     // другая услуга — другая очередь; номер выдаст оплата.
     // SERVICES_PACKAGES_V1 — и цена пакета, записанная на строке, уходит с ним.
-    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL, package_full = NULL, package_price = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')
-      .run(newServiceId, unit, lineTotal, tier, vsId);
+    db.prepare('UPDATE visit_services SET service_id = ?, doctor_id = ?, unit_price = ?, total = ?, package_id = NULL, package_full = NULL, package_price = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')
+      .run(newServiceId, newDoctor, unit, lineTotal, tier, vsId);   // CASHIER_LINE_EDIT_V1 — и исполнитель
     logRepeatOrders(db, orders, user);   // DUP_STOP_V1
 
     let invoice = null;
@@ -1709,6 +1722,21 @@ function isConsultation(db, serviceId, consultTypeId) {
   return !!s && s.type === 'consultation';
 }
 
+// CASHIER_LINE_EDIT_V1 (владелец, 2026-11-07) — МАРШРУТ УСЛУГИ У ДВЕРЕЙ КАССЫ: то же правило
+// serviceRoute, что у записи и очереди (группа; у «Консультаций» и строки без группы — вид отделения
+// и имя типа каталога). Анализ — окно забора, а не врач: врача ему касса не требует, даже с галочкой
+// «Услугу оказывает специалист» («даже если меняю на анализ, требует врача»).
+function cashierRouteOf(db, svc) {
+  if (!svc) return 'cabinet';
+  const d = svc.department_id != null ? db.prepare('SELECT kind FROM departments WHERE id = ?').get(svc.department_id) : null;
+  const t = svc.type_id != null ? db.prepare('SELECT name FROM service_types WHERE id = ?').get(svc.type_id) : null;
+  return serviceRoute({ ...svc, dept_kind: d ? d.kind : '', service_types: t ? { name: t.name } : null });
+}
+/** Касса требует врача у этой услуги: «специалист» (requires_doctor), кроме анализа. */
+function cashierRequiresDoctor(db, svc) {
+  return !!svc && Number(svc.requires_doctor) === 1 && cashierRouteOf(db, svc) !== 'lab';
+}
+
 function assertPerformer(db, doctorId, serviceId, consultTypeId = null) {
   const who = db.prepare('SELECT id, role, is_active, is_doctor, extra_roles FROM users WHERE id = ?').get(doctorId);
   if (!who) throw new RpcError('Такого сотрудника нет.', 400);
@@ -1841,7 +1869,7 @@ export function addServiceToVisitInvoice(db, args, user, { rpc = 'cashier_line_a
     if (!svc) throw new RpcError('Услуга не найдена или неактивна.', 400);
     { const r = surgeryWithoutBedRefusal(db, serviceId, visitId); if (r) throw new RpcError(r, 400); }   // ревью I4
     if (doctorId !== null) assertPerformer(db, doctorId, serviceId);
-    else if (Number(svc.requires_doctor) === 1) throw new RpcError('Для этой услуги нужен врач — выберите исполнителя.', 400);
+    else if (cashierRequiresDoctor(db, svc)) throw new RpcError('Для этой услуги нужен врач — выберите исполнителя.', 400);   // CASHIER_LINE_EDIT_V1 — анализу не нужен
 
     // DUP_STOP_V1 — та же услуга уже назначена в этом визите — отказ. Строка CRM, которая
     // уступит этой (onVisitLinesAdded ниже), повтором не считается.
@@ -1950,9 +1978,14 @@ export function cashierLinePerformers(db, args, user) {
   const price = (doctorId) => round2(lineUnitPrice(db,
     { service_id: serviceId, consultation_type_id: consultTypeId, doctor_id: doctorId, price_tier: tier, clinic_item_id: null, unit_price: 0, ...(stamp || {}) },
     { service: svc }) * qty);
+  const route = svc ? cashierRouteOf(db, svc) : 'cabinet';   // CASHIER_LINE_EDIT_V1
   return {
     performers: staff.map((u) => ({ id: u.id, full_name: u.full_name, specialty: u.specialty || null, role: u.role, assigned: assigned.has(u.id), unit_price: price(u.id) })),
     requires_doctor: !!(svc && Number(svc.requires_doctor) === 1) || (serviceId == null && consultTypeId != null),
+    // CASHIER_LINE_EDIT_V1 — куда идёт услуга и нужен ли ей исполнитель у кассы: анализ и процедура —
+    // нет (окно «Изменить» выбора исполнителя им не показывает), услуга кабинета и «специалист» — да.
+    route,
+    needs_performer: svc ? (route !== 'lab' && (Number(svc.requires_doctor) === 1 || route === 'cabinet')) : (consultTypeId != null),
     tier,
     catalog_price: price(null),
   };
@@ -2096,7 +2129,7 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
     // услуге, которой нужен врач, без врача не быть (то же правило, что у
     // cashier_line_add).
     if (targetDoctor != null) assertPerformer(db, targetDoctor, newServiceId);
-    else if (Number(svc.requires_doctor) === 1) throw new RpcError('Для этой услуги нужен врач — выберите исполнителя.', 400);
+    else if (cashierRequiresDoctor(db, svc)) throw new RpcError('Для этой услуги нужен врач — выберите исполнителя.', 400);   // CASHIER_LINE_EDIT_V1 — анализу не нужен
   } else if (newDoctorId !== null) {
     assertPerformer(db, newDoctorId, vs.service_id, vs.consultation_type_id);
   }
