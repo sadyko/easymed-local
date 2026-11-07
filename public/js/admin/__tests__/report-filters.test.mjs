@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  F_PAY, F_CASHIER, F_DOCTOR, F_GROUP, F_PATIENT_GROUP, PAY_FILTER_CHOICES,
+  F_PAY, F_PAY_INFLOW, F_CASHIER, F_DOCTOR, F_GROUP, F_PATIENT_GROUP, PAY_FILTER_CHOICES,
   activeFilters, filterFileSuffix, isStaticOption,
 } from '../views/report-filters.js';
 
@@ -47,4 +47,13 @@ test('имя файла говорит, какие фильтры примене
   // Перевод — языком экрана.
   assert.equal(filterFileSuffix([{ label: 'Способ оплаты', value: 'Карта' }], { tr: (s) => ({ 'Способ оплаты': 'Payment method', 'Карта': 'Card' }[s] || s) }),
     '_Payment method Card');
+});
+
+// REPORTS_TAX_PAY_V1 (ревью S2 L2) — «Отчёт кассира» считает только приход денег: «Кошелёк» и
+// «Подарочная карта» в его фильтре не предлагаются (всегда давали пустой отчёт); у выручки — есть.
+test('ревью S2 L2: фильтр «Отчёта кассира» — без «Кошелька» и «Подарочной карты»', () => {
+  assert.deepEqual(F_PAY_INFLOW.choices.map((c) => c[0]), ['', 'cash', 'card', 'transfer', 'acquiring', 'unpaid']);
+  assert.equal(F_PAY_INFLOW.arg, 'pay_method');
+  assert.equal(isStaticOption(F_PAY_INFLOW), true);
+  assert.ok(F_PAY.choices.some((c) => c[0] === 'wallet'), 'у выручки «Кошелёк» пропал');
 });

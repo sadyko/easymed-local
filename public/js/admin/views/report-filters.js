@@ -10,7 +10,7 @@
 // Здесь — определения пяти общих фильтров и две чистые функции: какие фильтры
 // выбраны (строка над таблицей) и как это записать в имя файла. Модуль чистый
 // (без DOM и i18n): перевод приходит параметром tx, проверяется тестом в node.
-import { METHOD_RU } from '../../shared/payment-methods.js';
+import { METHOD_RU, NON_CASH_INFLOW } from '../../shared/payment-methods.js';
 
 // Способ оплаты: словарь кассы и «Не оплачено» (остаток счёта). Пусто — все.
 export const PAY_FILTER_CHOICES = [
@@ -20,6 +20,9 @@ export const PAY_FILTER_CHOICES = [
 ];
 // static: варианты известны браузеру — список с сервера не спрашивается.
 export const F_PAY = { arg: 'pay_method', label: 'Способ оплаты', type: 'select', static: true, choices: PAY_FILTER_CHOICES };
+// REPORTS_TAX_PAY_V1 (ревью S2 L2) — «Отчёт кассира» считает только приход денег (INFLOW_SQL): «Кошелёк» и
+// «Подарочная карта» — не приход, выбор их всегда давал пустой отчёт. Здесь их нет.
+export const F_PAY_INFLOW = { ...F_PAY, choices: PAY_FILTER_CHOICES.filter(([v]) => !NON_CASH_INFLOW.includes(v)) };
 // Кассир, врач, группа пациентов — списки клиники (report_choices, за воротами отчёта).
 export const F_CASHIER = { arg: 'cashier_id', label: 'Кассир', type: 'select', choices: [['', 'Все кассиры']] };
 export const F_DOCTOR = { arg: 'doctor_id', label: 'Врач', type: 'select', choices: [['', 'Все врачи']] };

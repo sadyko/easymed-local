@@ -126,3 +126,11 @@ test('без фильтров — всё, как прежде по сумме: �
     assert.ok(reportKinds(def('total_revenue')).length === 1);
   } finally { db.close(); }
 });
+
+// REPORTS_TAX_PAY_V1 (ревью S2 L2) — плитка «Отчёт кассира»: в «Способе оплаты» нет «Кошелька» и
+// «Подарочной карты» (отчёт считает только приход); у «Общей выручки» — есть.
+test('ревью S2 L2: «Отчёт кассира» — способы оплаты без «Кошелька» и «Подарочной карты»', () => {
+  const choicesOf = (kind) => optionsFor(def(kind), kind).find((o) => o.arg === 'pay_method').choices.map((c) => c[0]);
+  assert.ok(!choicesOf('cashier').includes('wallet') && !choicesOf('cashier').includes('gift_card'), JSON.stringify(choicesOf('cashier')));
+  assert.ok(choicesOf('total_revenue').includes('wallet') && choicesOf('total_revenue').includes('gift_card'));
+});

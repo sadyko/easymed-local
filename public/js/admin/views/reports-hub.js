@@ -50,7 +50,7 @@ import { openReportServicePicker, loadRememberedServices, rememberServices, brow
 import { reportPrintHtml } from './report-print.js?v=jrn4';
 // REPORTS_TAX_PAY_V1 — общие фильтры окна отчёта (способ оплаты, кассир, врач,
 // группа услуг, группа пациентов), строка выбранных и имя файла Excel.
-import { F_PAY, F_CASHIER, F_DOCTOR, F_GROUP, F_PATIENT_GROUP, activeFilters, filterFileSuffix, isStaticOption } from './report-filters.js?v=rtp1';   // JOURNALS_V1_PRINT — печатная страница отчёта (jrn2 — перенос без разрыва слов); JOURNALS_V1_RJ2C — jrn3 не больше 5000 строк, jrn4 «Итого — по всем строкам»
+import { F_PAY, F_PAY_INFLOW, F_CASHIER, F_DOCTOR, F_GROUP, F_PATIENT_GROUP, activeFilters, filterFileSuffix, isStaticOption } from './report-filters.js?v=rtp1';   // JOURNALS_V1_PRINT — печатная страница отчёта (jrn2 — перенос без разрыва слов); JOURNALS_V1_RJ2C — jrn3 не больше 5000 строк, jrn4 «Итого — по всем строкам»
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
 // проверить тестом — страница целиком без DOM не поднимается.
@@ -247,7 +247,7 @@ export const REPORT_DEFS = [
         exports: true,
         // REPORTS_TAX_PAY_V1 — фильтры кассы (отбор на сервере), разрез по
         // способам оплаты; в имени файла таблиц — выбранные фильтры.
-        options: [F_PAY, F_CASHIER, F_DOCTOR, F_GROUP, F_PATIENT_GROUP],
+        options: [F_PAY_INFLOW, F_CASHIER, F_DOCTOR, F_GROUP, F_PATIENT_GROUP],   // ревью S2 L2 — без «Кошелька» и «Подарочной карты»
         render: (el, data, st) => renderCashierReport(el, data, st ? st.from + '_' + st.to + filterFileSuffix(st.resultFilters || [], reportTx()) : ''),
     },
     // TELEGRAM_BROADCAST_V1 — не отчёт в смысле Excel-выгрузки, поэтому у
