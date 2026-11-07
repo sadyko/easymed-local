@@ -62,3 +62,26 @@ test('касса показывает причину скидки через dis
   assert.ok(!/\binv\.discount_note\s*\+|,\s*inv\.discount_note\)/.test(src), 'сырая discount_note в разметке кассы');
   assert.ok((src.match(/discountNoteText\(inv\.discount_note\)/g) || []).length >= 2, 'не везде через discountNoteText');
 });
+
+// Ревью S5 L-1 — причина скидки по ставкам (domain/discount-rates.js ratedNote): «— по услугам
+// (по умолчанию N%)». Прежде на en/uz она показывалась по-русски.
+const RATED_GROUP = 'Скидка группы «Сотрудники» — по услугам (по умолчанию 20%)';
+const RATED_PROMO = 'Промокод «ЛЕТО» — по услугам (по умолчанию 12,5%)';
+
+test('ревью S5 L-1: скидка по ставкам — ru как есть; en/uz — переведена, имя как ввели', () => {
+  setLang('ru');
+  assert.equal(discountNoteText(RATED_GROUP), RATED_GROUP);
+  assert.equal(discountNoteText(RATED_PROMO + '; ' + DESK_PCT), RATED_PROMO + '; ' + DESK_PCT);
+  setLang('en');
+  try {
+    assert.equal(discountNoteText(RATED_GROUP), 'Group discount «Сотрудники» — by service (default 20%)');
+    assert.equal(discountNoteText(RATED_PROMO), 'Promo code «ЛЕТО» — by service (default 12,5%)');
+    assert.equal(discountNoteText(RATED_GROUP + '; ' + DESK_PCT), 'Group discount «Сотрудники» — by service (default 20%); Cashier: постоянный пациент — 5% — 4 500 UZS');
+    setLang('uz');
+    for (const n of [RATED_GROUP, RATED_PROMO]) {
+      const s = discountNoteText(n);
+      assert.ok(!/[А-Яа-яЁё]/.test(s.replace(/«[^»]*»/g, '')), 'кириллица в узбекском тексте: ' + s);
+      assert.match(s, n === RATED_GROUP ? /20%/ : /12,5%/);
+    }
+  } finally { setLang('ru'); }
+});

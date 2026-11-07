@@ -12,6 +12,9 @@ import { tr, trf } from './i18n.js';
 
 const RE_GROUP = /^Скидка группы «(.*)» — (\d+(?:,\d+)?)%$/;
 const RE_PROMO_PCT = /^Промокод «(.*)» — (\d+(?:,\d+)?)%$/;
+// Ревью S5 L-1 — скидка по ставкам (server/services/domain/discount-rates.js ratedNote).
+const RE_GROUP_RATED = /^Скидка группы «(.*)» — по услугам \(по умолчанию (\d+(?:,\d+)?)%\)$/;
+const RE_PROMO_RATED = /^Промокод «(.*)» — по услугам \(по умолчанию (\d+(?:,\d+)?)%\)$/;
 const RE_PROMO_SUM = /^Промокод «(.*)» — (\d[\d\s ]*) сум$/;
 const RE_DESK = /^Касса: (.+?) — (?:(\d+(?:,\d+)?)% — )?(\d[\d\s ]*) сум( \(доля врача — от цены до скидки\))?$/;
 const MANUAL = /^Скидка вручную$/;
@@ -19,6 +22,8 @@ const MANUAL = /^Скидка вручную$/;
 function piece(p) {
     let m;
     if (MANUAL.test(p)) return tr('Скидка вручную');
+    if ((m = RE_GROUP_RATED.exec(p))) return trf('Скидка группы «{name}» — по услугам (по умолчанию {pct}%)', { name: m[1], pct: m[2] });
+    if ((m = RE_PROMO_RATED.exec(p))) return trf('Промокод «{name}» — по услугам (по умолчанию {value}%)', { name: m[1], value: m[2] });
     if ((m = RE_GROUP.exec(p))) return trf('Скидка группы «{name}» — {pct}%', { name: m[1], pct: m[2] });
     if ((m = RE_PROMO_PCT.exec(p))) return trf('Промокод «{name}» — {value}%', { name: m[1], value: m[2] });
     if ((m = RE_PROMO_SUM.exec(p))) return trf('Промокод «{name}» — {value} сум', { name: m[1], value: m[2].trim() });
