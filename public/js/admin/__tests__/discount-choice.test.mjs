@@ -2,7 +2,7 @@
 // регистрации: варианты, выбор по умолчанию, аргументы счёта, причина рядом с итогом.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { groupOf, discountChoiceOptions, defaultChoiceKey, keepChoice, choiceArgs, choiceFloorPct, choiceReason, promoLabel } from '../discount-choice.js';
+import { groupOf, discountChoiceOptions, defaultChoiceKey, keepChoice, choiceArgs, choiceFloorPct, choiceReason, promoLabel, choiceToSend, fallbackChoiceKey } from '../discount-choice.js';
 
 const TODAY = '2026-11-07';
 const VIP = groupOf('VIP', 10);
@@ -52,4 +52,22 @@ test('причина рядом с итогом: группа, промокод,
   assert.deepEqual(choiceReason('manual', { group: VIP, applied: 10000, floor: 10000 }).params, { name: 'VIP', pct: '10' });
   assert.deepEqual(choiceReason('manual', { group: VIP, applied: 20000, floor: 10000 }), { text: 'Своя скидка (вручную)', params: {} });
   assert.equal(choiceReason('none', { group: VIP, applied: 0 }), null);
+});
+
+// DISCOUNT_V2 (ревью S1 L-3) — группа пациента не прочиталась: «Без скидки» по умолчанию — не выбор
+// человека и в счёт не уходит (сервер кладёт пол группы, как в 3.21); выбор человека уходит всегда.
+test('ревью S1 L-3: группа не известна — выбор по умолчанию не шлётся; выбор человека — шлётся', () => {
+  assert.equal(choiceToSend('none', { groupKnown: false }), null);
+  assert.deepEqual(choiceArgs(choiceToSend('none', { groupKnown: false })), {});
+  assert.equal(choiceToSend('none', { groupKnown: false, picked: true }), 'none');
+  assert.equal(choiceToSend('promo:3', { groupKnown: false, picked: true }), 'promo:3');
+  assert.equal(choiceToSend('none', { groupKnown: true }), 'none');
+  assert.equal(choiceToSend('group'), 'group');
+  // калькулятор услуг: без явного выбора — промокод, «вручную», группа, «Без скидки»; группа не прочиталась — null
+  assert.equal(fallbackChoiceKey({ promoId: 4, manualPct: 5, groupPct: 10 }), 'promo:4');
+  assert.equal(fallbackChoiceKey({ manualPct: 5, groupPct: 10 }), 'manual');
+  assert.equal(fallbackChoiceKey({ groupPct: 10 }), 'group');
+  assert.equal(fallbackChoiceKey({ groupPct: 0 }), 'none');
+  assert.equal(fallbackChoiceKey({ groupPct: 0, groupKnown: false }), null);
+  assert.equal(fallbackChoiceKey({ manualPct: 5, groupKnown: false }), 'manual');
 });

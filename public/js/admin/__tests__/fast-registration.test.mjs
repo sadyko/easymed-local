@@ -138,6 +138,7 @@ let crmLines = [];
 // CRM_LINK_ALL_V1 (R7a) — запись пациента на сегодня: чем отвечают выборки visits и visit_services.
 let visitRows = [];
 let vsRows = [];
+let failGroupRead = false;   // DISCOUNT_V2 (ревью S1 L-3) — чтение группы пациента падает
 let sheetTables = {};      // INVOICE_APPEND_V1 (ревью M2) — счёт с сервера для печати дописанного: invoices, invoice_items, patients, payments
 // { table, message, nth? } — отказ вставки. nth — номер вставки В ЭТУ таблицу
 // (1 — первая): цепочка вставляет строки услуг по одной, и «упала ВТОРАЯ» —
@@ -220,6 +221,9 @@ globalThis.fetch = async (url, opts = {}) => {
       else if (table === 'visit_services') row = { id: 900 + calls.filter((c) => c.table === 'visit_services').length, ...body.values };
       else row = { id: 1, ...body.values };
       return ok({ data: body.single ? row : [row] });
+    }
+    if (failGroupRead && table === 'patients' && /patient_categories/.test(String(body.columns || ''))) {
+      return { ok: false, status: 503, json: async () => ({ error: { message: 'Service unavailable' } }) };
     }
     calls.push({ kind: 'select', table, body });
     const rows = table === 'patients' ? patientRows
@@ -1639,4 +1643,35 @@ test('DISCOUNT_V2: без выбора по умолчанию — скидка 
   const inv = calls.find((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit');
   assert.deepEqual([inv.body.discount_choice, inv.body.discount_amount], ['group', 0]);
   dlg.close();
+});
+
+// DISCOUNT_V2 (ревью S1 L-3) — группа пациента не прочиталась: «Без скидки» по умолчанию — не выбор
+// человека, и в счёт выбор не уходит (пол группы кладёт сервер, как в 3.21); выбор человека — уходит.
+test('ревью S1 L-3: группа не прочиталась — discount_choice не шлётся; выбрал «Без скидки» сам — шлётся', async () => {
+  for (const pick of [false, true]) {
+    reset();
+    patientRows = [{ ...KARIMOVA, category_id: 3, patient_categories: { id: 3, name: 'VIP', discount_percent: 10, active: 1 } }];
+    visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+    vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+    failGroupRead = true;
+    try {
+      const dlg = openFastRegistrationDialog({});
+      await tick(40);
+      await pickKarimova(dlg);
+      await tick(40);
+      if (pick) {
+        const sel = walk(dlg.card).find((n) => n.tagName === 'SELECT' && n.attrs['data-discount-choice'] !== undefined);
+        sel.value = 'none';
+        sel.fireChange();
+      }
+      calls.length = 0;
+      btnByText(dlg.card, 'Сохранить').click();
+      await tick(120);
+      const inv = calls.find((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit');
+      assert.ok(inv, 'счёт не выставлен');
+      if (pick) assert.equal(inv.body.discount_choice, 'none', 'выбор человека не ушёл');
+      else assert.ok(!('discount_choice' in inv.body), 'выбор ушёл, хотя группа не известна: ' + inv.body.discount_choice);
+      dlg.close();
+    } finally { failGroupRead = false; }
+  }
 });

@@ -71,6 +71,27 @@ export function choiceArgs(key) {
     return {};
 }
 
+// DISCOUNT_V2 (ревью S1 L-3) — ГРУППА ПАЦИЕНТА НЕ ПРОЧИТАЛАСЬ (сбой сети или базы). Окно не знает,
+// есть ли у пациента скидка группы, и его «Без скидки» по умолчанию — не выбор человека: уйдя в
+// счёт, оно снимало пол группы, который 3.21 давал всегда. Пока группа не известна и регистратор сам
+// ничего не выбрал, выбор не шлётся (null → choiceArgs даёт {}): сервер кладёт пол группы сам, как в
+// 3.21. Выбор человека — «Без скидки» тоже — уходит всегда.
+/** Выбор, который уходит в счёт: key, или null — группа не известна и человек ничего не выбирал. */
+export function choiceToSend(key, { groupKnown = true, picked = false } = {}) {
+    return groupKnown || picked ? key : null;
+}
+
+/**
+ * Выбор калькулятора услуг, когда регистратор не выбирал явно: применённый промокод, своя скидка,
+ * скидка группы, иначе «Без скидки»; группа пациента не прочиталась — null (ревью S1 L-3).
+ */
+export function fallbackChoiceKey({ promoId = null, manualPct = 0, groupPct = 0, groupKnown = true } = {}) {
+    if (promoId != null) return 'promo:' + promoId;
+    if (Number(manualPct) > 0) return 'manual';
+    if (Number(groupPct) > 0) return 'group';
+    return groupKnown ? 'none' : null;
+}
+
 /** Пол скидки группы, который сервер положит при этом выборе: группа и «вручную» — да, остальные — нет. */
 export function choiceFloorPct(key, group) {
     return group && (key === 'group' || key === 'manual') ? group.pct : 0;

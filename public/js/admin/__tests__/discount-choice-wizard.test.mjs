@@ -80,6 +80,7 @@ const { reshape } = await import('../../../../server/routes/db.js');   // рев
 let USER = { id: 1, role: 'registrar', extra_roles: [] };   // INVOICE_APPEND_V1 (ревью M1) — тест баланса идёт администратором
 let DB = null;
 const RPC = [];
+let FAIL_GROUP_READ = false;   // ревью S1 L-3
 
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -94,6 +95,10 @@ globalThis.fetch = async (url, opts) => {
     catch (e) { return { ok: false, status: e.status || 500, json: async () => ({ error: { code: e.code, message: e.message, params: e.params } }) }; }
   }
   if (u === '/api/db') {
+    // ревью S1 L-3 — группа пациента не прочиталась (сбой сети или базы).
+    if (FAIL_GROUP_READ && body.table === 'patients' && /patient_categories/.test(String(body.columns || ''))) {
+      return { ok: false, status: 503, json: async () => ({ error: { message: 'Service unavailable' } }) };
+    }
     stampWriteBody(DB, body);
     let compiled;
     try { compiled = compile(body, USER); }
@@ -301,6 +306,37 @@ test('ревью S1 M-1: промокод на все услуги — оба д
   const calls = RPC.filter((c) => c.name === 'create_invoice_for_visit').map((c) => [c.body.discount_choice, c.body.discount_id ?? null]);
   assert.deepEqual(calls, [['promo', id], ['promo', id]]);
   assert.equal(money().reduce((n, m) => n + m.discount_amount, 0), 50000, 'промокод суммой дан не один раз');
+});
+
+// DISCOUNT_V2 (ревью S1 L-3) — ГРУППА ПАЦИЕНТА НЕ ПРОЧИТАЛАСЬ. Выбор по умолчанию «Без скидки» уходил в
+// счёт и снимал скидку группы, которую 3.21 давал всегда. Пока группа не известна и регистратор сам
+// ничего не выбрал, выбор не шлётся — пол группы кладёт сервер.
+test('ревью S1 L-3: группа не прочиталась — выбор не шлётся, скидку группы VIP 10 % кладёт сервер', async () => {
+  seed({ todayOff: false, from: '00:00', to: '23:59' });
+  vipPatient(10);
+  FAIL_GROUP_READ = true;
+  try {
+    await openWizard([22, 23]);
+    await pressUntilCreate();
+  } finally { FAIL_GROUP_READ = false; }
+  const body = invoiceCall().body;
+  assert.ok(!('discount_choice' in body), 'выбор ушёл, хотя группа не известна: ' + body.discount_choice);
+  const [inv] = money();
+  assert.deepEqual([inv.subtotal, inv.discount_amount, inv.total_amount], [90000, 9000, 81000], 'скидка группы потеряна');
+});
+
+test('ревью S1 L-3: группа не прочиталась, регистратор сам выбрал «Без скидки» — выбор уходит', async () => {
+  seed({ todayOff: false, from: '00:00', to: '23:59' });
+  vipPatient(10);
+  FAIL_GROUP_READ = true;
+  try {
+    await openWizard([22, 23]);
+    await choose('Своя скидка');
+    await choose('Без скидки');
+    await pressUntilCreate();
+  } finally { FAIL_GROUP_READ = false; }
+  assert.equal(invoiceCall().body.discount_choice, 'none');
+  assert.equal(money()[0].discount_amount, 0);
 });
 
 test.after(() => { if (DB) DB.close(); DB = null; });

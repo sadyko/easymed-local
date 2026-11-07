@@ -38,7 +38,7 @@ import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
 // они действуют; одно правило на оба мастера.
 import { eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining, serviceScope } from '../discount-rules.js';
-import { groupOf, discountChoiceOptions, keepChoice, choiceArgs, choiceFloorPct, choiceReason } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
+import { groupOf, discountChoiceOptions, keepChoice, choiceArgs, choiceFloorPct, choiceReason, choiceToSend } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
 import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
@@ -259,6 +259,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         discountAbs: 0,      // «Скидка (лояльность), сум»
         promo: null,         // применённый patient_discounts: { name, percent, amount, service_ids }
         discountChoice: 'none',   // DISCOUNT_V2 — выбранная скидка: 'none' | 'group' | 'manual' | 'promo:<id>' (одна, без сложения)
+        groupKnown: false,        // DISCOUNT_V2 (ревью S1 L-3) — группа пациента прочитана (есть она или нет)
+        discountPicked: false,    // DISCOUNT_V2 (ревью S1 L-3) — скидку выбрал сам регистратор
         discounts: [],       // DISCOUNT_RULES_V1 — все действующие скидки клиники; подходящие отбираются на лету
         bookings: [],        // BOOKED_JOIN_V1 — записи пациента (врач, время) на 15 дней
         bookingsReady: Promise.resolve(),
@@ -666,6 +668,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const cat = pRes && !pRes.error && pRes.data ? pRes.data.patient_categories : null;
             wiz.cardPayerId = pRes && !pRes.error && pRes.data ? (pRes.data.payer_id ?? null) : null;   // REFERRAL_BILL_V1 (дополнение 29.09)
             wiz.categoryId = pRes && !pRes.error && pRes.data && pRes.data.category_id != null ? Number(pRes.data.category_id) : null;
+            wiz.groupKnown = !!(pRes && !pRes.error);   // ревью S1 L-3 — сбой чтения: группа не известна
             if (cat && cat.active !== 0 && cat.active !== false && Number(cat.discount_percent) > 0) {
                 wiz.categoryName = cat.name || '';
                 wiz.categoryPct = Math.min(100, Number(cat.discount_percent));
@@ -3018,6 +3021,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             else wiz.discountPct = Math.min(100, n);
             // DISCOUNT_V2 — своё число в поле — это выбор «Своя скидка (вручную)»: одна скидка.
             if (wiz.discountChoice !== 'manual') { wiz.discountChoice = 'manual'; wiz.promo = null; if (choiceSel) choiceSel.value = 'manual'; }
+            wiz.discountPicked = true;   // ревью S1 L-3
             refreshTotals();
         });
 
@@ -3062,7 +3066,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const choiceSel = doctorBill ? null : h('select', {
             'data-discount-choice': '',
             style: { flex: 1, minWidth: 0, padding: '10px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px' },
-            onchange: () => { applyDiscountChoice(choiceSel.value); syncDiscInput(); refreshTotals(); },
+            onchange: () => { wiz.discountPicked = true; applyDiscountChoice(choiceSel.value); syncDiscInput(); refreshTotals(); },   // ревью S1 L-3 — выбор человека
         }, ...discOpts.map((o) => h('option', { value: o.key, selected: o.key === wiz.discountChoice }, trf(o.label.text, o.label.params))));
         if (choiceSel) choiceSel.value = wiz.discountChoice;
         if (wiz.card && !choices.some((d) => d.id === wiz.card.id)) wiz.card = null;   // CARD_BALANCE_V1
@@ -3599,7 +3603,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         const disc = job.payer === null && !promoMiss ? (dayRow ? dayDiscountSend(dayRow, discountLeft) : discountLeft) : 0;
                         const { data: iRes, error: iErr } = await supabase.rpc('create_invoice_for_visit',
                             { visit_id: visit.id, visit_service_ids: job.ids, discount_amount: disc, payer_id: job.payer,
-                                ...(doctorBill || job.payer !== null ? {} : choiceArgs(promoMiss ? 'none' : wiz.discountChoice)),   // DISCOUNT_V2 — сервер считает по выбору
+                                ...(doctorBill || job.payer !== null ? {} : choiceArgs(promoMiss ? 'none' : choiceToSend(wiz.discountChoice, { groupKnown: wiz.groupKnown, picked: wiz.discountPicked }))),   // DISCOUNT_V2 — сервер считает по выбору; ревью S1 L-3
                                 ...(spendStored && job.payer === null ? { append: false } : {}) });   // INVOICE_APPEND_V1 (ревью M1)
                         if (iErr) {
                             // REFERRAL_BILL_V1 — врачу «выставить из визита» не

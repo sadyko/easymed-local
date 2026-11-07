@@ -77,7 +77,7 @@ import { listTemplates, packageValidOn, cartPackage } from './service-templates.
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';
 import { nearestFree, noFreeText, nearestButtonText, visitDayNote } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
 import { loadPatientBookings, bookedJoinFor, joinMinutes } from './booked-rows.js';   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
-import { groupOf, discountChoiceOptions, choiceArgs, choiceFloorPct, choiceReason } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
+import { groupOf, discountChoiceOptions, choiceArgs, choiceFloorPct, choiceReason, fallbackChoiceKey } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
 import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // INVOICE_APPEND_V1 — дописанный счёт печатается целиком, из строк сервера
 
@@ -305,11 +305,14 @@ export function openServicePickerModal({
     if (attachMode && refs.attachedPatient && refs.attachedPatient.id != null) loadAttachCategory(refs.attachedPatient);
     async function loadAttachCategory(p) {
         wiz.categoryPct = 0;
+        wiz.categoryFailed = false;
         try {
-            const { data: row } = await supabase.from('patients').select('id, category_id, payer_id').eq('id', p.id).maybeSingle();
+            const { data: row, error: rowErr } = await supabase.from('patients').select('id, category_id, payer_id').eq('id', p.id).maybeSingle();
+            if (rowErr) throw rowErr;   // DISCOUNT_V2 (ревью S1 L-3) — группа не известна
             let pct = 0;
             if (row && row.category_id != null) {
-                const { data: cat } = await supabase.from('patient_categories').select('id, name, discount_percent, active').eq('id', row.category_id).maybeSingle();
+                const { data: cat, error: catErr } = await supabase.from('patient_categories').select('id, name, discount_percent, active').eq('id', row.category_id).maybeSingle();
+                if (catErr) throw catErr;
                 if (cat && isOn(cat.active)) { pct = Math.min(100, Math.max(0, Number(cat.discount_percent) || 0)); wiz.categoryName = cat.name || ''; }   // DISCOUNT_V2 — имя группы для выбора скидки
             }
             if (pct > 0 && row && row.payer_id != null) {
@@ -317,7 +320,7 @@ export function openServicePickerModal({
                 if (payer && isOn(payer.active)) pct = 0;
             }
             wiz.categoryPct = pct;
-        } catch (_) { wiz.categoryPct = 0; }
+        } catch (_) { wiz.categoryPct = 0; wiz.categoryFailed = true; }   // ревью S1 L-3
         if (wiz._railRefresh) wiz._railRefresh();
     }
 
@@ -2592,7 +2595,7 @@ export function openServicePickerModal({
                 }
                 const discOpts = discountChoiceOptions({ group: calcGroup(), discounts: wiz.allDiscounts || [], fmtMoney: formatMoney,
                     ctx: { today: localYmd(), categoryId: wizPatientCategoryId(), serviceIds: state.added.map((a) => Number(a.service && a.service.id)) } });
-                const curKey = calcChoice();
+                const curKey = calcChoice() || 'none';   // ревью S1 L-3 — группа не известна: на экране «Без скидки»
                 if (curKey.startsWith('promo:') && !discOpts.some((o) => o.key === curKey) && wizPromo()) {
                     discOpts.splice(discOpts.length - 1, 0, { key: curKey, kind: 'promo', label: { text: 'Промокод «{name}» — −{value}%', params: { name: wizPromo().name || '', value: String(Number(wizPromo().percent) || 0) } } });
                 }
@@ -2745,12 +2748,12 @@ export function openServicePickerModal({
     // промокод, вручную или без скидки. Не выбрано явно — как было: промокод, если
     // применён; своя скидка, если введена; иначе скидка группы (или без скидки).
     function calcGroup() { return groupOf(wiz.categoryName || '', wiz.categoryPct); }
+    // DISCOUNT_V2 (ревью S1 L-3) — группа пациента не прочиталась (wiz.categoryFailed): «Без скидки»
+    // по умолчанию — не выбор человека, и в счёт не уходит (null): пол группы кладёт сервер, как в 3.21.
     function calcChoice() {
         if (wiz.payment.discountChoice) return wiz.payment.discountChoice;
         const promo = wizPromo();
-        if (promo) return 'promo:' + promo.id;
-        if (wizDiscountPct() > 0) return 'manual';
-        return Number(wiz.categoryPct) > 0 ? 'group' : 'none';
+        return fallbackChoiceKey({ promoId: promo ? promo.id : null, manualPct: wizDiscountPct(), groupPct: wiz.categoryPct, groupKnown: !wiz.categoryFailed });
     }
     /** Аргументы pickerDiscount по выбору: одна скидка — без сложения. */
     function calcDiscountArgs() {
@@ -2897,12 +2900,14 @@ export function openServicePickerModal({
         // (billing.js patientCategoryDiscount), значит и смета обязана её знать.
         if (wiz.categoryPct == null && refs.attachedPatient) {
             wiz.categoryPct = 0;
+            wiz.categoryFailed = false;
             const cid = wizPatientCategoryId();
             if (cid) {
                 try {
-                    const { data } = await supabase.from('patient_categories').select('id, name, discount_percent, active').eq('id', cid).maybeSingle();
+                    const { data, error } = await supabase.from('patient_categories').select('id, name, discount_percent, active').eq('id', cid).maybeSingle();
+                    if (error) throw error;   // DISCOUNT_V2 (ревью S1 L-3) — группа не известна
                     if (data && (data.active === 1 || data.active === true)) { wiz.categoryPct = Math.min(100, Math.max(0, Number(data.discount_percent) || 0)); wiz.categoryName = data.name || ''; }   // DISCOUNT_V2
-                } catch (_) {}
+                } catch (_) { wiz.categoryFailed = true; }
             }
         }
         if (!wiz._prefilled && refs.attachedPatient) {

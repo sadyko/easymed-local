@@ -80,7 +80,7 @@ import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    /
 import { printableSheet } from './doc-settings.js?v=noqr1';                    // WIZ_INVOICE_PRINT_V1 — тот же бланк «Счёт»
 import { packageItemName, packageLabel, printInvoiceSheetById } from './receipt-print.js?v=rp1';     // PACKAGES_V1 — пакет и скидка позиции на бланке; CLINIC_API_FIX_V1 — packageLabel; INVOICE_APPEND_V1 — дописанный счёт целиком
 import { invoiceAppendNote } from '../invoice-append.js';
-import { groupOf, discountChoiceOptions, defaultChoiceKey, keepChoice, choiceArgs, choiceReason } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
+import { groupOf, discountChoiceOptions, defaultChoiceKey, keepChoice, choiceArgs, choiceReason, choiceToSend } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
 import { discountValue, localYmd } from '../discount-rules.js';   // DISCOUNT_V2 — стоимость промокода на смете                      // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 
 /** Разряды тысяч пробелом — так цену читают во всех экранах продукта. */
@@ -184,6 +184,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     // врача» ставил курсор в ТУ САМУЮ строку, а не заставлял искать её глазами.
     const state = {
         discountChoice: 'none', group: null, discounts: [],   // DISCOUNT_V2 — выбор скидки, группа пациента, скидки клиники
+        groupKnown: false, discountPicked: false,   // DISCOUNT_V2 (ревью S1 L-3) — группа прочитана; скидку выбрал человек
         patient: null,      // выбранный/созданный пациент — второй раз не создаём
         rows: [],
         catalog: [],
@@ -324,7 +325,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     // пациента, промокоды клиники, «Без скидки». По умолчанию — скидка группы (как было).
     // Почему скидка такая — строкой под выбором. Деньги считает сервер (discount_choice).
     const choiceSel = h('select', { 'data-discount-choice': '', style: { minWidth: '220px', maxWidth: '100%', padding: '6px 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px' },
-        onchange: () => { state.discountChoice = choiceSel.value; paintDiscountChoice(); } });
+        onchange: () => { state.discountChoice = choiceSel.value; state.discountPicked = true; paintDiscountChoice(); } });   // ревью S1 L-3 — выбор человека
     const choiceWhy = h('span', { class: 'muted', 'data-discount-reason': '', style: { fontSize: '12.5px' } });
     const choiceRow = h('div', { 'data-discount-row': '', style: { display: 'none', padding: '8px 14px 0', alignItems: 'center', gap: '8px', justifyContent: 'flex-end', flexWrap: 'wrap' } },
         h('span', { style: { fontSize: '12.5px', color: 'var(--ink-700)' } }, tr('Скидка')), choiceSel, choiceWhy);
@@ -505,6 +506,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     /** DISCOUNT_V2 — группа пациента и скидки клиники для выбора (сбой — без выбора, как прежде). */
     async function loadDiscountChoices(patientId) {
         state.group = null; state.discounts = []; state.patientCategoryId = null; state.discountChoice = 'none';
+        state.groupKnown = false; state.discountPicked = false;   // ревью S1 L-3
         try {
             const [pRes, dRes] = await Promise.all([
                 supabase.from('patients').select('id, category_id, patient_categories(id, name, discount_percent, active)').eq('id', patientId).maybeSingle(),
@@ -516,6 +518,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             state.group = cat && cat.active !== 0 && cat.active !== false ? groupOf(cat.name, cat.discount_percent) : null;
             state.discounts = dRes && !dRes.error && Array.isArray(dRes.data) ? dRes.data : [];
             state.discountChoice = defaultChoiceKey(state.group);
+            state.groupKnown = !!(pRes && !pRes.error);   // ревью S1 L-3 — сбой чтения: группа не известна
         } catch (e) { /* выбор скидки — удобство: без него сервер даст скидку группы сам */ }
         paintDiscountChoice();
     }
@@ -1178,7 +1181,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 bookedVisitId: state.bookedVisitId,
                 referralSourceId: referralSel.value || null,
                 // DISCOUNT_V2 — выбранная скидка (одна); промокод — его стоимость на смете, сервер проверит и зажмёт.
-                discount: { ...choiceArgs(state.discountChoice), discount_amount: String(state.discountChoice).startsWith('promo:') ? chosenDiscountBefore() : 0 },
+                // ревью S1 L-3 — группа пациента не прочиталась и человек не выбирал — выбор не шлётся (пол группы — сервер).
+                discount: { ...choiceArgs(choiceToSend(state.discountChoice, { groupKnown: state.groupKnown, picked: state.discountPicked })), discount_amount: String(state.discountChoice).startsWith('promo:') ? chosenDiscountBefore() : 0 },
                 createdBy: (currentUser() || {}).id || null,
                 // WALK_IN_ROLE_GATE_V1 — тот же человек, что уходит в
                 // created_by, и его же «Дополнительные роли»: цепочка сама
