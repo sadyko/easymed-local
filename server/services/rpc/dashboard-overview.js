@@ -31,6 +31,7 @@
 
 import { today, localDate, localRangeWhere } from '../domain/day.js';
 import { outstandingWhere } from '../domain/money.js';
+import { labRouteSql } from '../domain/lab-route-sql.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — анализ ли услуга, решает группа
 import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';
 import { canSeeReportKey } from '../report-access.js';
 import { canSeeAllLeads } from '../crm/visibility.js';
@@ -355,9 +356,11 @@ export function dashboardOverview(db, args, user) {
   }
 
   // ── ЛАБОРАТОРИЯ ─────────────────────────────────────────────────────────
+  // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — «заказано» — по правилу очереди лаборатории (labRouteSql).
+  const labRoute = labRouteSql(db, 's');
   const ordered = one(`SELECT COUNT(*) n FROM visit_services vs
       JOIN visits v ON v.id = vs.visit_id JOIN services s ON s.id = vs.service_id
-     WHERE ${sw.sql} AND s.is_lab = 1 AND ${LIVE_VISIT_SQL}`, sw.params).n;
+     WHERE ${sw.sql} AND ${labRoute.sql} AND ${LIVE_VISIT_SQL}`, [...sw.params, ...labRoute.params]).n;
   const lw = win('lr.verified_at');
   // Срок выполнения — от заказа строки до ПОСЛЕДНЕГО подтверждённого
   // показателя: результат готов, когда готов весь, а не первая строка бланка.

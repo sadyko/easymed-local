@@ -115,6 +115,7 @@ const RPC_LABELS = {
     patient_referral_orders: 'Направления врача пациента',          // DOCTOR_REFERRAL_DESK_V1
     referral_recommendation_attach: 'Рекомендация врача — в визит', // DOCTOR_REFERRAL_DESK_V1
     referral_visit_links: 'Метки «от врача» в календаре',            // DOCTOR_REFERRAL_DESK_V1
+    my_referrals: 'Мои направления',                                  // MY_REFERRALS_V1
     doctor_bot_settings_get: 'Бот для врачей: настройки',
     doctor_bot_settings_save: 'Бот для врачей: сохранение настроек',
     doctor_bot_token_clear: 'Бот для врачей: удаление токена',

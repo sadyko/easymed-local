@@ -51,6 +51,25 @@ const VS_CHILDREN = [
   ['service_queue_tickets', 'по услуге уже выдан талон очереди'],   // разбор ревью I2
 ];
 
+// DIAG_ROUTE_V1 (3.22.0, ревью L-4) — ИСПОЛНИТЕЛЬ СТРОКИ ЗАПИСИ — ТОТ ЖЕ КРУГ, ЧТО У ЗАПИСИ
+// (views/doctor-pool.js performerCandidates + doctorPoolFor): врач (is_doctor или роль «Врач»)
+// или живой сотрудник, которому ЭТА услуга отмечена в «Услугах и ставках». Прежде — только врач:
+// ЭКГ, отмеченное одной медсестре, календарь отдавал какому-нибудь врачу, и строка уходила не в
+// тот кабинет. Консультация по виду приёма — только врач (отметок у неё нет).
+export const BOOKING_PERFORMER_REFUSAL = 'Исполнитель строки — не врач и не отмечен на эту услугу («Сотрудники» → «Услуги и ставки»).';
+function ratesOf(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try { const p = JSON.parse(raw); return Array.isArray(p) ? p : []; } catch { return []; }
+}
+export function bookingPerformerOk(db, userId, serviceId) {
+  const u = db.prepare('SELECT id, role, is_doctor, is_active, service_rates FROM users WHERE id = ?').get(userId);
+  if (!u) return false;
+  if (Number(u.is_doctor) === 1 || u.role === 'doctor') return true;   // как прежде (ревью M2)
+  if (serviceId == null || Number(u.is_active) === 0) return false;
+  return ratesOf(u.service_rates).some((r) => r && String(r.service_id) === String(serviceId));
+}
+
 /** Запись, к которой можно дописывать и с которой можно снимать услуги. */
 function bookingOrRefuse(db, visitId) {
   const v = db.prepare(`SELECT id, patient_id, doctor_id, status, sync_origin, visit_date,
@@ -104,9 +123,9 @@ export function bookingLinesAdd(db, args, user) {
       if (refusal) throw new RpcError(refusal, 400);
       const doctorId = l && l.doctor_id != null && l.doctor_id !== '' ? Number(l.doctor_id) : null;
       // M2 — врач строки должен быть врачом, а не любым сотрудником.
-      if (doctorId != null && (!isPosInt(doctorId)
-          || !db.prepare("SELECT 1 FROM users WHERE id = ? AND (is_doctor = 1 OR role = 'doctor')").get(doctorId))) {
-        throw new RpcError('Врач строки не найден среди врачей клиники.', 400);
+      // DIAG_ROUTE_V1 (ревью L-4) — или тем, кому эта услуга отмечена (bookingPerformerOk).
+      if (doctorId != null && (!isPosInt(doctorId) || !bookingPerformerOk(db, doctorId, serviceId))) {
+        throw new RpcError(BOOKING_PERFORMER_REFUSAL, 400);
       }
       const rawAt = l && l.scheduled_at != null && l.scheduled_at !== '' ? String(l.scheduled_at) : null;
       if (rawAt != null && Number.isNaN(Date.parse(rawAt))) throw new RpcError('Время услуги указано неверно.', 400);

@@ -37,6 +37,7 @@ import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
 import { canWriteServiceTemplates, canAddVisitLines, canNameVisitSource } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы · DIAG_ROUTE_V1 (D8) — шаг «Направление»
 import { precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 — повтор услуги в визите дня — отказ до записи
+import { serviceRoute } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — маршрут решает группа, одним правилом
 import { surgeryBedRefusal, linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация, хирургия без койки; BACKLOG_1011_V1 — исполнитель по умолчанию
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
@@ -96,6 +97,13 @@ function bookedSummary(visit, vsRows) {
         })),
     };
 }
+
+// DIAG_ROUTE_V1 (3.22.0, ревью L-5) — «кабинетная» и «процедурная» услуга каталога записи — по
+// общему правилу маршрута (shared/service-route.js), а не своим сравнением services.type: для
+// всех групп, кроме «Консультаций», ответ прежний; анализ и процедура группы «Консультации»
+// (отделение / тип каталога) больше не получают «всех врачей» запасным списком.
+export const pickerIsCabinetRouted = (svc) => serviceRoute(svc) === 'cabinet';
+export const pickerIsProcedureRouted = (svc) => serviceRoute(svc) === 'procedure';
 
 export function openServicePickerModal({
     visitDoctorId   = null,
@@ -1025,8 +1033,7 @@ export function openServicePickerModal({
     // pick a doctor; otherwise visit_services.doctor_id is written null and the
     // patient never reaches any worklist. SERVICE_GROUP_ROUTING_V1.
     function isCabinetRouted(svc) {
-        const t = (svc && svc.type || '').trim();
-        return t !== 'lab' && t !== 'procedure';
+        return pickerIsCabinetRouted(svc);   // DIAG_ROUTE_V1 (ревью L-5)
     }
     // PROC_PERFORMER_V1 — процедура маршрутизируется в очередь процедур, а не в
     // кабинет, поэтому isCabinetRouted() для неё ложь и запасного списка у неё
@@ -1035,7 +1042,7 @@ export function openServicePickerModal({
     // приходила никому. Запасной список у неё теперь свой и правильный — врачи
     // И медсестры (owner: «either can be for doctors or nurses»).
     function isProcedureRouted(svc) {
-        return String((svc && svc.type) || '').trim() === 'procedure';
+        return pickerIsProcedureRouted(svc);   // DIAG_ROUTE_V1 (ревью L-5)
     }
     // Candidate doctors for a non-consult service: its performers, or — when it
     // has none but is cabinet-routed — every active doctor, so the patient can

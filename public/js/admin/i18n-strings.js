@@ -13561,4 +13561,19 @@ export const STRINGS = {
   "Фильтры: {list}": {"en":"Filters: {list}","ru":"Фильтры: {list}","uz":"Filtrlar: {list}"},   // REPORTS_TAX_PAY_V1
   "По способам оплаты": {"en":"By payment method","ru":"По способам оплаты","uz":"To‘lov usullari bo‘yicha"},   // REPORTS_TAX_PAY_V1
   // /REPORTS_TAX_PAY_V1
+  // ── S4 · 3.22.0 — кабинет врача, процедуры, остатки 3.21.2 (MY_REFERRALS_V1 · PROC_SCOPE_V1 · DIAG_ROUTE_V1) ──
+  "Все исполнители": {"en":"All performers","ru":"Все исполнители","uz":"Barcha bajaruvchilar"},   // PROC_SCOPE_V1
+  "Мои направления": {"en":"My referrals","ru":"Мои направления","uz":"Mening yo‘llanmalarim"},   // MY_REFERRALS_V1
+  "Возвращено": {"en":"Refunded","ru":"Возвращено","uz":"Qaytarilgan"},   // MY_REFERRALS_V1
+  "Поиск: пациент, услуга, исполнитель…": {"en":"Search: patient, service, performer…","ru":"Поиск: пациент, услуга, исполнитель…","uz":"Qidiruv: bemor, xizmat, bajaruvchi…"},   // MY_REFERRALS_V1
+  "Показаны последние направления периода — сузьте период, чтобы увидеть остальные.": {"en":"The latest referrals of the period are shown — narrow the period to see the rest.","ru":"Показаны последние направления периода — сузьте период, чтобы увидеть остальные.","uz":"Davrdagi oxirgi yo‘llanmalar ko‘rsatilgan — qolganlarini ko‘rish uchun davrni qisqartiring."},   // MY_REFERRALS_V1
+  "За этот период вы никого не направляли.": {"en":"You have not referred anyone in this period.","ru":"За этот период вы никого не направляли.","uz":"Bu davrda siz hech kimni yo‘llamagansiz."},   // MY_REFERRALS_V1
+  "визит {day}": {"en":"visit {day}","ru":"визит {day}","uz":"tashrif {day}"},   // MY_REFERRALS_V1
+  "рекомендация": {"en":"recommendation","ru":"рекомендация","uz":"tavsiya"},   // MY_REFERRALS_V1
+  "Документ не найден — откройте карту пациента.": {"en":"Document not found — open the patient card.","ru":"Документ не найден — откройте карту пациента.","uz":"Hujjat topilmadi — bemor kartasini oching."},   // MY_REFERRALS_V1
+  "«Мои направления» — у врача.": {"en":"“My referrals” are available to doctors.","ru":"«Мои направления» — у врача.","uz":"«Mening yo‘llanmalarim» — shifokor uchun."},   // MY_REFERRALS_V1
+  "Период указан неверно.": {"en":"Invalid period.","ru":"Период указан неверно.","uz":"Davr noto‘g‘ri ko‘rsatilgan."},   // MY_REFERRALS_V1
+  "Период — не длиннее года.": {"en":"The period must not exceed one year.","ru":"Период — не длиннее года.","uz":"Davr — bir yildan oshmasin."},   // MY_REFERRALS_V1
+  "Исполнитель строки — не врач и не отмечен на эту услугу («Сотрудники» → «Услуги и ставки»).": {"en":"The line's performer is not a doctor and is not assigned to this service (“Employees” → “Services & rates”).","ru":"Исполнитель строки — не врач и не отмечен на эту услугу («Сотрудники» → «Услуги и ставки»).","uz":"Qator ijrochisi shifokor emas va bu xizmatga belgilanmagan («Xodimlar» → «Xizmatlar va tariflar»)."},   // DIAG_ROUTE_V1
+  // /S4 · 3.22.0
 };

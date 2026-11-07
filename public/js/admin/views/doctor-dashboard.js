@@ -543,11 +543,16 @@ const LINE_VISIT_STATUSES = ['added', 'queued', 'in_progress', 'completed'];
 const VISIT_COLUMNS = 'id, visit_date, duration_minutes, status, patient_id, service_id, room_id, patients(id, mrn, full_name, first_name, last_name, phone, date_of_birth), services(id, name, duration_minutes), rooms(id, name, code)';
 async function loadLineVisits(me, ownIds, from, to) {
     const out = { rows: [], failed: false };
+    // DIAG_ROUTE_V1 (3.22.0, ревью L-1) — строки — по дню ВИЗИТА (окно «Моего дня»), а не 2000
+    // новейших строк врача: строку, записанную заранее, вытесняли более новые — и визит дня, где
+    // она стоит, в «Моём дне» не появлялся. Предел остаётся предохранителем.
     const { data: lines, error } = await supabase.from('visit_services')
-        .select('visit_id')
+        .select('visit_id, visits!inner(visit_date)')
         .eq('doctor_id', me)
         .is('sync_origin', null)
         .in('status', LINE_VISIT_STATUSES)
+        .gte('visits.visit_date', from.toISOString())
+        .lt('visits.visit_date', to.toISOString())
         .order('created_at', { ascending: false })
         .limit(2000);
     if (error) { console.warn('[doctor-dash] line visits:', error.message); out.failed = true; return out; }

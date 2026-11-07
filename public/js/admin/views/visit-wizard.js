@@ -540,6 +540,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
     // ---- shell ----
     const overlay = h('div', {
+        'data-visit-wizard': '',   // DIAG_ROUTE_V1 (3.22.0, ревью I-2) — кабинет не обновляет список под мастером
         style: {
             position: 'fixed', inset: '0', zIndex: '150',
             background: 'var(--ink-25, #f6f8f9)',
@@ -1841,8 +1842,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // SCHED_V1 + SVC_DOCTORS_V1 — если на услугу назначен ровно один врач,
         // выбираем его и ближайший слот сами; иначе регистратор выбирает из
         // назначенных на услугу.
+        // DIAG_ROUTE_V1 (3.22.0, ревью I-1) — сам ставится исполнитель только услуге, которой он
+        // нужен (needsPerformer), — как в быстрой регистрации. Анализ, отмеченный одному лаборанту,
+        // и процедура, отмеченная одной медсестре, молча исполнителя не получают: процедуру берёт
+        // тот, кто её делает (PROC_SCOPE_V1), а талон не уходит в линию одной медсестры.
         const pool = doctorsForService(svc.id);
-        if (pool.length === 1) {
+        if (pool.length === 1 && needsPerformer(svc)) {
             line.doctorId = pool[0].id;
             // DIAG_ROUTE_V1 (D1) — у строки «на дату» день остаётся и у врача живой очереди.
             if (isLiveQueueDoc(line.doctorId)) { if (!line.dateOnly) line.when = null; repaintRail(); }

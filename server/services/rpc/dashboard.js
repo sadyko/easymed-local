@@ -13,6 +13,7 @@
 
 import { isLocalToday, today, localDate, inLocalRange } from '../domain/day.js';
 import { outstandingWhere } from '../domain/money.js';
+import { labRouteSql } from '../domain/lab-route-sql.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — анализ ли услуга, решает группа
 import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';   // DEPOSIT_REVENUE_V1
 // LAB_ONE_CLINIC_V1 — границу лаборатории задаёт ОДНА функция, общая с экраном
 // (views/lab-scope.js через domain/buildings.js). Импортируем правило, а не
@@ -89,12 +90,15 @@ export function dashboardSummary(db, _args, user) {
   // индекса idx_visit_services_lab_pending: так SQLite идёт по нему, а не по
   // всей таблице (было ~1 с на миллионе строк). INDEXED BY не ставим: на базе
   // до миграции запрос обязан работать и без индекса.
+  // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — анализ — по правилу очереди лаборатории (labRouteSql):
+  // анализ группы «Консультации» из отделения «Лаборатория» стоит в очереди — и на плитке тоже.
+  const labRoute = labRouteSql(db, 's');
   const labRows = all(`SELECT ${originExpr(db, 'visit_services', 'vs')} AS origin, COUNT(*) n
       FROM visit_services vs
       JOIN services s ON s.id = vs.service_id
-      WHERE vs.status IN ('queued','in_progress') AND s.is_lab=1${labBuildingClause}
+      WHERE vs.status IN ('queued','in_progress') AND ${labRoute.sql}${labBuildingClause}
         AND NOT EXISTS (SELECT 1 FROM lab_results lr WHERE lr.visit_service_id=vs.id AND lr.verified_at IS NOT NULL)
-      GROUP BY origin`);
+      GROUP BY origin`, ...labRoute.params);
 
   const merged = [
     ...patients.map((r) => ({ origin: r.origin, patients_today: r.n })),

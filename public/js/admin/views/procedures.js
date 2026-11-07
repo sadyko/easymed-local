@@ -23,8 +23,9 @@
 //      отсеивал чужое. Правило «кому это видно» переехало на сервер целиком —
 //      медсестра, попросившая чужую очередь curl'ом, получает свою.
 //
-// Область видимости прежняя (SERVICE_SCOPE_V1): врач/медсестра видят своё и
-// ничьё, полный администратор — всё. Здание — своё (BRANCH_ORIGIN_V1), и у
+// Область видимости (SERVICE_SCOPE_V1; PROC_SCOPE_V1, 3.22.0): врач/медсестра видят
+// своё и ничьё, администратор и старшая медсестра — всё, с фильтром «Исполнитель»
+// (фильтрует сервер: procedures_list { performer }). Здание — своё (BRANCH_ORIGIN_V1), и у
 // палатных строк иначе не бывает: госпитализации между зданиями не ездят.
 import { supabase } from '../../supabase.js';
 import { h, Icon, toast, clear, fmtDateTime } from '../ui.js';
@@ -46,7 +47,8 @@ const OPEN = ['added', 'queued', 'in_progress'];
 // процедура, за которую касса вернула деньги (r.refunded), — не работа; её
 // видно во «Все» (и в «Выполнено», если её успели сделать) с меткой.
 const isOpenWork = (r) => OPEN.includes(r.status) && !r.refunded;
-const state = { rows: [], filter: 'open', showAll: true, search: '', place: 'all' };   // PROC_SEARCH_V1 / PROC_PERFORMER_V1
+const state = { rows: [], filter: 'open', showAll: true, search: '', place: 'all',   // PROC_SEARCH_V1 / PROC_PERFORMER_V1
+    performer: '', performers: [] };   // PROC_SCOPE_V1 — фильтр «Исполнитель» ('' — все, 'none' — не назначен, id)
 
 export async function renderProcedures(container) {
     clear(container);
@@ -55,6 +57,7 @@ export async function renderProcedures(container) {
     const body = h('div', { class: 'card', style: { padding: '0', overflow: 'hidden' } });
     container.appendChild(body);
     body.appendChild(h('div', { class: 'muted', style: { padding: '28px', textAlign: 'center' } }, tr('Загрузка…')));
+    state.performer = '';   // PROC_SCOPE_V1 — каждое открытие раздела — без фильтра исполнителя
     await load();
     paint(body);
 }
@@ -63,7 +66,10 @@ async function load() {
     // Одна очередь на два вида процедур. Склейка, сортировка и правило
     // видимости — на сервере (rpc/procedures.js): палатная строка живёт в
     // другой таблице, и браузеру её одним запросом не достать.
-    const { data, error } = await supabase.rpc('procedures_list', { limit: 300 });
+    // PROC_SCOPE_V1 — фильтр исполнителя читает сервер, и только у того, кто видит всё.
+    const args = { limit: 300 };
+    if (state.performer) args.performer = state.performer;
+    const { data, error } = await supabase.rpc('procedures_list', args);
     if (error) {
         console.warn('[procedures]', error.message);
         toast(trf('Не удалось загрузить процедуры: {msg}', { msg: error.message }), 'fail');
@@ -80,6 +86,22 @@ async function load() {
     for (const r of rows) r.refunded = !!(refunded && r.kind === 'outpatient' && refunded.has(Number(r.id)));
     state.rows = rows;
     state.showAll = (data && data.scope) === 'all';
+    state.performers = (data && Array.isArray(data.performers)) ? data.performers : [];   // PROC_SCOPE_V1
+    if (!state.showAll) state.performer = '';
+}
+
+// PROC_SCOPE_V1 — «Исполнитель» у администратора и старшей медсестры: все / не назначен /
+// сотрудник. Смена — новое чтение с сервера (фильтр в SQL до предела).
+export function performerFilterEl(onChange) {
+    if (!state.showAll) return null;
+    const sel = h('select', { 'data-proc-performer': '', title: tr('Исполнитель'),
+        style: { height: '30px', padding: '0 8px', border: '1px solid var(--ink-200, #ddd)', borderRadius: '8px', fontSize: '12.5px', fontFamily: 'inherit', maxWidth: '220px' },
+        onchange: (e) => { state.performer = e.target.value || ''; onChange(); } },
+        h('option', { value: '' }, tr('Все исполнители')),
+        h('option', { value: 'none' }, tr('Исполнитель не назначен')),
+        ...state.performers.map((p) => h('option', { value: String(p.id) }, p.full_name || String(p.id))));
+    sel.value = String(state.performer || '');
+    return sel;
 }
 
 function placeOf(r) { return r.kind === 'inpatient' ? 'inpatient' : 'outpatient'; }
@@ -112,6 +134,9 @@ function paint(body) {
                 icon ? ' ' + label + ' · ' + places[key] : label));
         }
     }
+    // PROC_SCOPE_V1 — фильтр исполнителя (только тому, кто видит всё).
+    const perfSel = performerFilterEl(async () => { await load(); paint(body); });
+    if (perfSel) tabs.appendChild(perfSel);
     // PROC_SEARCH_V1 — live search over service / patient / phone / performer.
     // Only the row list repaints on input so the field keeps focus.
     const searchInp = h('input', {

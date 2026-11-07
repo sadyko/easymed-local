@@ -19,6 +19,7 @@
 import { supabase } from '../../supabase.js';
 import { tr } from '../i18n.js';
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';
+import { serviceRoute } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5)
 
 const isPosInt = (v) => Number.isInteger(Number(v)) && Number(v) > 0 && String(v).trim() !== '';
 
@@ -54,9 +55,9 @@ export function visitDoctorMayPerform(svc) {
     if (!svc) return false;
     if (isConsultPick(svc)) return true;
     if (svc.requires_doctor === false || svc.requires_doctor === 0 || svc.requires_doctor === '0') return false;
-    if (svc.is_lab === true || svc.is_lab === 1) return false;
-    const t = String(svc.type || '').toLowerCase();
-    return t !== 'lab' && t !== 'procedure';
+    // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — анализ и процедура — по общему правилу маршрута
+    // (is_lab, группа; у группы «Консультации» — отделение и тип каталога).
+    return serviceRoute(svc) === 'cabinet';
 }
 
 /**

@@ -47,6 +47,8 @@ import { serviceRoute } from '../../shared/service-route.js';   // DIAG_ROUTE_V1
 // пул исполнителей — тот же, что у записи; дверь — та же, что «Сменить врача» карты.
 import { doctorPoolFor, performerCandidates, soleCandidate } from './doctor-pool.js?v=dp1';
 import { setLinePerformer } from './booked-rows.js';
+// MY_REFERRALS_V1 (3.22.0) — вкладка «Мои направления»: что врач направил и что с этим стало.
+import { myReferralsView, loadMyReferrals, resetMyReferrals, canSeeMyReferrals, state as referralsState } from './my-referrals.js';
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -154,8 +156,8 @@ const LINE_NOTES = new Map();   // id строки → { status, seq }
 // зарплата — нижняя часть той же страницы, что дашборд. Адрес
 // '#consultation/pay' из закладок и ссылок продолжает работать: он открывает
 // эту страницу и прокручивает к зарплате (state.scrollToPay).
-const SUB_TO_TAB = { work: 'appointments', inpatients: 'inpatients', pay: 'dashboard', profile: 'profile' };
-const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', profile: 'profile' };
+const SUB_TO_TAB = { work: 'appointments', inpatients: 'inpatients', pay: 'dashboard', profile: 'profile', referrals: 'referrals' };   // MY_REFERRALS_V1 — '#consultation/referrals'
+const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', profile: 'profile', referrals: 'referrals' };
 
 export async function renderConsultation(container, { onNavigate, payload, tabId, onPayload, onShow } = {}) {
     stopAutoFresh();   // DIAG_ROUTE_V1 (D6) — новый экран — свой таймер (один на модуль)
@@ -166,6 +168,8 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // пересылку ссылки, а голый '#consultation' открывает дашборд.
     const sub = payload && typeof payload.sub === 'string' ? payload.sub : null;
     state.tab = SUB_TO_TAB[sub] || 'dashboard';
+    if (state.tab === 'referrals' && !canSeeMyReferrals()) state.tab = 'dashboard';   // MY_REFERRALS_V1 — вкладка только врачу
+    resetMyReferrals();   // MY_REFERRALS_V1 — каждое открытие кабинета: последние 30 дней, без фильтров
     state.scrollToPay = sub === 'pay';   // CABINET_DASH_PAY_ONE_V1 — старый адрес зарплаты
     if (cabinetHero) cabinetHero.stop();
     cabinetHero = null;   // SECTION_HERO_V1 — новый вход в раздел — новый баннер
@@ -331,11 +335,13 @@ function cabinetOnScreen() {
     if (state.tab !== 'appointments') return false;
     return !(containerRef.style && containerRef.style.display === 'none');
 }
-/** Открыто модальное окно (у всех окон приложения — .modal / .modal-backdrop). */
+/** Открыто модальное окно (у всех окон приложения — .modal / .modal-backdrop) или полноэкранный
+ *  мастер записи «Направить на услуги» (у его подложки класса .modal нет — метка data-visit-wizard;
+ *  DIAG_ROUTE_V1, 3.22.0, ревью I-2). */
 function dialogOpen() {
     try {
         if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return false;
-        return !!document.querySelector('.modal-backdrop, .modal');
+        return !!document.querySelector('.modal-backdrop, .modal, [data-visit-wizard]');
     } catch (_) { return false; }
 }
 /** Снять таймер (новое открытие раздела, уход с экрана). Экспорт — для проверки. */
@@ -553,6 +559,27 @@ function unassignedBlock() {
 const CABINET_OPEN_STATUSES = ['added', 'queued', 'in_progress'];
 const CABINET_OPEN_LIMIT = 5000;
 const CABINET_DONE_WINDOW = 300;
+// DIAG_ROUTE_V1 (3.22.0, ревью L-2) — открытые строки клиники у администратора — визиты не
+// старше этого числа дней (и все будущие): давние незакрытые строки не тратят предел.
+const CABINET_ADMIN_PAST_DAYS = 60;
+
+/**
+ * DIAG_ROUTE_V1 (3.22.0, ревью L-3) — открытые и завершённые строки читаются параллельно; строку,
+ * завершённую между двумя чтениями, вернут оба — она одна, завершённая (на месте открытой).
+ * Экспорт — для проверки.
+ */
+export function mergeOpenDone(open, done) {
+    const doneById = new Map((done || []).map((r) => [String(r.id), r]));
+    const out = [];
+    const seen = new Set();
+    for (const r of [...(open || []), ...(done || [])]) {
+        const k = String(r.id);
+        if (seen.has(k)) continue;   // одна строка — один раз (и из двух запросов открытых)
+        seen.add(k);
+        out.push(doneById.get(k) || r);
+    }
+    return out;
+}
 async function loadServices() {
     const build = () => {
         let query = supabase
@@ -584,13 +611,33 @@ async function loadServices() {
         return query;
     };
     const unassignedP = loadUnassigned();   // DIAG_ROUTE_V1 (ревью M-1) — параллельно, своим запросом
-    const [openRes, doneRes] = await Promise.all([
-        build().in('status', CABINET_OPEN_STATUSES).order('created_at', { ascending: false }).limit(CABINET_OPEN_LIMIT),
+    // DIAG_ROUTE_V1 (3.22.0, ревью L-2) — предел открытых строк не тратится на чужое кабинету:
+    // строки отменённых и несостоявшихся визитов и услуги групп «Лаборатория» / «Процедуры»
+    // отсекает SQL (прежде — экран, после предела: у администратора запись, сделанная заранее,
+    // пропадала за 5000 более новых анализов). Двумя запросами: консультации по виду приёма
+    // (услуги нет — фильтр по группе их бы выбросил) и услуги каталога. «Консультации» из
+    // отделения «Лаборатория» отсекает экран, как прежде (_goesElsewhere). У администратора —
+    // визиты не старше CABINET_ADMIN_PAST_DAYS дней (и все будущие).
+    const adminFrom = (() => {
+        const scoped = (typeof scopedProviderId === 'function') ? scopedProviderId() : null;
+        if (scoped) return null;
+        const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - CABINET_ADMIN_PAST_DAYS);
+        return d.toISOString();
+    })();
+    const openLive = (q) => {
+        let x = q.in('status', CABINET_OPEN_STATUSES).not('visits.status', 'in', '(cancelled,no_show)');
+        if (adminFrom) x = x.gte('visits.visit_date', adminFrom);
+        return x;
+    };
+    const [consultRes, svcRes, doneRes] = await Promise.all([
+        openLive(build()).is('service_id', null).order('created_at', { ascending: false }).limit(CABINET_OPEN_LIMIT),
+        openLive(build()).not('service_id', 'is', null).not('services.type', 'in', '(lab,procedure)')
+            .order('created_at', { ascending: false }).limit(CABINET_OPEN_LIMIT),
         build().eq('status', 'completed').order('created_at', { ascending: false }).limit(CABINET_DONE_WINDOW),
     ]);
     state.unassigned = await unassignedP;
-    const error = openRes.error || doneRes.error;
-    const data = [...(openRes.data || []), ...(doneRes.data || [])];
+    const error = consultRes.error || svcRes.error || doneRes.error;
+    const data = mergeOpenDone([...(consultRes.data || []), ...(svcRes.data || [])], doneRes.data || []);   // ревью L-3
     if (error) {
         console.error('[my-services] load failed:', error);
         toast('Could not load services: ' + error.message, 'fail');
@@ -743,11 +790,13 @@ function paint() {
             topTab('dashboard',    'Дашборд · Зарплата', 'Dashboard'),
             topTab('appointments', 'Мои приёмы',  'Activity'),
             topTab('inpatients',   'Стационар',    'Bed', inpatientWaiting()),   // INPATIENT_TAB_V1 / ADMITTING_DOCTOR_CABINET_V1
+            canSeeMyReferrals() ? topTab('referrals', 'Мои направления', 'Send') : null,   // MY_REFERRALS_V1
             topTab('profile',      'Мой профиль',  'User'),
         )),
         state.tab === 'profile' ? profileView()
             : state.tab === 'inpatients' ? inpatientsView()
             : state.tab === 'appointments' ? appointmentsView()
+            : state.tab === 'referrals' ? myReferralsView(() => { if (state.tab === 'referrals') paint(); })   // MY_REFERRALS_V1
             : dashboardAndPayView(),
     ));
     // The appointments table body is painted into a slot by id — only meaningful
@@ -1122,6 +1171,7 @@ function ensureTabData(id) {
             .then(() => loadDashboardData())
             .then(() => { state.dash.loading = false; });
     }
+    if (id === 'referrals' && !referralsState.loaded) return loadMyReferrals();   // MY_REFERRALS_V1
     if (id === 'inpatients' && !state.inpt.loaded) {   // INPATIENT_TAB_V1
         state.inpt.loading = true;
         return loadInpatients().then(() => { state.inpt.loading = false; });
