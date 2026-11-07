@@ -22,6 +22,7 @@
 
 import { hasAnyRole, canViewSection } from '../roles.js';
 import { today, localDate } from '../domain/day.js';
+import { serviceRoute } from '../../../public/js/shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — дверь талона — по маршруту группы
 import { notRefundReleasedSql } from '../domain/pay-releases.js';   // REFUND_SWAP_V1 (ревью A2) — «услуга возвращена» в очереди не стоит
 
 export class RpcError extends Error {
@@ -70,12 +71,13 @@ export function issueQueueNumbers(db, args, user) {
                v.patient_id, v.visit_date,
                ${localDate('COALESCE(vs.scheduled_at, v.visit_date)')} AS day_local,
                s.type AS svc_type, s.is_lab AS svc_is_lab, s.name AS svc_name, s.requires_doctor,
-               st.name AS svc_type_name,
+               st.name AS svc_type_name, sd.kind AS svc_dept_kind,   -- DIAG_ROUTE_V1 (ревью L-5) — подсказки маршрута «Консультаций»
                s.room_id AS svc_room_id, r.queue_mode AS room_queue_mode   -- ROOMS_QUEUE_V1
           FROM visit_services vs
           JOIN visits v ON v.id = vs.visit_id
           LEFT JOIN services s ON s.id = vs.service_id
           LEFT JOIN service_types st ON st.id = s.type_id
+          LEFT JOIN departments sd ON sd.id = s.department_id
           LEFT JOIN rooms r ON r.id = s.room_id
          WHERE vs.id = ?
       `).get(id);
@@ -102,7 +104,14 @@ export function issueQueueNumbers(db, args, user) {
       // localDate(), что и весь остальной код (domain/day.js).
       const day = row.day_local || 'no-date';
       const type = String(row.svc_type || '').toLowerCase();
-      const isLab = !!row.svc_is_lab || type === 'lab';
+      // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — дверь — по общему правилу маршрута (как у очереди
+      // лаборатории, процедур и кабинета): группа; у группы «Консультации» — отделение и тип
+      // каталога. Для остальных групп — прежний ответ (is_lab / type).
+      const route = row.service_id == null ? 'cabinet' : serviceRoute({
+        type: row.svc_type, is_lab: row.svc_is_lab, dept_kind: row.svc_dept_kind || '',
+        service_types: row.svc_type_name ? { name: row.svc_type_name } : null,
+      });
+      const isLab = route === 'lab';
 
       // QUEUE_SURGERY_NO_TICKET_V1 — операция НЕ занимает очередь.
       //
@@ -166,8 +175,9 @@ export function issueQueueNumbers(db, args, user) {
       // общую врачебную линию дня. Прежняя очередь на аппарат (img:) исчезла
       // вместе с «Рентгеном»: очередь к машине была нужна ему, а диагностику
       // ведёт человек.
+      // DIAG_ROUTE_V1 (ревью L-5) — процедура — по маршруту: «Консультации» из «Процедурного» тоже.
+      else if (route === 'procedure')        key = `proc:room:${day}`;
       else if (type === 'consultation' || type === 'imaging') key = `doc:0:${day}`;
-      else if (type === 'procedure')         key = `proc:room:${day}`;
       // Хирургия сюда не доходит — она отсеяна выше (талона у неё нет).
       // Остаток: услуга без узнаваемого типа. Своя линия по услуге — самое
       // безобидное, что можно сделать, не выдумывая ей маршрут.

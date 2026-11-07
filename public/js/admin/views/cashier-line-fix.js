@@ -36,6 +36,7 @@ import { tr, trf } from '../i18n.js';
 import { canFixCashierLines, canSwapPaidLines } from '../permissions.js';
 import { localYmd } from '../discount-rules.js';   // REFERRAL_BILL_V1 — местный день, как у остальной кассы
 import { TUBE_STATUSES } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 (ревью U11, M3/L5) — статусы строк, у которых есть пробирка
+import { serviceRoute } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — анализ ли услуга, решает группа
 
 // Работа по строке начата или сделана — сервер её не меняет (PERFORMED_LINE_STATUSES).
 const PERFORMED = ['collected', 'in_progress', 'resulted', 'completed'];
@@ -347,7 +348,9 @@ export async function openSwapConfirm(args, { onDone = null } = {}) {
 // окно говорит, что новый уйдёт в лабораторию новым заказом, а у возврата с
 // новой — что пробу отметят заново. Пока замена в пути, окно ничего не
 // меняет (busy). `onDone(r)` получает ответ сервера (`rebill: true` — второй путь).
-const isLabService = (s) => !!s && (Number(s.is_lab) === 1 || s.type === 'lab');
+// DIAG_ROUTE_V1 (3.22.0, ревью L-5) — то же правило, что у очереди лаборатории (serviceRoute).
+export const cashierIsLabService = (s) => !!s && serviceRoute(s) === 'lab';
+const isLabService = cashierIsLabService;
 
 // LAB_TUBE_LABEL_V1 (ревью U11, M3) — строка анализа в работе лаборатории (ждёт
 // забора … результаты внесены — статусы пробирки, lab-tube.js): её номер мог уйти
