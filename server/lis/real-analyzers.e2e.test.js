@@ -355,7 +355,7 @@ test('A1000: по сети (HL7, как пишет прибор) и через �
       db.prepare('UPDATE lab_devices SET added = 1, model_confirmed = 1 WHERE id = ?').run(fdev.id);
       await fwd.send(FWD_ORU('LAB-000202'));
       assert.equal(last(db).status, 'applied', 'та же модель — та же панель (правило «та же модель»)');
-      assert.deepEqual(blank(db, 202), { 'Витамин B12': '390.946' }, 'провод переадресателя: код из OBX-3');
+      assert.deepEqual(blank(db, 202), { 'Витамин B12': '390.95' }, 'провод переадресателя: код из OBX-3 (LAB_ROUND_V1 — до 2 знаков)');
       notReleased(db, 202);
       assert.deepEqual(tray(db), []);
     } finally { net1.close(); fwd.close(); }
@@ -602,7 +602,7 @@ test('BS-240 (как пишет прибор): номер пробирки из 
       m = last(db);
       assert.deepEqual([m.status, m.visit_service_id, m.sample_id], ['unmapped', 123, 'LAB-000123']);
       assert.equal(m.detail, 'не пришли: Мочевина (UREA, прибор: нет результата «-268435455.000000», OBX-13 «0.000000» — для сверки, в бланк не пишется)');
-      assert.deepEqual(blank(db, 123), { 'Глюкоза': '5.1234' }, '«нет результата» в бланк не легло');
+      assert.deepEqual(blank(db, 123), { 'Глюкоза': '5.12' }, '«нет результата» в бланк не легло (LAB_ROUND_V1 — до 2 знаков)');
       assert.deepEqual(blank(db, 1), {}, 'заказ № 1 чужого пациента не тронут');
       assert.deepEqual(blank(db, 2), {}, 'заказ № 2 чужого пациента не тронут');
       notReleased(db, 123);

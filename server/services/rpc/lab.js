@@ -21,6 +21,7 @@ import { crmServiceEvidence } from '../crm/visit-status.js';
 import { LAB_RESULT_STATUSES } from '../visit-status-guard.js';
 import { refundedWithoutResult } from '../domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
 import { REFUNDED_LAB_REFUSAL } from '../../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1
+import { roundHalfUp2 } from '../../../public/js/shared/lab-round.js';   // LAB_ROUND_V1
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -108,6 +109,11 @@ export function saveLabResults(db, args, user) {
   // проверенный результат выдавался как проверенный.
   const setStatus = db.prepare("UPDATE visit_services SET status='resulted', verified_at=NULL, verified_by=NULL WHERE id=?");
   const clearVerified = db.prepare('UPDATE lab_results SET verified_at=NULL, verified_by=NULL WHERE visit_service_id=?');
+  // LAB_ROUND_V1 — значение прибора, записанное полным (до обновления или при
+  // выключенном округлении), лаборатория видит округлённым и сохраняет лист:
+  // полное не теряется — уходит в raw_value (по нему его покажет выключенная настройка).
+  const oldRow = db.prepare('SELECT value, raw_value, source FROM lab_results WHERE id = ? AND visit_service_id = ?');
+  const keepRaw = db.prepare('UPDATE lab_results SET raw_value = ? WHERE id = ?');
 
   let inserted = 0, updated = 0;
   db.transaction(() => {
@@ -116,8 +122,14 @@ export function saveLabResults(db, args, user) {
       if (row.id) {
         // Правку строки ограничиваем ЭТОЙ услугой: id приходит от клиента, и
         // без привязки к vsId им можно было бы переписать чужой результат.
+        const was = oldRow.get(row.id, vsId);   // LAB_ROUND_V1
         const res = upd.run(p);
-        if (res.changes) { updated++; continue; }
+        if (res.changes) {
+          if (was && was.source === 'analyzer' && was.raw_value == null && row.value != null
+              && String(was.value) !== row.value && String(roundHalfUp2(was.value)) === row.value.trim()) keepRaw.run(was.value, row.id);
+          updated++;
+          continue;
+        }
         // Строки с таким id в этой услуге нет — заводим новую, а не молча
         // теряем введённое лаборантом значение.
       }

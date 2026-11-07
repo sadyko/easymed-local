@@ -38,6 +38,8 @@ import { printBarcodeLabel, printBarcodeLabels } from './lab-barcode.js';   // L
 import { tubeGroups, tubeDeviceMap, tubeLabelStamp, shortTestName, BARE_ID_MAX_AGE_DAYS } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 — этикетка на пробирку (чистые правила); срок голого номера — ревью U11, L6
 import { dayLabels } from './lab-tube.js';   // LAB_ONE_BARCODE_V1 — один номер на день визита
 import { dayLabelLine } from '../../shared/lab-day-label.js';   // LAB_ONE_BARCODE_V1 — скан этикетки дня в поиске
+import { labShownValue } from '../../shared/lab-round.js';   // LAB_ROUND_V1 — значение прибора до 2 знаков
+import { loadRoundSetting as loadLabRound } from './lab-round-card.js';   // LAB_ROUND_V1 — настройка клиники (не прочиталась — включена)
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels, hasActorRole } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=panelsv15';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now · LIS_REAL_ANALYZERS_V1 — штамп · LAB_PANEL_DEDUP_V1 — v15
@@ -163,6 +165,7 @@ const state = {
     // загрузке очереди: настройка приезжает из главного филиала со справочником,
     // и филиал должен подхватить её без перезапуска приложения.
     labScope: LAB_SCOPE_DEFAULT,
+    labRound: true,   // LAB_ROUND_V1 — «Округлять результаты анализаторов до 2 знаков» (doc_settings.lab_round_analyzer)
 };
 
 // LAB_ONE_CLINIC_V1 — две стороны переключателя в шапке очереди.
@@ -671,6 +674,8 @@ async function fetchAndPaint() {
     // строки (у выборки есть .limit — отсев после неё выбросил бы часть работы).
     state.labScope = await loadLabScope();
     if (token !== lastFetchToken) return;
+    state.labRound = await loadLabRound();   // LAB_ROUND_V1 — как показывать значения прибора
+    if (token !== lastFetchToken) return;
     paintScopeSwitch();
 
     try {
@@ -781,12 +786,16 @@ async function fetchAndPaint() {
             for (let i = 0; i < vsIds.length; i += CHUNK) chunks.push(vsIds.slice(i, i + CHUNK));
             const parts = await Promise.all(chunks.map((ids) =>
                 supabase.from('lab_results')
-                    .select('id,visit_service_id,parameter,value,unit,flag,notes,entered_at')
+                    .select('id,visit_service_id,parameter,value,unit,flag,notes,entered_at,source,raw_value')   // source, raw_value: LAB_ROUND_V1
                     .in('visit_service_id', ids).limit(100000)));
             if (token !== lastFetchToken) return;
             for (const part of parts) {
                 if (!part || part.error) resultsFailed = true;
                 for (const r of ((part && part.data) || [])) {
+                    // LAB_ROUND_V1 — значение прибора так, как велит настройка клиники: включена —
+                    // до 2 знаков, выключена — полное (raw_value). Ручной ввод — как набран.
+                    // Все экраны лаборатории (карточка, лист, проверка, бланк) читают отсюда.
+                    r.value = labShownValue(r, state.labRound);
                     (resultsByVs[r.visit_service_id] = resultsByVs[r.visit_service_id] || []).push(r);
                 }
             }

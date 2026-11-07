@@ -1340,7 +1340,8 @@ test('D5: −268435455 не пишется в бланк и не стирает 
     'OBX|1|NM|Glu-G|Glucose (GOD-POD Method)|5.123400|mmol/L|-|N|||F||5.123400|20260528122129|||0||',
     'OBX|2|NM|UREA|Urea|-268435455.000000||-|N|||F||0.000000|19000101000000|||0||',
   ]), '10.0.0.42', 1), 'AA');
-  assert.deepEqual(blank(db), { 'Глюкоза': '5.1234', 'Мочевина': '6.2' }, '«нет результата» не легло и черновик не стёрло');
+  // LAB_ROUND_V1 — значение прибора до 2 знаков (настройка клиники, по умолчанию включена).
+  assert.deepEqual(blank(db), { 'Глюкоза': '5.12', 'Мочевина': '6.2' }, '«нет результата» не легло и черновик не стёрло');
   const urea = db.prepare("SELECT * FROM lab_results WHERE parameter = 'Мочевина'").get();
   assert.deepEqual([urea.numeric_value, urea.source], [6.2, 'manual']);
   const m = message(db);
@@ -1754,7 +1755,8 @@ test('D3: прибор сообщения неизвестен (строку у�
   const db = visitClinic({ services: THYROID, orders: [[301, 'ТТГ'], [302, 'Т4 свободный']] });
   ingestMessage(db, CLT('LAB-000301', [['TSH', '2.350000'], ['FT4', '15.200000']]), '10.0.0.43', null);
   // Без строки прибора кадр CL (MSH-3/4 пусты) читается общим проводом — нули не срезаны.
-  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.350000' }, {}]);
+  // LAB_ROUND_V1 — «2.350000» в бланке до 2 знаков (полное — в raw_value).
+  assert.deepEqual([formOf(db, 301), formOf(db, 302)], [{ 'ТТГ': '2.35' }, {}]);
   assert.match(message(db).detail, /не использованы: FT4/);
   db.close();
 });

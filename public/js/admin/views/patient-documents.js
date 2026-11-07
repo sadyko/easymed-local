@@ -40,6 +40,7 @@ import { printableSheet } from './doc-settings.js?v=noqr1';
 import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, matchResultsToAnalytes,
          namedRangeCell, ageYears, labAccession, labIssueDates, labMaxDate } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';
+import { labShownValue, labRoundOn } from '../../shared/lab-round.js';   // LAB_ROUND_V1
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_PANEL_DEDUP_V1 — одно правило «лабораторная услуга» с очередью лаборатории
 
 const refs = { container: null, onNavigate: null, bodyEl: null, docsWrap: null };
@@ -526,7 +527,10 @@ export async function fetchLabByVisit(visitIds) {
                     // того же показателя, а не к разным показателям панели,
                     // поэтому ключ — пара (услуга, параметр).
                     const latestByVsParam = new Map();
+                    // LAB_ROUND_V1 — значение прибора по настройке клиники (как в лаборатории): до 2 знаков или полностью.
+                    const roundOn = labRoundOn((await getBrand()).lab_round_analyzer);
                     for (const r of (lrData || [])) {
+                        r.value = labShownValue(r, roundOn);
                         const key = r.visit_service_id + '\0' + (r.parameter || '');
                         const prev = latestByVsParam.get(key);
                         if (!prev || r.id > prev.id) latestByVsParam.set(key, r);

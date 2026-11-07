@@ -46,6 +46,7 @@ import { refundedWithoutResult } from '../services/domain/pay-releases.js';   //
 import { specimenKey } from '../../public/js/shared/specimen-key.js';   // LAB_TUBE_LABEL_V1 — одно правило материала для приёма и этикетки
 import { BARE_ID_MAX_AGE_DAYS } from '../../public/js/shared/lab-label-age.js';   // LAB_TUBE_LABEL_V1 (ревью U11, L6) — один срок голого номера для приёма и этикетки
 import { dayLabelLine, dayLabelValue } from '../../public/js/shared/lab-day-label.js';   // LAB_ONE_BARCODE_V1 — один номер на день визита
+import { roundHalfUp2, labRoundOn } from '../../public/js/shared/lab-round.js';   // LAB_ROUND_V1 — до 2 знаков, полное — в raw_value
 
 /**
  * LIS_REAL_ANALYZERS_V1_SAMPLE — номер пробы БЕЗ «LAB-» (голые цифры)
@@ -341,7 +342,7 @@ function seriesMembers(db, { orderId, deviceId, perInstrument, profileKey, profi
   for (const r of rows) {
     if (BEFORE_BLANK.test(String(r.detail || ''))) continue;
     const head = mshOf(r.raw);
-    const { observations } = readResult(r.raw, wireFor({ profile, facility: head.facility, app: head.app }));
+    const { observations } = readObs(db, r.raw, wireFor({ profile, facility: head.facility, app: head.app }));   // LAB_ROUND_V1
     if (!planObservations(observations, analytes).fills.length) continue;
     members.push({ id: r.id, observations });
   }
@@ -566,7 +567,7 @@ function deliveredValue(db, row, analyte) {
   const dev = row.device_id ? db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(row.device_id) : null;
   const head = mshOf(row.raw);
   const wire = wireFor({ profile: dev ? getProfile(dev.profile) : null, facility: head.facility, app: head.app });
-  const fill = planObservations(readResult(row.raw, wire).observations, [{ ...analyte, device_code_confirmed: 1 }]).fills[0];
+  const fill = planObservations(readObs(db, row.raw, wire).observations, [{ ...analyte, device_code_confirmed: 1 }]).fills[0];   // LAB_ROUND_V1 — как записано в бланк
   return fill ? fill.obs.value : null;
 }
 
@@ -654,6 +655,35 @@ const isReleased = (db, orderId) => db.prepare('SELECT COUNT(*) c FROM lab_resul
 
 /** Значение строки прибора так, как оно ложится в бланк: у числа одна десятичная запятая — точка (D0). */
 const valueOf = (obs) => (obs.valueType === 'NM' ? decimalPoint(obs.value) : obs.value);
+
+// ═══ LAB_ROUND_V1 (решение владельца 2026-11-07, п. 6) — ДО 2 ЗНАКОВ ══════════
+// Настройка клиники «Округлять результаты анализаторов до 2 знаков»
+// (doc_settings.lab_round_analyzer, мигр. 279; по умолчанию включена). Числа
+// прибора (OBX-2 NM) округляются половиной вверх СРАЗУ после чтения провода —
+// до сопоставления: тогда «повтор», «повторная передача», серия, «Привязать»
+// (снять своё значение) и закрытие устаревших строк лотка сравнивают с бланком
+// ровно то, что в него пишется. Полное значение — obs.rawValue, в бланк — в
+// raw_value. Флаг и numeric_value — по округлённому (то, что видит врач).
+// Текст и число с ≤ 2 знаками — как есть. Не прочиталась настройка — включено.
+function labRoundSetting(db) {
+  try {
+    const r = db.prepare('SELECT lab_round_analyzer AS v FROM doc_settings WHERE id = 1').get();
+    return labRoundOn(r ? r.v : 1);
+  } catch {
+    return true;
+  }
+}
+function roundObs(o) {
+  if (!o || o.valueType !== 'NM') return o;
+  const dp = decimalPoint(o.value);
+  if (!/^-?\d+\.\d{3,}$/.test(dp)) return o;
+  return { ...o, value: roundHalfUp2(dp), rawValue: dp };
+}
+/** readResult провода, числа — по настройке округления клиники (LAB_ROUND_V1). */
+function readObs(db, raw, wire) {
+  const r = readResult(raw, wire);
+  return labRoundSetting(db) ? { ...r, observations: r.observations.map(roundObs) } : r;
+}
 
 /**
  * Значения прибора в бланке заказа: имя строки бланка → значение. fresh —
@@ -1089,16 +1119,16 @@ function writeFills(db, orderId, fills) {
     if (existing) {
       // D6 — машина побеждает в ЧЕРНОВИКЕ (выданное отсеяно выше).
       db.prepare(`UPDATE lab_results SET value = ?, numeric_value = ?, unit = ?, reference_range = ?,
-                    ref_low = ?, ref_high = ?, flag = ?, source = 'analyzer',
+                    ref_low = ?, ref_high = ?, flag = ?, source = 'analyzer', raw_value = ?,
                     entered_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
                   WHERE id = ?`)
-        .run(value, num, a.unit || '', range, a.ref_low, a.ref_high, flag, existing.id);   // LIS_VENDOR_EXACT_V1 (D0) — value с точкой
+        .run(value, num, a.unit || '', range, a.ref_low, a.ref_high, flag, obs.rawValue || null, existing.id);   // LIS_VENDOR_EXACT_V1 (D0) — value с точкой; LAB_ROUND_V1 — raw_value
       ids.push(existing.id);
     } else {
       ids.push(db.prepare(`INSERT INTO lab_results
-                    (visit_service_id, parameter, value, numeric_value, unit, reference_range, ref_low, ref_high, flag, entered_by, source)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'analyzer')`)
-        .run(orderId, a.name, value, num, a.unit || '', range, a.ref_low, a.ref_high, flag).lastInsertRowid);   // LIS_VENDOR_EXACT_V1 (D0)
+                    (visit_service_id, parameter, value, numeric_value, unit, reference_range, ref_low, ref_high, flag, entered_by, source, raw_value)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'analyzer', ?)`)
+        .run(orderId, a.name, value, num, a.unit || '', range, a.ref_low, a.ref_high, flag, obs.rawValue || null).lastInsertRowid);   // LIS_VENDOR_EXACT_V1 (D0); LAB_ROUND_V1 — полное значение прибора
     }
   }
   return ids;
@@ -1161,7 +1191,8 @@ function closeStaleRows(db, { sides, k, deviceId, msgId, profile }) {
     const head = mshOf(r.raw);
     const w = wireFor({ profile, facility: head.facility, app: head.app });
     if (readEnvelope(r.raw, w).service) continue;
-    const t = planTube(readResult(r.raw, w).observations, order.map((s, i) => ({ analytes: s.analytes, tier: i === 0 ? 0 : (s.closed ? 2 : 1) })));
+    const t = planTube(readObs(db, r.raw, w).observations,   // LAB_ROUND_V1
+                       order.map((s, i) => ({ analytes: s.analytes, tier: i === 0 ? 0 : (s.closed ? 2 : 1) })));
     const fills = t.plans.flatMap((p, i) => p.fills.map((f) => ({ orderId: order[i].order.id, f })));
     if (t.ambiguous.length || !fills.length) continue;
     const same = fills.every(({ orderId, f }) => {
@@ -1252,7 +1283,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       detail: SERVICE_DETAIL[env.kind] || SERVICE_DETAIL.query, kind: env.kind, resolved: true });
     return 'AA';
   }
-  const { obrs, observations } = readResult(raw, wire);
+  const { obrs, observations } = readObs(db, raw, wire);   // LAB_ROUND_V1 — числа прибора до 2 знаков, если так настроила клиника
 
   // Номер пробы — из поля провода: LAB- в OBR-2 или OBR-3 бьёт всё, иначе
   // основное поле, иначе запасное (wire.js pickSampleId). Номер, названный

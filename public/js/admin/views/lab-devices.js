@@ -25,6 +25,7 @@ import { splitTray, groupReceiving, staleSeriesRest, seriesPendingRest, isLocalI
 import { peerNotes, hasUnreadableText } from './lab-devices-lists.js?v=lists4';
 // LIS_PROXY_V1 — карточка «LIS Proxy».
 import { mountProxyCard } from './lab-proxy-card.js';
+import { mountRoundCard } from './lab-round-card.js';   // LAB_ROUND_V1 — «Округлять результаты анализаторов до 2 знаков»
 import { isProxyDevice, proxyAddress, bothPaths, groupProxyTray } from './lab-devices-lists.js?v=lists4';   // LIS_PROXY_V1
 import { PROXY_MODELS } from '../../shared/lisproxy-models.js';   // LIS_PROXY_V1
 
@@ -146,6 +147,7 @@ export async function mountLabDevices(container) {
     const trayCard = h('div', { class: 'card' });
     const guideCard = h('div', { class: 'card' });
     const proxyCard = h('div', { class: 'card' });   // LIS_PROXY_V1 — карточка «LIS Proxy»
+    const roundCard = h('div', { class: 'card' });   // LAB_ROUND_V1 — карточка «Результаты анализаторов»
     // LAB_COMPACT_V1 — владелец: «too much noise and text … fix the listings».
     // Карточки — сеткой с общим зазором: приборы во всю ширину, «последние
     // результаты» и «необработанные» рядом, инструкция — свёрнутой внизу.
@@ -154,6 +156,7 @@ export async function mountLabDevices(container) {
     const grid = h('div', { class: 'ld' });
     grid.appendChild(devicesCard);
     grid.appendChild(proxyCard);   // LIS_PROXY_V1
+    grid.appendChild(roundCard);   // LAB_ROUND_V1
     grid.appendChild(formCard);
     const pair = h('div', { class: 'ld-grid' });
     pair.appendChild(liveCard);
@@ -164,6 +167,7 @@ export async function mountLabDevices(container) {
     paintGuide();
     // LIS_PROXY_V1 — карточка читает свою настройку сама (lis_proxy_get) и в живой опрос не входит.
     mountProxyCard(proxyCard).catch(() => {});
+    mountRoundCard(roundCard).catch(() => {});   // LAB_ROUND_V1 — читает свою настройку сама
 
     // ---------- загрузка ----------
 

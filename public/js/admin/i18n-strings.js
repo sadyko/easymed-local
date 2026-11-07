@@ -13543,5 +13543,11 @@ export const STRINGS = {
   // /DOCTOR_REFERRAL_DESK_V1
   // ═══ S3 3.22.0 — лаборатория (LAB_ONE_BARCODE_V1, LAB_ROUND_V1, LAB_MATRIX_PANEL_V1, LAB_DOC_SPLIT_V1, LAB_PRINT_PICK_V1, LAB_PRINT_SPACING_V1, PRINT_PERFORMER_V1) ═══
   "Один номер на все пробирки дня визита — этикетка на каждую пробирку": {"en":"One number for all tubes of the visit day — a label for each tube","ru":"Один номер на все пробирки дня визита — этикетка на каждую пробирку","uz":"Tashrif kunining barcha probirkalari uchun bitta raqam — har bir probirkaga etiketka"},   // LAB_ONE_BARCODE_V1
+  "Результаты анализаторов": {"en":"Analyzer results","ru":"Результаты анализаторов","uz":"Analizator natijalari"},   // LAB_ROUND_V1
+  "Округлять результаты анализаторов до 2 знаков": {"en":"Round analyzer results to 2 decimal places","ru":"Округлять результаты анализаторов до 2 знаков","uz":"Analizator natijalarini 2 xonagacha yaxlitlash"},   // LAB_ROUND_V1
+  "Например, 4.152122 → 4.15; половина — вверх: 4.155 → 4.16. Снимите галочку, чтобы видеть полные значения прибора. Значения, набранные руками, не меняются.": {"en":"For example, 4.152122 → 4.15; a half rounds up: 4.155 → 4.16. Untick to see the analyzer’s full values. Values typed by hand are not changed.","ru":"Например, 4.152122 → 4.15; половина — вверх: 4.155 → 4.16. Снимите галочку, чтобы видеть полные значения прибора. Значения, набранные руками, не меняются.","uz":"Masalan, 4.152122 → 4.15; yarmi yuqoriga: 4.155 → 4.16. Analizatorning to‘liq qiymatlarini ko‘rish uchun belgini olib tashlang. Qo‘lda kiritilgan qiymatlar o‘zgarmaydi."},   // LAB_ROUND_V1
+  "Изменить может администратор.": {"en":"Only an administrator can change this.","ru":"Изменить может администратор.","uz":"Faqat administrator o‘zgartira oladi."},   // LAB_ROUND_V1
+  "Результаты анализаторов — до 2 знаков": {"en":"Analyzer results — to 2 decimal places","ru":"Результаты анализаторов — до 2 знаков","uz":"Analizator natijalari — 2 xonagacha"},   // LAB_ROUND_V1
+  "Результаты анализаторов — полностью": {"en":"Analyzer results — full values","ru":"Результаты анализаторов — полностью","uz":"Analizator natijalari — to‘liq"},   // LAB_ROUND_V1
   // /S3 3.22.0
 };
