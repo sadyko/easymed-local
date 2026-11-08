@@ -36,7 +36,7 @@
 - Create `server/services/ai/worker.js` (+ test) — one job end to end; scheduler.
 - Create `server/services/ai/hooks.js` (+ test) — what the pollers call.
 - Create `server/services/rpc/ai.js` (+ test) — `ai_settings_get`, `ai_settings_save`, `ai_flags`.
-- Modify `server/services/telegram/chat.js` — `sendChatMessage` marks AI messages `kind='ai'`.
+- Modify `server/services/telegram/chat.js` — `sendChatMessage` marks AI messages `by_ai = 1` (via `logMessage` in `flow.js`; `kind` has a CHECK and stays `'text'`).
 - Modify `server/services/telegram/flow.js` — hand free text to the AI when the switch is on.
 - Modify `server/services/telegram/deeplinks.js` — export `ensureSource`.
 - Modify `server/services/meta/inbox-poller.js` — enqueue new incoming DMs and comments.
@@ -194,6 +194,7 @@ test('NNN AI_CHAT_V1: таблицы ИИ-помощника и отметки �
     /UNIQUE/, 'одно входящее сообщение — одна задача');
   db.prepare("INSERT INTO ai_chat_flags (channel, chat_key, reason, flagged_at) VALUES ('telegram','1','medical','2026-01-01T00:00:00Z')").run();
   const cols = (t) => db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
+  assert.ok(cols('telegram_messages').includes('by_ai'));
   assert.ok(cols('meta_messages').includes('by_ai'));
   assert.ok(cols('meta_comments').includes('by_ai'));
   db.close();
@@ -258,7 +259,10 @@ CREATE TABLE ai_chat_flags (
 );
 
 -- Сообщения и ответы, отправленные ИИ, видны в истории с пометкой «ИИ».
--- Telegram отмечает их telegram_messages.kind = 'ai' (колонка уже есть).
+-- Отметка — колонка by_ai во всех трёх таблицах. У telegram_messages.kind есть
+-- CHECK ('text','document','system','broadcast', миграция 062): новое значение
+-- 'ai' потребовало бы пересборки таблицы, а ответ ИИ — это обычный текст.
+ALTER TABLE telegram_messages ADD COLUMN by_ai INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE meta_messages ADD COLUMN by_ai INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE meta_comments ADD COLUMN by_ai INTEGER NOT NULL DEFAULT 0;
 ```
@@ -551,10 +555,10 @@ function fresh() { const db = openDb(':memory:'); migrate(db); return db; }
 
 test('Telegram: сообщение оператора за 12 часов — ИИ молчит; бот и ИИ не в счёт', () => {
   const db = fresh();
-  const put = (dir, sentBy, kind, at) => db.prepare(
-    'INSERT INTO telegram_messages (chat_id, direction, text, kind, sent_by, created_at) VALUES (?,?,?,?,?,?)').run('100', dir, 'x', kind, sentBy, iso(at));
+  const put = (dir, sentBy, kind, at, byAi = 0) => db.prepare(
+    'INSERT INTO telegram_messages (chat_id, direction, text, kind, sent_by, created_at, by_ai) VALUES (?,?,?,?,?,?,?)').run('100', dir, 'x', kind, sentBy, iso(at), byAi);
   put('out', null, 'system', NOW - 1000);
-  put('out', null, 'ai', NOW - 1000);
+  put('out', null, 'text', NOW - 1000, 1);   // ответ ИИ
   assert.equal(operatorRecent(db, 'telegram', '100', NOW), false);
   put('out', 5, 'text', NOW - OPERATOR_QUIET_MS + 60_000);
   assert.equal(operatorRecent(db, 'telegram', '100', NOW), true);
@@ -596,7 +600,7 @@ Run: `node --test server/services/ai/guards.test.js`
 // AI_CHAT_V1 — когда ИИ должен молчать.
 //
 // «Оператор» — сообщение с sent_by (учётная запись сотрудника). Служебные
-// ответы бота (kind 'system') и ответы ИИ (kind 'ai', by_ai = 1) идут без
+// ответы бота (kind 'system') и ответы ИИ (by_ai = 1) идут без
 // sent_by и оператором не считаются.
 export const OPERATOR_QUIET_MS = 12 * 3600_000;
 const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -780,7 +784,7 @@ const LIMIT = 20;
 export function conversationFor(db, channel, chatKey) {
   if (channel === 'telegram') {
     const link = db.prepare('SELECT tg_name, phone FROM telegram_links WHERE chat_id = ? AND revoked_at IS NULL ORDER BY id DESC LIMIT 1').get(String(chatKey));
-    const rows = db.prepare(`SELECT direction, text, kind FROM telegram_messages WHERE chat_id = ? AND kind IN ('text','ai') AND text <> ''
+    const rows = db.prepare(`SELECT direction, text, kind FROM telegram_messages WHERE chat_id = ? AND kind = 'text' AND text <> ''
                              ORDER BY id DESC LIMIT ?`).all(String(chatKey), LIMIT).reverse();
     return {
       patientName: (link && link.tg_name) || '', linkPhone: (link && link.phone) || '', postText: '',
@@ -1017,15 +1021,18 @@ git commit -m "ИИ-помощник: заявка из Telegram по прави
 To `server/services/telegram/chat.test.js` (reuse that file's existing `seed`/fake-fetch helpers — read the top of the file first and use the same names it uses):
 
 ```js
-test('AI_CHAT_V1: ответ ИИ записан kind=ai, без подписи сотрудника', async () => {
+test('AI_CHAT_V1: ответ ИИ записан by_ai = 1 (kind text), без подписи сотрудника', async () => {
   const db = openDb(':memory:'); migrate(db);
   db.prepare(`INSERT INTO telegram_links (chat_id, phone, tg_user_id, tg_name, last_seen_at) VALUES ('100','+998901112233','u','A','2026-11-08T10:00:00Z')`).run();
   const sent = [];
   const deps = { fetchImpl: async (url, opts) => { sent.push(JSON.parse(opts.body)); return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 5 } }) }; } };
   await sendChatMessage(db, 'x', '100', 'Здравствуйте!', { ai: true }, deps);
   assert.equal(sent[0].text, 'Здравствуйте!');
-  const m = db.prepare("SELECT kind, sent_by FROM telegram_messages WHERE direction = 'out'").get();
-  assert.deepEqual(m, { kind: 'ai', sent_by: null });
+  const m = db.prepare("SELECT kind, sent_by, by_ai FROM telegram_messages WHERE direction = 'out'").get();
+  assert.deepEqual(m, { kind: 'text', sent_by: null, by_ai: 1 });
+  // Ответ сотрудника — by_ai = 0.
+  await sendChatMessage(db, 'x', '100', 'Я оператор', { id: 5, full_name: 'Оператор' }, deps);
+  assert.equal(db.prepare("SELECT by_ai FROM telegram_messages WHERE direction = 'out' ORDER BY id DESC LIMIT 1").get().by_ai, 0);
 });
 ```
 
@@ -1048,14 +1055,33 @@ Run: `node --test server/services/telegram/chat.test.js server/services/meta/inb
 
 - [ ] **Step 3: Implement**
 
+`server/services/telegram/flow.js` — `logMessage` gets an optional `byAi` flag (default `false`) and writes it to the `by_ai` column (migration 284). `telegram_messages.kind` has a CHECK (`'text','document','system','broadcast'`, migration 062), so the AI marker is a column, not a new kind:
+
+```js
+export function logMessage(db, chatId, direction, text,
+                           { kind = 'text', sentBy = null, tgMessageId = '', filePath = '', byAi = false } = {}) {
+  if (!text) return;
+  try {
+    db.prepare(
+      `INSERT INTO telegram_messages (chat_id, direction, text, kind, sent_by, tg_message_id, file_path, by_ai)
+       VALUES (?,?,?,?,?,?,?,?)`)
+      .run(String(chatId), direction, String(text).slice(0, 4000), kind, sentBy,
+           String(tgMessageId || ''), String(filePath || ''), byAi ? 1 : 0);
+  } catch (e) {
+    // (keep the existing comment and console.warn exactly as they are)
+    console.warn('[telegram] message log:', e.message);
+  }
+}
+```
+
 `server/services/telegram/chat.js`, in `sendChatMessage` replace the `logMessage(...)` call with:
 
 ```js
   // AI_CHAT_V1 — ответ ИИ-помощника: без подписи сотрудника (её нет), в ленте
-  // kind 'ai', чтобы операторы видели, что ответил ИИ, и чтобы guards.js не
-  // считал его оператором.
+  // by_ai = 1, чтобы операторы видели, что ответил ИИ, и чтобы guards.js не
+  // считал его оператором (у ответа ИИ нет sent_by).
   logMessage(db, chatId, 'out', body + signature, {
-    kind: user && user.ai ? 'ai' : 'text', sentBy: (user && user.id) || null, tgMessageId: res && res.message_id,
+    kind: 'text', sentBy: (user && user.id) || null, tgMessageId: res && res.message_id, byAi: !!(user && user.ai),
   });
 ```
 
@@ -1731,7 +1757,7 @@ export async function renderAiAssistant(container) {
 `public/js/admin.js`: add `import { renderAiAssistant } from './admin/views/ai-assistant.js';   // AI_CHAT_V1`; in `PARENT_OF` add `'commerce-ai': 'commerce',   // AI_CHAT_V1`; in the crumbs map add `'commerce-ai': ['Insights', 'Settings', 'ИИ-помощник'],   // AI_CHAT_V1` (same shape as the `commerce-push` entry); in `renderViewInner` add `case 'commerce-ai': return void await renderAiAssistant(viewRoot);   // AI_CHAT_V1`.
 
 - [ ] **Step 5: Chat screens** — in `public/js/admin/views/telegram-chat.js`:
-- in `bubble(m)`, for outgoing messages with `m.kind === 'ai'`, append under the bubble a small note `h('div', { class: 'ai-msg-note' }, tr('ИИ'))`;
+- in `bubble(m)`, for outgoing messages with `m.by_ai` (the `chatMessages` query selects `m.*`, so the column arrives by itself), append under the bubble a small note `h('div', { class: 'ai-msg-note' }, tr('ИИ'))`;
 - after the list loads, call `supabase.rpc('ai_flags', {})` and keep `state.aiFlags = new Set(data.filter((f) => f.channel === 'telegram').map((f) => f.chat_key))`; in the chat row, when `state.aiFlags.has(String(c.chat_id))`, add `h('span', { class: 'ai-flag' }, tr('Нужен оператор'))`;
 - in the `PageHead` `right` slot add a status chip filled from `ai_settings_get` when the user can view it: `h('span', { class: 'ai-state ' + (on ? 'is-on' : 'is-off') }, tr(on ? 'Отвечает ИИ' : 'Отвечают операторы'))` (fetch once on render; on error show nothing).
 
