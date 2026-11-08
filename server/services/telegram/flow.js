@@ -174,14 +174,14 @@ function rateExceeded(db, chatId) {
 // анализы?»), и до появления раздела «Чат с пациентами» эти сообщения никто в
 // клинике не видел — бот их молча проглатывал.
 export function logMessage(db, chatId, direction, text,
-                           { kind = 'text', sentBy = null, tgMessageId = '', filePath = '' } = {}) {
+                           { kind = 'text', sentBy = null, tgMessageId = '', filePath = '', byAi = false } = {}) {
   if (!text) return;
   try {
     db.prepare(
-      `INSERT INTO telegram_messages (chat_id, direction, text, kind, sent_by, tg_message_id, file_path)
-       VALUES (?,?,?,?,?,?,?)`)
+      `INSERT INTO telegram_messages (chat_id, direction, text, kind, sent_by, tg_message_id, file_path, by_ai)
+       VALUES (?,?,?,?,?,?,?,?)`)
       .run(String(chatId), direction, String(text).slice(0, 4000), kind, sentBy,
-           String(tgMessageId || ''), String(filePath || ''));
+           String(tgMessageId || ''), String(filePath || ''), byAi ? 1 : 0);   // AI_CHAT_V1 — by_ai: ответ ИИ-помощника (kind остаётся 'text': у него CHECK, мигр. 062)
   } catch (e) {
     // Переписка — журнал, а не сама работа: если запись не удалась, бот обязан
     // продолжить отвечать пациенту.

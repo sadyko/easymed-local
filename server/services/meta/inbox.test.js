@@ -15,7 +15,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
 import { storeConnection } from './settings.js';
-import { setInboxEnabled, readInboxState, listConversations, listCommentThreads, unreadCounts } from './inbox-store.js';
+import { setInboxEnabled, readInboxState, listConversations, listCommentThreads, unreadCounts, conversationMessages } from './inbox-store.js';
 import { pollInboxOnce } from './inbox-poller.js';
 import {
   metaInboxState, metaInboxToggle, metaInboxConversations, metaInboxMessages, metaInboxSend,
@@ -280,4 +280,11 @@ test('В CRM из формы: имя, комментарий сотрудник�
   const c = db.prepare("SELECT id FROM meta_comments WHERE comment_id = 'c_ad'").get();
   const rc = metaInboxToCrm(db, { kind: 'comment', id: c.id }, admin);
   assert.equal(db.prepare('SELECT assigned_to FROM crm_requests WHERE id = ?').get(rc.crm_request_id).assigned_to, null);
+});
+
+test('AI_CHAT_V1: переписка отдаёт by_ai', () => {
+  const db = openDb(':memory:'); migrate(db);
+  const conv = db.prepare(`INSERT INTO meta_conversations (platform, conv_id, peer_id, peer_name, updated_time) VALUES ('messenger','c1','p1','A','2026-11-08T11:00:00Z')`).run().lastInsertRowid;
+  db.prepare(`INSERT INTO meta_messages (conversation_id, msg_id, direction, text, created_at, by_ai) VALUES (?, 'm1', 'out', 'hi', '2026-11-08T11:00:00Z', 1)`).run(conv);
+  assert.equal(conversationMessages(db, conv)[0].by_ai, 1);
 });
