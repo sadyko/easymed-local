@@ -58,7 +58,7 @@ import { prepareConsultTypeSave } from '../../shared/consultation-price.js';   /
 // карточку связи зданий он монтирует над списком, как раньше.
 import { renderBranchesEditor } from './branches-editor.js';
 import { discountServicesField, discountRatesField, ratesSummaryText } from './discount-service-picker.js';   // DISCOUNT_V2 — «Только на эти услуги»: окно выбора   // BRANCH_PROFILE_V1 · DISCOUNT_RATES_V1 — ставки по услугам
-import { promoRatesApply } from '../discount-rates.js';   // ревью S5 L-2
+import { promoRatesApply, promoRatesEditable, hasRates } from '../discount-rates.js';   // ревью S5 L-2; DISCOUNT_RATES_NEW_FORM_V1
 import { specialtyOptions, canonicalSpecialty } from '../specialties.js?v=spec2';   // REFERRAL_SPECIALTY_SELECT_V1 — тот же список, что у «Сотрудников»
 
 let state = { section: null, readOnly: false };   // null = hub; else one of LOOKUP_CONFIG's keys
@@ -754,9 +754,16 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
             { key: 'amount', label: 'Сумма скидки (промокод) или номинал карты / сертификата, UZS', type: 'number' },
             { key: 'valid_from', label: 'Действует с (пусто — сразу)', type: 'date' },
             { key: 'valid_until', label: 'Действует по (пусто — бессрочно)', type: 'date' },
-            { key: 'category_id', label: 'Только для группы пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name' },
+            { key: 'category_id', label: 'Только для группы пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name',
+              noneLabel: '— все —' },   // DISCOUNT_RATES_NEW_FORM_V1 — пусто здесь значит «для всех»
             { key: 'service_ids', label: 'Только на эти услуги (ничего не отмечено — на весь счёт)', type: 'services', full: true, ratesKey: 'discount_rates',   // ratesKey: DISCOUNT_RATES_V1 — ставки в том же окне
-              ratesWhen: (v) => promoRatesApply(v) },   // ревью S5 L-2 — ставки видны только у промокода с процентом
+              // ревью S5 L-2 — ставок нет у карты и промокода суммой. DISCOUNT_RATES_NEW_FORM_V1 (3.22.0,
+              // владелец 2026-11-08) — в новом окне они видны и до процента: прежде их прятал пустой
+              // «Скидка, %», и владелец решил, что новой скидке ставки не задать.
+              ratesWhen: (v) => promoRatesEditable(v),
+              // Ставки без процента счёт не видит (promoRatesApply) — молча их не пишем, а называем, что указать.
+              ratesProblem: (v, rates) => (hasRates(rates) && !promoRatesApply(v)
+                  ? 'Ставки по услугам действуют вместе с процентом скидки: укажите «Скидка, %» — его получат остальные услуги.' : null) },
             // DISCOUNT_V2 (решение владельца 2026-11-07, п. 5) — снята: доля врача — от цены до скидки (клиника берёт скидку на себя).
             { key: 'reduces_doctor_share', label: 'Скидка уменьшает долю врача', type: 'checkbox', checkedValue: 1, uncheckedValue: 0, default: 1, full: true },
             { key: 'note', label: 'Примечание', type: 'text', full: true },
@@ -856,7 +863,8 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
         fields: [
             { key: 'name', label: 'Название правила (например, «Самоплательщик 3%»)', type: 'text', required: true },
             { key: 'percent', label: 'Кэшбэк, % (возвращается пациенту)', type: 'number' },
-            { key: 'category_id', label: 'Группа пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name' },
+            { key: 'category_id', label: 'Группа пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name',
+              noneLabel: '— все —' },   // DISCOUNT_RATES_NEW_FORM_V1 — пусто здесь значит «для всех»
         ],
     },
 
@@ -1615,6 +1623,10 @@ async function renderEditor(container, key) {
         // отказал бы всей записи (db/write-grant.js).
         const fields = grantCols ? cfg.fields.filter(f => grantCols.includes(f.key)) : cfg.fields;
         const isEdit = !!row;
+        // DISCOUNT_RATES_NEW_FORM_V1 (3.22.0, владелец 2026-11-08) — пустой выбор ссылки был
+        // английским «— none —» посреди русского окна (снимок «Скидки и сертификаты»). Теперь —
+        // на языке экрана; поле, у которого пусто значит «для всех», называет это само (noneLabel).
+        const fkNoneLabel = (f) => tr(f.noneLabel || '— не выбрано —');
         const overlay = h('div', { class: 'modal' });
         const close = () => overlay.remove();
         overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
@@ -1660,8 +1672,8 @@ async function renderEditor(container, key) {
                 control = phoneInput(f.key, f.placeholder || '+998 90 961 00 04', { value: row ? row[f.key] : '' });
             } else if (f.type === 'fk') {
                 // Options populated after mount by loadFkOptions() (see below) — starts
-                // with just the "— none —" placeholder so the modal can render immediately.
-                control = h('select', null, h('option', { value: '' }, '— none —'));
+                // with just the empty-choice placeholder so the modal can render immediately.
+                control = h('select', null, h('option', { value: '' }, fkNoneLabel(f)));   // DISCOUNT_RATES_NEW_FORM_V1
                 fkFields.push(f);
             } else if (f.type === 'suggest') {
                 // SUGGEST_FIELD_V1 — a plain TEXT column with a <datalist> of the
@@ -1758,7 +1770,7 @@ async function renderEditor(container, key) {
                     const list = (data && data[f.optionsRpc.list]) || [];
                     const current = row && row[f.key] != null ? Number(row[f.key]) : null;
                     clear(select);
-                    select.appendChild(h('option', { value: '' }, list.length || !f.emptyHint ? '— none —' : f.emptyHint));
+                    select.appendChild(h('option', { value: '' }, list.length || !f.emptyHint ? fkNoneLabel(f) : f.emptyHint));   // DISCOUNT_RATES_NEW_FORM_V1
                     for (const opt of list) {
                         select.appendChild(h('option', { value: String(opt.id), selected: current !== null && current === Number(opt.id) }, opt[f.optionsRpc.label]));
                     }
@@ -1774,7 +1786,7 @@ async function renderEditor(container, key) {
                 if (error) throw error;
                 const current = row && row[f.key] != null ? Number(row[f.key]) : null;
                 clear(select);
-                select.appendChild(h('option', { value: '' }, '— none —'));
+                select.appendChild(h('option', { value: '' }, fkNoneLabel(f)));   // DISCOUNT_RATES_NEW_FORM_V1
                 for (const opt of (data || [])) {
                     select.appendChild(h('option', { value: String(opt.id), selected: current !== null && current === Number(opt.id) }, opt[f.fkLabel]));
                 }
@@ -1822,6 +1834,10 @@ async function renderEditor(container, key) {
                 if (f.type === 'services') {
                     payload[f.key] = controls[f.key].value;
                     if (f.ratesKey && controls[f.key].rates !== undefined) payload[f.ratesKey] = controls[f.key].rates;   // DISCOUNT_RATES_V1
+                    // DISCOUNT_RATES_NEW_FORM_V1 — ставки, которых счёт не увидит (промокод без процента), не пишем
+                    // молча: окно остаётся открытым и называет, что указать.
+                    const ratesWhy = f.ratesProblem ? f.ratesProblem(formValues(), controls[f.key].rates) : null;
+                    if (ratesWhy) { toast(tr(ratesWhy), 'fail'); return; }
                     continue;
                 }
                 if (f.type === 'discount_rates') { payload[f.key] = controls[f.key].value; continue; }   // DISCOUNT_RATES_V1

@@ -132,6 +132,20 @@ export function promoRatesApply(row) {
     return (Number(row.percent) || 0) > 0;
 }
 
+/**
+ * DISCOUNT_RATES_NEW_FORM_V1 (3.22.0, владелец 2026-11-08) — показывать ли ставки по услугам
+ * в окне скидки. Новое окно открывается с пустым «Скидка, %», и promoRatesApply прятал ставки
+ * так же, как у карты и промокода суммой: владелец видел строку-подсказку вместо пяти групп и
+ * решил, что новой скидке ставки не задать. Окно прячет их только там, где они не нужны
+ * никогда: подарочная карта, сертификат и промокод СУММОЙ (сумма есть, процента нет). Процент
+ * ещё не набран — ставки видны; записать их без процента окно не даст (promoRatesApply — правило
+ * счёта, оно не менялось).
+ */
+export function promoRatesEditable(row) {
+    if (!row || ['gift_card', 'certificate'].includes(row.kind)) return false;
+    return !((Number(row.amount) || 0) > 0 && !((Number(row.percent) || 0) > 0));
+}
+
 /** Источник ставок промокода: { pct, rates, scope } или null (сумма, карта, без ставок). */
 export function promoRateSource(row) {
     if (!promoRatesApply(row)) return null;

@@ -208,10 +208,13 @@ export function discountServicesField(initialIds, emptyHint = 'Ничего не
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Поле «%» ставки: пусто — процент скидки по умолчанию. */
+// DISCOUNT_RATES_NEW_FORM_V1 (3.22.0, владелец 2026-11-08) — подсказка «по умолч.» в поле шириной
+// 84 px обрезалась до «по умо…» (снимок «Скидки и сертификаты»; у группы пациентов — то же поле).
+// В поле — «—», смысл — во всплывающей подписи.
 function rateInput(r, level, key, onChange, attrs = {}) {
   const k = String(key);
   const cur = r[level][k];
-  const inp = h('input', { type: 'number', min: '0', max: '100', step: 'any', placeholder: tr('по умолч.'), value: cur !== undefined ? String(cur) : '',
+  const inp = h('input', { type: 'number', min: '0', max: '100', step: 'any', placeholder: '—', title: 'Пусто — процент скидки по умолчанию', value: cur !== undefined ? String(cur) : '',
     'aria-label': tr('Скидка, %'), ...attrs, style: { width: '84px', textAlign: 'right' } });
   inp.value = cur !== undefined ? String(cur) : '';
   inp.addEventListener('input', () => {
