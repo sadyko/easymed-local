@@ -122,6 +122,7 @@ globalThis.fetch = async (url, init = {}) => {
 
 const { renderMetaChat } = await import('../views/meta-chat.js');
 const { setFullAccess } = await import('../permissions.js');
+const { __resetAiFlagsCache } = await import('../ai-chat-marks.js');   // AI_CHAT_V1 — отметки кэшируются на 30 с
 
 // Раздел экран помнит между заходами (state модуля) — тест начинает с Messenger.
 async function mount() {
@@ -274,6 +275,7 @@ test('META_INBOX_STATS_V1: «Статистика» в шапке открыва
 // «Ответил(-а)», чип состояния ИИ в шапке. Сбой ai_flags — без пометок.
 test('AI_CHAT_V1: «Нужен оператор», «ИИ» и чип в шапке', async () => {
   setFullAccess('Администратор'); canReply = true; windowOpen = true;
+  __resetAiFlagsCache();
   const saved = { msgs: RESP.meta_inbox_messages, thread: RESP.meta_inbox_comment_thread };
   RESP.ai_flags = () => ([
     { channel: 'meta_dm', chat_key: '11', reason: 'medical', flagged_at: NOW },
@@ -313,6 +315,7 @@ test('AI_CHAT_V1: «Нужен оператор», «ИИ» и чип в шап�
 
     // Сбой ai_flags — список на месте, пометок нет.
     RESP.ai_flags = () => { throw new Error('boom'); };
+    __resetAiFlagsCache();
     const root2 = await mount();
     assert.deepStrictEqual(rows(root2), ['11']);
     assert.ok(!textOf(root2).includes('Нужен оператор'));

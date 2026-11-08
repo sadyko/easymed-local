@@ -91,6 +91,7 @@ globalThis.fetch = async (url, init = {}) => {
 
 const { renderAiAssistant } = await import('../views/ai-assistant.js');
 const chat = await import('../views/telegram-chat.js');
+const marks = await import('../ai-chat-marks.js');
 
 const switchOf = (root) => walk(root).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'checkbox');
 
@@ -155,6 +156,7 @@ test('AI_CHAT_V1: сбой загрузки — сказано, а не пуст
 // --- «Чат с пациентами» ------------------------------------------------------
 const NOW = new Date().toISOString();
 function tgServer({ flags }) {
+  marks.__resetAiFlagsCache();   // отметки кэшируются на 30 с — каждый тест со своими
   rpcAnswers.telegram_chats_list = { chats: [
     { chat_id: '777', tg_name: 'Пациент Один', tg_username: '', patients: [], unread: 1, last_text: 'Сколько стоит?', last_direction: 'in', last_at: NOW, folders: [], blocked: false },
     { chat_id: '888', tg_name: 'Пациент Два', tg_username: '', patients: [], unread: 0, last_text: 'Спасибо', last_direction: 'out', last_at: NOW, folders: [], blocked: false },
@@ -202,4 +204,33 @@ test('AI_CHAT_V1: Telegram — ai_flags отказал, список рисуе�
   assert.equal(byAttr(root, 'data-ai-flag').length, 0);
   const chip = byAttr(root, 'data-ai-status')[0];
   assert.ok(!chip || !chip.textContent, 'отказ ai_settings_get — чип пуст и скрыт');
+});
+
+test('AI_CHAT_V1: ai_flags — не чаще раза в 30 секунд; сбой не кэшируется', async () => {
+  marks.__resetAiFlagsCache();
+  rpcAnswers.ai_flags = [{ channel: 'telegram', chat_key: '1', reason: 'medical', flagged_at: NOW }];
+  const count = () => rpcCalls.filter((c) => c[0] === 'ai_flags').length;
+  const before = count();
+  const t0 = 1_000_000;
+  assert.deepEqual([...await marks.loadAiFlags('telegram', t0)], ['telegram:1']);
+  assert.deepEqual([...await marks.loadAiFlags('telegram', t0 + 15_000)], ['telegram:1'], 'из кэша');
+  assert.deepEqual([...await marks.loadAiFlags('meta_dm', t0 + 15_000)], [], 'кэш фильтруется по каналу');
+  assert.equal(count() - before, 1, 'за 30 с — один запрос');
+  rpcAnswers.ai_flags = [];
+  assert.deepEqual([...await marks.loadAiFlags('telegram', t0 + 30_000)], [], 'через 30 с — свежий ответ');
+  assert.equal(count() - before, 2);
+
+  marks.__resetAiFlagsCache();
+  rpcAnswers.ai_flags = { __status: 500, __error: { message: 'boom' } };
+  assert.equal((await marks.loadAiFlags('telegram', t0)).size, 0);
+  assert.equal((await marks.loadAiFlags('telegram', t0 + 1)).size, 0);
+  assert.equal(count() - before, 4, 'отказ не кэшируется — спрашиваем снова');
+});
+
+test('AI_CHAT_V1: переключатель — role=switch и подпись', async () => {
+  rpcAnswers.ai_settings_get = { enabled: false, blocked: '', has_module: true, facts: { services: 1, doctors: 1 } };
+  const c = mk('div'); await renderAiAssistant(c); await tick();
+  const sw = switchOf(c);
+  assert.equal(sw.attrs.role, 'switch');
+  assert.equal(sw.attrs['aria-label'], 'ИИ отвечает в чатах');
 });

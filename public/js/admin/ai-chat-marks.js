@@ -27,13 +27,24 @@ export function aiStatusChip() {
 }
 
 // Отметки «Нужен оператор» одного канала ('telegram' | 'meta_dm' |
-// 'meta_comment') — множество chat_key строками. Один запрос на загрузку
-// списка; отказ, сбой или ответ не той формы — пустое множество, без падения.
-export async function loadAiFlags(channels) {
+// 'meta_comment') — множество 'channel:chat_key'. Список чатов перечитывается
+// каждые 10–15 секунд, а отметка — событие редкое: ответ сервера держим 30 с,
+// чаще не спрашиваем. Отказ, сбой или ответ не той формы — пустое множество,
+// без падения, и в кэш не попадает: следующая загрузка спросит снова.
+export const AI_FLAGS_TTL_MS = 30000;
+let flagsCache = null;   // { at, data } — последний удачный ответ ai_flags
+
+/** Для тестов: забыть закэшированные отметки. */
+export function __resetAiFlagsCache() { flagsCache = null; }
+
+export async function loadAiFlags(channels, now = Date.now()) {
     const want = new Set([].concat(channels));
+    const pick = (data) => new Set(data.filter((f) => f && want.has(f.channel)).map((f) => f.channel + ':' + String(f.chat_key)));
+    if (flagsCache && now - flagsCache.at < AI_FLAGS_TTL_MS) return pick(flagsCache.data);
     try {
         const { data, error } = await supabase.rpc('ai_flags', {});
         if (error || !Array.isArray(data)) return new Set();
-        return new Set(data.filter((f) => f && want.has(f.channel)).map((f) => f.channel + ':' + String(f.chat_key)));
+        flagsCache = { at: now, data };
+        return pick(data);
     } catch (_) { return new Set(); }
 }

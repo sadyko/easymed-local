@@ -40,7 +40,7 @@ export async function renderAiAssistant(container) {
         clear(body);
         const on = !!(state && state.enabled);
         const hasModule = !!(state && state.has_module);
-        const sw = h('input', { type: 'checkbox', class: 'ai-switch-input', checked: on, disabled: !canEdit || (!hasModule && !on), 'aria-label': 'ИИ отвечает в чатах' });
+        const sw = h('input', { type: 'checkbox', class: 'ai-switch-input', checked: on, disabled: !canEdit || (!hasModule && !on), role: 'switch', 'aria-label': tr('ИИ отвечает в чатах') });
         sw.addEventListener('change', () => save(sw.checked));
         body.appendChild(h('label', { class: 'ai-switch' }, sw,
             h('span', { class: 'ai-switch-text' },

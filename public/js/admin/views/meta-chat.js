@@ -340,7 +340,7 @@ function convRow(c) {
     const tags = [];
     if (c.crm_request_id) tags.push(tag('Лид'));
     if (!c.window_open && c.last_in_at) tags.push(tag('окно 24 ч закрыто', 'warn'));
-    if (state.aiFlags.has('meta_dm:' + String(c.id))) tags.push(tag('Нужен оператор', 'warn'));   // AI_CHAT_V1
+    if (state.aiFlags.has('meta_dm:' + String(c.id))) tags.push(aiFlagTag());   // AI_CHAT_V1
     return listRow({ id: c.id, name: convName(c), platform: c.platform, text: c.last_text, at: c.last_at, unread: c.unread, mine: c.last_direction === 'out', tags });
 }
 
@@ -352,7 +352,7 @@ function threadRow(t) {
     if (t.crm_request_id) tags.push(tag('Лид'));
     // AI_CHAT_V1 — t.id — строка КОРНЯ нитки (inbox-store listCommentThreads),
     // ровно тот chat_key, под которым ИИ отмечает нитку (A2).
-    if (state.aiFlags.has('meta_comment:' + String(t.id))) tags.push(tag('Нужен оператор', 'warn'));
+    if (state.aiFlags.has('meta_comment:' + String(t.id))) tags.push(aiFlagTag());
     return listRow({ id: t.id, name: t.author_name || tr('Пользователь'), platform: t.platform, text: t.text, at: t.last_at, unread: t.unread, mine: t.last_is_page, tags });
 }
 
@@ -706,6 +706,12 @@ function paintCommentSide(t) {
 // ---------------------------------------------------------------------------
 // Мелочи
 // ---------------------------------------------------------------------------
+// AI_CHAT_V1 — «Нужен оператор» тем же янтарным .ai-flag, что в чате Telegram:
+// одна отметка — один цвет на обоих экранах.
+function aiFlagTag() {
+    return h('span', { class: 'mc-tag ai-flag' }, tr('Нужен оператор'));
+}
+
 function tag(text, tone = 'plain') {
     return h('span', { class: 'mc-tag mc-tag-' + tone }, text);
 }
