@@ -10913,6 +10913,7 @@ export const STRINGS = {
   "Включать опрос может администратор или роль с правом «Meta: заявки из рекламы — Изменение».": {"en":"Checking can be turned on by an administrator or a role with “Meta: ad leads — Edit”.","ru":"Включать опрос может администратор или роль с правом «Meta: заявки из рекламы — Изменение».","uz":"Tekshirishni administrator yoki «Meta: reklamadan so‘rovlar — Tahrirlash» huquqli rol yoqa oladi."},   // META_INBOX_V1
   "Переписка не найдена.": {"en":"Conversation not found.","ru":"Переписка не найдена.","uz":"Yozishma topilmadi."},   // META_INBOX_V1
   "Комментарий не найден.": {"en":"Comment not found.","ru":"Комментарий не найден.","uz":"Izoh topilmadi."},   // META_INBOX_V1
+  "Обновление экранов недоступно.": {"en":"Live screen updates are unavailable.","ru":"Обновление экранов недоступно.","uz":"Ekranlarni yangilash mavjud emas."},   // LIVE_REFRESH_V1 (3.22.0) — /api/live без шины (503)
   // Тексты отказов и ошибок, которые сервер (server/**) присылает экрану: tr()
   // переводит их целиком. Шаблоны с {дырками} — ключи для собранных фраз: сервер
   // присылает template + params (server/services/server-message.js), экран
