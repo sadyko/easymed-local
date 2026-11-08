@@ -148,6 +148,7 @@ export function metaInboxCommentThread(db, args, user) {
       id: c.id, author_name: c.author_name, text: c.text, created_at: c.created_at, is_page: !!c.is_page,
       is_hidden: !!c.is_hidden, is_root: c.comment_id === t.key, private_replied_at: c.private_replied_at,
       crm_request_id: c.crm_request_id, sent_by_name: names.get(c.sent_by) || '',
+      by_ai: !!c.by_ai,   // AI_CHAT_V1 — публичный ответ ИИ помечен «ИИ» в нитке
     })),
   };
 }

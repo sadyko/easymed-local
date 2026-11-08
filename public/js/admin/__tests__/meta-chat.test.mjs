@@ -268,3 +268,56 @@ test('META_INBOX_STATS_V1: «Статистика» в шапке открыва
   await tick();
   assert.ok(textOf(toggle()).includes('Статистика'), 'вернулись к переписке');
 });
+
+// AI_CHAT_V1 — пометки ИИ-помощника: «Нужен оператор» у переписки и нитки из
+// ai_flags (нитка — по id строки КОРНЯ, A2), «ИИ» у ответа ИИ вместо
+// «Ответил(-а)», чип состояния ИИ в шапке. Сбой ai_flags — без пометок.
+test('AI_CHAT_V1: «Нужен оператор», «ИИ» и чип в шапке', async () => {
+  setFullAccess('Администратор'); canReply = true; windowOpen = true;
+  const saved = { msgs: RESP.meta_inbox_messages, thread: RESP.meta_inbox_comment_thread };
+  RESP.ai_flags = () => ([
+    { channel: 'meta_dm', chat_key: '11', reason: 'medical', flagged_at: NOW },
+    { channel: 'meta_comment', chat_key: '21', reason: 'unknown', flagged_at: NOW },
+    { channel: 'telegram', chat_key: '12', reason: 'medical', flagged_at: NOW },   // чужой канал — не переписка 12
+  ]);
+  RESP.ai_settings_get = () => ({ enabled: false, blocked: '', has_module: true, facts: { services: 3, doctors: 1 } });
+  RESP.meta_inbox_messages = () => ({ ...saved.msgs(), messages: [
+    { id: 1, direction: 'in', text: 'Сколько стоит УЗИ?', attachments: [], created_at: NOW, status: 'ok', error: '', error_text: '', sent_by_name: '', by_ai: 0 },
+    { id: 2, direction: 'out', text: 'УЗИ — 150 000 сум.', attachments: [], created_at: NOW, status: 'ok', error: '', error_text: '', sent_by_name: '', by_ai: 1 },
+  ] });
+  RESP.meta_inbox_comment_thread = () => ({ ...saved.thread(), comments: [
+    ...saved.thread().comments,
+    { id: 22, author_name: 'Клиника', text: 'Да, работаем. Написали вам в личку.', created_at: NOW, is_page: true, is_hidden: false, is_root: false, private_replied_at: null, crm_request_id: null, sent_by_name: '', by_ai: true },
+  ] });
+  try {
+    const root = await mount();
+    byAttr(root, 'data-meta-tab', 'all')[0].click();
+    await tick();
+    const rowEl = (id) => byAttr(root, 'data-meta-row', id)[0];
+    assert.ok(textOf(rowEl('11')).includes('Нужен оператор'));
+    assert.ok(!textOf(rowEl('12')).includes('Нужен оператор'), 'отметка Telegram не попадает в Instagram');
+    const chip = byAttr(root, 'data-ai-status')[0];
+    assert.ok(chip, 'чип состояния ИИ');
+    assert.equal(chip.textContent, 'Отвечают операторы');
+
+    rowEl('11').click();
+    await tick();
+    assert.equal(byAttr(root, 'data-ai-msg').length, 1, '«ИИ» — только у ответа ИИ');
+
+    byAttr(root, 'data-meta-tab', 'fb_comments')[0].click();
+    await tick();
+    assert.ok(textOf(rowEl('21')).includes('Нужен оператор'), 'нитка — по id корня');
+    rowEl('21').click();
+    await tick();
+    assert.equal(byAttr(root, 'data-ai-msg').length, 1, 'публичный ответ ИИ в нитке помечен «ИИ»');
+
+    // Сбой ai_flags — список на месте, пометок нет.
+    RESP.ai_flags = () => { throw new Error('boom'); };
+    const root2 = await mount();
+    assert.deepStrictEqual(rows(root2), ['11']);
+    assert.ok(!textOf(root2).includes('Нужен оператор'));
+  } finally {
+    delete RESP.ai_flags; delete RESP.ai_settings_get;
+    RESP.meta_inbox_messages = saved.msgs; RESP.meta_inbox_comment_thread = saved.thread;
+  }
+});

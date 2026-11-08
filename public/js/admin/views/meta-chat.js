@@ -33,6 +33,7 @@ import { h, Icon, clear, toast, PageHead, initials, avColor, field } from '../ui
 import { tr, trf } from '../i18n.js';
 import { canEdit } from '../permissions.js';
 import { renderMetaChatStats } from './meta-chat-stats.js?v=ms1';   // META_INBOX_STATS_V1
+import { aiStatusChip, loadAiFlags } from '../ai-chat-marks.js';   // AI_CHAT_V1 — чип «Отвечает ИИ» и «Нужен оператор»
 
 // Вкладки сверху. Комментарии разделены по каналу, как во «Входящих» Meta.
 export const TABS = [
@@ -54,6 +55,9 @@ const state = {
     commentMode: 'public',     // 'public' | 'private'
     sending: false,
     view: 'inbox',             // 'inbox' | 'stats' — META_INBOX_STATS_V1
+    // AI_CHAT_V1 — «Нужен оператор»: 'meta_dm:<id переписки>' и
+    // 'meta_comment:<id строки корня нитки>' (ключ нитки — её корень, A2).
+    aiFlags: new Set(),
 };
 let refs = {};
 let poll = null;
@@ -81,6 +85,9 @@ export async function renderMetaChat(container) {
     container.appendChild(root);
     refs = { root };
     refs.headRight = h('div', { class: 'mc-head-right' });
+    // AI_CHAT_V1 — чип ИИ запрашивается один раз на заход; paintHead() чистит
+    // шапку каждые 15 секунд и ставит этот же узел обратно первым.
+    refs.aiChip = aiStatusChip();
     root.appendChild(PageHead({
         title: 'Чат Facebook и Instagram',
         subtitle: 'Сообщения страницы клиники в Messenger и Instagram и комментарии под постами и рекламой. Ответ уходит от имени клиники.',
@@ -144,6 +151,7 @@ function paintHead() {
     const st = state.info;
     clear(refs.headRight);
     clear(refs.banner);
+    if (refs.aiChip) refs.headRight.appendChild(refs.aiChip);   // AI_CHAT_V1
     if (!st) return;
 
     // META_INBOX_STATS_V1 — «Статистика» первой кнопкой шапки; на странице
@@ -258,10 +266,12 @@ async function loadList() {
     try {
         // Оба списка разом: у каждой вкладки сверху свой счётчик, и переход
         // между вкладками не ждёт сервера.
-        const [conv, com] = await Promise.all([rpc('meta_inbox_conversations'), rpc('meta_inbox_comments')]);
+        // AI_CHAT_V1 — отметки ИИ тем же заходом; loadAiFlags не бросает.
+        const [conv, com, flags] = await Promise.all([rpc('meta_inbox_conversations'), rpc('meta_inbox_comments'), loadAiFlags(['meta_dm', 'meta_comment'])]);
         state.conversations = conv.conversations || [];
         state.threads = com.threads || [];
         state.unread = com.unread || conv.unread;
+        state.aiFlags = flags;
     } catch (e) {
         clear(refs.list);
         refs.list.appendChild(h('div', { class: 'empty', style: { padding: '24px' } }, e.message));
@@ -330,6 +340,7 @@ function convRow(c) {
     const tags = [];
     if (c.crm_request_id) tags.push(tag('Лид'));
     if (!c.window_open && c.last_in_at) tags.push(tag('окно 24 ч закрыто', 'warn'));
+    if (state.aiFlags.has('meta_dm:' + String(c.id))) tags.push(tag('Нужен оператор', 'warn'));   // AI_CHAT_V1
     return listRow({ id: c.id, name: convName(c), platform: c.platform, text: c.last_text, at: c.last_at, unread: c.unread, mine: c.last_direction === 'out', tags });
 }
 
@@ -339,6 +350,9 @@ function threadRow(t) {
     if (t.answered) tags.push(tag('отвечено', 'ok'));
     if (t.is_hidden) tags.push(tag('скрыт', 'warn'));
     if (t.crm_request_id) tags.push(tag('Лид'));
+    // AI_CHAT_V1 — t.id — строка КОРНЯ нитки (inbox-store listCommentThreads),
+    // ровно тот chat_key, под которым ИИ отмечает нитку (A2).
+    if (state.aiFlags.has('meta_comment:' + String(t.id))) tags.push(tag('Нужен оператор', 'warn'));
     return listRow({ id: t.id, name: t.author_name || tr('Пользователь'), platform: t.platform, text: t.text, at: t.last_at, unread: t.unread, mine: t.last_is_page, tags });
 }
 
@@ -446,9 +460,11 @@ function messageBubble(m, c, lastOfRun) {
             h('div', { class: 'mc-bubble' + (out ? ' is-out mc-out-' + c.platform : '') + (failed ? ' is-failed' : ''), title: fullStamp(m.created_at) },
                 m.text ? h('div', { class: 'mc-bubble-text' }, m.text) : null,
                 ...att),
-            out && (m.sent_by_name || failed) ? h('div', { class: 'mc-msg-note' },
-                m.sent_by_name ? trf('Ответил(-а): {name}', { name: m.sent_by_name }) : '',
-                failed ? h('span', { class: 'mc-failed' }, (m.sent_by_name ? ' · ' : ''), tr('не доставлено')) : null,
+            // AI_CHAT_V1 — у ответа ИИ вместо «Ответил(-а)» — «ИИ»: сотрудника нет.
+            out && (m.by_ai || m.sent_by_name || failed) ? h('div', { class: 'mc-msg-note' },
+                m.by_ai ? h('span', { class: 'ai-msg-note', 'data-ai-msg': '' }, tr('ИИ'))
+                    : m.sent_by_name ? trf('Ответил(-а): {name}', { name: m.sent_by_name }) : '',
+                failed ? h('span', { class: 'mc-failed' }, ((m.by_ai || m.sent_by_name) ? ' · ' : ''), tr('не доставлено')) : null,
                 failed && m.error_text ? h('div', { class: 'mc-failed-text' }, tr(m.error_text)) : null) : null));
 }
 
@@ -513,6 +529,7 @@ function commentCard(c) {
             h('div', { class: 'mc-comment-meta' },
                 h('span', null, fullStamp(c.created_at)),
                 c.is_page && c.sent_by_name ? h('span', null, trf('Ответил(-а): {name}', { name: c.sent_by_name })) : null,
+                c.is_page && c.by_ai ? h('span', { class: 'ai-msg-note', 'data-ai-msg': '' }, tr('ИИ')) : null,   // AI_CHAT_V1
                 c.is_hidden ? tag('скрыт', 'warn') : null,
                 c.private_replied_at ? tag('ответ в личку отправлен', 'ok') : null,
                 ...actions)));
