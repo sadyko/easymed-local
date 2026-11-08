@@ -40,6 +40,10 @@ export function slowLog(db, { thresholdMs, log = console.warn } = {}) {
         const finish = () => {
             if (done) return;
             done = true;
+            // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — поток изменений (/api/live)
+            // открыт, пока открыта вкладка: он не «медленный», и каждое его закрытие
+            // засоряло бы журнал и счётчик slow_request.
+            if (req.__liveStream) return;
             const ms = Number(process.hrtime.bigint() - started) / 1e6;
             if (ms < limit) return;
             log('[slow] ' + ms.toFixed(0) + 'ms  ' + req.method + ' ' + label(req)

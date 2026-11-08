@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getRpc } from '../services/rpc/index.js';
-import { isReadOnlyRpc, isAlwaysAllowedRpc, lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
+import { isReadOnlyRpc, isAlwaysAllowedRpc, isReadRpc, lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1 · isReadRpc: LIVE_REFRESH_V1
+import { liveBusFor } from '../services/live/bus.js';   // LIVE_REFRESH_V1 — «записано» для живых экранов
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody, fillTemplate } from '../services/server-message.js';   // V3120_I18N
 import { dispatchRpc } from '../services/report-pool.js';   // V3120_PERF — тяжёлые отчёты в пуле потоков
@@ -45,10 +46,35 @@ export function rpcRoutes(db) {
       const drift = actAsRecheck(db, req);
       if (drift) return res.status(drift.status).json({ error: drift.error });
     }
+    // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — ПОСЛЕ УСПЕШНОГО RPC, КОТОРЫЙ ПИСАЛ,
+    // шина получает его имя и таблицы, которые поймала база. Рамка — только на
+    // синхронную часть вызова (а это почти все RPC: better-sqlite3 синхронен): после
+    // первого await в неё вклинились бы чужие запросы. Запись после await у асинхронных
+    // RPC база ловит и так, вне рамки. «Писал» — по total_changes() соединения, а не
+    // по списку: половина RPC вне READ_ONLY_RPCS — чистое чтение (queue_board,
+    // procedures_list, …), и иначе каждый опрос экрана будил бы все экраны клиники.
+    // Отказ (исключение) — пойманное выбрасывается: откатившаяся запись не будит никого.
+    const live = liveBusFor(db);
+    const liveScope = live ? live.open() : null;
+    const changesBefore = live ? live.totalChanges(db) : 0;
+    let liveHeld = null;
+    let pending;
     try {
       // V3120_PERF — отчёт (POOLED_RPCS) считается в потоке отчётов, если пул
-      // включён при запуске; иначе — здесь же, как прежде.
-      const data = await dispatchRpc(db, req.params.name, handler, req.body || {}, req.user);
+      // включён при запуске; иначе — здесь же, как прежде. dispatchRpc — async:
+      // синхронный обработчик выполняется целиком уже здесь, до первого await.
+      pending = dispatchRpc(db, req.params.name, handler, req.body || {}, req.user);
+    } finally {
+      liveHeld = liveScope ? liveScope.end() : null;   // LIVE_REFRESH_V1 — синхронная часть позади
+    }
+    try {
+      const data = await pending;
+      if (live) {   // LIVE_REFRESH_V1 — успех: событие, если RPC что-то записал
+        try {
+          const wrote = !isReadRpc(req.params.name) && live.totalChanges(db) !== changesBefore;
+          if (wrote || (liveHeld && liveHeld.size)) live.bump({ tables: [...(liveHeld || [])], rpc: wrote ? [req.params.name] : [] });
+        } catch { /* событие — не повод испортить ответ */ }
+      }
       return res.json({ data });
     } catch (e) {
       // V3120_I18N — нарушение ограничения SQLite внутри обработчика — это

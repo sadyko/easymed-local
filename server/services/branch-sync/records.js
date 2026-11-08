@@ -31,6 +31,7 @@ import { crmVisitStatus, crmInvoiceEvidence, crmServiceEvidence, EVIDENCE_SERVIC
 // PATIENT_MERGE_BRANCHES_V1 — объединение карт, сделанное в другом здании,
 // исполняется здесь тем же кодом, что и объединение на месте.
 import { applyMergeHere, applyContactPatch } from '../rpc/patient-merge.js';
+import { liveBump } from '../live/bus.js';   // LIVE_REFRESH_V1 — принятое из другого здания будит экраны
 
 // sync_seen (миграция 084): метка последнего ПРИНЯТОГО изменения каждой
 // колонки. Местная правка метки не имеет — до отправки её защищает журнал.
@@ -380,6 +381,17 @@ export function applyBatch(db, records, {
   // писатель, SQLite отвечает SQLITE_BUSY_SNAPSHOT и откатывает уже сделанную
   // работу вместо того, чтобы подождать. BEGIN IMMEDIATE берёт запись сразу.
   run.immediate(Array.isArray(records) ? records : []);
+  // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — порция ПРИНЯТА (транзакция выше
+  // закоммичена; откат бросил бы до этой строки): экраны этого здания узнают, в какие
+  // таблицы пришло. Строки, освобождённые из ожидания, и пересчёты внутри приёма база
+  // называет сама (временные триггеры шины). Шины нет (тесты модуля) — ничего.
+  if (stats.applied || stats.released || stats.deleted || stats.merged) {
+    const tables = new Set();
+    for (const rec of Array.isArray(records) ? records : []) {
+      if (rec && typeof rec.tbl === 'string' && SHIPPED[rec.tbl]) tables.add(rec.tbl);
+    }
+    liveBump(db, { tables: [...tables] });
+  }
   return stats;
 }
 
