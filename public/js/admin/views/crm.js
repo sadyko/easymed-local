@@ -2360,17 +2360,30 @@ async function paint() {
                         // Пишутся в базу обычным сохранением карточки.
                         const carried = (prefill && Array.isArray(prefill.addServices)) ? prefill.addServices : [];
                         let added = 0;
+                        // CRM_DUP_CARRY_OPEN_V1 (3.22.0, ревью) — «уже стоит в карточке» —
+                        // это только ЖДУЩАЯ строка: не выполнена, без даты и без записи.
+                        // Выполненная в прошлом месяце или записанная на другой день ЭКГ —
+                        // прежний заказ, а пациент звонит за новым; раньше новый пропадал
+                        // молча, и оператор, видя «ЭКГ» в карточке, считал его принятым.
+                        // О пропущенном окно теперь говорит по имени.
+                        const waiting = (p) => (p.status == null || p.status === 'pending') && !p.visit_id && !p.date;
+                        const skipped = [];
                         for (const c of carried) {
-                            const dup = picked.some((p) => (c.service_id != null && String(p.service_id) === String(c.service_id))
-                                || (c.service_id == null && c.consultation_type_id != null && String(p.consultation_type_id) === String(c.consultation_type_id)));
-                            if (dup) continue;
+                            const dup = picked.some((p) => waiting(p) && ((c.service_id != null && String(p.service_id) === String(c.service_id))
+                                || (c.service_id == null && c.consultation_type_id != null && String(p.consultation_type_id) === String(c.consultation_type_id))));
+                            if (dup) { skipped.push(c.name); continue; }
                             picked.push({ service_id: c.service_id, ...(c.consultation_type_id != null ? { consultation_type_id: c.consultation_type_id } : {}),
                                 name: c.name, price: c.price, date: '' });
                             added += 1;
                         }
                         linesLoaded = true;
                         syncPrimary(); paintPicked();
-                        if (added) toast(trf('Добавлено услуг в карточку: {n} — нажмите «Сохранить» или «Записать на дату».', { n: added }), 'ok');
+                        // CRM_DUP_CARRY_OPEN_V1 — одно сообщение на обе части: тост один, второй затёр бы первый.
+                        const carryMsg = [
+                            added ? trf('Добавлено услуг в карточку: {n} — нажмите «Сохранить» или «Записать на дату».', { n: added }) : '',
+                            skipped.length ? trf('Уже ждут в карточке, второй раз не добавлены: {names}', { names: skipped.join(', ') }) : '',
+                        ].filter(Boolean).join(' ');
+                        if (carryMsg) toast(carryMsg, added ? 'ok' : 'info');
                         prefillBookedTimes();   // CRM_REAL_BOOKING_V1 — час уже записанной строки
                     });
             } else if (svcChosen) {
@@ -2512,6 +2525,10 @@ async function paint() {
         // ОДНОМУ номеру (ревью W2-M5): запоминается его ключ, а не «да вообще».
         // Номер поменяли — спрашиваем заново.
         let dupAckKey = null;
+        // CRM_DUP_SHEET_V1 (3.22.0, ревью) — закрыть открытое окно «Даты приёма»
+        // (null — окна нет). Оно отдельный ребёнок document.body, и close()
+        // карточки его не снимает.
+        let shutSheet = null;
         // true — сохранять; false — человек выбрал «Отмена» или «Открыть».
         async function confirmNoDuplicate(phone, selfId) {
             // CRM_DUP_SAME_PATIENT_V1 — ответ «создать всё равно» принадлежит паре
@@ -2519,6 +2536,12 @@ async function paint() {
             const digits = phoneKey(phone);
             const key = digits ? digits + '|' + (linkedPatient && linkedPatient.id != null ? linkedPatient.id : '') : '';
             if (!key || key === dupAckKey) return true;
+            // CRM_DUP_SHEET_V1 — ответ, данный по одному НОМЕРУ (пациент ещё не был
+            // выбран), покрывает и любого пациента, выбранного потом: оператор уже
+            // видел ВСЕ карточки номера, а заявки пациента — их часть. Иначе после
+            // «Создать всё равно» и выбора карты в окне регистрации вопрос
+            // всплывал второй раз — уже поверх окна «Даты приёма».
+            if (dupAckKey === digits + '|') return true;
             // CRM_DUP_SAME_PATIENT_V1 — выбран пациент из базы: спрашиваем о ЕГО
             // заявках, а не обо всех на этом номере (у семьи один телефон).
             const { data: dups, error: dupErr } = await supabase.rpc('crm_leads_by_phone',
@@ -2547,6 +2570,12 @@ async function paint() {
                     .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
                     .eq('id', choice.open).maybeSingle();
                 if (exErr || !existing) { toast(exErr ? exErr.message : 'Заявка не найдена.', 'fail'); return false; }
+                // CRM_DUP_SHEET_V1 — вопрос мог прийти из-под окна «Даты приёма»:
+                // закрываем и его. Оставленное, оно висело поверх открытой карточки,
+                // и его «Сохранить и записать» снова звало persist() этой, уже
+                // закрытой карточки — «Создать всё равно» заводило вторую и
+                // записывало дни дважды.
+                if (shutSheet) shutSheet();
                 close();
                 requestModal(existing, choice.add && carry.length ? { addServices: carry } : null);
                 return false;
@@ -2877,7 +2906,10 @@ async function paint() {
         // проставлять одно и то же в пяти полях — работа на пустом месте.
         function openScheduleSheet() {
             const ov = h('div', { class: 'modal', style: { zIndex: '160' } });
-            const shut = () => ov.remove();
+            // CRM_DUP_SHEET_V1 — ручка для confirmNoDuplicate: «Открыть…» в вопросе о
+            // дубле закрывает и это окно, а не только карточку под ним.
+            const shut = () => { ov.remove(); if (shutSheet === shut) shutSheet = null; };
+            shutSheet = shut;
             ov.appendChild(h('div', { class: 'modal-backdrop', onclick: shut }));
 
             // CRM_REAL_BOOKING_V1 — дни, запись на которые не удалась. Окно

@@ -4837,6 +4837,7 @@ export const STRINGS = {
   // CRM_DUP_ADD_SERVICES_V1 — окно дубля: открыть существующую карточку и перенести в неё набранные услуги
   "Открыть и добавить услуги": {"en":"Open and add services","ru":"Открыть и добавить услуги","uz":"Ochish va xizmatlarni qo'shish"},
   "Добавлено услуг в карточку: {n} — нажмите «Сохранить» или «Записать на дату».": {"en":"Services added to the card: {n} — press «Save» or «Book for a date».","ru":"Добавлено услуг в карточку: {n} — нажмите «Сохранить» или «Записать на дату».","uz":"Kartaga qo'shilgan xizmatlar: {n} — «Saqlash» yoki «Sanaga yozish» tugmasini bosing."},
+  "Уже ждут в карточке, второй раз не добавлены: {names}": {"en":"Already waiting in the card, not added twice: {names}","ru":"Уже ждут в карточке, второй раз не добавлены: {names}","uz":"Kartada allaqachon kutilmoqda, ikkinchi marta qo'shilmadi: {names}"},
   "остаток {n} {unit}": {"en":"{n} {unit} in stock","ru":"остаток {n} {unit}","uz":"qoldiq {n} {unit}"},
   "Выдано: {n}. Ошибки — {fails}": {"en":"Dispensed: {n}. Errors — {fails}","ru":"Выдано: {n}. Ошибки — {fails}","uz":"Berildi: {n}. Xatolar — {fails}"},
   "Выдано позиций: {n} — в счёт пациента.": {"en":"Items dispensed: {n} — billed to the patient.","ru":"Выдано позиций: {n} — в счёт пациента.","uz":"Berilgan pozitsiyalar: {n} — bemor hisobiga."},

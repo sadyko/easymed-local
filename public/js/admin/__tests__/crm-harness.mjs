@@ -202,6 +202,8 @@ globalThis.fetch = async (url, opts) => {
     // CRM_DUP_ADD_SERVICES_V1 — каталог услуг и строки заявки, когда тесту они нужны.
     if (body.table === 'services' && body.op === 'select') return jsonOk(S.services || []);
     if (body.table === 'crm_request_services' && body.op === 'select') return jsonOk(applyFilters(S.reqLines || [], body.filters));
+    // CRM_DUP_SHEET_V1 — поиск пациента в поле ФИО окна заявки, когда тесту он нужен.
+    if (body.table === 'patients' && body.op === 'select') return jsonOk(S.patients || []);
     if (body.table === 'crm_request_tags') {
       if (body.op === 'select') return jsonOk(applyFilters(S.leadTags, body.filters));
       if (body.op === 'insert') {
