@@ -71,9 +71,13 @@ export async function renderProcedures(container) {
     state.performer = '';   // PROC_SCOPE_V1 — каждое открытие раздела — без фильтра исполнителя
     await load();
     paint(body);
-    liveStop = watchScreen({ root: container, screen: 'procedures', reload: async () => {   // LIVE_REFRESH_V1
-        if (!(await load({ quiet: true }))) return;
-        keepScroll(body, () => paint(body));
+    liveStop = watchScreen({ root: container, screen: 'procedures', reload: async ({ canSwap = null } = {}) => {   // LIVE_REFRESH_V1
+        if (!(await load({ quiet: true }))) return false;
+        // Ревью M4 (3.22.0) — paint пересобирает и поле поиска: сестра щёлкнула в поиск или
+        // открыла «Выполнить процедуру», пока шло чтение, — перерисовка ждёт свободного экрана.
+        const repaint = () => { keepScroll(body, () => paint(body)); return true; };
+        if (typeof canSwap === 'function' && !canSwap()) return repaint;
+        return repaint();
     } });
 }
 

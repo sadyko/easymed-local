@@ -1,5 +1,6 @@
 // LIVE_REFRESH_V1 (3.22.0) — подделки для тестов живых экранов: часы, EventSource,
-// документ. Не тестовый файл — его импортируют live.test.mjs и live-screens.test.mjs.
+// документ. Не тестовый файл — его импортируют live.test.mjs и тесты экранов
+// live-cashier.test.mjs, live-cabinet.test.mjs, live-lab.test.mjs, live-procedures.test.mjs.
 
 /** Ручные часы: setTimeout/clearTimeout и advance(ms), исполняющий созревшие задачи. */
 export function fakeClock(start = 1_000_000) {

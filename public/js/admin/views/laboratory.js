@@ -237,9 +237,9 @@ export async function renderLaboratory(container, ctx = {}) {
 // перечитываются (у «Анализаторов» своя живая лента); вернутся в очередь — она читается
 // заново и так.
 let liveStop = null;
-function onLabLive() {
+function onLabLive({ canSwap = null } = {}) {   // canSwap — ревью M4 (3.22.0)
     if (state.mode !== 'queue' || !refs.list) return null;
-    return fetchAndPaint({ quiet: true });
+    return fetchAndPaint({ quiet: true, canSwap });
 }
 
 // Paints the body the current mode needs. The queue, the panel editor and the
@@ -685,7 +685,7 @@ let lastFetchToken = 0;
 // (refunded-lines.js — один на все экраны: партии по 500, сбой — null, и лист
 // как был: ворота сервера откажут и пробе, и результату сами).
 
-async function fetchAndPaint({ quiet = false } = {}) {   // LIVE_REFRESH_V1 — quiet: тихое перечитывание (onLabLive)
+async function fetchAndPaint({ quiet = false, canSwap = null } = {}) {   // LIVE_REFRESH_V1 — quiet: тихое перечитывание (onLabLive); canSwap — ревью M4
     const token = ++lastFetchToken;
     if (!quiet) {
         clear(refs.list);
@@ -868,7 +868,15 @@ async function fetchAndPaint({ quiet = false } = {}) {   // LIVE_REFRESH_V1 — 
         state.slotsByService = slotsByService;   // LAB_PANEL_DEDUP_V1 (ревью L3)
         state.inBed = inBedNow;   // LIVE_REFRESH_V1
         // LIVE_REFRESH_V1 — перерисовка одним шагом; прокрутка очереди на месте.
-        keepScroll(refs.list, () => { paintFilters(); paintRows(); });
+        // Ревью M4 — лаборант занят в миг перерисовки (открыл окно, щёлкнул в поиск) —
+        // прочитанное ждёт (live.js выполнит перерисовку, когда раздел свободен).
+        const repaint = () => {
+            if (token !== lastFetchToken || state.mode !== 'queue') return false;
+            keepScroll(refs.list, () => { paintFilters(); paintRows(); });
+            return true;
+        };
+        if (quiet && typeof canSwap === 'function' && !canSwap()) return repaint;
+        return repaint();
     } catch (e) {
         if (token !== lastFetchToken) return;
         if (quiet) return;   // LIVE_REFRESH_V1 — тихо: прежняя очередь, без уведомления

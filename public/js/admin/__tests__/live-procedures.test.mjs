@@ -60,9 +60,10 @@ const row = (kind, id, status, service, patient) => ({ kind, id, status, service
   patient_id: 900 + id, admission_id: kind === 'inpatient' ? 1 : null, ward: kind === 'inpatient' ? 'Терапия' : '', bed: '' });
 let ROWS = [row('outpatient', 1, 'added', 'Перевязка', 'Процедурный-Первый')];
 let lists = 0;
+let onList = null;   // вмешаться в миг чтения очереди
 globalThis.fetch = async (url) => {
   const u = String(url);
-  if (u === '/api/rpc/procedures_list') { lists++; return { ok: true, json: async () => ({ data: { scope: 'own', me: 2, rows: JSON.parse(JSON.stringify(ROWS)) } }) }; }
+  if (u === '/api/rpc/procedures_list') { lists++; if (onList) onList(); return { ok: true, json: async () => ({ data: { scope: 'own', me: 2, rows: JSON.parse(JSON.stringify(ROWS)) } }) }; }
   if (u === '/api/rpc/refunded_lines') return { ok: true, json: async () => ({ data: { line_ids: [] } }) };
   return { ok: true, json: async () => ({ data: null }) };
 };
@@ -126,4 +127,23 @@ test('открыто окно «Выполнить процедуру» — жд
   await settle(live.RECHECK_MS + 10);
   assert.equal(lists, before + 1);
   assert.match(textOf(root), /Процедурный-Третий/);
+});
+
+test('ревью M4: сестра щёлкнула в поиск, пока шло чтение, — поле не пересобрано под курсором; ушла из поля — список встал', async () => {
+  await pause();
+  const search = () => walk(root).find((n) => n.tagName === 'INPUT');
+  const inp = search();
+  assert.ok(inp, 'поле поиска на экране');
+  ROWS = [...ROWS, row('outpatient', 11, 'queued', 'Ингаляция', 'Процедурный-Четвёртый')];
+  onList = () => { document.activeElement = inp; };
+  emit(['visit_services']);
+  await settle(WAIT);
+  onList = null;
+  const reads = lists;
+  assert.equal(search(), inp, 'поле под курсором не заменено');
+  assert.doesNotMatch(textOf(root), /Процедурный-Четвёртый/);
+  document.activeElement = null;
+  await settle(live.RECHECK_MS + 10);
+  assert.match(textOf(root), /Процедурный-Четвёртый/, 'вышла из поля — прочитанное встало');
+  assert.equal(lists, reads, 'без нового чтения');
 });

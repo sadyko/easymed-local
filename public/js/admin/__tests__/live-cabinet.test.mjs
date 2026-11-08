@@ -81,6 +81,7 @@ const vs = (id, status, name) => ({
 let ROWS = [vs('q1', 'queued', 'Направленный-Первый'), vs('c1', 'completed', 'Осмотренный-Первый')];
 const VISITS = [];
 const dbCalls = [];
+let onVs = null;   // подглядеть/вмешаться в миг чтения списка
 function matches(row, f) {
   if (f.or) return true;
   const v = row[f.col];
@@ -97,6 +98,7 @@ globalThis.fetch = async (url, opts) => {
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (String(url).startsWith('/api/db')) {
     dbCalls.push(body.table);
+    if (body.table === 'visit_services' && onVs) onVs();
     const tables = { users: [DOC], visit_services: ROWS, invoice_items: [], visits: VISITS, recommended_services: [], admissions: [], patients: [] };
     let rows = tables[body.table] || [];
     for (const f of (body.filters || [])) rows = rows.filter((r) => matches(r, f));
@@ -142,7 +144,7 @@ const statusSelect = () => walk(root).find((n) => n.tagName === 'SELECT');
 
 test('«Мои приёмы» подписаны: один поток, первая строка на экране', () => {
   assert.equal(FakeES.live().length, 1);
-  assert.equal(client.status().subscribers, 1);
+  assert.equal(client.status().subscribers, 2, 'две подписки кабинета (ревью M3): «Мои приёмы» и «Мой день»');
   assert.match(textOf(root), /Направленный-Первый/);
 });
 
@@ -208,15 +210,74 @@ test('таймер кабинета спрашивает то же правил�
   } finally { busyAs = null; cabinet.stopAutoFresh(); }
 });
 
-test('«Мой день»: изменение для кабинета перечитывает дашборд (визиты дня)', async () => {
+test('ревью M3: результат анализатора «Мои приёмы» не будит (их правило без lab_results)', async () => {
   await pause();
-  const dash = mk('div');
-  await cabinet.renderConsultation(dash, { onNavigate() {}, tabId: 'consultation', payload: {} });
-  await tick(80);
-  assert.equal(client.status().subscribers, 1, 'новое открытие кабинета — одна подписка');
-  const visitsBefore = dbCalls.filter((t) => t === 'visits').length;
+  const before = vsReads();
+  emit(['lab_results']);
+  await settle(WAIT + live.RECHECK_MS);
+  assert.equal(vsReads(), before);
+});
+
+test('ревью M4: окно открыли, пока шло чтение, — список не перерисован; закрыли — встало прочитанное, без нового чтения', async () => {
+  await pause();
+  ROWS = [vs('q5', 'queued', 'Направленный-Пятый'), ...ROWS];
+  onVs = () => { busyAs = '.modal'; };
   emit(['visit_services']);
   await settle(WAIT);
-  assert.ok(dbCalls.filter((t) => t === 'visits').length > visitsBefore, '«Мой день» перечитан');
+  onVs = null;
+  const reads = vsReads();
+  assert.doesNotMatch(textOf(root), /Направленный-Пятый/, 'под окном список не перерисован');
+  await settle(live.RECHECK_MS * 2);
+  assert.doesNotMatch(textOf(root), /Направленный-Пятый/);
+  busyAs = null;
+  await settle(live.RECHECK_MS + 10);
+  assert.match(textOf(root), /Направленный-Пятый/, 'окно закрыли — прочитанное встало');
+  assert.equal(vsReads(), reads, 'без нового чтения');
+});
+
+let dash = null;
+const visitsReads = () => dbCalls.filter((t) => t === 'visits').length;
+test('«Мой день»: изменение для кабинета перечитывает дашборд (визиты дня)', async () => {
+  await pause();
+  dash = mk('div');
+  await cabinet.renderConsultation(dash, { onNavigate() {}, tabId: 'consultation', payload: {} });
+  await tick(80);
+  assert.equal(client.status().subscribers, 2, 'новое открытие кабинета — снова две подписки, не четыре');
+  const visitsBefore = visitsReads();
+  emit(['visit_services']);
+  await settle(WAIT);
+  assert.ok(visitsReads() > visitsBefore, '«Мой день» перечитан');
+  cabinet.stopAutoFresh();
+});
+
+test('ревью M3: «Мой день» — результат анализатора не будит; не чаще раза в 20 с, отложенное выполняется', async () => {
+  await clock.advance(21_000);
+  const before = visitsReads();
+  emit(['lab_results']);
+  await settle(WAIT + live.RECHECK_MS);
+  assert.equal(visitsReads(), before, 'lab_results — не правило «Моего дня»');
+  emit(['payments']);
+  await settle(WAIT);
+  const first = visitsReads();
+  assert.ok(first > before, 'оплата — перечитан');
+  emit(['visit_services']);
+  await settle(WAIT + 5000);
+  assert.equal(visitsReads(), first, 'через 6 с — ещё нет: предел 20 с');
+  await settle(15_000);
+  assert.ok(visitsReads() > first, 'после 20 с — отложенное выполнено');
+  cabinet.stopAutoFresh();
+});
+
+test('ревью M5: «Мой день» — прокрутка колонки дня на месте после тихого обновления', async () => {
+  await clock.advance(21_000);
+  const dayList = () => walk(dash).find((n) => String(n.className || '').split(/\s+/).includes('dd-day-list'));
+  const old = dayList();
+  assert.ok(old, 'колонка дня на экране');
+  old.scrollTop = 120;
+  emit(['visit_services']);
+  await settle(WAIT);
+  const fresh = dayList();
+  assert.notEqual(fresh, old, 'колонка пересобрана');
+  assert.equal(fresh.scrollTop, 120, 'прокрутка на месте');
   cabinet.stopAutoFresh();
 });
