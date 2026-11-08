@@ -14,3 +14,15 @@ test('сведения о клинике — только публичное: н
   assert.ok(Array.isArray(facts.services) && Array.isArray(facts.doctors) && Array.isArray(facts.branches));
   assert.equal(typeof facts.clinic, 'object');
 });
+
+test('2000 публичных услуг укладываются в лимит запроса', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const ins = db.prepare("INSERT INTO services (name, name_uz, name_en, price, active, online_booking) VALUES (?,?,?,?,1,1)");
+  db.transaction(() => { for (let i = 0; i < 2000; i++) ins.run('Услуга номер ' + i, 'Xizmat ' + i, 'Service ' + i, 10000 + i); })();
+  const facts = clinicFacts(db);
+  assert.equal(facts.services.length, 2000, 'услуги действительно показаны');
+  assert.equal(typeof facts.services[0].name, 'string');
+  assert.ok(!('id' in facts.services[0]));
+  assert.ok(JSON.stringify(facts).length < 200_000);
+});

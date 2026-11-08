@@ -38,7 +38,7 @@ test('Meta: комментарий — вся нитка по времени, т
   ins.run('z1', '', '', 'Акция на УЗИ', 'a', 'Другой', 'Чужая нитка', '2026-11-08T11:03:00Z', 0);
   const expected = [
     { from: 'patient', text: 'Сколько?' },
-    { from: 'clinic', text: 'Напишем вам в личные' },
+    { from: 'clinic', text: '(ответ сотрудника клиники)' },
     { from: 'patient', text: 'А в субботу работаете?' },
   ];
   for (const key of [rootRow, last]) {
@@ -47,4 +47,27 @@ test('Meta: комментарий — вся нитка по времени, т
     assert.equal(c.patientName, 'Carol');
     assert.deepEqual(c.transcript, expected);
   }
+});
+
+test('сотрудники не опознаются, команды бота и длинные тексты обрабатываются', () => {
+  const db = fresh();
+  const uid = db.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('op','x','Иванова Мария','receptionist')").run().lastInsertRowid;
+  const put = (dir, text, by, sent) => db.prepare('INSERT INTO telegram_messages (chat_id, direction, text, kind, by_ai, sent_by) VALUES (?,?,?,?,?,?)').run('7', dir, text, 'text', by, sent);
+  put('in', '/start', 0, null);
+  put('in', 'А'.repeat(5000), 0, null);
+  put('out', 'Добрый день. — Иванова Мария', 0, uid);
+  put('out', 'Ответ ИИ', 1, null);
+  const t = conversationFor(db, 'telegram', '7').transcript;
+  assert.deepEqual(t.map((x) => x.text.length), [2000, 26, 8]);
+  assert.equal(t[1].text, '(ответ сотрудника клиники)');
+  assert.equal(t[2].text, 'Ответ ИИ');
+  assert.ok(!JSON.stringify(t).includes('Иванова'));
+
+  const conv = db.prepare(`INSERT INTO meta_conversations (platform, conv_id, peer_id, peer_name, updated_time) VALUES ('messenger','c2','p','x','2026-11-08T11:00:00Z')`).run().lastInsertRowid;
+  const m = db.prepare(`INSERT INTO meta_messages (conversation_id, msg_id, direction, text, created_at, sent_by, by_ai) VALUES (?,?,?,?,?,?,?)`);
+  m.run(conv, 'a', 'in', 'Привет', '2026-11-08T11:00:00Z', null, 0);
+  m.run(conv, 'b', 'out', 'Здравствуйте — Иванова Мария', '2026-11-08T11:01:00Z', uid, 0);
+  const d = conversationFor(db, 'meta_dm', String(conv)).transcript;
+  assert.equal(d[1].text, '(ответ сотрудника клиники)');
+  assert.ok(!JSON.stringify(d).includes('Иванова'));
 });
