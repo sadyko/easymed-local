@@ -23,6 +23,13 @@ const finish = (lines) => lines.filter((r) => !isCommand(r)).map((r) => ({ from:
 const dmLine = (r) => (r.direction === 'in'
   ? { from: 'patient', text: r.text }
   : { from: 'clinic', text: r.sent_by != null && !r.by_ai ? STAFF : r.text });
+// AI_CHAT_V1: в Meta ответ сотрудника, набранный прямо в приложении Meta
+// (Business Suite, Instagram), опрос приносит без sent_by — а подпись и имя
+// там те же. Поэтому в личной переписке Meta всякая исходящая не от ИИ —
+// заглушка; с текстом уходят только ответы самого ИИ (by_ai = 1).
+const metaDmLine = (r) => (r.direction === 'in'
+  ? { from: 'patient', text: r.text }
+  : { from: 'clinic', text: r.by_ai ? r.text : STAFF });
 
 export function conversationFor(db, channel, chatKey) {
   if (channel === 'telegram') {
@@ -40,7 +47,7 @@ export function conversationFor(db, channel, chatKey) {
                              ORDER BY created_at DESC, id DESC LIMIT ?`).all(Number(chatKey), LIMIT).reverse();
     return {
       patientName: (conv && (conv.peer_name || conv.peer_username)) || '', linkPhone: '', postText: '',
-      transcript: finish(rows.map(dmLine)),
+      transcript: finish(rows.map(metaDmLine)),
     };
   }
   if (channel === 'meta_comment') {

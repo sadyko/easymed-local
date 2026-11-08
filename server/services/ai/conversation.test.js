@@ -71,3 +71,21 @@ test('сотрудники не опознаются, команды бота и
   assert.equal(d[1].text, '(ответ сотрудника клиники)');
   assert.ok(!JSON.stringify(d).includes('Иванова'));
 });
+
+// AI_CHAT_V1: ответ, набранный сотрудником прямо в приложении Meta (Business
+// Suite, Instagram), приходит опросом без sent_by — и всё равно не ИИ: его
+// подпись и имя сотрудника наружу не уходят.
+test('Meta: ответ сотрудника из приложения Meta (sent_by пуст) — тоже заглушка; ответ ИИ — с текстом', () => {
+  const db = fresh();
+  const conv = db.prepare(`INSERT INTO meta_conversations (platform, conv_id, peer_id, peer_name, updated_time) VALUES ('instagram','c3','p','x','2026-11-08T11:00:00Z')`).run().lastInsertRowid;
+  const m = db.prepare(`INSERT INTO meta_messages (conversation_id, msg_id, direction, text, created_at, sent_by, by_ai) VALUES (?,?,?,?,?,?,?)`);
+  m.run(conv, 'a', 'in', 'Привет', '2026-11-08T11:00:00Z', null, 0);
+  m.run(conv, 'b', 'out', 'Здравствуйте, это Мария из регистратуры', '2026-11-08T11:01:00Z', null, 0);
+  m.run(conv, 'c', 'out', 'УЗИ стоит 150 000 сум.', '2026-11-08T11:02:00Z', null, 1);
+  const d = conversationFor(db, 'meta_dm', String(conv)).transcript;
+  assert.deepEqual(d, [
+    { from: 'patient', text: 'Привет' },
+    { from: 'clinic', text: '(ответ сотрудника клиники)' },
+    { from: 'clinic', text: 'УЗИ стоит 150 000 сум.' },
+  ]);
+});
