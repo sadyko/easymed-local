@@ -24,7 +24,7 @@ export class RpcError extends Error {
 // TELEPHONY_V1 — 'callcenter' unlocks Настройки → «Телефония» (and later the
 // call-center screen rewrite); added here so the locked-tile's «Подключить
 // модуль» request validates instead of 400ing.
-export const SELLABLE_MODULES = new Set(['crm', 'telegram', 'marketing', 'callcenter']);
+export const SELLABLE_MODULES = new Set(['crm', 'telegram', 'marketing', 'callcenter', 'ai']);   // AI_CHAT_V1 — ИИ-помощник
 
 /** Everything the lock screen and the banners need. Never blocked. */
 export function licenceStatus(db, args, user) {

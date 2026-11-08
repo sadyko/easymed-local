@@ -85,6 +85,8 @@ test('CASE_OVERVIEW_ROUTE_V1: медсестра с beds — да; кассир 
 // доступу (администратор клиники / супер-админ). Каждый — с причиной; тест
 // проверяет, что они и вправду закрыты, иначе запись протухла и её надо снять.
 const FULL_ACCESS_ONLY = {
+    // AI_CHAT_V1 — экран ИИ-помощника: строка «ИИ-помощник» в «Ролях» или администратор.
+    'commerce-ai': 'AI_CHAT_V1 — ИИ-помощник: строка «ИИ-помощник» в «Ролях» или администратор',
     // Явное `return false` в isRouteAllowed: токен бота = вся переписка с пациентами.
     'telegram-settings':  'TELEGRAM_BOT_V1 — раздел админский целиком, включая чтение',
     // Явное `return false`: ключи Binotel/onlinePBX открывают журнал звонков всей клиники.
@@ -166,6 +168,11 @@ test('ROUTE_GATE_COVERS_PARENT_OF_V1: у каждого подэкрана из 
             if (parent in TILE_OPENED) {
                 perms.setEffectiveFromRole(tileRole(TILE_OPENED[parent]));
                 assert.ok(perms.isModuleAllowed(parent), 'TILE_OPENED протух: «' + parent + '» больше не открывается уровнем ' + JSON.stringify(TILE_OPENED[parent]));
+                // AI_CHAT_V1 — «только полный доступ» и здесь: окно «Telegram-бот» ИИ-помощника не открывает.
+                if (child in FULL_ACCESS_ONLY) {
+                    if (perms.isRouteAllowed(child)) stale.push(child + ' — открывается уровнем родителя «' + parent + '», а записан как «только полный доступ»');
+                    continue;
+                }
                 if (!perms.isRouteAllowed(child)) fallen.push('#' + child + ' (родитель «' + parent + '», уровень ' + JSON.stringify(TILE_OPENED[parent]) + ')');
                 continue;
             }

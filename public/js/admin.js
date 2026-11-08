@@ -841,6 +841,7 @@ const PARENT_OF = {
     'sms-settings': 'settings',   // SMS_INFORM_V1
     // COMMERCE_TOOLS_V1 — каждый инструмент витрины «Коммерческие инструменты»
     'commerce-push': 'commerce',
+    'commerce-ai': 'commerce',   // AI_CHAT_V1 — экран ИИ-помощника (сам экран — в задаче с views/ai-assistant.js)
     // CHATS_TO_COMMERCE_V1 — чаты стали частью витрины: «Назад» ведёт на неё, она
     // же подсвечена в меню, и «Видимость разделов» прячет их вместе с ней.
     'telegram-chat': 'commerce', 'meta-chat': 'commerce',

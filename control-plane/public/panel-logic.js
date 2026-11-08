@@ -21,7 +21,7 @@
 // Passed through moduleToggles() UNFILTERED (marketing included) so that
 // function's own exclusion is what actually gets exercised, rather than
 // trusting every caller to remember to filter first.
-export const SELLABLE_MODULES = ['crm', 'telegram', 'marketing', 'callcenter'];
+export const SELLABLE_MODULES = ['crm', 'telegram', 'marketing', 'callcenter', 'ai'];   // AI_CHAT_V1
 
 function parseDate(iso) {
   if (!iso) return null;

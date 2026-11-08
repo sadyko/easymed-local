@@ -319,7 +319,7 @@ test('ROLES_ACCORDION_V1: разделы свёрнуты, раскрывают�
 
   // Сколько разделов в справочнике — столько панелей, и все свёрнуты: экран
   // открывается списком, а не простынёй. (CALLCENTER_OPERATOR_V1 добавил Cust Dev.)
-  assert.equal(byClass('rm-section').length, 22);   // COMMERCE_BLOCK_V1 — + «Push-уведомления», «Ссылки для рекламы»; REFERRALS_NAV_V1 — + «Реферирование»; META_INBOX_V1 — + «Чат Facebook и Instagram»
+  assert.equal(byClass('rm-section').length, 23);   // AI_CHAT_V1 — + «ИИ-помощник»;COMMERCE_BLOCK_V1 — + «Push-уведомления», «Ссылки для рекламы»; REFERRALS_NAV_V1 — + «Реферирование»; META_INBOX_V1 — + «Чат Facebook и Instagram»
   assert.ok(byClass('rm-body').every((b) => b.hidden === true), 'раздел раскрыт при открытии экрана');
   assert.equal(toggleOf('inpatient').attrs['aria-expanded'], 'false');
 

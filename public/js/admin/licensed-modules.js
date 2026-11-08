@@ -46,6 +46,12 @@ export const LICENSED_MODULES = Object.assign(Object.create(null), {
         title: 'Каждый звонок пациента — в журнале клиники',
         blurb: 'Интеграция с АТС Binotel: входящие и исходящие звонки записываются автоматически и находят карту пациента по номеру телефона.',
     },
+    // AI_CHAT_V1 — ИИ-помощник в чатах: модуль `ai` лицензии (расход платит Easy-Med).
+    'commerce-ai': {
+        key: 'ai',
+        title: 'ИИ отвечает пациентам в чатах — днём и ночью',
+        blurb: 'Отвечает в Telegram, Facebook и Instagram о услугах, ценах, врачах и адресах, заводит заявки в CRM и передаёт медицинские вопросы операторам.',
+    },
 });
 
 /** Every nav id that is gated. Used by the sidebar to decide where to draw a lock. */
