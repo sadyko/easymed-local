@@ -26,6 +26,7 @@ import { BRANCH_SYNC_COLUMNS, syncableBranchValue, overlayOwnBuilding } from '..
 // STAFF_EDIT_V1 (ревью 3) — приехавший пароль снимает блокировку входа. Кольца
 // нет: services/auth.js и то, что он импортирует, этот файл не импортируют.
 import { clearLoginLocks } from '../auth.js';
+import { liveBump } from '../live/bus.js';   // LIVE_REFRESH_V1 — принятый справочник будит экраны
 
 // Колонки doc_settings, которые описывают КЛИНИКУ, а не ЗДАНИЕ.
 //
@@ -1279,6 +1280,17 @@ export function commitCatalogue(db, payload) {
   const summary = db.transaction(() => applyCatalogue(db, payload, { passwordSetFor }))();
   for (const name of passwordSetFor) {
     try { clearLoginLocks(name); } catch (e) { console.warn('[branch-sync] login lock not cleared:', e && e.message); }   // приём уже принят
+  }
+  // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — справочник принят (COMMIT выше):
+  // экраны узнают, какие таблицы справочника поменялись. Имена — ключи сводки приёма.
+  if (summary && summary.changed) {
+    const tables = new Set();
+    for (const part of ['created', 'updated', 'adopted', 'deactivated', 'removed', 'unlinked']) {
+      if (summary[part] && typeof summary[part] === 'object') for (const t of Object.keys(summary[part])) tables.add(t);
+    }
+    if (summary.settings) tables.add('doc_settings');
+    if (summary.roster) tables.add('users');
+    liveBump(db, { tables: [...tables] });
   }
   return summary;
 }

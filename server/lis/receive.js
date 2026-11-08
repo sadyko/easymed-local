@@ -29,6 +29,7 @@ import { guessProfile } from './discover.js';   // LIS_VENDOR_EXACT_V1 — ка�
 import { getProfile } from './profiles/index.js';
 import { ingestMessage } from './ingest.js';
 import { recordMessage, touchDevice } from './inbox.js';
+import { liveBump } from '../services/live/bus.js';   // LIVE_REFRESH_V1 — результат прибора будит лабораторию и кабинет
 
 function serviceDetail(env) {
   if (env.kind === 'qc') return 'контроль качества — в бланки и «Необработанные» не идёт';
@@ -151,6 +152,11 @@ export function receiveMessage(db, text, { peer = '', deviceId = null, journalId
   // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 12) — провод приём решает сам тем же
   // wireDecision: при споре профиля и сообщения он кладёт пробу в лоток.
   const code = ingestMessage(db, text, peer, deviceId, journalId != null ? { journalId } : {});   // LIS_PROXY_V1
+  // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — результат лёг в бланк (AA): лаборатория
+  // и кабинет врача узнают сразу, без «Обновить». Какие строки тронуты, база называет
+  // сама (временные триггеры шины); здесь — имя таблицы результатов на случай, если
+  // перехват недоступен. Шины нет (тесты приёма) — ничего.
+  if (code === 'AA') liveBump(db, { tables: ['lab_results'] });
   if (env.kind === 'unsupported') return { code: 'AR', kind: 'result', reply: buildAck(env, 'AR', { layout }) };
   if (env.kind === 'unparsed') return { code: 'AE', kind: 'result', reply: buildAck(env, 'AE', { layout }) };
   // Заголовок разобран как ORU^R01, значит AE приёма — сорвавшаяся запись.

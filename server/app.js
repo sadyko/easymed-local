@@ -17,6 +17,8 @@ import { ringWebhook } from './services/telephony/ring-webhook.js';   // CALL_RI
 import { branchSyncRoutes } from './routes/branch-sync.js';   // BRANCH_SYNC_V1
 import { lisProxyRoutes } from './routes/lisproxy.js';   // LIS_PROXY_V1
 import { actAsEndedGuard, actAsRouterGuard } from './middleware/act-as.js';   // ADMIN_ACT_AS_V1
+import { createLiveBus } from './services/live/bus.js';   // LIVE_REFRESH_V1 — шина изменений для живых экранов
+import { liveRoutes } from './routes/live.js';   // LIVE_REFRESH_V1 — GET /api/live (SSE) и /api/live/version
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -25,8 +27,12 @@ const CABINET_BODY_LIMIT = '8mb';   // CABINET_FIX_V1_R5
 const CABINET_DOC_ROUTE = /^\/api\/(db|rpc\/visit_document_archive)(\/|\?|$)/;   // CABINET_FIX_V1_R5
 const CABINET_ARCHIVE_ROUTE = /^\/api\/rpc\/visit_document_archive(\/|\?|$)/;   // CABINET_FIX_V1_R6
 
-export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
+export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {} } = {}) {
   setDataDir(dataDir);   // LICENCE_CORE_V1 — RPC handlers get no `req`; they read it from here.
+  // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — шина изменений этой базы: маршруты
+  // записи сообщают ей «записано», поток /api/live разносит это экранам. Одна на базу —
+  // её же находят приём анализаторов и обмен филиалов (liveBump по базе).
+  createLiveBus(db);
   const app = express();
   app.disable('x-powered-by');
   // PERF_SLOWLOG_V1 — самым первым: меряем полное время запроса, включая
@@ -154,6 +160,10 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // and BEFORE every other router, so anything mounted later is gated by
   // default instead of by someone remembering to add it.
   app.use('/api', requirePasswordChanged);
+  // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — поток изменений для рабочих экранов.
+  // Здесь, за requirePasswordChanged и с requireAuth, — тот же вход, что у /api/db и RPC.
+  // Только читает: ворота лицензии и журнал «от имени» ему не нужны.
+  app.use('/api/live', requireAuth, liveRoutes(db, live));
   // ADMIN_ACT_AS_V1 — actAsRouterGuard у каждого из четырёх путей записи: номер
   // вкладки (X-Em-Act-As, 409 act_as_changed) и журнал действий от имени. Стоит
   // В МОНТИРОВАНИИ маршрута — что дошло до маршрута, то прошло и проверку,

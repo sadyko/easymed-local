@@ -34,6 +34,7 @@ import { discountNoteText } from '../discount-note.js';   // DISCOUNT_V2 (рев
 import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт по счёту плательщику, та же сборка, что у мастера визита
 import { canCloseOtherShifts, canSwapPaidLines } from '../permissions.js';
 import { canCashierDiscount } from '../permissions.js';   // CASHIER_DISCOUNT_V1 — «Кассир может давать скидку»   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
+import { watchScreen } from '../live.js';   // LIVE_REFRESH_V1 — касса обновляется сама (без ?v=: один клиент потока на вкладку)
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
 // CARD_BALANCE_V1 — «Подарочная карта»: оплата остатком карты / сертификата.
@@ -253,13 +254,63 @@ const state = {
     found: { result: null, pendingQ: null },   // REFUND_ANY_V1 — счета за все дни по строке поиска (cashier_invoice_search): result { q, rows, has_more, error }
 };
 
+// LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — «КАССА ОБНОВЛЯЕТСЯ САМА». Счёт,
+// выставленный регистратурой, оплата на соседней кассе, направленный пациент («Ждут
+// счёта») появлялись только по «Обновить». Теперь касса подписана на изменения
+// (live.js, правило 'cashier' в live-relevance.js) и перечитывается тихо (paintQuiet):
+// новое собирается в стороне и встаёт на место одним шагом — фильтр, поиск и
+// прокрутка на месте, без «пустой кассы» на время запроса и без уведомлений. Пока
+// открыто окно (оплата, возврат, отмена, «История»), курсор в поле поиска или панель
+// скрыта — ждёт (правило занятости live.js). Одна подписка на модуль: новое открытие
+// раздела снимает прежнюю.
+let liveStop = null;
+let quietPaint = false;   // идёт тихое перечитывание: поле поиска фокус себе не берёт
+
 export async function renderCashier(container) {
+    if (liveStop) { liveStop(); liveStop = null; }   // LIVE_REFRESH_V1
     clear(container);
     state.filter = 'unpaid';
     state.search = '';
     const root = h('div', { class: 'fade-in' });
     container.appendChild(root);
     await paint(root);
+    liveStop = watchScreen({ root, screen: 'cashier', reload: () => paintQuiet(root) });   // LIVE_REFRESH_V1
+}
+
+/**
+ * LIVE_REFRESH_V1 — тихое перечитывание кассы. Сбой сети — на экране прежнее (без
+ * уведомления: следующее изменение перечитает). Экспорт — для проверки.
+ * @returns {Promise<boolean>} перерисовано ли
+ */
+export async function paintQuiet(root) {
+    quietPaint = true;
+    try {
+        let summary;
+        try {
+            const { data, error } = await supabase.rpc('cash_shift_summary', {});
+            if (error) return false;
+            summary = data;
+        } catch (e) { return false; }
+        const parts = [];
+        if (!summary || !summary.shift) parts.push(openShiftCard(root));
+        else {
+            parts.push(shiftBanner(root, summary));
+            parts.push(kpiTiles(summary));
+            const card = await paymentsCard(root, summary, { quiet: true });
+            if (!card) return false;
+            parts.push(card);
+        }
+        if (root.isConnected === false) return false;
+        const y = typeof window !== 'undefined' && typeof window.scrollY === 'number' ? window.scrollY : null;
+        clear(root);
+        for (const p of parts) root.appendChild(p);
+        if (y != null && window.scrollY !== y && typeof window.scrollTo === 'function') {
+            try { window.scrollTo(0, y); } catch (_) { /* прокрутка — не повод упасть */ }
+        }
+        return true;
+    } finally {
+        quietPaint = false;
+    }
 }
 
 async function paint(root) {
@@ -718,7 +769,7 @@ function closeShiftModal(root, shift, expectedDrawer, onDone = null) {
 // =============================================================================
 // «Приём оплат» — invoice list with chips, search, pay / cancel, Excel.
 // =============================================================================
-async function paymentsCard(root, summary) {
+async function paymentsCard(root, summary, { quiet = false } = {}) {   // LIVE_REFRESH_V1 — quiet: тихое перечитывание (null — счета не прочитались)
     const chipsEl = h('div');
     const searchEl = h('div');
     const tableEl = h('div');
@@ -740,7 +791,8 @@ async function paymentsCard(root, summary) {
         h('div', { style: { padding: '14px 16px' } }, chipsEl, searchEl, tableEl),
     );
 
-    await loadInvoices();
+    const loaded = await loadInvoices({ quiet });
+    if (quiet && !loaded) return null;   // LIVE_REFRESH_V1 — на экране остаётся прежний список
     function repaintTable() {
         paintChips(chipsEl, repaintTable);
         paintSearch(searchEl, repaintTable, repaintResults);
@@ -758,15 +810,26 @@ async function paymentsCard(root, summary) {
     return card;
 }
 
-async function loadInvoices() {
-    state.rows = [];
-    state.counts = null;
-    // REFUND_ANY_V1 — касса перечитана (после возврата, «Обновить»): найденное
-    // по всем дням устарело — следующая перерисовка спросит его заново.
-    _foundSeq++;
-    state.found = { result: null, pendingQ: null };
+// LIVE_REFRESH_V1 — quiet: тихое перечитывание (live.js). Прежние строки стоят на
+// экране до ответа, сбой — без уведомления и без пустого списка (false), найденное
+// поиском по всем дням и «Ждут счёта» не сбрасывается в «Ищем…», а переспрашивается
+// в фоне (stale) и заменяется, когда ответ придёт.
+async function loadInvoices({ quiet = false } = {}) {
+    if (!quiet) {
+        state.rows = [];
+        state.counts = null;
+        // REFUND_ANY_V1 — касса перечитана (после возврата, «Обновить»): найденное
+        // по всем дням устарело — следующая перерисовка спросит его заново.
+        _foundSeq++;
+        state.found = { result: null, pendingQ: null };
+    } else {
+        state.found.stale = true;   // LIVE_REFRESH_V1
+    }
     const { data, error } = await supabase.rpc('cashier_invoices', {});
-    if (error) { toast(trf('Не удалось загрузить счета: {msg}', { msg: error.message || error }), 'fail'); return; }
+    if (error) {
+        if (!quiet) toast(trf('Не удалось загрузить счета: {msg}', { msg: error.message || error }), 'fail');
+        return false;
+    }
     state.rows = (data && data.rows) || [];
     state.counts = (data && data.counts) || null;
     // DEPOSIT_V1 — отдельный запрос: депозиты не счета, в cashier_invoices их
@@ -776,31 +839,37 @@ async function loadInvoices() {
         // деньги, которые кассир только что взял, исчезают с экрана.
         const dep = await supabase.rpc('list_deposits', { status: 'all' });
         state.deposits = (dep && dep.data && dep.data.rows) || [];
-    } catch (e) { state.deposits = []; }
+    } catch (e) { if (!quiet) state.deposits = []; }   // LIVE_REFRESH_V1 — тихо: прежние
     // CARD_SALE_V1 — карты тоже отдельным запросом: сбой списка карт не прячет счета.
     try {
         const cr = await supabase.rpc('list_card_sales', {});
         state.cards = (cr && cr.data && cr.data.rows) || [];
-    } catch (e) { state.cards = []; }
-    await loadRefunds();   // CASHIER_PAID_SWAP_V1 — сбой не прячет счета, плашка покажет 0
-    await loadUnbilled();   // REFERRAL_BILL_V1 — то же правило: сбой не прячет счета
+    } catch (e) { if (!quiet) state.cards = []; }   // LIVE_REFRESH_V1 — тихо: прежние
+    await loadRefunds({ quiet });   // CASHIER_PAID_SWAP_V1 — сбой не прячет счета, плашка покажет 0
+    await loadUnbilled({ quiet });   // REFERRAL_BILL_V1 — то же правило: сбой не прячет счета
+    return true;
 }
 
 // REFERRAL_BILL_V1 — «Ждут счёта»: визиты, у которых амбулаторные услуги
 // записаны, а счёта нет (cashier_unbilled, rpc/cashier.js). «Приём оплат»
 // строится из одних счетов, и такого пациента касса раньше не видела вовсе.
-async function loadUnbilled() {
+async function loadUnbilled({ quiet = false } = {}) {   // LIVE_REFRESH_V1 — quiet: см. loadInvoices
     // REFBILL_REVIEW_V1 (ревью M1) — перечитали кассу (после счёта, «Обновить»):
     // прежний ответ поиска устарел — следующая перерисовка спросит его заново.
-    _unbilledSeq++;
-    state.unbilled.found = null;
-    state.unbilled.pendingQ = null;
+    if (!quiet) {
+        _unbilledSeq++;
+        state.unbilled.found = null;
+        state.unbilled.pendingQ = null;
+    } else {
+        state.unbilled.stale = true;   // LIVE_REFRESH_V1 — найденное на экране, переспрашивается в фоне
+    }
     try {
         const { data, error } = await supabase.rpc('cashier_unbilled', {});
         if (error) throw error;
         state.unbilled.rows = (data && data.rows) || [];
         state.unbilled.totals = (data && data.totals) || null;
     } catch (e) {
+        if (quiet) return;   // LIVE_REFRESH_V1 — тихо: прежние
         state.unbilled.rows = [];
         state.unbilled.totals = null;
     }
@@ -817,12 +886,13 @@ let _unbilledSeq = 0;
 function ensureUnbilledSearch(onChange) {
     const u = state.unbilled;
     const q = state.search.trim();
-    if (!q || (u.found && u.found.q === q) || u.pendingQ === q) return;
+    if (!q || (u.found && u.found.q === q && !u.stale) || u.pendingQ === q) return;   // LIVE_REFRESH_V1 — stale: переспросить
     u.pendingQ = q;
     const seq = ++_unbilledSeq;
     Promise.resolve(supabase.rpc('cashier_unbilled', { q })).then((res) => {
         if (seq !== _unbilledSeq) return;
         const { data, error } = res || {};
+        u.stale = false;   // LIVE_REFRESH_V1
         u.found = error ? { q, rows: [], totals: null, error: error.message || String(error) }
             : { q, rows: (data && data.rows) || [], totals: (data && data.totals) || null };
     }, (e) => {
@@ -863,12 +933,16 @@ function ensureInvoiceSearch(onChange) {
     if (!foundWanted()) return;
     const q = state.search.trim();
     const f = state.found;
-    if ((f.result && f.result.q === q) || f.pendingQ === q) return;
+    // LIVE_REFRESH_V1 — после тихого перечитывания (stale) ответ переспрашивается в фоне;
+    // раскрытый «Показать ещё» не сворачивается обратно к первой странице.
+    const fresh = f.result && f.result.q === q && (!f.stale || f.result.extended);
+    if (fresh || f.pendingQ === q) return;
     f.pendingQ = q;
     const seq = ++_foundSeq;
     Promise.resolve(supabase.rpc('cashier_invoice_search', { q })).then((res) => {
         if (seq !== _foundSeq) return;
         const { data, error } = res || {};
+        f.stale = false;   // LIVE_REFRESH_V1
         f.result = error ? { q, rows: [], has_more: false, error: error.message || String(error) }
             : { q, rows: (data && data.rows) || [], has_more: !!(data && data.has_more), error: null };
     }, (e) => {
@@ -896,6 +970,7 @@ async function moreFound(onChange) {
             const have = new Set(r.rows.map((x) => x.id));
             r.rows = r.rows.concat(((data && data.rows) || []).filter((x) => !have.has(x.id)));
             r.has_more = !!(data && data.has_more);
+            r.extended = true;   // LIVE_REFRESH_V1 — раскрытое тихое перечитывание не сворачивает
         }
     } catch (e) {
         if (seq === _foundSeq) toast(trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }), 'fail');
@@ -906,7 +981,7 @@ async function moreFound(onChange) {
 }
 
 // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период (по умолчанию сегодня).
-async function loadRefunds() {
+async function loadRefunds({ quiet = false } = {}) {   // LIVE_REFRESH_V1 — quiet: сбой оставляет прежние
     if (!state.refunds.from) { state.refunds.from = localYmd(); state.refunds.to = state.refunds.from; }
     try {
         const { data, error } = await supabase.rpc('cashier_refunds', { from: state.refunds.from, to: state.refunds.to });
@@ -914,6 +989,7 @@ async function loadRefunds() {
         state.refunds.rows = (data && data.rows) || [];
         state.refunds.totals = (data && data.totals) || null;
     } catch (e) {
+        if (quiet) return;   // LIVE_REFRESH_V1
         state.refunds.rows = [];
         state.refunds.totals = null;
     }
@@ -1557,7 +1633,8 @@ function paintSearch(el, onChange, onResults) {
             inp, h('span', { class: 'grow' }), count));
         el.__cashierSearch = ui;
         // Касса перерисована с непустым поиском — фокус и курсор в конец поля.
-        if (state.search) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+        // LIVE_REFRESH_V1 — но не при тихом перечитывании: фокус у человека не отбирается.
+        if (state.search && !quietPaint) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
     }
     ui.onChange = onChange;
     _searchInput = ui.inp;

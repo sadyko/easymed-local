@@ -24,7 +24,10 @@ import zlib from 'node:zlib';
 
 // Сжимаем только то, что от этого выигрывает. Картинки, PDF, xlsx и архивы уже
 // сжаты внутри — прогон через gzip тратит время и обычно даёт минус.
-const COMPRESSIBLE = /^(?:text\/|application\/(?:javascript|ecmascript|json|xml|manifest\+json)|image\/svg\+xml)/i;
+// LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — кроме text/event-stream: поток
+// изменений (/api/live) живёт часами, а «собрать и сжать» копило бы его до конца
+// ответа — экран не получил бы ни одного события.
+const COMPRESSIBLE = /^(?:text\/(?!event-stream)|application\/(?:javascript|ecmascript|json|xml|manifest\+json)|image\/svg\+xml)/i;
 
 // V3121_GZIP_CAP (2026-09-28) — ПОРОГ СБОРКИ В ПАМЯТИ — 8 МБ, а не 2.
 //

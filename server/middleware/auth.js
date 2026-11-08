@@ -18,6 +18,9 @@ export function parseCookies(header) {
   return out;
 }
 
+// LIVE_REFRESH_V1 — пути потока изменений (регистр — как у express: без учёта).
+const LIVE_PATH = /^\/api\/live(?:\/|$)/i;
+
 // Runs on every request: resolves the session cookie to req.user (or null).
 export function attachUser(db) {
   return (req, res, next) => {
@@ -28,7 +31,12 @@ export function attachUser(db) {
     // действий или { ended: причина } — вход от имени кончился сам, а экран ещё
     // не знает (middleware/act-as.js отвечает 409 до «Вернуться»).
     const state = {};
-    req.user = sessionUser(db, req.sessionId, { background: req.headers['x-em-background'] === '1', state });
+    // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — поток изменений и его запасной опрос
+    // (/api/live) — всегда фон: их открывает экран, а не человек, и заголовок фона
+    // EventSource послать не умеет. Иначе каждое переподключение продлевало бы сессию
+    // оставленного у стойки компьютера.
+    const background = req.headers['x-em-background'] === '1' || LIVE_PATH.test(String(req.path || ''));
+    req.user = sessionUser(db, req.sessionId, { background, state });
     req.actAs = state.actAsId != null || state.actAsEnded
       ? { id: state.actAsId != null ? state.actAsId : null, ended: state.actAsEnded || null }
       : null;
