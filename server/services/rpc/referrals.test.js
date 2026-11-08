@@ -307,3 +307,64 @@ test('подробнее: строки — услуги, а не визиты (R
   assert.ok(d.lines.every((l) => l.received === 0 && l.reward === 0), 'счетов нет — денег нет, но поля есть');
   assert.equal(d.visits.length, 4, 'шапка «Визитов» по-прежнему считает визиты');
 });
+
+// REFERRAL_DETAIL_SUM_V1 (3.22.0, ревью) — «Подробнее» (и его печать): строки
+// складываются в шапку. Корректировка закрытого месяца и стационарное
+// вознаграждение — без строки счёта визита (invoice_item_id) — в шапке были, а
+// строк у них не было: шапка «−25 000», таблица пустая.
+const sumOf = (lines, k) => Math.round(lines.reduce((a, l) => a + (Number(l[k]) || 0), 0) * 100) / 100;
+test('подробнее: корректировка закрытого месяца — своей строкой; строки сходятся с шапкой', () => {
+  const { db } = fresh();
+  const rpc = (name, args) => getRpc(name)(db, args, admin);
+  const cat = Number(db.prepare("INSERT INTO referral_source_categories (name, standard_percent) VALUES ('Партнёры', 10)").run().lastInsertRowid);
+  const P = Number(db.prepare("INSERT INTO referral_sources (name, category_id, reward_mode, service_rates) VALUES ('Партнёр П', ?, 'category', ?)")
+    .run(cat, JSON.stringify([{ service_id: 31, unit: 'pct', value: 25 }])).lastInsertRowid);
+  db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (31, 'УЗИ', 200000, 0, 'imaging')").run();
+  db.prepare("INSERT INTO patients (id, full_name, phone, referral_source_id) VALUES (20, 'Пациент Двадцатый', '+998900000020', ?)").run(P);
+  const cur = today(db).slice(0, 7);
+  const [y, m] = cur.split('-').map(Number);
+  const pm = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
+  const vid = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (20, ?, 'arrived')").run(pm + '-10T06:00:00Z').lastInsertRowid);
+  const vs = Number(db.prepare(`INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, created_by, created_at)
+      VALUES (?, 31, 1, 200000, 200000, 'completed', 1, ?)`).run(vid, pm + '-10 06:00:00').lastInsertRowid);
+  const inv = rpc('create_invoice_for_visit', { visit_id: vid, visit_service_ids: [vs], discount_amount: 0 }).invoice;
+  rpc('record_payment', { invoice_id: inv.id, amount: inv.total_amount, method: 'cash' });
+  db.prepare('UPDATE invoices SET created_at = ? WHERE id = ?').run(pm + '-10 06:00:00', inv.id);
+  db.prepare('UPDATE payments SET created_at = ? WHERE invoice_id = ?').run(pm + '-10 06:00:00', inv.id);
+  rpc('pay_period_close', { month: pm });
+  const pay = db.prepare('SELECT id FROM payments WHERE invoice_id = ?').get(inv.id).id;
+  rpc('refund_payment', { payment_id: pay, amount: 100000, reason: 'частичный возврат' });
+
+  const d = referralsSourceDetail(db, { source_id: P, from: cur + '-01', to: today(db) }, admin);
+  assert.equal(d.reward, -25000, 'шапка: −25 % от возвращённых 100 000');
+  const adj = d.lines.filter((l) => l.reward !== 0);
+  assert.equal(adj.length, 1, 'корректировка — своя строка: ' + JSON.stringify(d.lines));
+  assert.equal(adj[0].reward, -25000);
+  assert.equal(adj[0].patient, 'Пациент Двадцатый');
+  assert.match(adj[0].service, /^Корректировка за /);
+  assert.equal(sumOf(d.lines, 'reward'), d.reward, 'строки складываются в «Вознаграждение» шапки');
+  assert.equal(sumOf(d.lines, 'received'), d.received, 'и в «Получено»');
+});
+
+test('подробнее: стационарное вознаграждение партнёра — своими строками; строки сходятся с шапкой', () => {
+  const { db } = fresh();
+  const cat = Number(db.prepare("INSERT INTO referral_source_categories (name, standard_percent) VALUES ('Партнёры', 10)").run().lastInsertRowid);
+  const P = Number(db.prepare(`INSERT INTO referral_sources (name, category_id, inpatient_bonus_enabled, inpatient_pct, inpatient_fixed)
+      VALUES ('Клиника Х', ?, 1, 5, 50000)`).run(cat).lastInsertRowid);
+  db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (21, 'Пациент Стационара', '+998900000021')").run();
+  db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (41, 'Операция', 1000000, 0, 'other')").run();
+  db.prepare("INSERT INTO admissions (id, admission_no, patient_id, doctor_id, attending_doctor_id, status, referral_source_id) VALUES (1, 'A-1', 21, 3, 3, 'active', ?)").run(P);
+  const line = db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, quantity, unit_price, total, status, notes, billable)
+      VALUES (?, 1, ?, 3, ?, ?, ?, 'added', ?, 1)`);
+  line.run(1, 41, 1, 1000000, 1000000, null);
+  line.run(2, null, 2, 300000, 600000, 'ACCOMMODATION · 201 · койка 1');
+  const { invoice } = getRpc('create_invoice_for_admission')(db, { admission_id: 1, admission_service_ids: [1, 2] }, admin);
+  db.prepare("UPDATE invoices SET paid_amount = total_amount, status = 'paid', created_at = ? WHERE id = ?").run(atNoon(1), invoice.id);
+
+  const d = referralsSourceDetail(db, { source_id: P, ...period }, admin);
+  assert.equal(d.reward, 130000, 'шапка: 5 % от 1 600 000 + фикс 50 000');
+  assert.equal(d.lines.length, 3, 'операция, проживание и фикс — строками: ' + JSON.stringify(d.lines));
+  assert.ok(d.lines.every((l) => l.patient === 'Пациент Стационара'));
+  assert.equal(sumOf(d.lines, 'reward'), d.reward, 'строки складываются в «Вознаграждение» шапки');
+  assert.equal(sumOf(d.lines, 'received'), d.received, 'и в «Получено»');
+});
