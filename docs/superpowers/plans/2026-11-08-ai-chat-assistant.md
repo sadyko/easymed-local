@@ -22,6 +22,24 @@
 - Font sizes only from the scale (12.5px floor) — `type-scale.test.mjs`.
 - Commit after each task with a Russian message in the project's style, ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Do not push; the owner tests on dev first.
 
+## Amendments after review (2026-11-08) — these OVERRIDE the task text below
+
+**A1. Telegram AI marker is `telegram_messages.by_ai = 1`, kind stays `'text'`** (kind has a CHECK, migration 062). Already applied in the task text.
+
+**A2. A Facebook/Instagram comment job is keyed by THREAD, not by comment.** For `channel = 'meta_comment'`:
+- `chat_key` = the row id (`meta_comments.id`) of the thread ROOT comment; `source_id` = the incoming comment's `comment_id` (the specific comment to answer).
+- How to get the root row id from any comment row `r`: `const rootKey = r.root_id || r.comment_id; const root = db.prepare('SELECT id FROM meta_comments WHERE comment_id = ?').get(rootKey); const threadRowId = root ? root.id : r.id;`
+- Task 12 `aiNoteMetaComment(db, { threadRowId, commentId, isPage, createdAt, now })` enqueues `chatKey: String(threadRowId)`; the poller computes `threadRowId` as above. Test: two comments of one thread produce ONE queued job's chat_key (same chat_key), and the second is merged at claim.
+- Task 7 `conversationFor(db, 'meta_comment', threadRowId)`: transcript = the whole thread in time order (root and replies: `WHERE comment_id = rootKey OR root_id = rootKey ORDER BY created_at, id`, last 20), `from: is_page ? 'clinic' : 'patient'`; `patientName` = author of the latest non-page comment; `postText` from the root.
+- Task 11 worker: the comment to answer is `const target = db.prepare('SELECT id FROM meta_comments WHERE comment_id = ?').get(job.source_id)`; if missing → `dropped` / `'gone'`. Use `target.id` for `replyComment`, `privateReply` and `metaLead` (`toCrm` kind `'comment'`). Flags, merging and operator checks use `job.chat_key` (thread). The by_ai marking after a public reply uses the thread's rootKey.
+- `guards.js` already resolves the root from any row id, so it works with the thread row id unchanged.
+
+**A3. Stale jobs are never answered.** `queue.js` gets `expireStaleJobs(db, now)`: marks every `queued` job with `created_at < now − GIVE_UP_MS` as `failed`/`'timeout'` and returns the distinct `{ channel, chat_key }` of those jobs. Task 11 worker calls it at the start of every `processOneJob` and `flagChat(..., 'timeout')` for each returned chat, before claiming. (Covers server downtime and boot recovery.)
+
+**A4. Hardening:** `retryJob` — backoff index `Math.max(0, Math.min(attempts - 1, len - 1))` and requeue only `WHERE status = 'working'`; `setAiEnabled(true)` keeps the existing `enabled_at` when the switch is already on; `lastOperatorAt` for `meta_dm` ignores operator rows with `status = 'failed'`.
+
+**Owner decision pending (do not implement):** replies typed by staff directly in the Facebook/Instagram app (not in Easy-Med) arrive with `sent_by NULL` and currently do NOT silence the AI. Keep it that way unless the owner decides otherwise.
+
 ## File map
 
 **Clinic server (`server/`)**
