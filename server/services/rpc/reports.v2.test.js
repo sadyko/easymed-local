@@ -124,9 +124,12 @@ test('рефералы: сводка по направившим — внутр�
   const own = rows.find((o) => o['Источник'] === 'Врачев В.В.');
   assert.equal(own['Вид'], 'Внутренний');
   assert.equal(own['Пациентов'], 1);
-  // База — строка счёта ПОСЛЕ скидки (90 000), а не цена каталога (100 000): 5 % = 4 500.
+  // REFERRAL_FULL_PRICE_V1 (3.22.0, владелец 2026-11-08: «discount not applied to the
+  // partners share — full price, always») — было: база — строка ПОСЛЕ скидки (90 000),
+  // 5 % = 4 500. Теперь база — цена строки счёта ДО скидки (100 000): 5 % = 5 000.
+  // «Оплачено» — по-прежнему деньги после скидки.
   assert.equal(own['Оплачено'], 90000);
-  assert.equal(own['Вознаграждение'], 4500);
+  assert.equal(own['Вознаграждение'], 5000);
 });
 
 test('рефералы: фильтр «внутренние / внешние» и аннулированный счёт не входит', () => {
@@ -168,7 +171,7 @@ test('кабинет врача: вознаграждение за направ�
   const { db } = seed();
   const mine = doctorReferralReward(db, { doctor_id: 1, from: FROM, to: TO }, admin);
   assert.equal(mine.count, 1);
-  assert.equal(mine.reward, 4500);
+  assert.equal(mine.reward, 5000);   // REFERRAL_FULL_PRICE_V1 (владелец 2026-11-08) — было 4 500: 5 % от цены до скидки 100 000
   assert.equal(mine.paid_amount, 90000);
   assert.equal(mine.rows[0].service, 'Консультация');
   const own = objects(run(db, 'referrals', { referrer: 'internal' })).find((o) => o['Источник'] === 'Врачев В.В.');
@@ -250,8 +253,10 @@ test('по врачам: работа и выплата по выполненн�
   assert.equal(v['Услуг'], 1, 'аннулированный INV-4 посчитан как работа');
   assert.equal(v['Выставлено'], 200000);
   assert.equal(v['Доля за услуги'], 75200);
-  assert.equal(v['Вознаграждение за направления'], 4500);   // направил пациента INV-1
-  assert.equal(v['Итого к выплате'], 79700);
+  // REFERRAL_FULL_PRICE_V1 (владелец 2026-11-08) — было 4 500 / 79 700: процент направившего
+  // теперь от цены до скидки (5 % от 100 000).
+  assert.equal(v['Вознаграждение за направления'], 5000);   // направил пациента INV-1
+  assert.equal(v['Итого к выплате'], 80200);
   const s = rows.find((o) => o['Врач'] === 'Хирургов Х.Х.');
   assert.equal(s['Пациентов'], 3);
   assert.equal(s['Визитов'], 2);

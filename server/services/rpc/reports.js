@@ -913,9 +913,11 @@ const PRE_SALE_TOTAL_SQL = `(i.subtotal - ${PRE_SALE_DISCOUNT_SQL})`;
 const ITEM_DISCOUNT_SQL = `(${STAGE2_DISCOUNT_SQL} + CASE WHEN ${POST_SALE_SQL} > 0 AND ${PRE_SALE_TOTAL_SQL} > 0
   THEN MIN(${POST_SALE_SQL}, ${PRE_SALE_TOTAL_SQL}) / ${PRE_SALE_TOTAL_SQL} * (ii.total - ${STAGE2_DISCOUNT_SQL}) ELSE 0 END)`;
 // Доля денег, оставшихся у счёта после скидки после продажи: фикс врача и фикс
-// вознаграждения умножаются на неё (процент уменьшается сам — через сумму
-// строки после скидки). Тот же коэффициент, что дал бы возврат «с доплатой»
-// (REFUND_KEEP_SQL: оплачено / сумма счёта). 1 — скидки после продажи нет.
+// вознаграждения умножаются на неё (процент врача уменьшается сам — через сумму
+// строки после скидки; процент вознаграждения считается от цены до скидки и
+// умножается на неё тоже — REFERRAL_FULL_PRICE_V1, referralRewardOf). Тот же
+// коэффициент, что дал бы возврат «с доплатой» (REFUND_KEEP_SQL: оплачено /
+// сумма счёта). 1 — скидки после продажи нет.
 const POST_SALE_KEEP_SQL = `(CASE WHEN ${POST_SALE_SQL} > 0 AND i.total_amount + ${POST_SALE_SQL} > 0
   THEN MAX(0, MIN(1, i.total_amount * 1.0 / (i.total_amount + ${POST_SALE_SQL}))) ELSE 1 END)`;
 
@@ -2178,16 +2180,19 @@ function payFeeAtMonthRate(L, rec, sample) {
 }
 
 // Вознаграждение по живой строке L по ставке, записанной в месяце (rec.rate).
+// REFERRAL_FULL_PRICE_V1 — и по ПРАВИЛУ, по которому месяц закрыт: запись без отметки
+// reward_base: 'full_price' сделана до решения 2026-11-08, и её процент — от суммы после
+// скидки. Иначе каждая строка со скидкой в месяце, закрытом раньше, дала бы
+// корректировку от одной только смены правила — а корректировка бывает только от
+// событий строки (возврат, отмена, новый счёт…). Поздний возврат по такому месяцу —
+// по его же правилу.
 function referralRewardAtMonthRate(L, rec) {
   const rate = rec && rec.rate;
   if (!rate) return L.fee;
   const factor = payFactorOf(L);
   if (!(factor > 0) || L.goods_to_doctor) return 0;
-  if (L.kind === 'ref_in') {
-    const v = Number(rate.value) || 0;
-    return L.line_kind === 'fixed' ? v * factor * postSaleKeepOf(L) : (Number(L.after_discount) || 0) * v / 100 * factor;
-  }
-  return rewardForLine(rate, { amount: L.amount, discount: L.discount, qty: L.qty }) * factor * fixKeep(rate, L);
+  if (L.kind === 'ref_in' && L.line_kind === 'fixed') return (Number(rate.value) || 0) * factor * postSaleKeepOf(L);
+  return referralRewardOf(rate, L, rec.reward_base === REWARD_BASE_FULL) * factor;
 }
 
 // Закрытые месяцы, в записи которых есть партнёры и ставки (V3120_FIX).
@@ -2756,7 +2761,10 @@ function anyReferralRate(db) {
 }
 
 const REFERRAL_ZERO_NOTE = 'У всех источников направлений ставка вознаграждения 0 % — поэтому вознаграждение в этом отчёте 0. Ставки вводятся в «Настройки → Направления» (на категории и на источнике) и в карточке врача, вкладка «Вознаграждение за направления».';
-const REFERRAL_BASE_NOTE = 'Вознаграждение считается от суммы строки счёта после скидки и только по оплаченным счетам; неоплаченные строки входят в «Сумму услуг», но вознаграждения не приносят. После частичного возврата по оплаченному счёту вознаграждение уменьшается в той же доле, в какой вернули деньги (как доля врача). Период — по дате счёта.';
+// REFERRAL_FULL_PRICE_V1 (3.22.0, владелец 2026-11-08) — база названа словами: цена до скидки.
+const REFERRAL_BASE_NOTE = 'Вознаграждение считается от цены строки счёта до скидки: скидка пациенту (в том числе 100 %) долю направившего не уменьшает, фиксированная сумма платится за услугу целиком. Только по оплаченным счетам (счёт со скидкой 100 % закрывается при выставлении и считается оплаченным); неоплаченные строки входят в «Сумму услуг», но вознаграждения не приносят. Возврат — не скидка: после частичного возврата по оплаченному счёту (и обычного, когда счёт уменьшается до оплаченного, и с доплатой) вознаграждение уменьшается в той же доле, в какой вернули деньги (как доля врача). Период — по дате счёта.';
+// REFERRAL_FULL_PRICE_V1 — строки месяцев, закрытых до 3.22.0, — по прежнему правилу (запись месяца).
+const REFERRAL_LEGACY_NOTE = 'Строки месяцев, закрытых до 3.22.0, показаны по записи на момент закрытия: в них процент вознаграждения посчитан от суммы строки после скидки — так эти месяцы и были выплачены; поздние возвраты по ним считаются по тому же правилу.';
 
 // V3120_FIX (решение владельца 27.09) — ВОЗНАГРАЖДЕНИЕ ЗА НАПРАВЛЕНИЕ ПОСЛЕ
 // ЧАСТИЧНОГО ВОЗВРАТА уменьшается ПРОПОРЦИОНАЛЬНО — той же долей оставшихся
@@ -2770,9 +2778,6 @@ const REFERRAL_BASE_NOTE = 'Вознаграждение считается от
 //     неоплаченного.
 // r — строка с rf_refunded / rf_gross / rf_total / refund_keep (REFUND_JOIN).
 // Доля оплаты строки вознаграждения; у строк снимков, записанных до V3120_FIX, её нет.
-// V3120_FINAL (C1) — множитель фикса вознаграждения: доля денег после скидки
-// после продажи. Процент её не берёт — она уже в сумме строки после скидки.
-const fixKeep = (rate, r) => (rate && rate.unit === 'fix' ? postSaleKeepOf(r) : 1);
 const payFactorOf = (r) => (r.pay_factor == null ? (r.paid ? 1 : 0) : Number(r.pay_factor));
 function referralPayFactor(r) {
   const refunded = Number(r.rf_refunded) || 0;
@@ -2784,6 +2789,37 @@ function referralPayFactor(r) {
     return Number.isFinite(keep) ? Math.max(0, Math.min(1, keep)) : 0;
   }
   return r.status === 'paid' ? 1 : 0;
+}
+
+// REFERRAL_FULL_PRICE_V1 (3.22.0, владелец 2026-11-08: «discount not applied to the
+// partners share — full price, always») — ОДНО правило вознаграждения строки для всех,
+// кто направил: внешние партнёры, представители, свои врачи; амбулатория и стационар.
+//   • процент — от ЦЕНЫ строки ДО скидки (rewardForLine, amount = invoice_items.total):
+//     скидка пациенту, в том числе 100 %, его не уменьшает. Прежде — после скидки;
+//   • фикс — за услугу, скидкой не уменьшается (так было и раньше);
+//   • ВОЗВРАТ — не скидка. Частичный возврат по оплаченному счёту касса по умолчанию
+//     проводит «скидкой после продажи» (billing.js refundPayment: сумма счёта = оплачено,
+//     invoices.post_sale_discount; коэффициент возврата referralPayFactor тогда 1). Это
+//     вернувшиеся деньги, поэтому и процент, и фикс умножаются на долю оставшихся денег
+//     (postSaleKeepOf) — те же деньги, что при возврате «с доплатой» (V3120_FINAL C1).
+//     Иначе обычный возврат половины денег оставлял бы партнёру всё вознаграждение.
+// Множитель оплаты (referralPayFactor: неоплаченный, отменённый, частичный возврат) —
+// у вызывающего, как прежде. Счёт со скидкой 100 % закрывается при выставлении
+// оплаченным (FREE_SERVICE_V1, billing.js settleZeroTotal) — множитель у него 1.
+//
+// full = false — ПРЕЖНЕЕ правило (процент — от суммы строки после скидки; скидка после
+// продажи уже в ней): только для строк месяцев, закрытых до этого решения
+// (referralRewardAtMonthRate, referralReportLines) — закрытый месяц не двигается от
+// смены правила. Строка, посчитанная новым правилом, несёт reward_base: 'full_price' —
+// по этой отметке запись месяца узнаёт своё правило.
+const REWARD_BASE_FULL = 'full_price';
+const REWARD_BASE_AFTER = 'after_discount';
+function referralRewardOf(rate, r, full = true) {
+  if (!rate) return 0;
+  if (!full && rate.unit !== 'fix') {
+    return rewardForLine(rate, { amount: (Number(r.amount) || 0) - (Number(r.discount) || 0), qty: r.qty });
+  }
+  return rewardForLine(rate, { amount: r.amount, qty: r.qty }) * postSaleKeepOf(r);
 }
 
 // REFERRAL_LINE_V1 — у счёта есть строка визита со своим источником. Условие — на СЧЁТ i:
@@ -2900,9 +2936,14 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
         paid,
         pay_factor: factor,
         goods_to_doctor: goodsToDoctor,
+        // Деньги строки («Сумма услуг», «Оплачено», НДС) — после скидки; база
+        // вознаграждения — нет (REFERRAL_FULL_PRICE_V1).
         after_discount: row.amount - row.discount,
-        // V3120_FINAL (C1) — фикс за услугу уменьшается скидкой после продажи (процент — сам).
-        reward: paid && !goodsToDoctor ? rewardForLine(rate, { amount: row.amount, discount: row.discount, qty: row.qty }) * factor * fixKeep(rate, row) : 0,
+        // REFERRAL_FULL_PRICE_V1 (3.22.0, владелец 2026-11-08: «discount not applied to the
+        // partners share») — процент от цены до скидки, фикс целиком; возврат (и «скидкой
+        // после продажи») уменьшает и то и другое в доле вернувшихся денег (referralRewardOf).
+        reward_base: REWARD_BASE_FULL,
+        reward: paid && !goodsToDoctor ? referralRewardOf(rate, row) * factor : 0,
         where: 'out',
         beneficiary_doctor_id: row.referral_doctor_id ?? null,
         referral_via: b.via,   // REFERRAL_LINE_V1 — 'visit' (источник визита/пациента) | 'line' (источник строки)
@@ -2942,8 +2983,10 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
 //
 // ФОРМУЛА (одна на обоих, различаются только числа):
 //   % × база: база — строки ОПЛАЧЕННЫХ (status 'paid') счетов госпитализации,
-//     сумма строки после её доли скидки счёта (ITEM_DISCOUNT_SQL; налог не
-//     вычитается — так же, как у обычного вознаграждения за направления).
+//     сумма строки ДО скидки счёта (REFERRAL_FULL_PRICE_V1, владелец 2026-11-08;
+//     прежде — после её доли скидки, ITEM_DISCOUNT_SQL) × доля денег после
+//     скидки после продажи (это возврат); налог не вычитается — так же, как у
+//     обычного вознаграждения за направления (referralRewardOf).
 //     В базу входят УСЛУГИ (строка с услугой каталога) и КОЙКО-ДНИ (строка
 //     проживания, shared/accommodation-line.js); ТОВАРЫ — медикаменты и
 //     расходники (строка стационара с clinic_item_id) — не входят; строка
@@ -3106,7 +3149,8 @@ function inpatientReferralLines(db, args, ctx, { allBeneficiaries = false } = {}
       invoice_id: r.invoice_id, item_id: r.item_id, branch_id: r.branch_id,   // PAY_PERIOD_CLOSE_V1
       patient_id: r.patient_id, patient: r.patient, mrn: r.mrn,
       admission_id: r.admission_id, admission_no: r.admission_no, where: 'in',
-      post_sale_keep: r.post_sale_keep,   // V3120_FINAL (C1) — фикс × доля после скидки после продажи
+      post_sale_keep: r.post_sale_keep,   // V3120_FINAL (C1) — процент и фикс × доля денег после скидки после продажи (REFERRAL_FULL_PRICE_V1)
+      reward_base: REWARD_BASE_FULL,      // REFERRAL_FULL_PRICE_V1 — правило базы для записи месяца
     };
     const isFirstPaid = paid && firstPaid.get(r.admission_id) === r.invoice_id;
     for (const b of bs) {
@@ -3116,13 +3160,16 @@ function inpatientReferralLines(db, args, ctx, { allBeneficiaries = false } = {}
                     ...(b.hidden ? { hidden: true } : {}) };
       if (r.line_kind === 'service' || r.line_kind === 'bed') {
         const after = (Number(r.amount) || 0) - (Number(r.discount) || 0);
+        const rate = { unit: 'pct', value: b.pct };
         out.push({
           ...base, ...who,
           line_kind: r.line_kind,
           service: r.service || (r.line_kind === 'bed' ? 'Проживание в палате' : ''),
           qty: r.qty, amount: r.amount, discount: r.discount, after_discount: after,
-          rate: { unit: 'pct', value: b.pct },
-          reward: paid && b.pct > 0 ? after * b.pct / 100 * factor : 0,
+          rate,
+          // REFERRAL_FULL_PRICE_V1 (3.22.0, владелец 2026-11-08) — процент от строки
+          // счёта госпитализации ДО скидки (возврат — в доле денег, referralRewardOf).
+          reward: paid && b.pct > 0 ? referralRewardOf(rate, r) * factor : 0,
         });
       }
       const fk = r.admission_id + '|' + b.key;
@@ -3176,7 +3223,13 @@ export function referralReportLines(db, args, ctx) {   // REFERRALS_CRM_V1 — �
     const m = monthOf(r.date);
     if (!closed.has(m)) return true;
     return r.beneficiary_doctor_id == null && !partners.has(m);
-  });
+  // REFERRAL_FULL_PRICE_V1 — партнёр месяца, закрытого ещё без записи партнёров (до
+  // мигр. 202), живой «как был» — значит и по правилу того времени (процент после скидки):
+  // закрытый месяц от смены правила не двигается.
+  }).map((r) => (closed.has(monthOf(r.date)) ? {
+    ...r, reward_base: REWARD_BASE_AFTER,
+    reward: referralRewardAtMonthRate({ ...r, kind: r.where === 'in' ? 'ref_in' : 'ref', fee: r.reward }, { rate: r.rate }),
+  } : r));
   const stored = storedLines(db, { from, to, kinds: ['ref', 'ref_in'], args, ctx, doctorsOnly: false })
     .filter((r) => inScope(r) && (r.doctor_id != null || partners.has(monthOf(r.date))));
   const adj = payAdjustments(db, { from, to, args, ctx, partners: true })
@@ -3186,12 +3239,13 @@ export function referralReportLines(db, args, ctx) {   // REFERRALS_CRM_V1 — �
       after_discount: 0, rate: null, reward: a.fee, service: a.label,
       referral: a.referral || '', beneficiary_doctor_id: a.doctor_id ?? null,
     }));
-  if (!adj.length && !stored.length && kept.length === live.length) return live;
+  if (!adj.length && !stored.length) return kept;   // REFERRAL_FULL_PRICE_V1 — kept, а не live: строки старых месяцев пересчитаны выше
   return [...kept, ...stored, ...adj];
 }
 
 // INPATIENT_BONUS_V1 — правило стационара словами, под обоими отчётами.
-const REFERRAL_INPATIENT_NOTE = 'Стационар (строки «Где: Стационар») — отдельное вознаграждение: партнёру — только при включённом «Вознаграждении за стационар» в его карточке, сотруднику — по вкладке «Стационар» его карточки, если он выбран в «Кто направил» (источник сотрудника) или записан направившим врачом заявки (лечащий врач за свою госпитализацию не получает, если его не записали направившим); один сотрудник — один раз. Процент — от оплаченных строк счёта госпитализации после скидки: услуги и койко-дни, без медикаментов и расходников; фиксированная сумма — один раз за госпитализацию, с первого оплаченного счёта. После частичного возврата по оплаченному счёту и процент, и фикс уменьшаются в той же доле, в какой вернули деньги; счёт, деньги по которому вернули целиком, не приносит ничего, и фикс переходит к следующему оплаченному счёту госпитализации (и может попасть в другой месяц). Обычные ставки групп к строкам стационара не применяются. Кто направил — из заявки на госпитализацию, иначе из карточки пациента.';
+// REFERRAL_FULL_PRICE_V1 (3.22.0, владелец 2026-11-08) — процент от строк ДО скидки.
+const REFERRAL_INPATIENT_NOTE = 'Стационар (строки «Где: Стационар») — отдельное вознаграждение: партнёру — только при включённом «Вознаграждении за стационар» в его карточке, сотруднику — по вкладке «Стационар» его карточки, если он выбран в «Кто направил» (источник сотрудника) или записан направившим врачом заявки (лечащий врач за свою госпитализацию не получает, если его не записали направившим); один сотрудник — один раз. Процент — от оплаченных строк счёта госпитализации до скидки (скидка его не уменьшает): услуги и койко-дни, без медикаментов и расходников; фиксированная сумма — один раз за госпитализацию, с первого оплаченного счёта. После частичного возврата по оплаченному счёту и процент, и фикс уменьшаются в той же доле, в какой вернули деньги; счёт, деньги по которому вернули целиком, не приносит ничего, и фикс переходит к следующему оплаченному счёту госпитализации (и может попасть в другой месяц). Обычные ставки групп к строкам стационара не применяются. Кто направил — из заявки на госпитализацию, иначе из карточки пациента.';
 
 // REFERRAL_LINE_V1 — правило «обоим» словами (только когда такие строки есть в отчёте).
 // Ревью U10 LOW-6 — «за свою услугу не получает» — правило только направившего СТРОКИ: врач —
@@ -3203,6 +3257,9 @@ function referralNotes(db, lines) {
   if (lines.some((r) => r.referral_via === 'line')) notes.push(REFERRAL_LINE_NOTE);   // REFERRAL_LINE_V1
   if (lines.some((r) => r.where !== 'in') && !anyReferralRate(db)) notes.push(REFERRAL_ZERO_NOTE);
   if (lines.some((r) => r.where === 'in')) notes.push(REFERRAL_INPATIENT_NOTE);
+  // REFERRAL_FULL_PRICE_V1 — в отчёте есть строки месяца, закрытого по прежнему правилу:
+  // записанные без отметки базы или партнёр старого месяца, пересчитанный по-прежнему.
+  if (lines.some((r) => r.where !== 'adj' && (r.frozen || r.reward_base) && r.reward_base !== REWARD_BASE_FULL)) notes.push(REFERRAL_LEGACY_NOTE);
   return notes;
 }
 
