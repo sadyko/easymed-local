@@ -29,10 +29,13 @@ import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
 // версия в специфике делает ОТДЕЛЬНЫЙ экземпляр модуля, а у дашборда есть
 // состояние.
 import {
-    renderDoctorDashboard, resetDoctorDashboard,
+    renderDoctorDashboard, resetDoctorDashboard, refreshDoctorDashboard,   // refreshDoctorDashboard: LIVE_REFRESH_V1
     serviceRateMap, tierProgressText, perServicePayApplies,
     loadDoctorPay, PAY_DENIED_NOTE,   // PAY_BASIS_PERFORMED_V1 / ROLE_REPORTS_SETTINGS_V1 (ревью M2)
 } from './doctor-dashboard.js';
+// LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — кабинет обновляется сам по потоку изменений;
+// правило «окно открыто» (в т. ч. мастер «Направить на услуги») — одно на все экраны.
+import { watchScreen, dialogOpen as liveDialogOpen } from '../live.js';
 // HEAD_DOCTOR_WARD_VIEW_V1 — главный врач делает свою работу ПРЯМО ИЗ КАБИНЕТА:
 // оба окна те же самые, что в разделе «Стационар», а не их копии.
 import { openAdmissionCard, openAdmissionReviewModal, openAdmissionAttendingModal } from './admission-modal.js?v=inp2';   // INPATIENT_TAB_V1 / ADMISSION_ORDER_V1
@@ -161,6 +164,7 @@ const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', profile: 'p
 
 export async function renderConsultation(container, { onNavigate, payload, tabId, onPayload, onShow } = {}) {
     stopAutoFresh();   // DIAG_ROUTE_V1 (D6) — новый экран — свой таймер (один на модуль)
+    if (liveStop) { liveStop(); liveStop = null; }   // LIVE_REFRESH_V1 — и своя подписка на изменения
     containerRef = container;
     onNavigateRef = onNavigate || null;
     tabIdRef = tabId || null;
@@ -218,6 +222,37 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // Today's referrals feed the KPI cards (3) and (4). Loaded after the first
     // paint so the queue never waits on it; repaint once it lands.
     loadTodayReferrals().then(() => { if (state.tab === 'appointments') paint(); });
+    // LIVE_REFRESH_V1 — подписка кабинета на изменения (onCabinetLive ниже).
+    liveStop = watchScreen({ root: container, screen: 'cabinet', reload: onCabinetLive });
+}
+
+// ---------------------------------------------------------------------------
+// LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — «ПАЦИЕНТ ОТПРАВЛЕН — ВРАЧ ВИДИТ СРАЗУ».
+//
+// Владелец: «whenever the invoice created or a patient sent show right away without
+// the refresh». Таймер DIAG_ROUTE_V1 (раз в 60 с) оставлен страховкой, но ждать минуту
+// врачу больше не нужно: кабинет подписан на поток изменений (live.js, правило 'cabinet'
+// в live-relevance.js: визиты, строки услуг, счёт и оплата — касса отпускает к осмотру,
+// возврат строки, результаты анализов) и перечитывает то, что на экране, теми же тихими
+// дорогами, что «Обновить»:
+//   • «Мои приёмы» — refreshQueueQuietly (фильтр, период, поиск, раскрытые группы и
+//     прокрутка списка на месте; перерисовываются только список и плитки);
+//   • «Мой день» — refreshDoctorDashboard({ quiet: true }) (без анимации графика);
+//   • другая вкладка — список помечается устаревшим и перечитается, когда её откроют.
+// Правило занятости — общее (live.js): открыто окно или мастер «Направить на услуги»
+// (data-visit-wizard — то же правило 3.22.0, что у таймера: dialogOpen ниже берёт его
+// оттуда), курсор в поле кабинета, панель скрыта — изменение ждёт и применяется, когда
+// кабинет свободен. Одна подписка на модуль: новое открытие кабинета снимает прежнюю.
+let liveStop = null;
+
+/** Изменение для кабинета пришло, и кабинет свободен. Экспорт — для проверки. */
+export async function onCabinetLive() {
+    if (state.tab === 'appointments') {
+        if (queueLoaded) await refreshQueueQuietly();
+        return;
+    }
+    if (queueLoaded) state.queueStale = true;   // откроют «Мои приёмы» — перечитаются (ensureTabData)
+    if (state.tab === 'dashboard') await refreshDoctorDashboard({ quiet: true });
 }
 
 // Рабочий список — по требованию. До DOCTOR_DASHBOARD_V1 он грузился всегда,
@@ -337,12 +372,11 @@ function cabinetOnScreen() {
 }
 /** Открыто модальное окно (у всех окон приложения — .modal / .modal-backdrop) или полноэкранный
  *  мастер записи «Направить на услуги» (у его подложки класса .modal нет — метка data-visit-wizard;
- *  DIAG_ROUTE_V1, 3.22.0, ревью I-2). */
+ *  DIAG_ROUTE_V1, 3.22.0, ревью I-2).
+ *  LIVE_REFRESH_V1 — правило переехало в live.js (BUSY_SELECTOR) и стало общим для всех
+ *  живых экранов; таймер кабинета спрашивает то же самое (плюс раскрытые выпадающие списки). */
 function dialogOpen() {
-    try {
-        if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return false;
-        return !!document.querySelector('.modal-backdrop, .modal, [data-visit-wizard]');
-    } catch (_) { return false; }
+    return liveDialogOpen();
 }
 /** Снять таймер (новое открытие раздела, уход с экрана). Экспорт — для проверки. */
 export function stopAutoFresh() {

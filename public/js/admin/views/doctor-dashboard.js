@@ -853,12 +853,18 @@ export async function renderDoctorDashboard(host, { onOpenWork, onOpenInpatients
     paint();
 }
 
-/** Перечитать данные по кнопке. Идентичность берётся заново — своя. */
-export async function refreshDoctorDashboard() {
+/** Перечитать данные по кнопке. Идентичность берётся заново — своя.
+ *  LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — { quiet: true }: «Мой день» обновлён
+ *  потоком изменений (consultation.js, live.js) — пациента отправили к врачу, касса
+ *  отпустила приём. Перерисовка та же (одним шагом, раскрытые группы — в state), но
+ *  график не «вырастает» заново: обновление незаметно, кроме самих чисел. */
+let quietPaint = false;
+export async function refreshDoctorDashboard({ quiet = false } = {}) {
     state.loading = true;
     await loadDoctorDashboard();
     state.loading = false;
-    paint();
+    quietPaint = !!quiet;
+    try { paint(); } finally { quietPaint = false; }
 }
 
 export function resetDoctorDashboard() {
@@ -1063,7 +1069,7 @@ function chartCard(stats) {
             ),
         ),
         h('div', { class: 'dash-card-body dd-chart-body' },
-            barChart({ series: stats.series, x: 'label', keys, fmt: earned ? money : String })),
+            barChart({ series: stats.series, x: 'label', keys, fmt: earned ? money : String, reveal: !quietPaint })),   // LIVE_REFRESH_V1 — тихо: без анимации
         topServicesBlock(stats.topServices),
     );
 }

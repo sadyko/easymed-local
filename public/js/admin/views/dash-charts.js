@@ -133,13 +133,15 @@ const svgOpen = (cls, W, H, label) =>
  *   tipFor(i)                — строки подсказки для точки i;
  *   xAt(W, i)                — где по горизонтали стоит точка i (для подсказки).
  */
-function chartFrame({ count, height, drawBase, drawOverlay, tipFor, xAt, label }) {
+function chartFrame({ count, height, drawBase, drawOverlay, tipFor, xAt, label, reveal = true }) {
     const wrap = h('div', { class: 'dash-chart' + (height ? '' : ' dash-chart-fill'), style: height ? { height: height + 'px' } : null });
     const tip = h('div', { class: 'dash-chart-tip', hidden: true });
     let hover = null;
     let W = DEFAULT_W, H = height || DEFAULT_H;
     let baseEl = null, overEl = null;
-    let revealed = false;
+    // LIVE_REFRESH_V1 (3.22.0) — reveal:false — график перерисован тихим обновлением
+    // экрана (live.js): столбики не «вырастают» заново на каждое изменение.
+    let revealed = !reveal;
 
     function measure() {
         const rect = wrap.getBoundingClientRect ? wrap.getBoundingClientRect() : null;
@@ -281,7 +283,7 @@ export function areaChart({ series = [], x = 'date', keys = [], fmt = String, fm
  * СТОЛБИКИ — по группе столбиков на день, по столбику на ряд. Под курсором —
  * полоса над группой (слой сверху), сами столбики не перерисовываются.
  */
-export function barChart({ series = [], x = 'date', keys = [], fmt = String, height = null } = {}) {
+export function barChart({ series = [], x = 'date', keys = [], fmt = String, height = null, reveal = true } = {}) {   // reveal: LIVE_REFRESH_V1
     if (!series.length || !keys.length) return h('div', { class: 'dash-chart-empty' }, tr('Нет данных'));
     const n = series.length;
     const max = niceMax(Math.max(...series.map((r) => Math.max(...keys.map((k) => Number(r[k.key]) || 0)))));
@@ -318,7 +320,7 @@ export function barChart({ series = [], x = 'date', keys = [], fmt = String, hei
         const r = series[i];
         return [{ label: shortDay(r[x]) }, ...keys.map((k) => ({ label: k.label, value: fmt(Number(r[k.key]) || 0), color: k.color }))];
     }
-    return chartFrame({ count: n, height, drawBase, drawOverlay, tipFor, xAt: (W, i) => geom(W, DEFAULT_H).xAt(i), label });
+    return chartFrame({ count: n, height, drawBase, drawOverlay, tipFor, xAt: (W, i) => geom(W, DEFAULT_H).xAt(i), label, reveal });
 }
 
 /**
