@@ -1179,7 +1179,14 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     if (!canDoc && !canRef) { toast(tr('Нет сотрудников, которые оказывают эту услугу.'), 'info'); return; }
                     const selStyle = { padding: '5px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', maxWidth: '180px' };
 
+                    // CARD_REFERRER_ONLY_V1 (3.22.0, ревью) — у строки без врача первым
+                    // стоит и выбран пункт «— не назначен —». Без него браузер показывал
+                    // выбранным первого врача списка, и смена одного «Направил» + «ОК»
+                    // молча назначала строке исполнителя (и ему начислялась доля).
+                    // Пустое значение — «врача не меняли» (docChanged ниже).
+                    const noDoctor = s.doctorId == null || s.doctorId === '';
                     const sel = canDoc ? h('select', { style: selStyle },
+                        noDoctor ? h('option', { value: '', selected: true }, '— не назначен —') : null,
                         ...(s.doctorId && !pool.some(d => String(d.id) === String(s.doctorId))
                             ? [h('option', { value: s.doctorId, selected: true }, s.doctorName || trf('Врач #{id}', { id: s.doctorId }))] : []),
                         ...pool.map(d => h('option', { value: d.id, selected: String(d.id) === String(s.doctorId) }, d.full_name))) : null;
@@ -1195,7 +1202,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
                     const save = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'ОК');
                     save.addEventListener('click', async () => {
-                        const docChanged = !!sel && String(sel.value) !== String(s.doctorId ?? '');
+                        // CARD_REFERRER_ONLY_V1 — «— не назначен —» (пустое значение) врача не меняет.
+                        const docChanged = !!sel && sel.value !== '' && String(sel.value) !== String(s.doctorId ?? '');
                         const nextRef = refSel && refSel.value !== '' ? Number(refSel.value) : null;
                         const refChanged = !!refSel && String(nextRef ?? '') !== String(s.referralId ?? '');
                         if (!docChanged && !refChanged) { toast('Ничего не изменилось.', 'info'); return; }

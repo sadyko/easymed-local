@@ -72,6 +72,10 @@ test('ревью L-6: «Сменить врача» берёт пул через
   const HERE = path.dirname(fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(HERE, '..', 'views', 'patient-card.js'), 'utf8');
   assert.doesNotMatch(src, /\.eq\('role', 'doctor'\)/);
-  assert.match(src, /const pool = await cardPerformerPool\(s, \{ users: await svcDoctorPool\(\), serviceOf: svcRouteRow \}\)/);
+  // CARD_REFERRER_ONLY_V1 (3.22.0, ревью) — после слияния с работой партнёра (врач и
+  // «Направил» одной правкой) сотрудники берутся заранее (docPool = svcDoctorPool()),
+  // а пул — по-прежнему cardPerformerPool.
+  assert.match(src, /editable \? svcDoctorPool\(\)/);
+  assert.match(src, /const pool = editable \? await cardPerformerPool\(s, \{ users: docPool, serviceOf: svcRouteRow \}\)/);
   assert.match(src, /select\('id, full_name, is_doctor, service_rates'\)\.eq\('is_active', true\)/);
 });
