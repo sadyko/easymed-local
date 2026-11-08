@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import {
     defaultPeriod, dmy, fmtSum, subline, matches, groupByRepresentative, groupTotals,
     dynamicsCell, printSheet, ACTIVITY_LABELS, ACTIVITY_TAG,
+    serviceDetailColumns,   // REFERRAL_ADJ_LABEL_I18N_V1
 } from './referrals-logic.js';
+import { STRINGS } from './i18n-strings.js';   // REFERRAL_ADJ_LABEL_I18N_V1
 
 test('defaultPeriod: с 1-го числа месяца по сегодня, локальные даты', () => {
     assert.deepEqual(defaultPeriod(new Date(2026, 9, 26, 15, 0)), { from: '2026-10-01', to: '2026-10-26' });
@@ -63,4 +65,42 @@ test('printSheet: колонки — подписи, строки — масси
     });
     assert.deepEqual(sheet.res, { columns: ['Врач', 'Визитов', 'Код'], rows: [['А', 3, '№ 0001']] });
     assert.deepEqual(sheet.meta, { title: 'Врачи', from: '2026-10-01', to: '2026-10-26' });
+});
+
+// REFERRAL_ADJ_LABEL_I18N_V1 (3.22.0, ревью) — «Подробнее» (и его печать): подпись
+// корректировки закрытого месяца — на языке экрана, тем же шаблоном словаря, что
+// ячейка отчёта (report-totals.js viaTemplate); по-русски — текст сервера как есть.
+const MONTHS = {
+    en: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
+    uz: ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'],
+    ru: ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'],
+};
+const txFor = (lang) => {
+    const tr = (s) => (STRINGS[s] && STRINGS[s][lang]) || s;
+    return { lang, tr, trf: (tpl, p) => Object.entries(p || {}).reduce((o, [k, v]) => o.split('{' + k + '}').join(String(v)), tr(tpl)),
+        monthName: (m) => MONTHS[lang][m] };
+};
+test('serviceDetailColumns: подпись корректировки — на языке экрана; услуга клиники — как есть', () => {
+    const adj = { date: '2026-11-01', patient: 'П', service: 'Корректировка за октябрь 2026',
+        service_t: { template: 'Корректировка за {month}', params: { month: '2026-10' } }, status: null, received: 0, reward: -25000 };
+    const usg = { date: '2026-11-02', patient: 'П', service: 'УЗИ', status: 'completed', received: 1, reward: 1 };
+    const svc = (lang) => serviceDetailColumns(true, { sumText: String, tr: txFor(lang).tr, tx: txFor(lang) }).find((c) => c.label === 'Услуга').value;
+    assert.equal(svc('en')(adj), 'Adjustment for October 2026');
+    assert.equal(svc('uz')(adj), 'Oktabr 2026 uchun tuzatish');
+    assert.equal(svc('ru')(adj), 'Корректировка за октябрь 2026', 'по-русски — текст сервера как есть');
+    assert.equal(svc('en')(usg), 'УЗИ', 'название услуги клиники не переводится');
+    assert.equal(svc('en')({ service: '' }), '—');
+    // Без tx (прежний вызов) — как прежде: текст сервера.
+    assert.equal(serviceDetailColumns(true, { sumText: String, tr: txFor('en').tr }).find((c) => c.label === 'Услуга').value(adj), 'Корректировка за октябрь 2026');
+    const k = 'Корректировка за {month}';
+    assert.ok(STRINGS[k] && STRINGS[k].uz && STRINGS[k].en, k + ': статья словаря');
+    assert.ok(!/[Ѐ-ӿ]/.test(STRINGS[k].uz + STRINGS[k].en), k + ': без кириллицы в uz/en');
+});
+
+test('экраны «Подробнее» передают в колонки словарь языка экрана (tx), а не один tr', async () => {
+    const fs = await import('node:fs');
+    for (const f of ['./views/referrals-representatives.js', './views/referrals-activity.js']) {
+        const src = fs.readFileSync(new URL(f, import.meta.url), 'utf8');
+        assert.match(src, /serviceDetailColumns\(money, \{ sumText, tr, tx: detailTx\(\) \}\)/, f);
+    }
 });

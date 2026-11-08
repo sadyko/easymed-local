@@ -22,7 +22,7 @@ import { isAdminUser } from '../grants.js';
 import { tableWriteAllowed } from '../../db/write-grant.js';   // закрепление врача — по праву записи в referral_sources, ровно как /api/db
 import { canViewSection } from '../roles.js';
 import { canSeeReportKey } from '../report-access.js';   // деньги — по группе отчётов reports.referrals (REPORT_GROUP), как у дашборда
-import { referralReportLines, resolveRange } from './reports.js';
+import { referralReportLines, resolveRange, adjustmentLabelTemplate } from './reports.js';   // adjustmentLabelTemplate: REFERRAL_ADJ_LABEL_I18N_V1
 import { buildingContext } from '../domain/buildings.js';   // FIX_318_V1 (L5) — строкам отчёта — контекст зданий, как у run_report
 import { today, localDate, localRangeWhere } from '../domain/day.js';
 import { EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE } from '../domain/line-referral.js';   // REFERRAL_LINE_V1 (полировка, п. 11) — счёт визитов как деньги
@@ -506,8 +506,14 @@ function sourceDetailLines(db, sourceId, w, money, cash) {
   if (items) {
     for (const [k, m] of items) {
       if (shown.has(k)) continue;
-      out.push({ line_id: null, visit_id: null, date: m.date, patient_id: null, patient: m.patient, service: m.service,
-        status: null, received: round2(m.received), reward: round2(m.reward) });
+      const line = { line_id: null, visit_id: null, date: m.date, patient_id: null, patient: m.patient, service: m.service,
+        status: null, received: round2(m.received), reward: round2(m.reward) };
+      // REFERRAL_ADJ_LABEL_I18N_V1 (3.22.0, ревью) — «Корректировка за <месяц>»: рядом с
+      // русским текстом — шаблон словаря (месяц ГГГГ-ММ словом пишет браузер), как у
+      // ячейки отчёта (reports.js cells_t). Записанная подпись не меняется.
+      const t = adjustmentLabelTemplate(m.service);
+      if (t) line.service_t = t;
+      out.push(line);
     }
     out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   }

@@ -100,16 +100,24 @@ const YM_RE = /\b(\d{4})-(0[1-9]|1[0-2])\b(?!-\d)/g;
 // слова словаря; список способов словами («Наличные, Карта») tr() оставит как есть.
 export const ENUM_COLS = new Set(['Где', 'Вид', 'Статус', 'Статус счёта', 'Режим ставок', 'Оплата', 'Роль', 'Категория', 'Ставка НДС', 'Пол', 'Тип палаты', 'Кто направил', 'Способ оплаты']);
 
+// Текст сервера и его шаблон ({ template, params }) → строка на языке экрана:
+// по-русски (или без шаблона) — текст словарём целиком; иначе — шаблон словаря,
+// а месяц ГГГГ-ММ в значениях — словом языка экрана.
+// REFERRAL_ADJ_LABEL_I18N_V1 (3.22.0, ревью) — вынесено из localizeReport: тем же
+// правилом окно «Подробнее» «Реферирования» переводит «Корректировка за …».
+export function viaTemplate(text, t, tx) {
+    if (!t || !t.template || tx.lang === 'ru') return tx.tr(text);
+    const params = {};
+    for (const [k, v] of Object.entries(t.params || {})) {
+        params[k] = String(v == null ? '' : v).replace(YM_RE,
+            (_, y, m) => tx.monthName(Number(m) - 1, { standalone: true }) + ' ' + y);
+    }
+    return tx.trf(t.template, params);
+}
+
 export function localizeReport(r, tx) {
     const res = r || {};
-    const ym = (v) => String(v == null ? '' : v).replace(YM_RE,
-        (_, y, m) => tx.monthName(Number(m) - 1, { standalone: true }) + ' ' + y);
-    const viaT = (text, t) => {
-        if (!t || !t.template || tx.lang === 'ru') return tx.tr(text);
-        const params = {};
-        for (const [k, v] of Object.entries(t.params || {})) params[k] = ym(v);
-        return tx.trf(t.template, params);
-    };
+    const viaT = (text, t) => viaTemplate(text, t, tx);
     const cols = res.columns || [];
     const cellT = new Map((res.cells_t || []).map(([ri, ci, template, params]) => [ri + ':' + ci, { template, params }]));
     const enumCol = cols.map((c) => ENUM_COLS.has(c));

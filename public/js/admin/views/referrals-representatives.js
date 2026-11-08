@@ -12,6 +12,7 @@ import { tr, trf } from '../i18n.js';
 import { grantAllows } from '../permissions.js';
 import {
     rpc, kpi, kpiRow, sumText, filterBar, loadingEl, errorEl, nameCell, actionButtons, openPrint, detailModal, simpleTable,
+    detailTx,   // REFERRAL_ADJ_LABEL_I18N_V1
 } from './referrals-common.js';
 import {
     defaultPeriod, groupByRepresentative, matches, subline, fmtSum, dmy, printSheet, VISIT_STATUS_RU,
@@ -170,7 +171,7 @@ export async function renderReferralsRepresentatives(host, ctx = {}) {
     }
 
     // REFERRAL_DETAIL_BY_SERVICE_V1 — строка окна — УСЛУГА, а не визит.
-    const detailColumns = (money) => serviceDetailColumns(money, { sumText, tr });
+    const detailColumns = (money) => serviceDetailColumns(money, { sumText, tr, tx: detailTx() });   // REFERRAL_ADJ_LABEL_I18N_V1 — «Корректировка за …» на языке экрана
 
     function sheetFor(s, det) {
         const cols = detailColumns(det.money).map((c) => ({ label: c.label, value: c.print || c.value }));

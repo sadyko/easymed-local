@@ -2348,17 +2348,25 @@ const INPATIENT_NO_RATE_T = 'Услуг, у исполнителя которы�
 const ADJ_LABEL_T = 'Корректировка за {month}';
 const ADJ_LABEL_SERVICE_T = 'Корректировка за {month}: {service}';
 const ADJ_LABEL_RE = /^Корректировка за (\S+) (\d{4})(?:: ([\s\S]*))?$/;
+// Подпись «Корректировка за <месяц> <год>[: услуга]» → { template, params } или null.
+// Узнаётся по тексту, а не по объекту: строки снимка закрытого месяца несут подпись
+// так, как она была записана, и запись не меняется. REFERRAL_ADJ_LABEL_I18N_V1
+// (3.22.0, ревью) — та же функция даёт шаблон строке окна «Подробнее» (rpc/referrals.js).
+export function adjustmentLabelTemplate(v) {
+  if (typeof v !== 'string' || !v.startsWith('Корректировка за ')) return null;
+  const m = ADJ_LABEL_RE.exec(v);
+  const mi = m ? MONTHS_RU.indexOf(m[1]) : -1;
+  if (mi < 0) return null;
+  const month = m[2] + '-' + String(mi + 1).padStart(2, '0');
+  return m[3] != null ? { template: ADJ_LABEL_SERVICE_T, params: { month, service: m[3] } } : { template: ADJ_LABEL_T, params: { month } };
+}
 // Ячейки «Корректировка за <месяц> <год>[: услуга]» → шаблоны (строки
 // снимка закрытого месяца тоже: подпись узнаётся по тексту, а не по объекту).
 function cellTemplates(rows) {
   const out = [];
   (rows || []).forEach((row, ri) => (row || []).forEach((v, ci) => {
-    if (typeof v !== 'string' || !v.startsWith('Корректировка за ')) return;
-    const m = ADJ_LABEL_RE.exec(v);
-    const mi = m ? MONTHS_RU.indexOf(m[1]) : -1;
-    if (mi < 0) return;
-    const month = m[2] + '-' + String(mi + 1).padStart(2, '0');
-    out.push(m[3] != null ? [ri, ci, ADJ_LABEL_SERVICE_T, { month, service: m[3] }] : [ri, ci, ADJ_LABEL_T, { month }]);
+    const t = adjustmentLabelTemplate(v);
+    if (t) out.push([ri, ci, t.template, t.params]);
   }));
   return out;
 }

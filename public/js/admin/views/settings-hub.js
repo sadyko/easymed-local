@@ -1034,7 +1034,15 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
             // REFERRAL_SOURCE_FORM_V2 — номер карты живёт только у выплаты на
             // карту: сменили тип — прежний номер стирается, а не лежит молча
             // у партнёра, которому теперь платят наличными.
-            if (payload.payment_type !== 'card') { if (isEdit) payload.card_number = null; else delete payload.card_number; }
+            // REFERRAL_FORM_NO_MONEY_EDIT_V1 (3.22.0, ревью) — стирается, только
+            // когда тип оплаты ПРИСЛАН. Роли без «Цен и процентов» поля типа
+            // оплаты в окне нет, и null в card_number сервер отклонял 403 — она
+            // не могла сохранить ни одной правки; «—» в типе тоже не шлёт ничего,
+            // и прежний тип в базе остаётся, а с ним и номер.
+            if (payload.payment_type !== 'card') {
+                if (isEdit && Object.prototype.hasOwnProperty.call(payload, 'payment_type')) payload.card_number = null;
+                else delete payload.card_number;
+            }
             const full = [payload.last_name, payload.first_name, payload.middle_name]
                 .map(v => (v || '').trim()).filter(Boolean).join(' ');
             // REFERRALS_CRM_V1 — строка, пришедшая импортом, несёт ФИО одной колонкой

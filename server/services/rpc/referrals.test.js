@@ -176,7 +176,7 @@ test('подробнее: визиты источника за период с �
 // ---------------------------------------------------------------------------
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { referralReportLines } from './reports.js';
+import { referralReportLines, runReport } from './reports.js';   // runReport: REFERRAL_ADJ_LABEL_I18N_V1
 import { buildingContext } from '../domain/buildings.js';
 
 test('M3 (повтор R4): «Внутренние врачи» — по is_doctor: администратор-врач (ADMIN_DOCTOR_V1) в списке и в итогах', () => {
@@ -344,6 +344,17 @@ test('подробнее: корректировка закрытого меся
   assert.match(adj[0].service, /^Корректировка за /);
   assert.equal(sumOf(d.lines, 'reward'), d.reward, 'строки складываются в «Вознаграждение» шапки');
   assert.equal(sumOf(d.lines, 'received'), d.received, 'и в «Получено»');
+
+  // REFERRAL_ADJ_LABEL_I18N_V1 — подпись корректировки едет ещё и шаблоном словаря
+  // (месяц — ГГГГ-ММ, словом его пишет браузер на языке экрана); русский текст тот же.
+  assert.deepEqual(adj[0].service_t, { template: 'Корректировка за {month}', params: { month: pm } });
+  assert.ok(d.lines.filter((l) => l !== adj[0]).every((l) => !('service_t' in l)), 'у обычной услуги шаблона нет');
+  // В отчёте «Рефералы» (детализация) та же ячейка уже переводится шаблоном (cells_t).
+  const rep = runReport(db, { kind: 'referrals_detail', from: cur + '-01', to: today(db) }, admin);
+  const ri = rep.rows.findIndex((r) => r.includes(adj[0].service));
+  assert.ok(ri >= 0, 'строка корректировки в отчёте');
+  const ci = rep.columns.indexOf('Услуга');
+  assert.deepEqual(rep.cells_t.find(([r, c]) => r === ri && c === ci), [ri, ci, 'Корректировка за {month}', { month: pm }]);
 });
 
 test('подробнее: стационарное вознаграждение партнёра — своими строками; строки сходятся с шапкой', () => {
