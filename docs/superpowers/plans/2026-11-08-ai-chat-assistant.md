@@ -38,6 +38,18 @@
 
 **A4. Hardening:** `retryJob` — backoff index `Math.max(0, Math.min(attempts - 1, len - 1))` and requeue only `WHERE status = 'working'`; `setAiEnabled(true)` keeps the existing `enabled_at` when the switch is already on; `lastOperatorAt` for `meta_dm` ignores operator rows with `status = 'failed'`.
 
+**A5. Payload size (review of Tasks 6-8: 2000 public services ≈ 490 KB, the control plane's `/cp` JSON limit is 100 KB).**
+- `facts.js` sends a slim shape: `clinic` = `{ name, phone, address, website, telegram, instagram }` (whatever of these the snapshot's clinic part has; strings only); `branches` = `[{ name, address, phone, hours, open_24_7 }]`; `doctors` = `[{ name, specialties, consultations: [{ name, price }] }]` where `name` is ONE string (ru, falling back to uz/en); `services` = `[{ name, group, price }]` — ONE name string (ru, falling back to uz/en), no `id`; `packages` = `[{ name, price }]` with one name string. Wrap `buildSnapshot` in try/catch → `{}`. Test: 2000 shown services produce `JSON.stringify(clinicFacts(db)).length < 200_000`.
+- `conversation.js` cuts every transcript text to 2000 characters, and drops patient lines starting with `/` (bot commands).
+- `cp-client.js` sends the install token in the header `X-Install-Token` (NOT in the body); maps HTTP 413 → `{ error: 'too_large' }`. The worker treats `too_large` like `bad_response` (hand off, no retry).
+- Control plane (Task 17): the AI route is mounted BEFORE the global `app.use('/cp', express.json({ limit: '100kb' }))`, reads `X-Install-Token` and authenticates it BEFORE parsing the body, then parses with `express.json({ limit: '1mb' })`. Tests post with the header.
+
+**A6. Staff are not identified outward.** In `conversation.js`, Telegram and Meta DM rows written by an operator (`direction='out' AND sent_by IS NOT NULL`) become `{ from: 'clinic', text: '(ответ сотрудника клиники)' }` — no name, no text. AI replies (`by_ai = 1`) keep their text. Comment-thread page replies: by_ai=1 keep text, other page rows → the same placeholder. Test: an operator row with a signature `— Иванова Мария` never appears in the transcript.
+
+**A7. The answer's shape is validated on the clinic side** (`cp-client.js`): `reply` needs a non-empty string `text`; `reply_comment` non-empty `public_text` and `private_text`; `create_lead` non-empty `text` and string `name`/`phone`/`wish`; `hand_off` a string `text` (may be empty — the worker substitutes HANDOFF_TEXT). Otherwise `{ error: 'bad_response' }`.
+
+**A8. Switch screen warns when the AI has nothing to say** (Task 13/14): `ai_settings_get` also returns `facts: { services: N, doctors: M }` (counts from `clinicFacts`); the screen shows «ИИ не знает ни одной услуги: отметьте услуги для показа на сайте в «Настройки → Услуги для сайта и партнёров»» when `services === 0`.
+
 **Owner decision pending (do not implement):** replies typed by staff directly in the Facebook/Instagram app (not in Easy-Med) arrive with `sent_by NULL` and currently do NOT silence the AI. Keep it that way unless the owner decides otherwise.
 
 ## File map
