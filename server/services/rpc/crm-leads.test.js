@@ -163,3 +163,31 @@ test('CRM_UNIFY_V1: crm_search { assigned } — мои / ничьи / по им�
   assert.equal(search(db, { q: 'тестова' }, admin).length, 3, 'без assigned — как раньше');
   assert.deepEqual(search(db, { q: 'тестова', assigned: 'мусор' }, admin), [], 'непонятный фильтр расширил выдачу');
 });
+
+// CRM_DUP_SAME_PATIENT_V1 (2026-11-08) — владелец: при выбранном пациенте окно
+// дубля показывало ВСЕ заявки с тем же номером («похожие» — родственники,
+// другие люди на одном телефоне). Нужны ровно заявки ЭТОГО пациента.
+test('crm_leads_by_phone с patient_id: только заявки этого пациента, чужие по номеру — нет', () => {
+  const { db, admin } = seed();
+  const pat = (name) => Number(db.prepare("INSERT INTO patients (full_name, phone) VALUES (?, '915662278')").run(name).lastInsertRowid);
+  const p1 = pat('TEST TEST');
+  const p2 = pat('Тест 2 Тест 2');
+  const mine = ins(db, { full_name: 'TEST TEST', phone: '915662278' });
+  const other = ins(db, { full_name: 'Тест 2 Тест 2', phone: '915662278' });
+  const loose = ins(db, { full_name: 'нев', phone: '915662278' });
+  db.prepare('UPDATE crm_requests SET patient_id = ? WHERE id = ?').run(p1, mine);
+  db.prepare('UPDATE crm_requests SET patient_id = ? WHERE id = ?').run(p2, other);
+  const rpc = getRpc('crm_leads_by_phone');
+  assert.deepEqual(rpc(db, { phone: '+998915662278', patient_id: p1 }, admin).map((r) => r.id), [mine]);
+  assert.equal(rpc(db, { phone: '+998915662278' }, admin).length, 3, 'без пациента — по номеру, как раньше');
+  assert.ok(loose);
+});
+
+test('crm_leads_by_phone с patient_id: чужая заявка ДРУГОГО пациента не даёт строки «у другого оператора»', () => {
+  const { db, op1, op2 } = seed();
+  const p1 = Number(db.prepare("INSERT INTO patients (full_name, phone) VALUES ('A', '942846494')").run().lastInsertRowid);
+  const p2 = Number(db.prepare("INSERT INTO patients (full_name, phone) VALUES ('B', '942846494')").run().lastInsertRowid);
+  const foreignOther = ins(db, { phone: '942846494', assigned_to: op2.id });
+  db.prepare('UPDATE crm_requests SET patient_id = ? WHERE id = ?').run(p2, foreignOther);
+  assert.deepEqual(getRpc('crm_leads_by_phone')(db, { phone: '942846494', patient_id: p1 }, op1), []);
+});

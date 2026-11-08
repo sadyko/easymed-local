@@ -63,8 +63,11 @@ export function nameCell(name, sub) {
         sub ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub) : null);
 }
 
-export function actionButtons({ onDetails, onPrint }) {
+export function actionButtons({ onDetails, onPrint, onEdit = null }) {
     return h('div', { class: 'ref-actions' },
+        // REFERRAL_EDIT_FROM_REPS_V1 — карточка врача (номер, способ выплаты…);
+        // только тем, кому справочник открыт на изменение, — иначе кнопки нет.
+        onEdit ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-ref-edit': '1', onclick: onEdit }, Icon('Edit', { size: 13 }), ' ', 'Изменить') : null,
         h('button', { class: 'btn btn-sm ref-btn-more', type: 'button', onclick: onDetails }, 'Подробнее'),
         h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: onPrint }, Icon('Print', { size: 13 }), ' ', 'Печать'));
 }

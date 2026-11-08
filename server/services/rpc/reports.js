@@ -78,7 +78,7 @@ import {
 // браузером: тот же приём, что у payment-methods.js выше. Отчёт «Рефералы»
 // существует дважды — здесь и выгрузкой в reports-export.js, — и две копии
 // правила «какая ставка применяется» означали бы две разные суммы к выплате.
-import { resolveReferralRate, rewardForLine, referralGroupOf } from '../../../public/js/shared/referral-reward.js';
+import { resolveReferralRate, rewardForLine, referralGroupOf, serviceRateOf } from '../../../public/js/shared/referral-reward.js';   // serviceRateOf: REFERRAL_SERVICE_RATES_V1
 import { lineBeneficiaries } from '../domain/line-referral.js';   // REFERRAL_LINE_V1 — кому платить за строку (одно правило с окном регистрации)
 // REPORTS_V2 — группа услуги (одна из пяти) подписью раздела каталога: тот же
 // модуль, что раскладывает каталог в мастере записи.
@@ -2745,6 +2745,10 @@ function anyReferralRate(db) {
   for (const s of db.prepare("SELECT own_percent, own_rates FROM referral_sources WHERE reward_mode = 'own'").all()) {
     if (Number(s.own_percent) > 0 || hasPositive(s.own_rates)) return true;
   }
+  // REFERRAL_SERVICE_RATES_V1 — особая ставка за услугу действует в любом режиме.
+  for (const s of db.prepare("SELECT service_rates FROM referral_sources WHERE service_rates <> ''").all()) {
+    if (hasPositive(s.service_rates)) return true;
+  }
   for (const c of db.prepare('SELECT standard_percent, rates FROM referral_source_categories').all()) {
     if (Number(c.standard_percent) > 0 || hasPositive(c.rates)) return true;
   }
@@ -2828,7 +2832,7 @@ function lineSourcesOf(db, rows) {
 function referralLines(db, args, ctx, { doctorId = null } = {}) {
   const scope = referrerScope(args);
   const sources = new Map(db.prepare(
-    'SELECT id, name, code, category_id, reward_mode, own_percent, own_rates, doctor_id FROM referral_sources').all()
+    'SELECT id, name, code, category_id, reward_mode, own_percent, own_rates, service_rates, doctor_id FROM referral_sources').all()   // service_rates: REFERRAL_SERVICE_RATES_V1
     .map((r) => [r.id, r]));
   const categories = new Map(db.prepare(
     'SELECT id, name, standard_percent, rates, is_internal FROM referral_source_categories').all()
@@ -2873,7 +2877,9 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
       // GROUPS_FIVE_REFERRAL_V1 — ставка по ГРУППЕ услуги (services.type, одна
       // из пяти), а не по строке справочника типов. Строка без услуги — без группы.
       const serviceGroup = row.service_id != null ? referralGroupOf(row.service_group) : null;
-      const rate = resolveReferralRate({ source: src, category: cat, serviceGroup });
+      // REFERRAL_SERVICE_RATES_V1 — особая ставка источника за ЭТУ услугу стоит
+      // выше и категории, и своих групп (shared/referral-reward.js).
+      const rate = resolveReferralRate({ source: src, category: cat, serviceGroup, serviceId: row.service_id });
       // V3120_FIX — частичный возврат уменьшает вознаграждение пропорционально.
       const factor = referralPayFactor(row);
       const paid = factor > 0;
@@ -2887,7 +2893,9 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
         ...row,
         internal,
         category_name: (cat && cat.name) || row.referral_category || '',
-        mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
+        // REFERRAL_SERVICE_RATES_V1 — особая ставка названа своим именем: сумма,
+        // не похожая ни на категорию, ни на «свою», иначе читается как ошибка.
+        mode: serviceRateOf(src, row.service_id) ? 'Особая (услуга)' : (src && src.reward_mode === 'own' ? 'Своя' : 'По категории'),
         rate,
         paid,
         pay_factor: factor,

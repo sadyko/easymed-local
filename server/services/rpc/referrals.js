@@ -170,7 +170,7 @@ function moneyBy(db, { from, to }, user, scope) {
   for (const r of referralReportLines(db, { from, to, referrer: scope }, buildingContext(db))) {
     const key = scope === 'internal' ? r.beneficiary_doctor_id : r.referral_source_id;
     if (key == null) continue;
-    const acc = out.get(key) || { received: 0, reward: 0, visits: new Map() };
+    const acc = out.get(key) || { received: 0, reward: 0, visits: new Map(), items: new Map() };
     const received = r.paid ? num(r.after_discount) * num(r.pay_factor) : 0;
     acc.received += received;
     acc.reward += num(r.reward);
@@ -178,6 +178,14 @@ function moneyBy(db, { from, to }, user, scope) {
       const v = acc.visits.get(r.visit_id) || { received: 0, reward: 0 };
       v.received += received; v.reward += num(r.reward);
       acc.visits.set(r.visit_id, v);
+    }
+    // REFERRAL_DETAIL_BY_SERVICE_V1 — и по строке счёта: «Подробнее» показывает
+    // каждую услугу отдельной строкой со своими деньгами.
+    if (r.invoice_item_id != null) {
+      const k = Number(r.invoice_item_id);
+      const it = acc.items.get(k) || { received: 0, reward: 0, date: r.date || null, patient: r.patient || '', service: r.service || '' };
+      it.received += received; it.reward += num(r.reward);
+      acc.items.set(k, it);
     }
     out.set(key, acc);
   }
@@ -430,6 +438,71 @@ export function referralsSourceDetail(db, args, user) {
   });
   const out = { source, from, to, money, visits: rows, patients: new Set(visits.map((v) => v.patient_id)).size };
   if (money) { out.received = round2(cash ? cash.received : 0); out.reward = round2(cash ? cash.reward : 0); }
+  out.lines = sourceDetailLines(db, sourceId, w, money, cash);
+  return out;
+}
+
+// REFERRAL_DETAIL_BY_SERVICE_V1 (владелец, 2026-11-07, по снимку «Подробнее»:
+// «it shouldn't be by date, each service should be separately shown here») —
+// строки окна «Подробнее» — УСЛУГИ, а не визиты: визит из трёх услуг давал одну
+// строку со списком через запятую и одной суммой, и понять, за что именно
+// начислено вознаграждение, было нельзя.
+//
+// Какие услуги — те же, что делают визит направлением этого врача
+// (sourceVisitsSql): у визита, где он источник визита (иначе карточки
+// пациента), — все живые услуги визита (партнёру платят за каждую строку
+// визита); у визита, где он источник только СТРОКИ, — только эти строки.
+// Отменённые, снятые и возвращённые строки не показываются — их и в
+// направлениях нет.
+//
+// Деньги — из тех же строк отчёта «Рефералы», что и итоги окна (moneyBy), по
+// строке счёта. Строка отчёта, которой нет среди показанных услуг (счёт за
+// период выставлен по визиту другого периода — отчёт считает по дате СЧЁТА),
+// добавляется своей строкой: иначе сумма строк окна не сходилась бы с «Получено»
+// и «Вознаграждение» в его шапке.
+const LINE_STATUS = Object.freeze({
+  added: 'added', queued: 'queued', collected: 'collected', in_progress: 'in_progress',
+  resulted: 'resulted', completed: 'completed',
+});
+function sourceDetailLines(db, sourceId, w, money, cash) {
+  const lines = db.prepare(`
+    SELECT vs.id, vs.invoice_item_id, vs.status AS line_status, v.id AS visit_id,
+           ${localDate('v.visit_date')} AS day, pt.id AS patient_id, pt.full_name AS patient,
+           COALESCE(s.name, ct.name_ru, ct.name, pr.name, '') AS service
+      FROM visit_services vs
+      JOIN visits v ON v.id = vs.visit_id
+      JOIN patients pt ON pt.id = v.patient_id
+      LEFT JOIN services s ON s.id = vs.service_id
+      LEFT JOIN consultation_types ct ON ct.id = vs.consultation_type_id
+      LEFT JOIN products pr ON pr.id = vs.clinic_item_id
+     WHERE ${VISIT_LIVE} AND ${w.sql}
+       AND vs.status NOT IN ('cancelled', 'removed') AND ${LINE_NOT_REFUNDED('vs')}
+       AND (${SOURCE_OF_VISIT} = ?
+            OR (vs.referred_by_source_id = ?
+                AND v.id IN (SELECT sv.visit_id FROM (${sourceVisitsSql(w.sql)}) sv WHERE sv.source_id = ?)))
+     ORDER BY v.visit_date DESC, vs.id`).all(...w.params, sourceId, sourceId, ...w.params, ...w.params, sourceId);
+  // Деньги видит не каждая роль (canSeeReferralMoney); у врача без счетов за
+  // период cash пуст — тогда у строк нули, а не пропавшие поля.
+  const items = money ? (cash ? cash.items : new Map()) : null;
+  const shown = new Set();
+  const out = lines.map((l) => {
+    const row = { line_id: l.id, visit_id: l.visit_id, date: l.day, patient_id: l.patient_id, patient: l.patient || '',
+      service: l.service || '', status: LINE_STATUS[l.line_status] || l.line_status };
+    if (items) {
+      const m = l.invoice_item_id != null ? items.get(Number(l.invoice_item_id)) : null;
+      if (m) shown.add(Number(l.invoice_item_id));
+      row.received = round2(m ? m.received : 0); row.reward = round2(m ? m.reward : 0);
+    }
+    return row;
+  });
+  if (items) {
+    for (const [k, m] of items) {
+      if (shown.has(k)) continue;
+      out.push({ line_id: null, visit_id: null, date: m.date, patient_id: null, patient: m.patient, service: m.service,
+        status: null, received: round2(m.received), reward: round2(m.reward) });
+    }
+    out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  }
   return out;
 }
 

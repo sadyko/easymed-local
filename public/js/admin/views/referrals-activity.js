@@ -10,7 +10,7 @@
 import { h, Tag, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { rpc, kpi, kpiRow, loadingEl, errorEl, nameCell, actionButtons, openPrint, detailModal, simpleTable, sumText } from './referrals-common.js';
-import { matches, subline, dmy, dynamicsCell, printSheet, ACTIVITY_LABELS, ACTIVITY_TAG, VISIT_STATUS_RU, ymdLocal } from '../referrals-logic.js';
+import { matches, subline, dmy, dynamicsCell, printSheet, ACTIVITY_LABELS, ACTIVITY_TAG, VISIT_STATUS_RU, ymdLocal, serviceDetailColumns } from '../referrals-logic.js';   // serviceDetailColumns: REFERRAL_DETAIL_BY_SERVICE_V1
 import { ACTIVITY_WINDOWS } from '../../shared/referral-activity.js';
 
 const WINDOW_LABEL = { 7: 'Последние 7 дн.', 30: 'Последние 30 дн.', 90: 'Последние 90 дн.' };
@@ -106,20 +106,13 @@ export async function renderReferralsActivity(host, ctx = {}) {
         const d = new Date(to + 'T12:00:00'); d.setDate(d.getDate() - 89);
         return { from: ymdLocal(d), to };
     }
-    function detailColumns(money) {
-        return [
-            { label: 'Дата', value: (v) => dmy(v.date) },
-            { label: 'Пациент', value: (v) => v.patient || '—' },
-            { label: 'Услуги', value: (v) => v.services || '—' },
-            { label: 'Статус', value: (v) => tr(VISIT_STATUS_RU[v.status] || v.status) },
-            ...(money ? [{ label: 'Получено', value: (v) => sumText(v.received), num: true, print: (v) => Math.round(v.received) }] : []),
-        ];
-    }
+    // REFERRAL_DETAIL_BY_SERVICE_V1 — по услугам, как «Подробнее» у «Представителей».
+    const detailColumns = (money) => serviceDetailColumns(money, { sumText, tr });
     function sheetFor(s, det) {
         return printSheet({
             title: trf('Направления врача {name}', { name: s.name }) + (s.code ? ' (№ ' + s.code + ')' : ''),
             from: det.from, to: det.to,
-            columns: detailColumns(det.money).map((c) => ({ label: c.label, value: c.print || c.value })), rows: det.visits,
+            columns: detailColumns(det.money).map((c) => ({ label: c.label, value: c.print || c.value })), rows: det.lines || [],
         });
     }
     async function openDetails(s) {
@@ -133,7 +126,7 @@ export async function renderReferralsActivity(host, ctx = {}) {
         try { det = await rpc('referrals_source_detail', { source_id: s.id, ...p }); }
         catch (e) { clear(m.body); m.body.appendChild(errorEl((e && e.message) || String(e))); return; }
         clear(m.body);
-        m.body.appendChild(simpleTable(detailColumns(det.money), det.visits, { emptyText: tr('За 90 дней визитов от этого врача не было.') }));
+        m.body.appendChild(simpleTable(detailColumns(det.money), det.lines || [], { emptyText: tr('За 90 дней визитов от этого врача не было.') }));
     }
     async function printSource(s) {
         try { const det = await rpc('referrals_source_detail', { source_id: s.id, ...detailPeriod() }); openPrint(sheetFor(s, det)); }

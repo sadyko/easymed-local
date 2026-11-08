@@ -1,0 +1,15 @@
+-- REFERRAL_SERVICE_RATES_V1 — особая ставка источника направления за ОТДЕЛЬНУЮ
+-- услугу.
+--
+-- Владелец (2026-11-07): «sometimes for some services we give them more than
+-- general — give me possibility to provide more % for some services». Ставки
+-- по пяти группам (мигр. 153) для этого слишком крупны: «за УЗИ щитовидной
+-- платим 15 %, за остальную диагностику — 10 %» одной группой не выразить.
+--
+-- JSON-массив [{ service_id, unit: 'pct'|'fix', value }] по образцу own_rates.
+-- ОТДЕЛЬНАЯ колонка, а не записи внутри own_rates: у own_rates зафиксировано
+-- «читается только в режиме 'own'» (shared/referral-reward.js, решение
+-- владельца 2026-09-08), а особая ставка услуги действует В ЛЮБОМ режиме —
+-- поверх ставки категории тоже. Смешать два правила в одной колонке значило
+-- бы объяснять исключение в каждом читателе.
+ALTER TABLE referral_sources ADD COLUMN service_rates TEXT NOT NULL DEFAULT '';

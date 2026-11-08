@@ -1561,8 +1561,18 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const letter = state.resType === 'doctor' ? (letterOfBranchId(res.branchId) || myLetter()) : myLetter();
         const modeText = slotMode(res) === MODE_LIVE_QUEUE ? tr('живая очередь') : tr('по записи');
         const showLetter = buildings().length > 1 && !!letter;
+        // SLOT_LABEL_HOURLY_V1 (владелец, 2026-11-08: «too sharp to eyes») —
+        // подпись в КАЖДОЙ четверти часа давала стену одинакового текста на
+        // весь экран. Теперь она стоит раз в час и на первой рабочей клетке
+        // после нерабочего промежутка (приём с 09:15 не остаётся без неё).
+        let prevOff = null;   // null — «до первой клетки»: и рабочая, и закрытая подписываются
         for (let m = canvas.from; m < canvas.to; m += state.step) {
             const off = isOffHour(win, m);
+            const labelHere = label && !off && (m % 60 === 0 || prevOff !== false);
+            // OFFHOURS_CALM_V3 — закрытый час теперь тихая заливка, а не
+            // штриховка; что он закрыт, говорит подпись на первой его клетке.
+            const offLabelHere = label && off && prevOff !== true;
+            prevOff = off;
             body.appendChild(h('div', {
                 class: 'rcal-slot' + (off ? ' off' : '') + (m % 60 === 0 ? ' hr' : ''),
                 // Минута клетки — на самой клетке. Дорожка уже подписана
@@ -1572,11 +1582,12 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 'data-min': String(m),
                 style: { height: (state.step * ppm) + 'px' },
                 onclick: () => { if (off) { toast('Вне рабочих часов.', 'info'); return; } bookAt(res, dayIso, m); },
-            }, label && !off
+            }, labelHere
                 ? h('span', { class: 'rcal-slot-info' },
                     showLetter ? h('b', null, letter) : null,
                     showLetter ? ' · ' : null,
                     modeText)
+                : offLabelHere ? h('span', { class: 'rcal-off-info' }, tr('Не работает'))
                 : null));
         }
         if (dayIso === todayIso()) {

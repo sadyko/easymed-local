@@ -200,13 +200,13 @@ test('referral reward columns are wired, and the name-matched rewards table is n
     assert.ok(readableColumns('referral_source_categories','registrar').includes(c), 'category.'+c+' unreadable');
     assert.ok(writableColumns('referral_source_categories','update','admin').includes(c), 'category.'+c+' unwritable');
   }
-  for (const c of ['category_id','reward_mode','own_percent','own_rates']) {
+  for (const c of ['category_id','reward_mode','own_percent','own_rates','service_rates']) {   // service_rates: REFERRAL_SERVICE_RATES_V1
     assert.ok(readableColumns('referral_sources','registrar').includes(c), 'source.'+c+' unreadable');
     assert.ok(writableColumns('referral_sources','update','admin').includes(c), 'source.'+c+' unwritable');
   }
   // JSON columns: without this the compiler binds an object straight at SQLite.
   assert.deepEqual(jsonColumns('referral_source_categories'), ['rates']);
-  assert.deepEqual(jsonColumns('referral_sources'), ['own_rates']);
+  assert.deepEqual(jsonColumns('referral_sources'), ['own_rates','service_rates']);
   assert.equal(embedEntry('referral_sources','referral_source_categories').fk, 'category_id');
   // A registrar books visits and may add a source, but rates are the admin's.
   assert.ok(!canWrite('referral_sources','update','registrar'), 'registrar can rewrite reward rates');

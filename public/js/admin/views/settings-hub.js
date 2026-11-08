@@ -26,6 +26,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
 import { getLang, tr, trf } from '../i18n.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
+import { searchableSelect } from './searchable-select.js';   // REFERRAL_SERVICE_RATES_V1 — выбор услуги для особой ставки
 // GROUPS_FIVE_REFERRAL_V1 — ставки направлений по пяти группам услуг: ключи из
 // общего правила расчёта, подписи — те же, что у группировки услуг.
 import { REFERRAL_GROUPS, referralGroupOf } from '../../shared/referral-reward.js';
@@ -58,6 +59,7 @@ import { prepareConsultTypeSave } from '../../shared/consultation-price.js';   /
 import { renderBranchesEditor } from './branches-editor.js';
 import { discountServicesField, discountRatesField, ratesSummaryText } from './discount-service-picker.js';   // DISCOUNT_V2 — «Только на эти услуги»: окно выбора   // BRANCH_PROFILE_V1 · DISCOUNT_RATES_V1 — ставки по услугам
 import { promoRatesApply } from '../discount-rates.js';   // ревью S5 L-2
+import { specialtyOptions, canonicalSpecialty } from '../specialties.js?v=spec2';   // REFERRAL_SPECIALTY_SELECT_V1 — тот же список, что у «Сотрудников»
 
 let state = { section: null, readOnly: false };   // null = hub; else one of LOOKUP_CONFIG's keys
 
@@ -911,8 +913,27 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
     // none of them had to change and non-person rows («Instagram») keep working.
     referral_sources: {
         table: 'referral_sources', title: 'Source list', icon: 'MapPin',
-        addTitle: 'Новый источник направления', editTitle: 'Источник направления',
-        modalWidth: '920px', modalCols: '1fr 1fr',
+        addTitle: 'Новый источник направления',
+        // REFERRAL_SOURCE_FORM_V2 — номер в заголовке правки, а не полем формы:
+        // его присваивает триггер (мигр. 121), и поле «присвоится при
+        // сохранении» на новой карточке было пустым местом.
+        editTitle: (row) => (row && row.code ? trf('Источник направления № {code}', { code: row.code }) : tr('Источник направления')),
+        modalWidth: '920px',
+        // REFERRAL_SOURCE_FORM_V2 (2026-11-07) — владелец: «Surname, Name, Middle
+        // Name, then phone, speciality, region, place of work, then type of
+        // payment (cash — no card number, card — card number), then category».
+        // Разделы вместо одной сетки «1fr 1fr»: в ней поля шли парами слева
+        // направо, «Номер» стоял рядом с «Фамилией», а «Тип оплаты» и «Номер
+        // карты» — в разных строках. Поля, не названные ни в одном разделе,
+        // редактор дорисовывает в конце — ничего не пропадает молча (modalGroups).
+        groups: [
+            { title: 'Кто направляет', cols: '1fr 1fr 1fr',
+              fields: ['last_name', 'first_name', 'middle_name', 'phone', 'specialty', 'district', 'workplace'] },
+            { title: 'Выплата вознаграждения', cols: '1fr 1fr', fields: ['payment_type', 'card_number'] },
+            { title: 'Категория и представитель', cols: '1fr 1fr', fields: ['category_id', 'representative_id'] },
+            { title: 'Вознаграждение за направления', cols: '1fr 1fr',
+              fields: ['reward_mode', 'own_percent', 'own_rates', 'service_rates', 'inpatient_bonus_enabled', 'inpatient_pct', 'inpatient_fixed'] },
+        ],
         embed: 'referral_source_categories(name)',
         filterRow: true,   // LOOKUP_COLUMN_FILTERS_V1 — с мигр. 117 здесь ещё и все врачи клиники
         // REFERRALS_CRM_V1 — врачи клиники (doctor_id, строка от триггера) в списке
@@ -930,17 +951,26 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
             { key: 'referral_source_categories', label: 'Категория', embed: true },
         ],
         fields: [
-            { key: 'code',        label: 'Номер', type: 'readonly', placeholder: 'присвоится при сохранении' },
             { key: 'last_name',   label: 'Фамилия', type: 'text' },
             { key: 'first_name',  label: 'Имя', type: 'text', required: true },
             { key: 'middle_name', label: 'Отчество', type: 'text' },
             { key: 'phone',       label: 'Телефон', type: 'phone' },
-            { key: 'workplace',   label: 'Место работы', type: 'text' },
+            // REFERRAL_SPECIALTY_SELECT_V1 (владелец, 2026-11-07: «speciality should be
+            // dropdown») — тот же закрытый список, что у «Сотрудников» (specialties.js:
+            // хранится русское название, показывается на языке экрана). Написание «не из
+            // списка» у старой записи остаётся отдельным пунктом с пометкой.
+            { key: 'specialty',   label: 'Специальность', type: 'select',
+              options: (row) => specialtyOptions(row && row.specialty).filter(([v]) => v !== ''),
+              canon: canonicalSpecialty },   // REFERRALS_CRM_V1
             { key: 'district',    label: 'Район', type: 'text' },
-            { key: 'specialty',   label: 'Специальность', type: 'text' },   // REFERRALS_CRM_V1
+            { key: 'workplace',   label: 'Место работы', type: 'text', full: true },   // REFERRAL_SOURCE_FORM_V2 — названия учреждений длинные
             { key: 'payment_type', label: 'Тип оплаты', type: 'select',
               options: [['cash', 'Наличные'], ['card', 'На карту'], ['transfer', 'Перечислением']] },
-            { key: 'card_number', label: 'Номер карты', type: 'text' },
+            // REFERRAL_SOURCE_FORM_V2 — номер карты есть только у выплаты на
+            // карту, и тогда без него платить некуда: виден и обязателен
+            // вместе. При другом типе beforeSave ниже стирает прежний номер.
+            { key: 'card_number', label: 'Номер карты', type: 'text',
+              visibleWhen: (v) => v.payment_type === 'card', requiredWhen: (v) => v.payment_type === 'card' },
             // REFERRAL_REP_ON_CREATE_V1 (2026-10-31) — владелец: «when referral
             // doctor creates it should be linked to medical representative … only
             // medical rep can be chosen». Новый врач-источник заводится сразу за
@@ -961,8 +991,12 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
             // достаточным. Достаточным он не был: на категории теперь висит
             // ставка вознаграждения, и три написания одного названия — это уже
             // не три группы в списке, а деньги, которых партнёр не получил.
+            // REFERRAL_SOURCE_FORM_V2 — без категории «Внутренние врачи»
+            // (is_internal, мигр. 122): внутреннего врача заводит триггер из
+            // списка сотрудников, и внешний партнёр в ней — врач, которого
+            // кадровый список не знает. Фильтр разрешён в реестре.
             { key: 'category_id', label: 'Категория', type: 'fk',
-              fkTable: 'referral_source_categories', fkLabel: 'name' },
+              fkTable: 'referral_source_categories', fkLabel: 'name', fkFilter: { is_internal: 0 } },
             // Стоит галочка — платим по ставке категории; снята — у источника
             // свои ставки, и категория не читается вовсе.
             { key: 'reward_mode', label: 'Вознаграждение по категории (общая ставка)', type: 'checkbox',
@@ -976,6 +1010,12 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
               hint: 'Пусто — действует «Свой процент» выше (если и он пуст — 0 %); ставка категории в этом режиме не применяется. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.',
               ratePlaceholder: 'как «Свой процент»',   // RATES_MODE_TYPED_V1 — пустое поле: «Свой процент», не стандарт
               visibleWhen: (v) => v.reward_mode === 'own' },
+            // REFERRAL_SERVICE_RATES_V1 (мигр. 282) — особые ставки за ОТДЕЛЬНЫЕ
+            // услуги. Владелец (2026-11-07): «за некоторые услуги платим больше
+            // общего». Действуют в любом режиме — поверх категории и поверх
+            // своих групп (shared/referral-reward.js), поэтому видны всегда.
+            { key: 'service_rates', label: 'Особые ставки по отдельным услугам', type: 'service_rates', full: true,
+              hint: 'Действуют при любом режиме — и «по категории», и со своими ставками — и перекрывают ставку группы и общий процент. Пусто — особых ставок нет.' },
             // INPATIENT_BONUS_V1 (мигр. 155) — стационарное вознаграждение
             // партнёра. Выключено — за стационар не платится НИЧЕГО: обычные
             // ставки групп к счёту госпитализации не применяются. Источник,
@@ -991,6 +1031,10 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
         // `name` — производная колонка: её не показываем, но она NOT NULL и
         // остаётся тем, что видят все остальные экраны.
         beforeSave(payload, { isEdit, row } = {}) {
+            // REFERRAL_SOURCE_FORM_V2 — номер карты живёт только у выплаты на
+            // карту: сменили тип — прежний номер стирается, а не лежит молча
+            // у партнёра, которому теперь платят наличными.
+            if (payload.payment_type !== 'card') { if (isEdit) payload.card_number = null; else delete payload.card_number; }
             const full = [payload.last_name, payload.first_name, payload.middle_name]
                 .map(v => (v || '').trim()).filter(Boolean).join(' ');
             // REFERRALS_CRM_V1 — строка, пришедшая импортом, несёт ФИО одной колонкой
@@ -1052,8 +1096,13 @@ function fmtCell(v) {
 // Older entries were bare strings used as BOTH, which is how «insurance» and
 // «gift_card» ended up in front of a registrar. Bare strings still work (they
 // become their own label) so a config can be migrated one list at a time.
-function optionPairs(f) {
-    return (f.options || []).map(o => (Array.isArray(o) ? o : [o, o]));
+// REFERRAL_SPECIALTY_SELECT_V1 — options может быть функцией записи: список,
+// в который должно попасть ТЕКУЩЕЕ значение строки, даже если его в общем списке
+// нет (специальность, введённая до списка), — иначе открытие карточки молча
+// «стирало» бы его при следующем сохранении.
+function optionPairs(f, row = null) {
+    const list = typeof f.options === 'function' ? (f.options(row) || []) : (f.options || []);
+    return list.map(o => (Array.isArray(o) ? o : [o, o]));
 }
 
 // DISCOUNT_RULES_V1 — «с 01.09 по 30.09» / «бессрочно» / «услуг: 3» / «на весь счёт».
@@ -1106,6 +1155,153 @@ function enumLabel(cfg, key, value) {
     if (!f) return value;
     const hit = optionPairs(f).find(([val]) => val === value);
     return hit ? hit[1] : value;
+}
+
+// Конфигурация справочника — для тестов формы (__tests__/settings-hub-referral-form.test.mjs).
+export function lookupConfig(key) { return LOOKUP_CONFIG[key]; }
+
+// REFERRAL_SOURCE_FORM_V2 — тело окна РАЗДЕЛАМИ (cfg.groups: заголовок,
+// колонки, ключи полей) стилями .mg-section / .mg-grid карточек сотрудника и
+// пациента. Поле, не названное ни в одном разделе, не пропадает: хвост
+// дорисовывается последним разделом без заголовка; раздел, все поля которого
+// сняты правами (ревью I2 — деньги только администратору), не рисуется.
+// `tail` — «Активен» на правке. Экспорт — для теста.
+export function modalGroups(cfg, fields, fieldEls, tail) {
+    const byKey = new Map(fields.map((f, i) => [f.key, fieldEls[i]]));
+    const used = new Set();
+    const body = h('div', { class: 'modal-body' });
+    for (const g of cfg.groups) {
+        const els = (g.fields || []).map((k) => { used.add(k); return byKey.get(k); }).filter(Boolean);
+        if (!els.length) continue;
+        body.appendChild(h('div', { class: 'mg-section' },
+            h('h3', null, g.title),
+            h('div', { class: 'mg-grid', style: { gridTemplateColumns: g.cols || '1fr 1fr', gap: '0 14px' } }, ...els)));
+    }
+    const rest = fields.filter((f) => !used.has(f.key)).map((f) => byKey.get(f.key)).filter(Boolean);
+    if (rest.length || tail) {
+        body.appendChild(h('div', { class: 'mg-section' },
+            h('div', { class: 'mg-grid', style: { gridTemplateColumns: '1fr 1fr', gap: '0 14px' } }, ...rest, tail)));
+    }
+    return body;
+}
+
+// REFERRAL_SERVICE_RATES_V1 (мигр. 282) — «строка на ОТДЕЛЬНУЮ услугу»: особая
+// ставка источника за неё. Владелец (2026-11-07): «за некоторые услуги платим
+// больше общего». Ставки по группам (groupRatesControl ниже) для этого слишком
+// крупны. Та же пара «число + единица», то же правило «пустая строка — записи
+// нет». Действует в любом режиме (shared/referral-reward.js).
+//
+// Выбор услуги сразу добавляет строку (без отдельной кнопки) и ставит курсор
+// в ставку. Строки живут в массиве, а не читаются из DOM при сохранении:
+// «что показано — то и сохранено», и поддельному DOM тестов не нужен
+// querySelectorAll. Запись без service_id таблица не показывает и переносит
+// как была (ревью M6). Экспорт — для теста.
+export function serviceRatesControl(initialRaw, hint) {
+    let initial = [];
+    try {
+        initial = Array.isArray(initialRaw) ? initialRaw
+            : (typeof initialRaw === 'string' && initialRaw.trim() ? JSON.parse(initialRaw) : []);
+    } catch { initial = []; }
+    if (!Array.isArray(initial)) initial = [];
+    const known = (e) => e && e.service_id != null && Number.isFinite(Number(e.service_id));
+    const hidden = initial.filter((e) => !known(e));
+    const rows = [];        // { serviceId, input, unit }
+    let services = [];      // активные услуги { id, name, type }
+
+    const tbody = h('tbody');
+    const pick = h('select', { 'data-service-pick': '' }, h('option', { value: '' }, 'Выберите услугу…'));
+
+    function paint() {
+        clear(tbody);
+        if (!rows.length) {
+            tbody.appendChild(h('tr', null, h('td', { colspan: '3', class: 'muted', style: { fontSize: '12.5px' } },
+                'Особых ставок нет — ставка по общему правилу.')));
+            return;
+        }
+        const byId = new Map(services.map((s) => [Number(s.id), s]));
+        for (const r of rows) {
+            const s = byId.get(r.serviceId);
+            const g = s ? referralGroupOf(s.type) : null;
+            const removeBtn = h('button', { class: 'btn btn-sm btn-ghost', type: 'button', title: 'Убрать', 'aria-label': 'Убрать',
+                'data-rate-remove': String(r.serviceId),
+                onclick: () => { rows.splice(rows.indexOf(r), 1); paint(); } }, '×');
+            tbody.appendChild(h('tr', null,
+                h('td', null, s ? (s.name || '') : trf('Услуга № {id} (не найдена)', { id: r.serviceId }),
+                    g ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, tr(TYPE_TO_GROUP_NAME[g])) : null),   // 12.5 — пол шкалы (type-scale.test.mjs)
+                h('td', null, h('div', { class: 'rate-cell' }, r.input, r.unit)),
+                h('td', { style: { width: '36px', textAlign: 'right' } }, removeBtn)));
+        }
+    }
+    function addRow(serviceId, cur) {
+        const existing = rows.find((r) => r.serviceId === serviceId);
+        if (existing) return existing;
+        const r = {
+            serviceId,
+            input: h('input', { type: 'number', min: '0', step: '0.01', 'data-rate-service': String(serviceId),
+                value: cur && Number.isFinite(Number(cur.value)) ? String(cur.value) : '', placeholder: '0' }),
+            unit: h('select', { 'data-rate-unit-service': String(serviceId) },
+                h('option', { value: 'pct', selected: !cur || cur.unit !== 'fix' }, '%'),
+                h('option', { value: 'fix', selected: !!(cur && cur.unit === 'fix') }, 'сум')),
+        };
+        // Значение ставится и свойством: .value читает сохранение, а атрибут
+        // selected у <option> — только браузер.
+        r.unit.value = cur && cur.unit === 'fix' ? 'fix' : 'pct';
+        rows.push(r);
+        return r;
+    }
+    for (const e of initial) if (known(e)) addRow(Number(e.service_id), e);
+    pick.addEventListener('change', () => {
+        const id = Number(pick.value);
+        if (!pick.value || !Number.isFinite(id)) return;
+        const r = addRow(id, null);
+        pick.value = '';
+        paint();
+        r.input.focus();
+    });
+
+    const wrap = h('div', { style: { display: 'block' } },
+        h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '0 0 8px' } }, hint),
+        h('table', { class: 'tbl' },
+            h('thead', null, h('tr', null,
+                h('th', null, 'Услуга'),
+                h('th', { style: { textAlign: 'right', width: '240px' } }, 'Ставка'),
+                h('th', { style: { width: '36px' } }, ''))),
+            tbody),
+        h('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', marginTop: '8px' } },
+            h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, 'Добавить услугу'),
+            h('div', { style: { flex: '1', minWidth: '0', maxWidth: '420px' } }, searchableSelect(pick, { placeholder: 'Поиск услуги…' }))));
+
+    // load() — список активных услуг. `services` в аргументе — для теста (без сети).
+    wrap.load = async ({ services: given } = {}) => {
+        if (Array.isArray(given)) services = given;
+        else {
+            try {
+                const { data, error } = await supabase.from('services').select('id,name,type').eq('active', 1).order('name').limit(2000);
+                services = error ? [] : (data || []);
+            } catch { services = []; }
+        }
+        clear(pick);
+        pick.appendChild(h('option', { value: '' }, 'Выберите услугу…'));
+        for (const s of services) pick.appendChild(h('option', { value: String(s.id) }, s.name || ''));
+        paint();
+    };
+    paint();
+
+    // save() читает поле обобщённо через .value — как у ставок групп.
+    Object.defineProperty(wrap, 'value', {
+        get() {
+            const out = hidden.slice();
+            for (const r of rows) {
+                const raw = String(r.input.value == null ? '' : r.input.value).trim();
+                if (raw === '') continue;              // пусто — записи нет
+                const value = Number(raw);
+                if (!Number.isFinite(value) || value < 0) continue;
+                out.push({ service_id: r.serviceId, unit: r.unit.value === 'fix' ? 'fix' : 'pct', value });
+            }
+            return out;
+        },
+    });
+    return wrap;
 }
 
 // REFERRAL_CATEGORY_RATES_V1 — «строка на группу услуг»: число плюс единица.
@@ -1310,6 +1506,21 @@ async function renderEditor(container, key) {
 
     await load();
 
+    // REFERRAL_EDIT_FROM_REPS_V1 — открыть карточку ОДНОЙ строки снаружи.
+    // Владелец (2026-11-07): номер и способ выплаты внешнего врача меняются, а во
+    // «Представителях» карточки не было — только «Подробнее» и «Печать». Чужой
+    // экран зовёт ту же форму, что и щелчок по строке (openRowModal), а не свою
+    // копию: две формы одного справочника разошлись бы с первой же правкой.
+    // Возвращает false, если строки нет (не загрузилась, отфильтрована
+    // rowFilter) или справочник только для чтения.
+    container.openLookupRow = (id) => {
+        if (readOnly) return false;
+        const row = allRows.find((r) => String(r.id) === String(id));
+        if (!row) return false;
+        openRowModal(row);
+        return true;
+    };
+
     async function load() {
         clear(tbody);
         tbody.appendChild(h('tr', null,
@@ -1394,8 +1605,10 @@ async function renderEditor(container, key) {
                 // the same list serves ru / en / uz.
                 control = h('select', null,
                     !f.required ? h('option', { value: '' }, '—') : null,
-                    ...optionPairs(f).map(([val, label]) =>
-                        h('option', { value: val, selected: !!(row && row[f.key] === val) }, label)));
+                    ...optionPairs(f, row).map(([val, label]) =>
+                        // REFERRAL_SPECIALTY_SELECT_V1 — canon приводит прежнее написание
+                        // («ЛОР») к значению списка, чтобы оно и было выбрано.
+                        h('option', { value: val, selected: !!(row && (f.canon ? f.canon(row[f.key]) : row[f.key]) === val) }, label)));
             } else if (f.type === 'number') {
                 control = h('input', { type: 'number', value: row && row[f.key] != null ? String(row[f.key]) : '' });
             } else if (f.type === 'date') {
@@ -1451,15 +1664,24 @@ async function renderEditor(container, key) {
             } else if (f.type === 'group_rates') {
                 control = groupRatesControl(row ? row[f.key] : null, f.hint || '');
                 rateFields.push({ f, control });
+            } else if (f.type === 'service_rates') {
+                // REFERRAL_SERVICE_RATES_V1 — особые ставки по услугам; список
+                // услуг грузится после монтирования, как у ставок групп.
+                control = serviceRatesControl(row ? row[f.key] : null, f.hint || '');
+                rateFields.push({ f, control });
             } else {
                 control = h('input', { type: 'text', value: row ? (row[f.key] || '') : '' });
             }
             controls[f.key] = control;
             // Поля во всю ширину модалки: таблица ставок в одну колонку сетки —
             // это горизонтальная прокрутка внутри окна.
+            // REFERRAL_SOURCE_FORM_V2 — requiredWhen: обязательно при определённом
+            // выборе в другом поле (номер карты — при выплате на карту). Такое
+            // поле и видно только тогда же (visibleWhen), поэтому звёздочка у
+            // него постоянная: раз его видно — оно обязательно.
             const wrapped = f.type === 'checkbox' ? checkField(f.label, control)
-                                                  : field(f.label, control, { required: !!(f.required || (f.requiredOnCreate && !isEdit)) });   // REFERRAL_REP_ON_CREATE_V1
-            if (f.full || f.type === 'group_rates') wrapped.style.gridColumn = '1 / -1';
+                                                  : field(f.label, control, { required: !!(f.required || (f.requiredOnCreate && !isEdit) || f.requiredWhen) });   // REFERRAL_REP_ON_CREATE_V1
+            if (f.full || f.type === 'group_rates' || f.type === 'service_rates') wrapped.style.gridColumn = '1 / -1';
             if (f.visibleWhen) conditional.push({ f, el: wrapped });
             return wrapped;
         });
@@ -1564,7 +1786,7 @@ async function renderEditor(container, key) {
                 // Массив ставок уходит как есть: колонка объявлена JSON в
                 // реестре, компилятор сериализует её сам. Пустой массив — это
                 // «ставок нет», его тоже надо записать, чтобы снять прежние.
-                if (f.type === 'group_rates') { payload[f.key] = controls[f.key].value; continue; }
+                if (f.type === 'group_rates' || f.type === 'service_rates') { payload[f.key] = controls[f.key].value; continue; }   // service_rates: REFERRAL_SERVICE_RATES_V1
                 if (f.type === 'number') { payload[f.key] = Number(controls[f.key].value) || 0; continue; }
                 if (f.type === 'date') { const d = String(controls[f.key].value || '').slice(0, 10); if (d) payload[f.key] = d; else if (isEdit) payload[f.key] = null; continue; }
                 if (f.type === 'services') {
@@ -1582,6 +1804,8 @@ async function renderEditor(container, key) {
                 const raw = controls[f.key].value;
                 const v = typeof raw === 'string' ? raw.trim() : raw;
                 if (f.required && !v) { toast(`Enter ${f.label.toLowerCase()}.`, 'fail'); return; }
+                // REFERRAL_SOURCE_FORM_V2 — обязательно при условии (номер карты при выплате на карту).
+                if (typeof f.requiredWhen === 'function' && !v && f.requiredWhen(formValues())) { toast(trf('Укажите: {field}', { field: tr(f.label) }), 'fail'); return; }
                 if (v) payload[f.key] = v;   // skip empties — omitted, never sent as ''
             }
             if (isEdit) payload.active = activeChk.checked ? 1 : 0;   // insert never accepts `active`
@@ -1627,16 +1851,18 @@ async function renderEditor(container, key) {
 
         // A config with many fields can ask for a wider, two-column body — a
         // nine-field form in the default 440px column is a scrollbar.
-        overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: (cfg.modalWidth || '440px'), maxWidth: 'calc(100vw - 32px)' } },
+        overlay.appendChild(h('div', { class: 'modal-card modal-compact' + (cfg.groups ? ' modal-grouped' : ''), style: { width: (cfg.modalWidth || '440px'), maxWidth: 'calc(100vw - 32px)' } },   // modal-grouped: REFERRAL_SOURCE_FORM_V2 — тело разделами
             h('header', { class: 'modal-head' },
                 h('h2', null, Icon(cfg.icon, { size: 16 }), ' ',
-                    isEdit ? (cfg.editTitle || trf('Изменить: {title}', { title: tr(cfg.title) }))
+                    isEdit ? (typeof cfg.editTitle === 'function' ? cfg.editTitle(row) : (cfg.editTitle || trf('Изменить: {title}', { title: tr(cfg.title) })))   // REFERRAL_SOURCE_FORM_V2 — заголовок может зависеть от строки (номер источника)
                            : (cfg.addTitle || trf('Добавить: {title}', { title: tr(cfg.title) }))),   // CLINIC_API_STEP7_V1
                 h('button', { class: 'modal-close', onclick: close }, '×')),
-            h('div', { class: 'modal-body', style: cfg.modalCols ? { display: 'grid', gridTemplateColumns: cfg.modalCols, gap: '0 14px' } : null },
-                ...fieldEls,
-                isEdit ? checkField('Active', activeChk) : null,
-            ),
+            cfg.groups
+                ? modalGroups(cfg, fields, fieldEls, isEdit ? checkField('Active', activeChk) : null)   // REFERRAL_SOURCE_FORM_V2
+                : h('div', { class: 'modal-body', style: cfg.modalCols ? { display: 'grid', gridTemplateColumns: cfg.modalCols, gap: '0 14px' } : null },
+                    ...fieldEls,
+                    isEdit ? checkField('Active', activeChk) : null,
+                ),
             h('footer', { class: 'modal-foot' },
                 h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'),
                 h('span', { class: 'grow' }),

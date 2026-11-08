@@ -44,6 +44,7 @@ import { admissionCharges, admissionChargeSetBillable, admissionServiceAdd, admi
 import { admissionDocSources } from './case-doc-sources.js';   // CASE_DOC_A4_V1
 import { admissionsRegister } from './admissions-register.js';   // ADMISSIONS_REGISTER_V1
 import { patientBaseAggregates } from './patient-aggregates.js';   // PATIENT_AGGREGATES_V1
+import { patientListPage } from './patient-list.js';   // PATIENT_LIST_LAST_VISIT_V1
 import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList, admissionAttendingCandidates,
   admissionCaseDocs, admissionCaseFile, admissionCaseFileSave } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1 / CASE_DOCS_V1
 import {
@@ -132,7 +133,7 @@ import {
 import { proceduresList, procedureAssign, procedureComplete } from './procedures.js';   // PROC_PERFORMER_V1
 import {
   patientCard, patientCardSavePatient, patientCardAddDocument, patientCardDeleteDocument,
-  patientCardSetServiceDoctor, requireServicesEdit, requireServicesDelete,
+  patientCardSetServiceDoctor, patientCardSetLineReferrer, requireServicesEdit, requireServicesDelete,
 } from './patient-card.js';   // PATIENT_TAB_ACCESS_V1
 import { visitDocumentArchive } from './patient-card.js';   // V3120_FIX (F2) — подпись протокола отзывает прежний, а не стирает
 import { patientDocSources } from './patient-doc-sources.js';   // PASTE_SOURCES_V1 — «Вставить результаты» кабинета: все документы пациента
@@ -152,6 +153,7 @@ export const RPC = {
   // установленные у клиник сборки, а переименование сделало бы им 501.
   patient_card_doc_void:    (db, args, user) => patientCardDeleteDocument(db, args, user),
   patient_card_set_doctor:  (db, args, user) => patientCardSetServiceDoctor(db, args, user),
+  patient_card_set_line_referrer: (db, args, user) => patientCardSetLineReferrer(db, args, user),   // SVC_REFERRER_COLUMN_V1 — «Направил» строки услуги в карте
   visit_document_archive:   (db, args, user) => visitDocumentArchive(db, args, user),   // V3120_FIX (F2)
   patient_doc_sources:      (db, args, user) => patientDocSources(db, args, user),   // PASTE_SOURCES_V1 — «Вставить результаты»: документы пациента по вкладкам
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
@@ -497,6 +499,7 @@ export const RPC = {
   // не было вовсе: сервер отвечал 501, а картотека у всех показывала «визитов
   // не было» и «0 сум».
   patient_base_aggregates:        (db, args, user) => patientBaseAggregates(db, args, user),
+  patient_list_page:              (db, args, user) => patientListPage(db, args, user),   // PATIENT_LIST_LAST_VISIT_V1 — картотека по последнему визиту
 
   // TWO_STEP_DISCHARGE_V1 (Задача 8) — ВЫПИСКА В ДВА ШАГА. Клиническая
   // готовность и административная выписка — разные события разных людей:

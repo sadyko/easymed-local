@@ -90,7 +90,14 @@ globalThis.fetch = async (url, opts) => {
     if (name === 'referrals_source_detail') return jsonOk({ source: SOURCES[0], from: '2026-10-01', to: '2026-10-26', money: true, visits: [], patients: 0, received: 0, reward: 0 });
     return jsonOk({});
   }
-  if (u.startsWith('/api/db')) { calls.push({ name: 'db', body }); return jsonOk([]); }
+  if (u.startsWith('/api/db')) {
+    calls.push({ name: 'db', body });
+    // REFERRAL_EDIT_FROM_REPS_V1 — справочник вкладки «Врачи-источники» (renderLookupEditor).
+    if (body && body.table === 'referral_sources' && body.op === 'select') {
+      return jsonOk(SOURCES.map((x) => ({ id: x.id, code: x.code, name: x.name, phone: x.phone, workplace: x.workplace, active: 1, doctor_id: null, payment_type: 'cash' })));
+    }
+    return jsonOk([]);
+  }
   return jsonOk({});
 };
 
@@ -215,4 +222,26 @@ test('внутренние врачи: шесть плиток и строка �
   assert.ok(t.includes('90 000'), 'вознаграждение с разрядами');
   const row = byAttr(root, 'data-ref-doctor')[0];
   assert.ok(row, 'строка врача');
+});
+
+// REFERRAL_EDIT_FROM_REPS_V1 — «Изменить» у врача в «Представителях» переключает на
+// «Врачи-источники» и открывает карточку ЭТОГО врача (номер, способ выплаты…) — ту
+// же форму, что щелчок по строке справочника.
+test('представители: «Изменить» открывает карточку врача во вкладке «Врачи-источники»', async () => {
+  const before = document.body.children.length;
+  const { root } = await mount();
+  const edits = findAll(root, (n) => n.tagName === 'BUTTON' && n.attrs['data-ref-edit']);
+  assert.strictEqual(edits.length, SOURCES.length, 'кнопка у каждого врача');
+  // строка Абдурахмановой (id 1) — по data-ref-source
+  const row = findAll(root, (n) => String(n.attrs['data-ref-source']) === '1')[0];
+  const btn = findAll(row, (n) => n.tagName === 'BUTTON' && n.attrs['data-ref-edit'])[0];
+  btn.click();
+  await tick(60);
+  assert.strictEqual(panel(root, 'sources').style.display, '', 'открылась вкладка «Врачи-источники»');
+  assert.strictEqual(panel(root, 'reps').style.display, 'none');
+  const modals = document.body.children.slice(before);
+  assert.strictEqual(modals.length, 1, 'открыта одна карточка');
+  assert.ok(textOf(modals[0]).includes('0003'), 'карточка именно этого врача (№ 0003)');
+  assert.strictEqual(toastMsg, null, 'без отказа');
+  document.body.children.length = before;
 });

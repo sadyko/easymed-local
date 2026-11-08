@@ -569,3 +569,63 @@ test('поиск по дате рождения фильтрует список 
   await tick();
   assert.ok(!JSON.stringify(patientsCalls().at(-1) || {}).includes('1990-04-11'), 'очистка не сняла фильтр');
 });
+
+// ===========================================================================
+// PATIENT_LIST_LAST_VISIT_V1 · PATIENT_LIST_COLUMNS_V1 (владелец, 2026-11-07)
+// ===========================================================================
+test('«Последний визит»: сортирует сервер, повторное нажатие — обратный порядок; «Фильтр» шлёт период', async () => {
+  const prevFetch = globalThis.fetch;
+  const listCalls = [];
+  globalThis.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (u.startsWith('/api/rpc/patient_list_page')) {
+      const body = opts && opts.body ? JSON.parse(opts.body) : {};
+      listCalls.push(body);
+      return { ok: true, status: 200, json: async () => ({ data: { rows: JSON.parse(JSON.stringify(PATIENTS)), total: PATIENTS.length } }) };
+    }
+    return prevFetch(url, opts);
+  };
+  try {
+    const { box } = await paint();
+    const sortBtn = buttons(box).find((b) => b.attrs['data-sort'] === 'last_visit');
+    assert.ok(sortBtn, 'кнопки «Последний визит» нет');
+    sortBtn.click(); await tick();
+    assert.equal(listCalls.at(-1).sort, 'last_visit_desc', 'первое нажатие — сначала недавние');
+    assert.equal(rowsOf(box).length, PATIENTS.length, 'строки пришли с сервера и нарисованы');
+    sortBtn.click(); await tick();
+    assert.equal(listCalls.at(-1).sort, 'last_visit_asc', 'повторное — сначала давние');
+
+    // «Фильтр» — справа, под «Создать пациента»; период уходит на сервер.
+    const filterBtn = buttons(box).find((b) => b.attrs['data-act'] === 'patients-filter');
+    assert.ok(filterBtn, 'кнопки «Фильтр» нет');
+    filterBtn.click();
+    const inp = (k) => walk(box).find((n) => n.tagName === 'INPUT' && n.attrs['data-filter'] === k);
+    inp('last-from').value = '2026-10-01';
+    inp('last-to').value = '2026-10-31';
+    buttons(box).find((b) => b.attrs['data-filter'] === 'apply').click(); await tick();
+    assert.equal(listCalls.at(-1).last_from, '2026-10-01');
+    assert.equal(listCalls.at(-1).last_to, '2026-10-31');
+    buttons(box).find((b) => b.attrs['data-filter'] === 'reset').click(); await tick();
+    assert.equal(listCalls.at(-1).last_from, null, '«Сбросить» снимает период');
+  } finally {
+    globalThis.fetch = prevFetch;
+  }
+});
+
+test('«Колонки»: отмеченная колонка встаёт в таблицу и запоминается на этом компьютере', async () => {
+  localStorage.removeItem('patients.extraCols');
+  const { box } = await paint();
+  const before = headCells(box).length;
+  buttons(box).find((b) => b.attrs['data-act'] === 'patients-columns').click();
+  const cb = walk(box).find((n) => n.tagName === 'INPUT' && n.attrs['data-col'] === 'national_id');
+  assert.ok(cb, 'галочки «ПИНФЛ» нет');
+  cb.checked = true;
+  cb.dispatchEvent({ type: 'change', currentTarget: cb, target: cb });
+  await tick();
+  const heads = headCells(box);
+  assert.equal(heads.length, before + 1, 'колонка не добавилась в шапку');
+  assert.ok(heads.some((th) => th.attrs['data-extra-col'] === 'national_id'));
+  assert.ok(rowsOf(box).every((tr) => cellsOf(tr).some((td) => td.attrs['data-extra-col'] === 'national_id')), 'в строках нет ячейки колонки');
+  assert.deepEqual(JSON.parse(localStorage.getItem('patients.extraCols')), ['national_id']);
+  localStorage.removeItem('patients.extraCols');
+});
