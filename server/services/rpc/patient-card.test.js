@@ -462,10 +462,17 @@ test('SVC_REFERRER_COLUMN_V1: строка услуги везёт направ�
   db.close();
 });
 
+// Внутренний источник врача клиники (заводит триггер мигр. 122 при найме врача).
+const doctorSource = (db, id, name) => {
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (?, ?, 'x', ?, 'doctor', 1)").run(id, 'doc' + id, name);
+  return db.prepare('SELECT id FROM referral_sources WHERE doctor_id = ?').get(id).id;
+};
+
 test('SVC_REFERRER_COLUMN_V1: patient_card_set_line_referrer — стойка ставит и снимает, визит не трогает', () => {
   const { db, pid, vid, vsid } = seed();
   const partner = db.prepare("INSERT INTO referral_sources (name) VALUES ('Клиника Шифо')").run().lastInsertRowid;
-  const karimov = db.prepare("INSERT INTO referral_sources (name) VALUES ('Доктор Каримов')").run().lastInsertRowid;
+  // REFERRAL_LINE_EXTERNAL_GUARD_V1 — врач клиники (не второй внешний партнёр: такой строке отказ, см. ниже).
+  const karimov = doctorSource(db, 4, 'Доктор Каримов');
   db.prepare('UPDATE visits SET referral_source_id = ? WHERE id = ?').run(partner, vid);
 
   const out = patientCardSetLineReferrer(db, { visit_service_id: vsid, referral_source_id: karimov }, REGISTRAR);
@@ -499,5 +506,86 @@ test('SVC_REFERRER_COLUMN_V1: patient_card_set_line_referrer — отказы', 
   db.prepare("INSERT INTO pay_periods (month) VALUES ('2026-08')").run();
   assert.equal(status(() => patientCardSetLineReferrer(db, { visit_service_id: vsid, referral_source_id: karimov }, REGISTRAR)), 409);
   assert.equal(db.prepare('SELECT referred_by_source_id r FROM visit_services WHERE id = ?').get(vsid).r, null);
+  db.close();
+});
+
+// REFERRAL_LINE_EXTERNAL_GUARD_V1 (3.22.0, ревью) — второй ВНЕШНИЙ партнёр на строке
+// не оплачивается (domain/line-referral.js EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE = false):
+// платят внешнему направившему визита (иначе карточки пациента). Карта показала бы
+// строке нового партнёра, а деньги ушли бы прежнему — стойка думала бы, что перенесла
+// их. Отказ 409 словами: менять направившего визита — в окне визита.
+test('REFERRAL_LINE_EXTERNAL_GUARD_V1: внешний партнёр на строке при внешнем направившем визита — 409, со словами про окно визита', () => {
+  const { db, pid, vid, vsid } = seed();
+  const P = Number(db.prepare("INSERT INTO referral_sources (name) VALUES ('Клиника Шифо')").run().lastInsertRowid);
+  const Q = Number(db.prepare("INSERT INTO referral_sources (name) VALUES ('Клиника Саломат')").run().lastInsertRowid);
+  const D = doctorSource(db, 4, 'Доктор Каримов');
+  const lineSrc = () => db.prepare('SELECT referred_by_source_id r FROM visit_services WHERE id = ?').get(vsid).r;
+  const set = (src) => patientCardSetLineReferrer(db, { visit_service_id: vsid, referral_source_id: src }, REGISTRAR);
+  const refused = (fn) => {
+    let err = null;
+    try { fn(); } catch (e) { err = e; }
+    assert.ok(err, 'отказа не было');
+    assert.equal(err.status, 409);
+    assert.match(err.message, /окне визита/);
+    return err;
+  };
+
+  // Внешний P у визита: внешний Q на строку — отказ, строка не тронута.
+  db.prepare('UPDATE visits SET referral_source_id = ? WHERE id = ?').run(P, vid);
+  refused(() => set(Q));
+  assert.equal(lineSrc(), null);
+  // Тот же P, врач клиники и «никто» — можно (за строку платят им обоим или только P).
+  assert.equal(set(P).referred_by_source_id, P);
+  assert.equal(set(D).referred_by_source_id, D);
+  assert.equal(set(null).referred_by_source_id, null);
+  // Внешний P только в карточке пациента — правило то же (отчёт платит источнику карточки).
+  db.prepare('UPDATE visits SET referral_source_id = NULL WHERE id = ?').run(vid);
+  db.prepare('UPDATE patients SET referral_source_id = ? WHERE id = ?').run(P, pid);
+  refused(() => set(Q));
+  // У визита врач клиники — внешний партнёр строки оплачивается сверху: можно.
+  db.prepare('UPDATE visits SET referral_source_id = ? WHERE id = ?').run(D, vid);
+  assert.equal(set(Q).referred_by_source_id, Q);
+  // Ни у визита, ни у пациента направившего нет — можно.
+  db.prepare('UPDATE visits SET referral_source_id = NULL WHERE id = ?').run(vid);
+  db.prepare('UPDATE patients SET referral_source_id = NULL WHERE id = ?').run(pid);
+  set(null);
+  assert.equal(set(Q).referred_by_source_id, Q);
+  db.close();
+});
+
+// REFERRAL_LINE_AUDIT_V1 (3.22.0, ревью) — кто кому перевёл деньги строки, видно в журнале
+// пациента: прежний и новый направивший, кто сменил (от имени — с администратором).
+test('REFERRAL_LINE_AUDIT_V1: смена направившего строки — запись в журнале пациента', () => {
+  const { db, pid, vid, vsid } = seed();
+  const D = doctorSource(db, 4, 'Доктор Каримов');
+  const Q = Number(db.prepare("INSERT INTO referral_sources (name, code) VALUES ('Клиника Саломат', '0042')").run().lastInsertRowid);
+  const log = () => db.prepare("SELECT * FROM patient_activity_log WHERE patient_id = ? AND action = 'referrer_changed' ORDER BY id").all(pid);
+
+  patientCardSetLineReferrer(db, { visit_service_id: vsid, referral_source_id: D }, REGISTRAR);
+  patientCardSetLineReferrer(db, { visit_service_id: vsid, referral_source_id: D }, REGISTRAR);   // без изменения — без записи
+  const ACTING = { id: 7, role: 'registrar', acting_admin: { id: 1, full_name: 'Админ Петров' } };
+  patientCardSetLineReferrer(db, { visit_service_id: vsid, referral_source_id: Q }, ACTING);
+  patientCardSetLineReferrer(db, { visit_service_id: vsid, referral_source_id: null }, REGISTRAR);
+
+  const rows = log();
+  assert.equal(rows.length, 3, 'три смены — три записи');
+  for (const r of rows) {
+    assert.equal(r.visit_id, vid);
+    assert.equal(r.entity_type, 'service');
+    assert.equal(r.entity_id, vsid);
+    assert.equal(r.entity_label, 'ОАК');
+    assert.equal(r.actor_user_id, 7);
+    assert.equal(r.actor_role, 'registrar');
+  }
+  const detail = rows.map((r) => JSON.parse(r.detail));
+  assert.deepEqual(detail.map((d) => [d.from && d.from.id, d.to && d.to.id]), [[null, D], [D, Q], [Q, null]]);
+  assert.equal(detail[1].to.name, 'Клиника Саломат');
+  assert.equal(rows[0].actor_name, 'Регистратор');
+  assert.equal(rows[1].actor_name, 'Регистратор (от имени: адм. Админ Петров)', 'от имени — с администратором');
+  assert.match(rows[1].summary, /Доктор Каримов.*Клиника Саломат/);
+  // Отказ не пишет ничего.
+  db.prepare("INSERT INTO pay_periods (month) VALUES ('2026-08')").run();
+  assert.throws(() => patientCardSetLineReferrer(db, { visit_service_id: vsid, referral_source_id: D }, REGISTRAR));
+  assert.equal(log().length, 3);
   db.close();
 });

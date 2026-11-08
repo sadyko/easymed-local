@@ -43,7 +43,8 @@ import { patientFileRefusal, refusalText } from '../../../public/js/shared/patie
 import { refundedOpenLineIds } from '../domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
 import { REFUNDED_SIGN_REFUSAL } from '../../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1
 import { assertChangedOrder, logRepeatOrders, repeatReasonArg } from '../domain/dup-order.js';   // DUP_STOP_V1
-import { isDeskActor } from '../domain/line-referral.js';   // SVC_REFERRER_COLUMN_V1 — кто правит направившего строки
+import { isDeskActor, lineBeneficiaries } from '../domain/line-referral.js';   // SVC_REFERRER_COLUMN_V1 — кто правит направившего строки; REFERRAL_LINE_EXTERNAL_GUARD_V1 — кому платят за строку
+import { actingActorName } from '../../../public/js/shared/act-as.js';   // REFERRAL_LINE_AUDIT_V1 — имя «от имени» в журнале пациента
 import { refuseSignWhileActing, refuseDoctorDocWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документ врача в карте)
 
 const SECTION = 'patients';
@@ -688,6 +689,16 @@ export function patientCardSetServiceDoctor(db, args, user) {
  *     направившего-врача входит в «Зарплаты врачей», закрытое не переписывается.
  * Направивший ВИЗИТА (visits.referral_source_id) здесь не меняется — у него своя
  * дверь в окне визита (visit_set_referral_source).
+ *
+ * REFERRAL_LINE_EXTERNAL_GUARD_V1 (3.22.0, ревью) — источник, которому за эту строку
+ * не заплатят, не ставится: внешний партнёр строки к внешнему направившему визита
+ * (иначе карточки пациента) не добавляется (lineBeneficiaries,
+ * EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE = false), и карта показала бы нового партнёра,
+ * а «Рефералы» платили бы прежнему. Отказ 409 называет, где менять: окно визита.
+ *
+ * REFERRAL_LINE_AUDIT_V1 (3.22.0, ревью) — каждая смена пишет строку журнала
+ * пациента (patient_activity_log): прежний и новый направивший, кто сменил; при
+ * входе «от имени» — с именем администратора (actingActorName).
  */
 export function patientCardSetLineReferrer(db, args, user) {
   requireCard(db, user);
@@ -704,8 +715,21 @@ export function patientCardSetLineReferrer(db, args, user) {
     throw new RpcError('Источник направления указан неверно.', 400);
   }
   const run = db.transaction(() => {
-    const line = db.prepare(`SELECT vs.id, vs.doctor_id, vs.referred_by_source_id, vs.created_at, v.visit_date
-        FROM visit_services vs LEFT JOIN visits v ON v.id = vs.visit_id WHERE vs.id = ?`).get(vsId);
+    // REFERRAL_LINE_EXTERNAL_GUARD_V1 — и направивший визита (иначе карточки пациента),
+    // тем же COALESCE, что у отчёта «Рефералы» (reports.js itemRowsQuery).
+    // REFERRAL_LINE_AUDIT_V1 — пациент, визит и название строки — для журнала.
+    const line = db.prepare(`SELECT vs.id, vs.doctor_id, vs.referred_by_source_id, vs.created_at, v.visit_date,
+               v.id AS visit_id, v.patient_id,
+               rs.id AS base_id, rs.name AS base_name, rs.doctor_id AS base_doctor_id,
+               COALESCE(s.name, ct.name_ru, ct.name, pr.name, '') AS service
+          FROM visit_services vs
+          LEFT JOIN visits v ON v.id = vs.visit_id
+          LEFT JOIN patients pt ON pt.id = v.patient_id
+          LEFT JOIN referral_sources rs ON rs.id = COALESCE(v.referral_source_id, pt.referral_source_id)
+          LEFT JOIN services s ON s.id = vs.service_id
+          LEFT JOIN consultation_types ct ON ct.id = vs.consultation_type_id
+          LEFT JOIN products pr ON pr.id = vs.clinic_item_id
+         WHERE vs.id = ?`).get(vsId);
     if (!line) throw new RpcError('Строка услуги не найдена.', 404);
     if ((line.referred_by_source_id ?? null) === sourceId) return { id: vsId, referred_by_source_id: sourceId };
     const months = [...new Set([line.visit_date, line.created_at].filter(Boolean).map((d) => String(d).slice(0, 7)))];
@@ -722,11 +746,54 @@ export function patientCardSetLineReferrer(db, args, user) {
       if (src.doctor_id != null && line.doctor_id != null && Number(src.doctor_id) === Number(line.doctor_id)) {
         throw new RpcError('Врач не направляет сам к себе — эту услугу он и выполняет.', 400);
       }
+      // REFERRAL_LINE_EXTERNAL_GUARD_V1 — получит ли выбранный источник что-нибудь за
+      // эту строку: то же правило, что у отчёта (lineBeneficiaries). Тот же источник
+      // или тот же сотрудник, что у визита, получает — через визит.
+      const base = line.base_id != null && String(line.base_name || '') !== ''
+        ? { id: Number(line.base_id), doctor_id: line.base_doctor_id ?? null } : null;
+      const chosen = { id: Number(src.id), doctor_id: src.doctor_id ?? null };
+      const same = (a) => Number(a.id) === chosen.id
+        || (a.doctor_id != null && chosen.doctor_id != null && Number(a.doctor_id) === Number(chosen.doctor_id));
+      if (!lineBeneficiaries(base, chosen, line.doctor_id ?? null).some((b) => same(b.source))) {
+        throw new RpcError('Направивший визита — внешний партнёр, и за эту услугу платят ему. Чтобы платить другому партнёру, смените направившего в окне визита.', 409);
+      }
     }
     db.prepare('UPDATE visit_services SET referred_by_source_id = ? WHERE id = ?').run(sourceId, vsId);
+    logLineReferrerChange(db, line, sourceId, user);   // REFERRAL_LINE_AUDIT_V1
     return { id: vsId, referred_by_source_id: sourceId };
   });
   return run();
+}
+
+// REFERRAL_LINE_AUDIT_V1 (3.22.0, ревью) — строка журнала пациента о смене направившего
+// строки: прежний → новый (номер, имя, код источника), кто сменил. Номер сотрудника —
+// как у сессии; имя при входе «от имени» — «сотрудник (от имени: адм. …)», как в
+// журнале счёта. Сводка — хранимая запись журнала (по-русски, как у экранов).
+function logLineReferrerChange(db, line, sourceId, user) {
+  if (line.patient_id == null) return;
+  const fromId = line.referred_by_source_id ?? null;
+  const ids = [fromId, sourceId].filter((x) => x != null).map(Number);
+  const byId = new Map(ids.length
+    ? db.prepare(`SELECT id, name, code FROM referral_sources WHERE id IN (${ids.map(() => '?').join(', ')})`).all(...ids).map((r) => [Number(r.id), r])
+    : []);
+  const ref = (id) => {
+    if (id == null) return null;
+    const r = byId.get(Number(id));
+    return { id: Number(id), name: r ? r.name : null, code: r ? (r.code || null) : null };
+  };
+  const from = ref(fromId);
+  const to = ref(sourceId);
+  const label = (x) => (x ? (x.name || '№ ' + x.id) : '—');
+  const actor = user && user.id != null ? db.prepare('SELECT id, full_name, role FROM users WHERE id = ?').get(user.id) : null;
+  db.prepare(`INSERT INTO patient_activity_log (patient_id, visit_id, entity_type, entity_id, entity_label, action, summary, detail,
+                                               actor_user_id, actor_name, actor_role)
+              VALUES (?, ?, 'service', ?, ?, 'referrer_changed', ?, ?, ?, ?, ?)`)
+    .run(line.patient_id, line.visit_id ?? null, line.id, line.service || null,
+      `Направил: ${label(from)} → ${label(to)}`,
+      JSON.stringify({ visit_service_id: line.id, from, to }),
+      actor ? actor.id : null,
+      actingActorName(user, actor ? actor.full_name : ((user && user.full_name) || null)),
+      actor ? actor.role : ((user && user.role) || null));
 }
 
 // V3120_FIX (M2) — кто оказывает услуги: те роли, чьё имя печатает чек как
