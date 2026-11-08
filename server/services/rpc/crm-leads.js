@@ -53,9 +53,14 @@ export function crmLeadsByPhone(db, args, user) {
   // карточки («похожие») рядом с карточкой самого пациента. С patient_id
   // отбор строгий — и по видимым, и по чужим заявкам: заявка другого пациента
   // на этом номере не повод ни для строки, ни для «есть у другого оператора».
+  // CRM_DUP_UNLINKED_KEEP_V1 (3.22.0, ревью) — убираются только заявки,
+  // привязанные к ДРУГОМУ пациенту. Заявка без пациента остаётся дублем: её
+  // заводит входящий звонок (lead-from-call.js — имя = номер, patient_id пуст,
+  // у семейного номера почти всегда), и это может быть этот же человек. Строгий
+  // отбор её прятал — окно молчало, и рядом с карточкой звонка заводилась вторая.
   const pid = args && args.patient_id != null && args.patient_id !== '' ? Number(args.patient_id) : null;
   let rows = leadsForPhone(db, (args && args.phone) || '');
-  if (pid != null && Number.isFinite(pid)) rows = rows.filter((r) => Number(r.patient_id) === pid);
+  if (pid != null && Number.isFinite(pid)) rows = rows.filter((r) => r.patient_id == null || Number(r.patient_id) === pid);
   if (!rows.length) return [];
   const names = new Map(db.prepare(
     `SELECT id, full_name FROM users WHERE id IN (${rows.map(() => '?').join(',')})`)

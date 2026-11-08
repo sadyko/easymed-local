@@ -167,7 +167,11 @@ test('CRM_UNIFY_V1: crm_search { assigned } — мои / ничьи / по им�
 // CRM_DUP_SAME_PATIENT_V1 (2026-11-08) — владелец: при выбранном пациенте окно
 // дубля показывало ВСЕ заявки с тем же номером («похожие» — родственники,
 // другие люди на одном телефоне). Нужны ровно заявки ЭТОГО пациента.
-test('crm_leads_by_phone с patient_id: только заявки этого пациента, чужие по номеру — нет', () => {
+// CRM_DUP_UNLINKED_KEEP_V1 (3.22.0, ревью) — «чужие» — это заявки, привязанные к
+// ДРУГОМУ пациенту. Заявка без пациента (её заводит входящий звонок: имя — номер,
+// patient_id пуст) может быть этим же человеком и остаётся дублем: прежде она
+// пропадала, окно молчало, и рядом заводилась вторая карточка.
+test('crm_leads_by_phone с patient_id: заявки этого пациента и ничьи, заявки другого пациента — нет', () => {
   const { db, admin } = seed();
   const pat = (name) => Number(db.prepare("INSERT INTO patients (full_name, phone) VALUES (?, '915662278')").run(name).lastInsertRowid);
   const p1 = pat('TEST TEST');
@@ -178,9 +182,30 @@ test('crm_leads_by_phone с patient_id: только заявки этого п�
   db.prepare('UPDATE crm_requests SET patient_id = ? WHERE id = ?').run(p1, mine);
   db.prepare('UPDATE crm_requests SET patient_id = ? WHERE id = ?').run(p2, other);
   const rpc = getRpc('crm_leads_by_phone');
-  assert.deepEqual(rpc(db, { phone: '+998915662278', patient_id: p1 }, admin).map((r) => r.id), [mine]);
+  assert.deepEqual(rpc(db, { phone: '+998915662278', patient_id: p1 }, admin).map((r) => r.id), [loose, mine],
+    'заявка без пациента пропала из проверки дубля, или осталась заявка другого пациента');
+  assert.deepEqual(rpc(db, { phone: '+998915662278', patient_id: p2 }, admin).map((r) => r.id), [loose, other]);
   assert.equal(rpc(db, { phone: '+998915662278' }, admin).length, 3, 'без пациента — по номеру, как раньше');
-  assert.ok(loose);
+});
+
+// CRM_DUP_UNLINKED_KEEP_V1 — ровно случай из ревью: входящий звонок с семейного
+// номера завёл карточку без пациента, оператор открыл «Новая заявка» и выбрал
+// пациента из базы. Карточка звонка обязана остановить создание второй.
+test('crm_leads_by_phone с patient_id: карточка входящего звонка без пациента — дубль', () => {
+  const { db, admin } = seed();
+  const pid = Number(db.prepare("INSERT INTO patients (full_name, phone) VALUES ('Пациент', '915662278')").run().lastInsertRowid);
+  const callLead = Number(db.prepare(`INSERT INTO crm_requests (full_name, phone, source, status, patient_id)
+      VALUES ('+998915662278', '+998915662278', 'telephony', 'in_process', NULL)`).run().lastInsertRowid);
+  const rpc = getRpc('crm_leads_by_phone');
+  assert.deepEqual(rpc(db, { phone: '915662278' }, admin).map((r) => r.id), [callLead]);
+  assert.deepEqual(rpc(db, { phone: '915662278', patient_id: pid }, admin).map((r) => r.id), [callLead]);
+});
+
+test('crm_leads_by_phone с patient_id: чужая (другого оператора) заявка без пациента — по-прежнему строка «у другого оператора»', () => {
+  const { db, op1, op2 } = seed();
+  const p1 = Number(db.prepare("INSERT INTO patients (full_name, phone) VALUES ('A', '942846494')").run().lastInsertRowid);
+  ins(db, { phone: '942846494', assigned_to: op2.id });   // patient_id пуст
+  assert.deepEqual(getRpc('crm_leads_by_phone')(db, { phone: '942846494', patient_id: p1 }, op1), [{ can_open: false, foreign: true }]);
 });
 
 test('crm_leads_by_phone с patient_id: чужая заявка ДРУГОГО пациента не даёт строки «у другого оператора»', () => {
