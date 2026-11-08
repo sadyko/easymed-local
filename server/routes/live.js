@@ -25,6 +25,7 @@ import { sessionUser } from '../services/auth.js';
 
 export const HEARTBEAT_MS = 25000;
 export const RETRY_MS = 3000;
+const MAX_BACKLOG = 64 * 1024;
 
 const frame = (ev) => `id: ${ev.v}\nevent: change\ndata: ${JSON.stringify(ev)}\n\n`;
 
@@ -62,6 +63,10 @@ export function liveRoutes(db, { heartbeatMs = HEARTBEAT_MS } = {}) {
     };
     const send = (text) => {
       if (done) return;
+      // Сокет перестал принимать (ПК выключили без закрытия соединения): события
+      // копились бы в памяти сервера до таймаута TCP. Больше 64 КБ невыкачанного —
+      // поток закрывается; живая вкладка переподключится сама.
+      if (res.writableLength > MAX_BACKLOG) { cleanup(); try { res.destroy(); } catch { /* уже закрыт */ } return; }
       try { res.write(text); } catch { cleanup(); }
     };
 
