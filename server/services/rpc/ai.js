@@ -1,0 +1,56 @@
+// AI_CHAT_V1 — экран «ИИ-помощник» и метки в чатах.
+//   ai_settings_get  — состояние (видит «ИИ-помощник: Просмотр»);
+//   ai_settings_save — переключатель (нужно «Изменение» и модуль `ai`);
+//   ai_flags         — чаты «Нужен оператор» (видит тот, кто видит чаты).
+import { grantAllowsAdminOr } from '../grants.js';
+import { canViewSection } from '../roles.js';
+import { readAiSettings, setAiEnabled, setAiBlocked } from '../ai/settings.js';
+import { dropQueuedJobs } from '../ai/queue.js';
+import { flaggedChats } from '../ai/guards.js';
+import { clinicFacts } from '../ai/facts.js';
+import { controlState } from '../control/state.js';
+import { getDataDir } from '../control/config.js';
+
+export class RpcError extends Error {
+  constructor(msg, status = 400) { super(msg); this.status = status; }
+}
+
+function defaultHasModule(db) {
+  try { return controlState(db, getDataDir()).has('ai'); } catch { return false; }
+}
+
+function requireAiLevel(db, user, need) {
+  if (!grantAllowsAdminOr(db, user, 'commerce_ai', need)) {
+    throw new RpcError('ИИ-помощник недоступен вашей роли. Права выдаёт администратор в «Настройки → Роли» (строка «ИИ-помощник»).', 403);
+  }
+}
+
+// A8: сколько услуг и врачей ИИ вообще знает — экран предупреждает, когда услуг 0.
+function factCounts(db) {
+  try {
+    const f = clinicFacts(db);
+    return { services: (f.services || []).length, doctors: (f.doctors || []).length };
+  } catch { return { services: 0, doctors: 0 }; }
+}
+
+export function aiSettingsGet(db, _args, user, { hasModule = defaultHasModule } = {}) {
+  requireAiLevel(db, user, 'view');
+  return { ...readAiSettings(db), has_module: !!hasModule(db), facts: factCounts(db) };
+}
+
+export function aiSettingsSave(db, args, user, { hasModule = defaultHasModule } = {}) {
+  requireAiLevel(db, user, 'edit');
+  const on = !!(args && args.enabled);
+  if (on && !hasModule(db)) throw new RpcError('Модуль «ИИ-помощник» не подключён. Обратитесь к менеджеру Easy-Med.', 402);
+  const s = setAiEnabled(db, on, (user && user.id) || null);
+  if (on) setAiBlocked(db, '');
+  else dropQueuedJobs(db);
+  return { ...readAiSettings(db), has_module: !!hasModule(db), enabled: s.enabled, facts: factCounts(db) };
+}
+
+export function aiFlags(db, _args, user) {
+  const sees = grantAllowsAdminOr(db, user, 'commerce_ai', 'view')
+    || canViewSection(db, user, 'telegram-chat') || canViewSection(db, user, 'meta-chat');
+  if (!sees) throw new RpcError('Чаты недоступны вашей роли.', 403);
+  return flaggedChats(db);
+}

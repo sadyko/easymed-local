@@ -86,6 +86,7 @@ import { roomsSetupDelete } from './rooms-delete.js';   // ROOMS_DELETE_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramBroadcastOptions, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
+import { aiSettingsGet, aiSettingsSave, aiFlags } from './ai.js';   // AI_CHAT_V1
 import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions,
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
          telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording,
@@ -692,6 +693,10 @@ export const RPC = {
   // которые НЕ admin-only: раздел выдаётся ролям, и его уровень (viewer /
   // editor) решает, читать переписку или ещё и отвечать в неё.
   telegram_chats_list:            (db, args, user) => telegramChatsList(db, args, user),
+  // AI_CHAT_V1 — переключатель ИИ-помощника и чаты «Нужен оператор».
+  ai_settings_get:                (db, args, user) => aiSettingsGet(db, args, user),
+  ai_settings_save:               (db, args, user) => aiSettingsSave(db, args, user),
+  ai_flags:                       (db, args, user) => aiFlags(db, args, user),
   telegram_chat_messages:         (db, args, user) => telegramChatMessages(db, args, user),
   telegram_chat_unread:           (db, args, user) => telegramChatUnread(db, args, user),
   telegram_chat_link:       (db, args, user) => telegramChatLink(db, args, user),   // TELEGRAM_ORPHAN_CHAT_V1
