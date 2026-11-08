@@ -214,19 +214,36 @@ const staffPatient = (rates = { s: { 21: 100 } }, pct = 20) => {
   DB.prepare('UPDATE patients SET category_id = ? WHERE id = 3').run(cat);
 };
 
+// Час запуска. У врача часы 00:00–23:59, консультация — 30 минут: примерно после 23:00 сегодня окон
+// уже нет, и мастер (как и должен) предлагает ближайший день — консультация уходит туда, анализ
+// остаётся сегодня, счетов два. CI запустился в 23:07 и оба теста ниже падали: ждали один счёт
+// сегодня. Ставки от часа не зависят — проверяем суммы и строки всех счетов визита: они одни и те же,
+// один счёт или два. Возвращает число дней (= счетов).
+async function consultTodayOrNearest() {
+  if (!textOf(overlay()).includes('Сегодня у врача нет свободного времени')) return 1;
+  const nearest = byAttr(overlay(), 'data-pick-nearest', 21);
+  assert.ok(nearest, 'сегодня окон нет, а кнопки ближайшего дня у консультации нет');
+  nearest.click();
+  await flush(20);
+  return 2;
+}
+const moneySum = () => money().reduce((s, m) => [s[0] + m.subtotal, s[1] + m.discount_amount, s[2] + m.total_amount], [0, 0, 0]);
+
 test('«Сотрудники» 20 %, консультация 100 %: выбор «по услугам», смета 32 000 = счёт 32 000 (консультация 0, анализ 32 000)', async () => {
   seed({ todayOff: false, from: '00:00', to: '23:59' });
   staffPatient();
   await openWizard([21, 22]);
+  const days = await consultTodayOrNearest();
   const sel = choiceSel();
   assert.deepEqual(optionTexts(sel), ['Без скидки', 'Скидка группы «Сотрудники» — по услугам (по умолчанию 20%)', 'Своя скидка (вручную)']);
   assert.equal(sel.value, 'group');
   assert.equal(reason(), 'Скидка группы «Сотрудники» — по услугам (по умолчанию 20%)');
   assert.ok(textOf(overlay()).includes('32 000 сум'), 'смета — не 32 000 к оплате');
   await pressUntilCreate();
-  assert.equal(invoiceCall().body.discount_choice, 'group');
-  const [inv] = money();
-  assert.deepEqual([inv.subtotal, inv.discount_amount, inv.total_amount], [140000, 108000, 32000]);
+  const calls = RPC.filter((c) => c.name === 'create_invoice_for_visit');
+  assert.equal(calls.length, days, 'счетов не столько, сколько дней: ' + JSON.stringify(TOASTS));
+  assert.ok(calls.every((c) => c.body.discount_choice === 'group'), 'выбор скидки не «группа»: ' + JSON.stringify(calls.map((c) => c.body.discount_choice)));
+  assert.deepEqual(moneySum(), [140000, 108000, 32000]);
   assert.deepEqual(DB.prepare('SELECT service_id, discount_amount, discount_rate FROM invoice_items ORDER BY service_id').all().map((r) => [r.service_id, r.discount_amount, r.discount_rate]),
     [[21, 100000, 100], [22, 8000, 20]]);
 });
@@ -248,9 +265,11 @@ test('«Без скидки» у группы со ставками — полн
   seed({ todayOff: false, from: '00:00', to: '23:59' });
   staffPatient();
   await openWizard([21, 22]);
+  const days = await consultTodayOrNearest();   // поздно вечером — консультация на ближайший день
   await choose('Без скидки');
   await pressUntilCreate();
-  assert.deepEqual(money().map((m) => [m.discount_amount, m.total_amount]), [[0, 140000]]);
+  assert.equal(money().length, days, 'счетов не столько, сколько дней: ' + JSON.stringify(TOASTS));
+  assert.deepEqual(moneySum(), [140000, 0, 140000]);
 });
 
 // Ревью S5 L-3 — строка под выбором скидки называет группу со ставками «по услугам», а не
