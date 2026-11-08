@@ -98,20 +98,24 @@ test('C1: счёт из одних строк пакета — скидка по
   const p = c.pay(invoice);
   const before = money(c);
   assert.equal(before.fee, 48000);
-  assert.equal(before.referral, 16000);
+  // REFERRAL_FULL_PRICE_V1 (3.22.0, владелец 2026-11-08: «discount not applied to the
+  // partners share — full price, always») — было 16 000 / 12 000 (10 % от 160 000 и от
+  // 120 000 после скидки). Скидка пакета долю направившего больше не уменьшает: 10 % от
+  // 200 000 = 20 000; уступка 40 000 — это возврат денег, а не скидка: × 120/160 = 15 000.
+  assert.equal(before.referral, 20000);
   refundPayment(c.db, { payment_id: p, amount: 40000, reason: 'уступка' }, admin);
   const inv = c.db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id);
   assert.equal(inv.total_amount, 120000);
   assert.equal(inv.status, 'paid');
   const m = money(c);
   assert.equal(m.fee, 36000, 'врачу — 30 % от 120 000, а не прежние 48 000');
-  assert.equal(m.referral, 12000, 'направившему — 10 % от 120 000');
+  assert.equal(m.referral, 15000, 'направившему — 10 % от цены 200 000 × доля оставшихся денег 120/160');
   assert.equal(m.revenue, 120000, '«После скидки» = сумма счёта');
   assert.equal(m.revenueFee, 36000);
   assert.equal(m.byServices, 120000);
   assert.equal(m.byServicesFee, 36000);
   assert.equal(m.salaryFee, 36000);
-  assert.equal(m.salaryReferral, 12000);
+  assert.equal(m.salaryReferral, 15000);
   assert.equal(linesAfterDiscount(c, inv.invoice_number), inv.total_amount, 'сумма строк после скидки = сумма счёта');
 });
 
@@ -124,7 +128,9 @@ test('C1: смешанный счёт (пакет + обычная строка)
   refundPayment(c.db, { payment_id: p, amount: 60000, reason: 'уступка' }, admin);
   const m = money(c);
   assert.equal(m.fee, 21000, '30 % от 70 000 — пропорционально (−18 000), а не −15 000');
-  assert.equal(m.referral, 7000);
+  // REFERRAL_FULL_PRICE_V1 (владелец 2026-11-08) — было 7 000 (10 % от 70 000 после скидки):
+  // теперь 10 % от цен до скидки пакета (100 000 + 50 000) × доля оставшихся денег 70/130.
+  assert.equal(m.referral, round2(15000 * 70000 / 130000));
   assert.equal(m.revenue, 70000);
   assert.equal(m.byServices, 70000);
   assert.equal(m.salaryFee, 21000);

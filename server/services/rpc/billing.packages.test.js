@@ -199,7 +199,11 @@ test('остаток скидки счёта разносится только �
   assert.equal(payLine(c, 3).discount, 5000);
 });
 
-test('вознаграждение партнёра по строке пакета — от суммы после скидки пакета', () => {
+// REFERRAL_FULL_PRICE_V1 (3.22.0, владелец 2026-11-08: «discount not applied to the
+// partners share — full price, always») — было «от суммы после скидки пакета» (8 000 от
+// 80 000): скидка пакета — тоже скидка, долю партнёра она больше не уменьшает. Деньги
+// строки («Сумма после скидки») — по-прежнему со скидкой пакета.
+test('вознаграждение партнёра по строке пакета — от цены до скидки пакета (REFERRAL_FULL_PRICE_V1)', () => {
   const c = clinic();
   const res = invoiceOf(c, [c.line(1, { pkgId: c.packageId }), c.line(2)]);
   c.db.prepare("UPDATE invoices SET status = 'paid', paid_amount = total_amount WHERE id = ?").run(res.invoice.id);
@@ -208,7 +212,7 @@ test('вознаграждение партнёра по строке пакет
   const us = r.rows.find((x) => col(x, 'Услуга') === 'УЗИ');
   const lab = r.rows.find((x) => col(x, 'Услуга') === 'Анализ');
   assert.equal(col(us, 'Сумма после скидки'), 80000);
-  assert.equal(col(us, 'Вознаграждение'), 8000);
+  assert.equal(col(us, 'Вознаграждение'), 10000);   // 10 % от 100 000 (было 8 000 — от 80 000)
   assert.equal(col(lab, 'Сумма после скидки'), 50000);
   assert.equal(col(lab, 'Вознаграждение'), 5000);
 });

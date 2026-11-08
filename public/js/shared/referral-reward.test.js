@@ -84,9 +84,18 @@ test('позиция без группы услуг откатывается н�
   assert.deepEqual(rate({ reward_mode: 'category' }, CATEGORY, null), { unit: 'pct', value: 10 });
 });
 
-test('процент берётся ПОСЛЕ скидки', () => {
-  const r = rewardForLine({ unit: 'pct', value: 10 }, { amount: 100000, discount: 20000, qty: 1 });
-  assert.equal(r, 8000, 'посчитано от прайса, а не от того, что взяли с пациента');
+// REFERRAL_FULL_PRICE_V1 (3.22.0, владелец 2026-11-08: «discount not applied to the
+// partners share — full price, always») — было «процент берётся ПОСЛЕ скидки» (8 000
+// от 100 000 − 20 000); правило заменено решением владельца: скидка пациенту долю
+// направившего не уменьшает.
+test('REFERRAL_FULL_PRICE_V1: процент — от цены строки ДО скидки (УЗИ 200 000, скидка 20 %, партнёр 10 % → 20 000)', () => {
+  assert.equal(rewardForLine({ unit: 'pct', value: 10 }, { amount: 200000, discount: 40000, qty: 1 }), 20000);
+  assert.equal(rewardForLine({ unit: 'pct', value: 10 }, { amount: 100000, discount: 20000, qty: 1 }), 10000);
+});
+
+test('REFERRAL_FULL_PRICE_V1: скидка 100 % (услуга бесплатна для пациента) — партнёру 10 % от 200 000 = 20 000', () => {
+  assert.equal(rewardForLine({ unit: 'pct', value: 10 }, { amount: 200000, discount: 200000, qty: 1 }), 20000);
+  assert.equal(rewardForLine({ unit: 'fix', value: 70000 }, { amount: 200000, discount: 200000, qty: 1 }), 70000);
 });
 
 test('фиксированная сумма умножается на количество', () => {

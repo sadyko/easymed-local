@@ -148,11 +148,22 @@ export function resolveReferralRate({ source, category, serviceGroup, serviceId 
 
 // Вознаграждение за одну позицию счёта.
 //
-// Процент берётся ПОСЛЕ скидки: партнёру причитается доля того, что клиника
-// действительно взяла с пациента, а не прайсовой цены — так считал и прежний
-// отчёт. Фиксированная сумма умножается на количество: «фиксированная сумма за
+// REFERRAL_FULL_PRICE_V1 (3.22.0, владелец 2026-11-08: «discount not applied to the
+// partners share — full price, always») — процент берётся от ЦЕНЫ строки ДО скидки
+// (amount = invoice_items.total): скидка пациенту — решение клиники, долю
+// направившего она не уменьшает, в том числе скидка 100 %. Прежде процент брался
+// после скидки («доля того, что клиника взяла с пациента»); скидку функция больше
+// не принимает. Одно правило для всех источников: внешние партнёры, представители,
+// свои врачи-направившие. ВОЗВРАТ — не скидка: долю оставшихся денег (возврат с
+// доплатой, «скидка после продажи») вызывающий умножает сам (reports.js
+// referralRewardOf, referralPayFactor) — одинаково для процента и фикса.
+// «С дня обновления» (владелец 2026-11-08): счёт, выставленный до того, как клиника
+// поставила 3.22.0 (мигр. 283), — по прежнему правилу: reports.js referralRewardOf
+// передаёт сюда сумму строки ПОСЛЕ скидки.
+//
+// Фиксированная сумма умножается на количество: «фиксированная сумма за
 // услугу» — это за услугу, и три снимка по 60 000 дают 180 000.
-export function rewardForLine(rate, { amount = 0, discount = 0, qty = 1 } = {}) {
+export function rewardForLine(rate, { amount = 0, qty = 1 } = {}) {
   if (!rate) return 0;
   const value = num(rate.value) ?? 0;
   if (value === 0) return 0;
@@ -160,6 +171,5 @@ export function rewardForLine(rate, { amount = 0, discount = 0, qty = 1 } = {}) 
   // читает расчёт доли врача (COALESCE(ii.quantity, 1) в ITEM_FEE_SQL). Иначе
   // строка счёта без количества молча не приносила бы партнёру ничего.
   if (rate.unit === 'fix') { const q = num(qty); return value * (q === null ? 1 : q); }
-  const base = (Number(amount) || 0) - (Number(discount) || 0);
-  return base * value / 100;
+  return (Number(amount) || 0) * value / 100;
 }
