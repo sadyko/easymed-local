@@ -12,7 +12,12 @@ test('284 AI_CHAT_V1: таблицы ИИ-помощника и отметки �
   assert.throws(() => db.prepare("INSERT INTO ai_chat_jobs (channel, chat_key, source_id, next_at) VALUES ('telegram','1','10','2026-01-01T00:00:00Z')").run(),
     /UNIQUE/, 'одно входящее сообщение — одна задача');
   db.prepare("INSERT INTO ai_chat_flags (channel, chat_key, reason, flagged_at) VALUES ('telegram','1','medical','2026-01-01T00:00:00Z')").run();
+  assert.throws(() => db.prepare("INSERT INTO ai_chat_flags (channel, chat_key, reason, flagged_at) VALUES ('telegram','1','x','2026-01-01T00:00:00Z')").run(),
+    /UNIQUE|PRIMARY/, 'один чат — один флаг');
+  assert.throws(() => db.prepare('INSERT INTO ai_settings (id) VALUES (2)').run(),
+    /CHECK/, 'строка настроек только одна');
   const cols = (t) => db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
+  assert.ok(cols('telegram_messages').includes('by_ai'));
   assert.ok(cols('meta_messages').includes('by_ai'));
   assert.ok(cols('meta_comments').includes('by_ai'));
   db.close();

@@ -47,6 +47,9 @@ CREATE TABLE ai_chat_flags (
 );
 
 -- Сообщения и ответы, отправленные ИИ, видны в истории с пометкой «ИИ».
--- Telegram отмечает их telegram_messages.kind = 'ai' (колонка уже есть).
+-- Отметка — колонка by_ai во всех трёх таблицах. У telegram_messages.kind есть
+-- CHECK ('text','document','system','broadcast', миграция 062): новое значение
+-- 'ai' потребовало бы пересборки таблицы, а ответ ИИ — это обычный текст.
+ALTER TABLE telegram_messages ADD COLUMN by_ai INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE meta_messages ADD COLUMN by_ai INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE meta_comments ADD COLUMN by_ai INTEGER NOT NULL DEFAULT 0;
