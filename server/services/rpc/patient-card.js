@@ -45,6 +45,7 @@ import { REFUNDED_SIGN_REFUSAL } from '../../../public/js/shared/refunded-line.j
 import { assertChangedOrder, logRepeatOrders, repeatReasonArg } from '../domain/dup-order.js';   // DUP_STOP_V1
 import { isDeskActor, lineBeneficiaries } from '../domain/line-referral.js';   // SVC_REFERRER_COLUMN_V1 — кто правит направившего строки; REFERRAL_LINE_EXTERNAL_GUARD_V1 — кому платят за строку
 import { actingActorName } from '../../../public/js/shared/act-as.js';   // REFERRAL_LINE_AUDIT_V1 — имя «от имени» в журнале пациента
+import { localMonth } from '../domain/day.js';   // PAY_MONTH_LOCAL_V1 — закрытый месяц — местный, как у выплаты
 import { refuseSignWhileActing, refuseDoctorDocWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документ врача в карте)
 
 const SECTION = 'patients';
@@ -639,13 +640,17 @@ export function patientCardSetServiceDoctor(db, args, user) {
   if (doctorId !== null && (typeof rawDoctor === 'boolean' || !Number.isInteger(doctorId) || doctorId <= 0)) {
     throw new RpcError('Исполнитель указан неверно.', 400);
   }
-  const line = db.prepare(`SELECT vs.id, vs.invoice_item_id, vs.created_at, v.visit_date
+  // PAY_MONTH_LOCAL_V1 (3.22.0, ревью) — месяц визита и строки — МЕСТНЫЙ (как
+  // pay_periods.month и закрытие месяца), а не UTC-срез метки: визит в 02:00 по
+  // местному 1-го числа в UTC ещё в прошлом месяце.
+  const line = db.prepare(`SELECT vs.id, vs.invoice_item_id,
+             ${localMonth('v.visit_date')} AS visit_month, ${localMonth('vs.created_at')} AS line_month
       FROM visit_services vs LEFT JOIN visits v ON v.id = vs.visit_id WHERE vs.id = ?`).get(vsId);
   if (!line) throw new RpcError('Строка услуги не найдена.', 404);
   if (line.invoice_item_id != null) {
     throw new RpcError('Услуга уже в счёте — исполнителя в ней не меняют: по ней начисляется оплата врача. Сначала уберите строку из счёта в кассе.', 409);
   }
-  const months = [...new Set([line.visit_date, line.created_at].filter(Boolean).map((d) => String(d).slice(0, 7)))];
+  const months = [...new Set([line.visit_month, line.line_month].filter(Boolean))];
   for (const m of months) {
     if (db.prepare('SELECT 1 FROM pay_periods WHERE month = ?').get(m)) {
       throw new RpcError('Начисления врачам за этот месяц закрыты — исполнителя услуги уже не меняют.', 409);
@@ -718,7 +723,13 @@ export function patientCardSetLineReferrer(db, args, user) {
     // REFERRAL_LINE_EXTERNAL_GUARD_V1 — и направивший визита (иначе карточки пациента),
     // тем же COALESCE, что у отчёта «Рефералы» (reports.js itemRowsQuery).
     // REFERRAL_LINE_AUDIT_V1 — пациент, визит и название строки — для журнала.
-    const line = db.prepare(`SELECT vs.id, vs.doctor_id, vs.referred_by_source_id, vs.created_at, v.visit_date,
+    // PAY_MONTH_LOCAL_V1 (3.22.0, ревью) — месяцы визита, строки и СЧЁТА строки —
+    // местные, как у выплаты и закрытия месяца. Вознаграждение направившему
+    // датируется счётом (reports.js: date — местный день счёта), а месяцы закрывают
+    // и не по порядку: строка открытого месяца в счёте закрытого — тоже отказ.
+    const line = db.prepare(`SELECT vs.id, vs.doctor_id, vs.referred_by_source_id,
+               ${localMonth('v.visit_date')} AS visit_month, ${localMonth('vs.created_at')} AS line_month,
+               ${localMonth('i.created_at')} AS invoice_month,
                v.id AS visit_id, v.patient_id,
                rs.id AS base_id, rs.name AS base_name, rs.doctor_id AS base_doctor_id,
                COALESCE(s.name, ct.name_ru, ct.name, pr.name, '') AS service
@@ -729,10 +740,12 @@ export function patientCardSetLineReferrer(db, args, user) {
           LEFT JOIN services s ON s.id = vs.service_id
           LEFT JOIN consultation_types ct ON ct.id = vs.consultation_type_id
           LEFT JOIN products pr ON pr.id = vs.clinic_item_id
+          LEFT JOIN invoice_items ii ON ii.id = vs.invoice_item_id
+          LEFT JOIN invoices i ON i.id = ii.invoice_id
          WHERE vs.id = ?`).get(vsId);
     if (!line) throw new RpcError('Строка услуги не найдена.', 404);
     if ((line.referred_by_source_id ?? null) === sourceId) return { id: vsId, referred_by_source_id: sourceId };
-    const months = [...new Set([line.visit_date, line.created_at].filter(Boolean).map((d) => String(d).slice(0, 7)))];
+    const months = [...new Set([line.visit_month, line.line_month, line.invoice_month].filter(Boolean))];
     for (const m of months) {
       if (db.prepare('SELECT 1 FROM pay_periods WHERE month = ?').get(m)) {
         throw new RpcError('Начисления врачам за этот месяц закрыты — направившего услуги уже не меняют.', 409);

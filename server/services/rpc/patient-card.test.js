@@ -589,3 +589,47 @@ test('REFERRAL_LINE_AUDIT_V1: смена направившего строки �
   assert.equal(log().length, 3);
   db.close();
 });
+
+// PAY_MONTH_LOCAL_V1 (3.22.0, ревью) — закрытый месяц — МЕСТНЫЙ месяц клиники, как у
+// выплаты и закрытия месяца (pay_periods.month; billing.js localMonth), а не UTC-срез
+// метки. Визит в 02:00 по местному 1 ноября (в UTC — ещё 31 октября) — ноябрьский, и
+// закрытый октябрь его не держит. Направившему строки — ещё и месяц СЧЁТА строки:
+// вознаграждение датируется счётом, а месяцы закрывают и не по порядку.
+const status = (fn) => { try { fn(); } catch (e) { return e.status; } return 'ok'; };
+test('PAY_MONTH_LOCAL_V1: закрытый месяц — местный: визит в 02:00 1 ноября не держит закрытый октябрь', () => {
+  const { db, pid, vsid } = seed();
+  // Метка UTC для местного времени — тем же SQLite, что считает месяцы (часовой пояс машины).
+  const utc = (local) => db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?, 'utc') t").get(local).t;
+  const at = utc('2026-11-01 02:00:00');
+  const vid = Number(db.prepare('INSERT INTO visits (patient_id, doctor_id, branch_id, visit_date) VALUES (?, 3, 1, ?)').run(pid, at).lastInsertRowid);
+  const sid = db.prepare('SELECT service_id s FROM visit_services WHERE id = ?').get(vsid).s;
+  const line = () => Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, created_at) VALUES (?, ?, 1, 50000, 50000, 'added', ?)")
+    .run(vid, sid, at.replace('T', ' ').replace('Z', '')).lastInsertRowid);
+  const D = doctorSource(db, 4, 'Доктор Каримов');
+  db.prepare("INSERT INTO pay_periods (month) VALUES ('2026-10')").run();
+
+  const a = line();
+  assert.equal(status(() => patientCardSetLineReferrer(db, { visit_service_id: a, referral_source_id: D }, REGISTRAR)), 'ok', 'ноябрьская строка — закрыт только октябрь');
+  assert.equal(status(() => patientCardSetServiceDoctor(db, { patient_id: pid, visit_service_id: a, doctor_id: 3 }, REGISTRAR)), 'ok', 'и врача ноябрьской строки меняют');
+  // Закрыли и ноябрь — теперь отказ обоим.
+  db.prepare("INSERT INTO pay_periods (month) VALUES ('2026-11')").run();
+  const b = line();
+  assert.equal(status(() => patientCardSetLineReferrer(db, { visit_service_id: b, referral_source_id: D }, REGISTRAR)), 409);
+  assert.equal(status(() => patientCardSetServiceDoctor(db, { patient_id: pid, visit_service_id: b, doctor_id: 3 }, REGISTRAR)), 409);
+  db.close();
+});
+
+test('PAY_MONTH_LOCAL_V1: направивший строки — и месяц счёта строки: счёт в закрытом месяце — отказ', () => {
+  const { db, vsid, inv } = seed();
+  const D = doctorSource(db, 4, 'Доктор Каримов');
+  // Визит посева — август; счёт выставлен в сентябре, и закрыт только сентябрь
+  // (месяцы закрывают и не по порядку): вознаграждение строки — сентябрьское.
+  db.prepare("UPDATE invoices SET created_at = '2026-09-02T06:00:00Z' WHERE id = ?").run(inv);
+  db.prepare("INSERT INTO pay_periods (month) VALUES ('2026-09')").run();
+  assert.equal(status(() => patientCardSetLineReferrer(db, { visit_service_id: vsid, referral_source_id: D }, REGISTRAR)), 409);
+  assert.equal(db.prepare('SELECT referred_by_source_id r FROM visit_services WHERE id = ?').get(vsid).r, null);
+  // Счёт в открытом месяце — можно.
+  db.prepare("UPDATE invoices SET created_at = '2026-10-02T06:00:00Z' WHERE id = ?").run(inv);
+  assert.equal(status(() => patientCardSetLineReferrer(db, { visit_service_id: vsid, referral_source_id: D }, REGISTRAR)), 'ok');
+  db.close();
+});
