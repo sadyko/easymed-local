@@ -50,7 +50,7 @@ export const LICENSED_MODULES = Object.assign(Object.create(null), {
     'commerce-ai': {
         key: 'ai',
         title: 'ИИ отвечает пациентам в чатах — днём и ночью',
-        blurb: 'Отвечает в Telegram, Facebook и Instagram о услугах, ценах, врачах и адресах, заводит заявки в CRM и передаёт медицинские вопросы операторам.',
+        blurb: 'Отвечает в Telegram, Facebook и Instagram об услугах, ценах, врачах и адресах, заводит заявки в CRM и передаёт медицинские вопросы операторам.',
     },
 });
 

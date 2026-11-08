@@ -311,7 +311,7 @@ test('каждая строка справочника называет пров
   // «Роли» его не было вовсе (CALLCENTER_OPERATOR_V1). ROLE_REPORTS_SETTINGS_V1
   // разделов не прибавил: группы отчётов и плитки настроек — окна прежних
   // разделов «Отчёты» и «Настройки».
-  assert.equal(CATALOG.length, 23, 'в справочнике двадцать три раздела');   // AI_CHAT_V1 — + «ИИ-помощник»   // COMMERCE_BLOCK_V1 — + «Push-уведомления», «Ссылки для рекламы в Telegram»;   // REFERRALS_NAV_V1 — + «Реферирование»; META_INBOX_V1 — + «Чат Facebook и Instagram»
+  assert.equal(CATALOG.length, 23, 'в справочнике двадцать три раздела');   // AI_CHAT_V1 — + «ИИ-помощник»; COMMERCE_BLOCK_V1 — + «Push-уведомления», «Ссылки для рекламы в Telegram»; REFERRALS_NAV_V1 — + «Реферирование»; META_INBOX_V1 — + «Чат Facebook и Instagram»
   // JOURNALS_V1_ACCESS — девятая группа «Журналы» (журнал услуг и реестр стационарных пациентов).
   assert.equal(CATALOG.find((s) => s.key === 'reports').windows.length, 9, 'девять групп отчётов: «Журналы» — после «По услугам», Telegram-бот — последняя');
   // PACKAGES_V1 — двадцать шестая плитка «Пакеты услуг» и её «Цены и проценты».

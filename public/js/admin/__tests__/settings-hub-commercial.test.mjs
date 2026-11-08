@@ -266,3 +266,29 @@ test('COMMERCE_TOOLS_V1: «Telegram-бот: Просмотр» — пункт и
     setFullAccess('Администратор');
   }
 });
+
+// AI_CHAT_V1 — экран «ИИ-помощник»: открывает ТОЛЬКО своя строка роли (или администратор).
+test('AI_CHAT_V1: commerce_ai — view открывает экран и витрину, none и ненастроенная строка закрывают', () => {
+  const role = (grants) => ({ name: 'Своя роль', permissions: {
+    sections: ['patients', 'settings'], levels: { patients: 'editor', settings: 'viewer' },
+    grants: { patients: 'edit', settings: 'view', ...grants },
+  } });
+  const user = globalThis.window.easymed.state.user;
+  const was = { role: user.role, super: user.is_super_admin };
+  Object.assign(user, { role: 'registrar', is_super_admin: false });
+  setActorRoles(['registrar']);
+  try {
+    setEffectiveFromRole(role({ commerce_ai: 'view' }));
+    assert.equal(perms.isRouteAllowed('commerce-ai'), true, 'view — экран открыт');
+    assert.equal(perms.isModuleAllowed('commerce'), true, 'и пункт витрины виден');
+    setEffectiveFromRole(role({ commerce_ai: 'none' }));
+    assert.equal(perms.isRouteAllowed('commerce-ai'), false, 'none — закрыт');
+    // Роль настроена, но строку «ИИ-помощник» не трогала: не настроена — только администратор.
+    setEffectiveFromRole(role({}));
+    assert.equal(perms.isRouteAllowed('commerce-ai'), false, 'ненастроенная строка — закрыт');
+  } finally {
+    Object.assign(user, { role: was.role, is_super_admin: was.super });
+    setActorRoles(['admin']);
+    setFullAccess('Администратор');
+  }
+});

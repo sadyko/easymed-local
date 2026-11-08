@@ -272,6 +272,8 @@ export const CATALOG = [
   { key: 'commerce_links', block: 'Коммерческие инструменты', label: 'Ссылки для рекламы в Telegram', desc: 'Своя ссылка на бота для каждого объявления: ответ, файл, кнопка «Оставить заявку», счётчики.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит ссылки и счётчики переходов и заявок.', edit: 'Заводит, правит и удаляет ссылки: ответ бота, файл, кнопки.' }, windows: [], actions: [], enforced: 'rpc:telegram_deeplink_save' },
   // AI_CHAT_V1 (2026-11-08) — ИИ-помощник: сам отвечает пациентам в Telegram,
   // Facebook и Instagram (docs/superpowers/specs/2026-11-08-ai-chat-assistant-design.md).
+  // Первый РАЗДЕЛ (не окно) с adminDefault: его обрабатывают fallbackLevel в
+  // gate-fallbacks.js и collectGrants в roles-matrix.
   // Строка управляет ПЕРЕКЛЮЧАТЕЛЕМ «ИИ отвечает в чатах»; отвечает ИИ от имени
   // клиники, а не от имени сотрудника. Правило перехода — «только администратор».
   { key: 'commerce_ai', block: 'Коммерческие инструменты', label: 'ИИ-помощник', desc: 'Сам отвечает пациентам в Telegram, Facebook и Instagram и заводит заявки в CRM.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит, включён ли ИИ, и чаты, переданные операторам.', edit: 'Включает и выключает ИИ в чатах.' }, windows: [], actions: [], adminDefault: true, enforced: 'rpc:ai_settings_save' },
