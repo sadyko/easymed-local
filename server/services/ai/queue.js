@@ -63,6 +63,15 @@ export function retryJob(db, id, now = Date.now()) {
   return 'retry';
 }
 
+/**
+ * AI_CHAT_V1: чаты Telegram, чьи сообщения ждут в очереди. Снимая их, бот
+ * должен сказать пациенту «сообщение принято» — сам он промолчал, потому что
+ * ответить взялся ИИ (worker.js ackTelegramChats).
+ */
+export function queuedTelegramChats(db) {
+  return db.prepare(`SELECT DISTINCT chat_key FROM ai_chat_jobs WHERE status = 'queued' AND channel = 'telegram'`).all().map((r) => r.chat_key);
+}
+
 /** Переключатель выключен — ждущие задачи снимаются; чаты остаются операторам. */
 export function dropQueuedJobs(db, now = Date.now()) {
   return db.prepare(`UPDATE ai_chat_jobs SET status = 'dropped', finished_at = ? WHERE status = 'queued'`).run(iso(now)).changes;

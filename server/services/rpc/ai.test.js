@@ -56,3 +56,15 @@ test('AI_CHAT_V1: ai_settings_get снимает no_module, когда моду�
   assert.equal(aiSettingsGet(db, {}, ADMIN, { hasModule: hasAi }).blocked, '');
   assert.equal(readAiSettings(db).blocked, '');
 });
+
+test('AI_CHAT_V1: выключение снимает ждущие сообщения Telegram и подтверждает их ботом', async () => {
+  const db = fresh();
+  aiSettingsSave(db, { enabled: true }, ADMIN, { hasModule: hasAi });
+  const put = db.prepare("INSERT INTO ai_chat_jobs (channel, chat_key, source_id, next_at) VALUES (?, ?, ?, '2026-01-01T00:00:00Z')");
+  put.run('telegram', '1', '1:a'); put.run('telegram', '1', '1:b'); put.run('meta_dm', '9', 'm1');
+  const acked = [];
+  aiSettingsSave(db, { enabled: false }, ADMIN, { hasModule: hasAi, ackTelegram: async (_db, chats) => { acked.push(...chats); } });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(acked, ['1'], 'один раз на чат, только Telegram');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM ai_chat_jobs WHERE status = 'queued'").get().n, 0);
+});

@@ -158,3 +158,20 @@ test('комментарий: ИИ выключен — off без поиска;
   assert.equal(aiNoteMetaCommentById(db, 'h1'), 'skip');
   assert.equal(aiNoteMetaCommentById(db, 'v1'), 'queued');
 });
+
+// AI_CHAT_V1: ИИ берёт только то, что поставил в очередь. Повтор того же
+// сообщения ('dup') и старое ('old') задачи не создают — ответить на них
+// некому, поэтому бот подтверждает «сообщение получено», как раньше.
+test('повтор того же сообщения и старое сообщение — бот отвечает сам', async () => {
+  const db = linked(); const { sent, deps } = harness();
+  setAiEnabled(db, true, 1, '2020-01-01T00:00:00Z');
+  await handleUpdate(db, 'x', textMsg('Сколько стоит УЗИ?', 21), deps);
+  assert.equal(sent.length, 0, 'первое — взял ИИ');
+  await handleUpdate(db, 'x', textMsg('Сколько стоит УЗИ?', 21), deps);
+  assert.equal(sent.length, 1, 'повтор (dup) — бот подтверждает');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM ai_chat_jobs').get().n, 1);
+
+  assert.equal(aiTakesTelegramText(db, { chatId: 100, messageId: 22, createdAt: '2019-12-31T00:00:00Z' }), false, 'old — не берёт');
+  assert.equal(aiTakesTelegramText(db, { chatId: 100, messageId: 21, createdAt: iso() }), false, 'dup — не берёт');
+  assert.equal(aiTakesTelegramText(db, { chatId: 100, messageId: 23, createdAt: iso() }), true, 'queued — берёт');
+});

@@ -5,7 +5,8 @@
 import { grantAllowsAdminOr } from '../grants.js';
 import { canViewSection } from '../roles.js';
 import { readAiSettings, setAiEnabled, setAiBlocked, hasAiModule, clearNoModuleBlock } from '../ai/settings.js';
-import { dropQueuedJobs } from '../ai/queue.js';
+import { dropQueuedJobs, queuedTelegramChats } from '../ai/queue.js';
+import { ackTelegramChats } from '../ai/worker.js';
 import { flaggedChats } from '../ai/guards.js';
 import { clinicFacts } from '../ai/facts.js';
 
@@ -36,7 +37,7 @@ export function aiSettingsGet(db, _args, user, { hasModule = defaultHasModule } 
   return { ...readAiSettings(db), has_module: !!hasModule(db), facts: factCounts(db) };
 }
 
-export function aiSettingsSave(db, args, user, { hasModule = defaultHasModule } = {}) {
+export function aiSettingsSave(db, args, user, { hasModule = defaultHasModule, ackTelegram = ackTelegramChats } = {}) {
   requireAiLevel(db, user, 'edit');
   // Только настоящее true/1: строки «false»/«0» не должны включать ИИ.
   const on = !!(args && (args.enabled === true || args.enabled === 1));
@@ -47,7 +48,14 @@ export function aiSettingsSave(db, args, user, { hasModule = defaultHasModule } 
   }
   const s = setAiEnabled(db, on, (user && user.id) || null);
   if (on) setAiBlocked(db, '');
-  else dropQueuedJobs(db);
+  else {
+    // AI_CHAT_V1: ждущие сообщения Telegram бот не подтверждал — их взял ИИ.
+    // Выключение снимает их, и бот говорит «сообщение принято» сам. Не ждём:
+    // ответ переключателю не должен висеть на Telegram; ackTelegramChats не бросает.
+    const chats = queuedTelegramChats(db);
+    dropQueuedJobs(db);
+    if (chats.length) Promise.resolve().then(() => ackTelegram(db, chats)).catch(() => {});
+  }
   return { ...readAiSettings(db), has_module: !!hasModule(db), enabled: s.enabled, facts: factCounts(db) };
 }
 

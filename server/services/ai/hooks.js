@@ -31,7 +31,10 @@ export function aiTakesTelegramText(db, { chatId, messageId, createdAt, now = Da
     // message_id у Telegram уникален только внутри чата: у двух пациентов он
     // совпадает постоянно. Без chat_id в source_id UNIQUE(channel, source_id)
     // молча отбросил бы сообщение второго пациента как «повтор».
-    return enqueueChatJob(db, { channel: 'telegram', chatKey: chat, sourceId: `${chat}:${messageId}`, createdAt, now }) !== 'off';
+    // AI_CHAT_V1: только 'queued' — ответ придёт от исполнителя. 'dup' (то же
+    // сообщение второй раз) и 'old' задачи не создают: ответить некому, и бот,
+    // как раньше, подтверждает «сообщение получено».
+    return enqueueChatJob(db, { channel: 'telegram', chatKey: chat, sourceId: `${chat}:${messageId}`, createdAt, now }) === 'queued';
   } catch (e) { console.warn('[ai] telegram hook:', e.message); return false; }
 }
 

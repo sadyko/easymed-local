@@ -12,7 +12,7 @@
 // (отметки, слияние, проверка оператора — по нитке), а отвечаем на тот
 // комментарий, что пришёл: source_id — его comment_id у Meta.
 import { readAiSettings, setAiBlocked, clearNoModuleBlock, hasAiModule } from './settings.js';
-import { claimNextJob, markSending, finishJob, retryJob, dropQueuedJobs, expireStaleJobs } from './queue.js';
+import { claimNextJob, markSending, finishJob, retryJob, dropQueuedJobs, expireStaleJobs, queuedTelegramChats } from './queue.js';
 import { operatorRecent, isFlagged, flagChat } from './guards.js';
 import { conversationFor } from './conversation.js';
 import { clinicFacts } from './facts.js';
@@ -20,6 +20,7 @@ import { askControlPlane } from './cp-client.js';
 import { createTelegramAiLead } from './lead.js';
 import { sendChatMessage } from '../telegram/chat.js';
 import { getDecryptedToken } from '../telegram/settings.js';
+import { sendGotMessage } from '../telegram/flow.js';
 import { sendConversationMessage, replyToComment, privateReplyToComment, toCrm, windowOpen } from '../meta/inbox-actions.js';
 import { conversationById } from '../meta/inbox-store.js';
 
@@ -40,6 +41,8 @@ const DEFAULT_DEPS = {
   metaLead: (db, args) => toCrm(db, args),
   facts: (db) => clinicFacts(db),
   hasModule: (db) => hasAiModule(db),
+  // Обычный ответ бота «сообщение принято» (kind 'system', не by_ai).
+  ackTelegram: (db, token, chatId) => sendGotMessage(db, token, chatId),
 };
 
 const clip = (t) => String(t == null ? '' : t).trim();
@@ -82,6 +85,35 @@ async function send(db, d, job, text) {
   }
   return { ok: false, reason: 'channel' };
 }
+
+/**
+ * AI_CHAT_V1 — бот Telegram молчит о сообщении, которое взял ИИ (hooks.js).
+ * Если задача кончилась без ответа ИИ (выключили, лимит, нет модуля, 10 минут
+ * без ответа, сбой отправки), пациент услышал бы тишину — поэтому бот один раз
+ * шлёт своё обычное «сообщение принято — оператор скоро ответит». По одному
+ * разу на чат; никогда не бросает: подтверждение — вежливость, не работа.
+ * Отвязанный или заблокировавший бота чат пропускается — туда не дойдёт.
+ */
+export async function ackTelegramChats(db, chatKeys, deps = {}) {
+  const d = { ...DEFAULT_DEPS, ...deps };
+  const keys = [...new Set([].concat(chatKeys || []).map(String))];
+  if (!keys.length) return 0;
+  let token = '';
+  try { token = d.telegramToken(db) || ''; } catch { token = ''; }
+  if (!token) return 0;
+  let sent = 0;
+  for (const chatId of keys) {
+    try {
+      const ok = db.prepare('SELECT 1 FROM telegram_links WHERE chat_id = ? AND revoked_at IS NULL AND blocked_at IS NULL').get(chatId);
+      if (!ok) continue;
+      await d.ackTelegram(db, token, chatId);
+      sent++;
+    } catch (e) { console.warn('[ai] telegram ack:', e && e.message); }
+  }
+  return sent;
+}
+
+const telegramKeys = (rows) => rows.filter((r) => r.channel === 'telegram').map((r) => r.chat_key);
 
 /** Публичный ответ и ответ в личку — на комментарий target (строка meta_comments). */
 async function sendComment(db, d, target, publicText, privateText) {
@@ -134,8 +166,17 @@ function stopReason(db, job, t) {
 
 const STOP_RESULT = { switch_off: 'dropped', operator: 'skipped', window_closed: 'handed_off' };
 
-function applyStop(db, job, reason, t) {
-  if (reason === 'switch_off') { finishJob(db, job.id, 'dropped', 'switch_off', t); dropQueuedJobs(db, t); }
+async function applyStop(db, d, job, reason, t) {
+  if (reason === 'switch_off') {
+    finishJob(db, job.id, 'dropped', 'switch_off', t);
+    // AI_CHAT_V1: ИИ выключили или остановили, пока сообщение ждало, — бот за
+    // него не ответил; подтверждаем как бот (и всем снятым из очереди тоже).
+    const chats = job.channel === 'telegram' ? [job.chat_key] : [];
+    chats.push(...queuedTelegramChats(db));
+    dropQueuedJobs(db, t);
+    await ackTelegramChats(db, chats, d);
+  }
+  // Оператор написал в чат — пациенту ответил человек, подтверждать нечего.
   else if (reason === 'operator') finishJob(db, job.id, 'dropped', 'operator', t);
   else { flagChat(db, job.channel, job.chat_key, 'window_closed', t); finishJob(db, job.id, 'handed_off', 'window_closed', t); }
   return STOP_RESULT[reason];
@@ -162,12 +203,17 @@ export async function processOneJob(db, deps = {}) {
   try { clearNoModuleBlock(db, d.hasModule); } catch (e) { console.warn('[ai] licence check:', e && e.message); }
   // AI_CHAT_V1 (A3): ждущая задача старше 10 минут (сервер стоял, перезапуск)
   // не отвечается — поздний ответ хуже тишины; её чат уходит оператору.
-  for (const c of expireStaleJobs(db, now)) flagChat(db, c.channel, c.chat_key, 'timeout', now);
+  const stale = expireStaleJobs(db, now);
+  for (const c of stale) flagChat(db, c.channel, c.chat_key, 'timeout', now);
+  // Бот за этих пациентов промолчал — подтверждаем «сообщение принято».
+  await ackTelegramChats(db, telegramKeys(stale), d);
 
   const job = claimNextJob(db, now);
   if (!job) return 'idle';
   let t = now;
   const handOff = (reason) => flagChat(db, job.channel, job.chat_key, reason || 'hand_off', t);
+  // Ответ ИИ пациенту в Telegram не ушёл — бот подтверждает сам (один раз).
+  const ackThis = () => (job.channel === 'telegram' ? ackTelegramChats(db, [job.chat_key], d) : Promise.resolve(0));
 
   // Всё после взятия задачи — под try: упавшее чтение базы не должно оставить
   // задачу в 'working' и не должно оборвать цикл исполнителя. До markSending
@@ -178,7 +224,7 @@ export async function processOneJob(db, deps = {}) {
       target = db.prepare('SELECT id, comment_id, root_id, private_replied_at FROM meta_comments WHERE comment_id = ?').get(String(job.source_id)) || null;
     }
     const s = readAiSettings(db, t);
-    if (!s.enabled || s.blocked) return applyStop(db, job, 'switch_off', t);
+    if (!s.enabled || s.blocked) return await applyStop(db, d, job, 'switch_off', t);
     if (job.channel === 'meta_comment') {
       if (!target) { finishJob(db, job.id, 'dropped', 'gone', t); return 'dropped'; }
       // Meta разрешает один личный ответ на комментарий; уже ответили (сотрудник
@@ -186,7 +232,7 @@ export async function processOneJob(db, deps = {}) {
       if (target.private_replied_at) { finishJob(db, job.id, 'dropped', 'already_replied', t); return 'dropped'; }
     }
     const before = stopReason(db, job, t);
-    if (before) return applyStop(db, job, before, t);
+    if (before) return await applyStop(db, d, job, before, t);
     if (job.channel === 'telegram' && !telegramReachable(db, d, job)) {
       finishJob(db, job.id, 'dropped', 'unreachable', t); return 'dropped';
     }
@@ -202,26 +248,30 @@ export async function processOneJob(db, deps = {}) {
       setAiBlocked(db, answer.error, isoOf(t));
       handOff(answer.error);
       finishJob(db, job.id, 'failed', answer.error, t);
+      const chats = job.channel === 'telegram' ? [job.chat_key] : [];
+      chats.push(...queuedTelegramChats(db));
       dropQueuedJobs(db, t);
+      await ackTelegramChats(db, chats, d);
       return 'blocked';
     }
     if (answer.error === 'network' || answer.error === 'not_enrolled') {
-      if (retryJob(db, job.id, t) === 'gave_up') { handOff('timeout'); return 'failed'; }
+      if (retryJob(db, job.id, t) === 'gave_up') { handOff('timeout'); await ackThis(); return 'failed'; }
       return 'retry';
     }
 
     // Повторная проверка ПОСЛЕ запроса: сотрудник написал, ИИ выключили, окно
     // Meta закрылось, пока ИИ думал, — ответ не отправляется.
     const after = stopReason(db, job, t);
-    if (after) return applyStop(db, job, after, t);
+    if (after) return await applyStop(db, d, job, after, t);
 
     markSending(db, job.id);
     // Ошибка, отличная от выше (bad_response, too_large), — то же, что hand_off:
     // повтор дал бы тот же ответ, пациент ждёт человека.
     if (answer.error || answer.outcome === 'hand_off') {
       const text = (answer.outcome === 'hand_off' && clip(answer.text)) || HANDOFF_TEXT;
-      await sendAny(db, d, job, target, text);
+      const r = await sendAny(db, d, job, target, text);
       handOff(answer.error || answer.reason || 'hand_off');
+      if (!(r && r.ok)) await ackThis();
       finishJob(db, job.id, 'handed_off', 'hand_off', t);
       return 'handed_off';
     }
@@ -249,8 +299,9 @@ export async function processOneJob(db, deps = {}) {
       if (!lead || lead.ok === false) {
         // «Администратор свяжется с вами» без заявки — обещание, которое никто
         // не выполнит. Вместо него — передача человеку.
-        await sendAny(db, d, job, target, HANDOFF_TEXT);
+        const r = await sendAny(db, d, job, target, HANDOFF_TEXT);
         handOff('lead_failed');
+        if (!(r && r.ok)) await ackThis();
         finishJob(db, job.id, 'handed_off', 'lead_failed', t);
         return 'handed_off';
       }
@@ -259,7 +310,7 @@ export async function processOneJob(db, deps = {}) {
     const sent = answer.outcome === 'reply_comment'
       ? await sendAny(db, d, job, target, answer.private_text || answer.text, answer.public_text)
       : await sendAny(db, d, job, target, answer.text);
-    if (!sent.ok) { handOff('send_failed'); finishJob(db, job.id, 'failed', 'send_failed', t); return 'failed'; }
+    if (!sent.ok) { handOff('send_failed'); finishJob(db, job.id, 'failed', 'send_failed', t); await ackThis(); return 'failed'; }
     finishJob(db, job.id, 'done', answer.outcome, t);
     return 'done';
   } catch (e) {

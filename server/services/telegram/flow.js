@@ -270,6 +270,14 @@ async function handleMessage(db, token, msg, deps) {
   // Всё остальное — вопрос живому человеку. Сообщение уже в «Чате с
   // пациентами»; пациенту подтверждаем, что его прочитают, и оставляем
   // кнопки под рукой.
+  return sendGotMessage(db, token, chatId, deps);
+}
+
+// AI_CHAT_V1 — «сообщение принято» обычным ответом бота (kind 'system', не
+// by_ai). Его же шлёт исполнитель ИИ (ai/worker.js), когда задача кончилась без
+// ответа ИИ (ИИ выключили, лимит, сбой, 10 минут без ответа): бот промолчал,
+// потому что ответить взялся ИИ, — без этой фразы пациент слышал бы тишину.
+export function sendGotMessage(db, token, chatId, deps = {}) {
   return reply(db, token, chatId, T.gotMessage, { reply_markup: menuKeyboard }, deps);
 }
 

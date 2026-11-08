@@ -5,7 +5,8 @@ import { migrate } from '../../db/migrate.js';
 import { setAiEnabled, readAiSettings, setAiBlocked } from './settings.js';
 import { enqueueChatJob, GIVE_UP_MS } from './queue.js';
 import { isFlagged, flagChat } from './guards.js';
-import { processOneJob, HANDOFF_TEXT, COMMENT_PUBLIC_TEXT } from './worker.js';
+import { processOneJob, ackTelegramChats, HANDOFF_TEXT, COMMENT_PUBLIC_TEXT } from './worker.js';
+import { sendGotMessage, TEXTS } from '../telegram/flow.js';
 
 const T0 = Date.parse('2026-11-08T10:00:00Z');
 const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -16,13 +17,15 @@ function world(answer) {
   db.prepare(`INSERT INTO telegram_links (chat_id, phone, tg_user_id, tg_name, last_seen_at) VALUES ('100','+998901112233','u','Алишер',?)`).run(iso(T0));
   db.prepare("INSERT INTO telegram_messages (chat_id, direction, text, kind, tg_message_id) VALUES ('100','in','Сколько стоит УЗИ?','text','7')").run();
   enqueueChatJob(db, { channel: 'telegram', chatKey: '100', sourceId: '7', createdAt: iso(T0 + 1000), now: T0 + 2000 });
-  const calls = { asked: [], tg: [], leads: [], dm: [], pub: [], priv: [], metaLeads: [] };
+  const calls = { asked: [], tg: [], leads: [], dm: [], pub: [], priv: [], metaLeads: [], acks: [] };
   const deps = {
     now: () => T0 + 3000,
     telegramToken: () => 'tok',
     ask: async (payload) => { calls.asked.push(payload); return typeof answer === 'function' ? answer() : answer; },
     sendTelegram: async (db2, token, chatId, text) => { calls.tg.push({ chatId, text }); return { ok: true }; },
     telegramLead: (db2, args) => { calls.leads.push(args); return { crm_request_id: 1 }; },
+    // AI_CHAT_V1: «сообщение принято» бота — записываем, в сеть не ходим.
+    ackTelegram: async (db2, token, chatId) => { calls.acks.push(chatId); },
     facts: () => ({ services: [] }),
   };
   return { db, calls, deps };
@@ -356,4 +359,100 @@ test('AI_CHAT_V1: no_module снимается в начале шага, ког�
   setAiBlocked(db, 'no_module', iso(T0));
   assert.equal(await processOneJob(db, { ...deps, hasModule: () => true }), 'done');
   assert.equal(readAiSettings(db, T0).blocked, '');
+});
+// ─── AI_CHAT_V1: Telegram без ответа ИИ — бот подтверждает «сообщение принято» ──
+// Бот промолчал, потому что сообщение взял ИИ (hooks.js). Задача кончилась без
+// ответа ИИ — пациент не должен слышать тишину.
+
+test('тишина Telegram: ответ ИИ ушёл — подтверждения нет; оператор написал — тоже нет', async () => {
+  const ok = world({ outcome: 'reply', text: 'Ответ.' });
+  assert.equal(await processOneJob(ok.db, ok.deps), 'done');
+  assert.deepEqual(ok.calls.acks, []);
+
+  const op = world({ outcome: 'reply', text: 'x' });
+  op.db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (5, 'op5', 'x', 'Оператор', 'admin')").run();
+  op.db.prepare("INSERT INTO telegram_messages (chat_id, direction, text, kind, sent_by, created_at) VALUES ('100','out','Здравствуйте','text',5,?)").run(iso(T0));
+  assert.equal(await processOneJob(op.db, op.deps), 'skipped');
+  assert.deepEqual(op.calls.acks, []);
+});
+
+test('тишина Telegram: выключили между постановкой и взятием — подтверждение, один раз', async () => {
+  const { db, calls, deps } = world({ outcome: 'reply', text: 'x' });
+  // Второе сообщение того же чата и сообщение другого пациента ждут в очереди.
+  db.prepare(`INSERT INTO telegram_links (chat_id, phone, tg_user_id, tg_name, last_seen_at) VALUES ('200','+998901110000','v','Вали',?)`).run(iso(T0));
+  enqueueChatJob(db, { channel: 'telegram', chatKey: '200', sourceId: '200:3', createdAt: iso(T0 + 1000), now: T0 + 2000 });
+  setAiBlocked(db, 'limit', iso(T0 + 2500));
+  assert.equal(await processOneJob(db, deps), 'dropped');
+  assert.deepEqual(calls.acks.sort(), ['100', '200']);
+  assert.equal(calls.tg.length, 0, 'ответа ИИ нет');
+});
+
+test('тишина Telegram: лимит и нет модуля — подтверждение текущему и снятым из очереди', async () => {
+  for (const error of ['limit', 'no_module']) {
+    const { db, calls, deps } = world({ error });
+    db.prepare(`INSERT INTO telegram_links (chat_id, phone, tg_user_id, tg_name, last_seen_at) VALUES ('200','+998901110000','v','Вали',?)`).run(iso(T0));
+    enqueueChatJob(db, { channel: 'telegram', chatKey: '200', sourceId: '200:3', createdAt: iso(T0 + 1000), now: T0 + 2000 });
+    assert.equal(await processOneJob(db, deps), 'blocked');
+    assert.deepEqual(calls.acks, ['100', '200'], error);
+  }
+});
+
+test('тишина Telegram: 10 минут сети без ответа — подтверждение', async () => {
+  const { db, calls, deps } = world({ error: 'network' });
+  let t = T0 + 3000;
+  deps.now = () => t;
+  assert.equal(await processOneJob(db, deps), 'retry');
+  assert.deepEqual(calls.acks, [], 'повтор ещё впереди — не подтверждаем');
+  // Задача снова в очереди и ещё не протухла; ответ сервера управления шёл
+  // так долго, что 10 минут от постановки истекли, — retryJob сдаётся.
+  t += 10_000;
+  db.prepare("UPDATE ai_chat_jobs SET next_at = ?, created_at = ?").run(iso(t), iso(t - GIVE_UP_MS + 1000));
+  const ask = deps.ask;
+  deps.ask = async (payload) => { t += 5000; return ask(payload); };
+  assert.equal(await processOneJob(db, deps), 'failed');
+  assert.deepEqual(calls.acks, ['100']);
+});
+
+test('тишина Telegram: задача протухла в очереди (сервер стоял) — подтверждение', async () => {
+  const { db, calls, deps } = world({ outcome: 'reply', text: 'x' });
+  deps.now = () => T0 + 2000 + GIVE_UP_MS + 1000;
+  assert.equal(await processOneJob(db, deps), 'idle');
+  assert.deepEqual(calls.acks, ['100']);
+});
+
+test('тишина Telegram: сбой отправки ответа и передачи — подтверждение', async () => {
+  const a = world({ outcome: 'reply', text: 'x' });
+  a.deps.sendTelegram = async () => { throw new Error('Bad Gateway'); };
+  assert.equal(await processOneJob(a.db, a.deps), 'failed');
+  assert.deepEqual(a.calls.acks, ['100']);
+
+  const b = world({ outcome: 'hand_off', text: '' });
+  b.deps.sendTelegram = async () => { throw new Error('Bad Gateway'); };
+  assert.equal(await processOneJob(b.db, b.deps), 'handed_off');
+  assert.deepEqual(b.calls.acks, ['100']);
+});
+
+test('тишина Telegram: подтверждение упало — исполнитель не падает', async () => {
+  const { db, deps } = world({ outcome: 'reply', text: 'x' });
+  deps.sendTelegram = async () => { throw new Error('Bad Gateway'); };
+  deps.ackTelegram = async () => { throw new Error('Telegram недоступен'); };
+  assert.equal(await processOneJob(db, deps), 'failed');
+  assert.equal(db.prepare('SELECT outcome FROM ai_chat_jobs').get().outcome, 'send_failed');
+});
+
+test('тишина Telegram: подтверждение — обычный ответ бота (kind system, не by_ai), отвязанный чат пропущен', async () => {
+  const { db } = world({ outcome: 'reply', text: 'x' });
+  const sent = [];
+  const api = { fetchImpl: async (url, opts) => { sent.push(JSON.parse(opts.body)); return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 55 } }) }; } };
+  db.prepare(`INSERT INTO telegram_links (chat_id, phone, tg_user_id, tg_name, last_seen_at, revoked_at) VALUES ('300','+998901119999','w','Нет',?,?)`).run(iso(T0), iso(T0));
+  const n = await ackTelegramChats(db, ['100', '100', '300'], {
+    telegramToken: () => 'tok',
+    ackTelegram: (db2, token, chatId) => sendGotMessage(db2, token, chatId, api),
+  });
+  assert.equal(n, 1, 'один раз на чат; отвязанный — мимо');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, TEXTS.gotMessage);
+  const row = db.prepare("SELECT kind, by_ai, sent_by, text FROM telegram_messages WHERE chat_id = '100' AND direction = 'out'").get();
+  assert.deepEqual({ ...row }, { kind: 'system', by_ai: 0, sent_by: null, text: TEXTS.gotMessage });
+  assert.equal(await ackTelegramChats(db, ['100'], { telegramToken: () => '' }), 0, 'нет токена — нечего слать');
 });
