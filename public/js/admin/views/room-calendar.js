@@ -99,11 +99,28 @@ const WD_KEY = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const RU_WD_L = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
 const RU_WD_S = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
-// Полотно сетки по умолчанию. Не «рабочий день» — рабочий день считает сервер,
-// — а холст, на котором он рисуется. Раздвигается под настоящие окна и под
-// записи, вылезающие за него (приём в 21:00 раньше был просто не виден).
+// Полотно сетки, когда о часах не известно ничего (ни окон, ни записей у выбранных
+// колонок). RCAL_TRIM_V1 (3.22.0, владелец: «remove this gray areas … not more than
+// one line») — раньше это был ПОЛ полотна: сетка всегда начиналась с 08:00, и если
+// все кабинеты открываются в 09:00, час до открытия рисовался штриховкой (три ряда
+// при шаге 20). Теперь полотно — ровно окна и записи выбранных колонок в показанные
+// дни, по шагу сетки: общей для всех колонок нерабочей полосы сверху и снизу нет,
+// а неровный край окна (09:10 при шаге 20) даёт не больше одного ряда.
 const CANVAS_FROM = 8 * 60;
 const CANVAS_TO = 20 * 60;
+
+// RCAL_TRIM_V1 — тип кабинета СЛОВОМ, а не ключом базы: шапка колонки показывала
+// «consultation · 1 этаж». Слова — те же, что на экране «Кабинеты» (rooms-setup.js).
+// Иконка вместо инициалов: «Кабинет 101» и «Кабинет 102» давали одинаковое «К1».
+const ROOM_TYPE_LABEL = {
+    consultation: () => tr('Консультация'),
+    procedure: () => tr('Процедурная'),
+    diagnostics: () => tr('Диагностика'),
+    lab: () => tr('Лаборатория'),
+    surgery: () => tr('Операционная'),
+};
+const ROOM_TYPE_ICON = { consultation: 'Stethoscope', procedure: 'Plus', diagnostics: 'Activity', lab: 'Flask', surgery: 'Pulse' };
+const roomTypeLabel = (key) => (ROOM_TYPE_LABEL[key] ? ROOM_TYPE_LABEL[key]() : (key || ''));
 
 // СТАТУСЫ — ПЯТЬ, И ЭТО ВСЕ, ЧТО МОЖЕТ БЫТЬ В БАЗЕ. visits.status несёт
 // CHECK (status IN ('scheduled','confirmed','arrived','cancelled','no_show'))
@@ -283,7 +300,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         state.rooms = take(rms, tr('кабинеты')).map(r => ({
             id: r.id,
             name: r.name || trf('Каб. {code}', { code: r.code || '' }),
-            spec: r.room_type || '',
+            spec: roomTypeLabel(r.room_type),   // RCAL_TRIM_V1 — словом, а не ключом
             napr: r.room_type || '',
             place: floorName[r.floor_id] || '',
         }));
@@ -1273,27 +1290,56 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
     }
 
     // ---- render ---------------------------------------------------------
+    /**
+     * RCAL_TRIM_V1 — квадратик у фамилии / кабинета. Был `style.background =
+     * avColor(...)`, но avColor() отдаёт ИМЯ КЛАССА ('av-3'), а не цвет: браузер
+     * отбрасывал такой фон, и белые инициалы стояли на светлой шапке — «К1» почти
+     * не было видно. Теперь у врача — его пастель (PASTEL_IDENTITY_V1, та же, что
+     * у его карточек в сетке) с читаемыми инициалами, у кабинета — нейтральный
+     * квадрат с иконкой типа: цвет в сетке кабинетов — это врач, а не кабинет.
+     */
+    function resAvatar(res) {
+        if (state.resType === 'room' && res.id !== UNASSIGNED_ID) {
+            return h('span', { class: 'rcal-av rcal-av-room' }, Icon(ROOM_TYPE_ICON[res.napr] || 'Building', { size: 16 }));
+        }
+        const hue = state.resType === 'doctor' && res.id !== UNASSIGNED_ID ? pastelFor(res.id) : '';
+        return h('span', { class: 'rcal-av' + (hue ? ' ' + hue : '') }, initials(res.name));
+    }
+
     let railListEl, gridWrapEl, countEl, naprSelEl, dayLabelEl, dateInputEl, statsEl, branchSelEl;
     let miniEl, stepperEl, stepSelEl;
     // Полотно, посчитанное под то, что реально надо показать.
     let canvas = { from: CANVAS_FROM, to: CANVAS_TO };
 
+    // RCAL_TRIM_V1 (3.22.0) — полотно = окна и записи ВЫБРАННЫХ колонок в ПОКАЗАННЫЕ дни,
+    // по шагу сетки. Раньше: все окна всех ресурсов и пол 08:00–20:00, по целым часам —
+    // и сверху стоял час штриховки, хотя все выбранные кабинеты открываются в 09:00.
+    // Шаг (5…60) делит час, поэтому клетки по-прежнему встают на часы (.hr).
     function recomputeCanvas() {
-        let from = CANVAS_FROM, to = CANVAS_TO;
-        for (const byDay of Object.values(state.windows || {})) {
-            for (const w of Object.values(byDay || {})) {
-                if (!w) continue;
-                from = Math.min(from, hhmmToMin(w.from));
-                to = Math.max(to, hhmmToMin(w.to));
+        const step = Math.max(5, Number(state.step) || 15);
+        const days = new Set(colDays());
+        const sel = resources().filter(r => state.selected.has(r.id));
+        const selIds = new Set(sel.map(r => r.id));
+        const resKey = state.resType === 'doctor' ? 'doctorId' : 'roomId';
+        let from = Infinity, to = -Infinity;
+        for (const r of sel) {
+            for (const d of days) {
+                const w = windowFor(r, d);
+                if (!w || !(w.to > w.from)) continue;
+                from = Math.min(from, w.from);
+                to = Math.max(to, w.to);
             }
         }
-        // Запись за пределами холста раньше была просто не видна.
+        // Запись за пределами окна (приём в 21:00) должна быть видна — полотно растёт под неё.
         for (const a of state.appts) {
             if (!state.showCancelled && a.status === 'cancelled') continue;
+            if (!days.has(a.date) || !inBranch(a)) continue;
+            if (!selIds.has(a[resKey] || UNASSIGNED_ID)) continue;
             from = Math.min(from, a.start);
             to = Math.max(to, a.start + a.dur);
         }
-        canvas = { from: Math.max(0, Math.floor(from / 60) * 60), to: Math.min(24 * 60, Math.ceil(to / 60) * 60) };
+        if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) { from = CANVAS_FROM; to = CANVAS_TO; }
+        canvas = { from: Math.max(0, Math.floor(from / step) * step), to: Math.min(24 * 60, Math.ceil(to / step) * step) };
         if (canvas.to <= canvas.from) canvas = { from: CANVAS_FROM, to: CANVAS_TO };
     }
 
@@ -1347,7 +1393,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                             persist(); repaintRailList(); repaintMini(); reloadWindowsAndRepaint();
                         },
                     }),
-                    h('span', { class: 'rcal-av', style: { background: avColor(r.id || r.name) } }, initials(r.name)),
+                    resAvatar(r),
                     h('span', { class: 'rcal-pick-tx' },
                         h('span', { class: 'rcal-pick-nm' }, r.name),
                         h('span', { class: 'rcal-pick-sp' }, [r.spec, r.place].filter(Boolean).join(' · '))),
@@ -1473,7 +1519,8 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const naprs = [...new Set(resources().map(r => r.napr).filter(Boolean))];
         clear(naprSelEl);
         naprSelEl.appendChild(h('option', { value: '' }, tr('Все направления')));
-        for (const n of naprs) naprSelEl.appendChild(h('option', { value: n, selected: n === state.napr ? true : null }, n));
+        // RCAL_TRIM_V1 — у кабинетов направление — ключ типа: в списке показываем слово.
+        for (const n of naprs) naprSelEl.appendChild(h('option', { value: n, selected: n === state.napr ? true : null }, state.resType === 'room' ? roomTypeLabel(n) : n));
     }
 
     function mainLabel() {
@@ -1782,7 +1829,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             });
             const full = load.workingSlots > 0 && load.busySlots >= load.workingSlots;
             const bLetter = state.resType === 'doctor' ? letterOfBranchId(c.res.branchId) : '';
-            head.appendChild(h('div', { class: 'rcal-colhead' + (c.firstOfDay ? ' rcal-dayfirst' : '') },
+            head.appendChild(h('div', { class: 'rcal-colhead' + (c.firstOfDay ? ' rcal-dayfirst' : '') + (c.dayIso === todayIso() ? ' rcal-today' : '') },   // RCAL_TRIM_V1 — сегодня видно в шапке
                 h('div', { class: 'rcal-colday-row' },
                     h('span', { class: 'rcal-colday' }, state.period > 1
                         ? `${tr(RU_WD_S[isoToLocalDay(c.dayIso).getDay()])} ${c.dayIso.slice(8)}.${c.dayIso.slice(5, 7)}`
@@ -1796,7 +1843,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                     // поэтому она показывает просто число записей.
                     }, c.res.id === UNASSIGNED_ID ? String(load.bookings) : `${load.busySlots}/${load.workingSlots}`)),
                 h('div', { class: 'rcal-colhead-in' },
-                    h('span', { class: 'rcal-av', style: { background: avColor(c.res.id || c.res.name) } }, initials(c.res.name)),
+                    resAvatar(c.res),
                     h('div', { class: 'rcal-colhead-tx' },
                         h('div', { class: 'rcal-colnm' }, c.res.name),
                         h('div', { class: 'rcal-colsp' },
@@ -1808,7 +1855,11 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         }
         const bodyRow = h('div', { class: 'rcal-bodyrow', style: { gridTemplateColumns: tmpl } });
         const timeCol = h('div', { class: 'rcal-timecol', style: { height: laneH + 'px' } });
-        for (let m = canvas.from; m <= canvas.to; m += 60) timeCol.appendChild(h('div', { class: 'rcal-tlabel', style: { top: ((m - canvas.from) * ppm) + 'px' } }, fmtHM(m)));
+        // RCAL_TRIM_V1 — полотно начинается по шагу, а не по часу (08:40): первая подпись —
+        // начало полотна, дальше — целые часы, как раньше.
+        const tlabel = (m) => timeCol.appendChild(h('div', { class: 'rcal-tlabel', style: { top: ((m - canvas.from) * ppm) + 'px' } }, fmtHM(m)));
+        if (canvas.from % 60) tlabel(canvas.from);
+        for (let m = Math.ceil(canvas.from / 60) * 60; m <= canvas.to; m += 60) tlabel(m);
         bodyRow.appendChild(timeCol);
         for (const c of cols) bodyRow.appendChild(laneBody(c.res, c.dayIso, c.firstOfDay));
         grid.appendChild(head); grid.appendChild(bodyRow);

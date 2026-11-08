@@ -3425,6 +3425,12 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-pick.on { background: var(--primary-50, var(--ink-25)); border-color: var(--ink-100); }
 .rcal-pick input[type=checkbox] { accent-color: var(--primary-600); width: 15px; height: 15px; flex: 0 0 15px; }
 .rcal-av { width: 28px; height: 28px; flex: 0 0 28px; border-radius: 8px; color: #fff; font-size: 12.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; letter-spacing: 0.02em; }
+/* RCAL_TRIM_V1 — цвет квадратика: пастель врача (та же, что у его карточек в сетке),
+   без врача — спокойный нейтральный; у кабинета — иконка типа на нейтральном.
+   Раньше фон не ставился вовсе (в style уходило имя класса), и белые инициалы
+   стояли на светлой шапке. */
+.rcal-av { background: var(--p-bg, var(--ink-50)); color: var(--p-fg, var(--ink-700)); box-shadow: inset 0 0 0 1px var(--p-line, var(--ink-100)); }
+.rcal-av-room { background: var(--primary-50); color: var(--primary-700); box-shadow: inset 0 0 0 1px var(--ink-100); }
 .rcal-pick-tx { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
 .rcal-pick-nm { font-size: 13.5px; font-weight: 600; color: var(--ink-900); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rcal-pick-sp { font-size: 12.5px; color: var(--ink-500); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3462,6 +3468,11 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-colcnt { flex: 0 0 auto; min-width: 20px; height: 18px; padding: 0 6px; border-radius: 999px; background: var(--ink-100); color: var(--ink-700); font-size: 12.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 .rcal-timecol { position: relative; border-right: 1px solid var(--ink-100); }
 .rcal-tlabel { position: absolute; right: 6px; transform: translateY(-50%); font-size: 12.5px; color: var(--ink-400); }
+/* RCAL_TRIM_V1 — верхняя подпись стояла на краю полотна и резалась пополам («08:00»). */
+.rcal-tlabel:first-child { transform: translateY(2px); }
+/* RCAL_TRIM_V1 — колонки сегодняшнего дня отмечены в шапке: полоска сверху и день цветом. */
+.rcal-colhead.rcal-today { box-shadow: inset 0 2px 0 var(--primary-500); background: var(--white); }
+.rcal-colhead.rcal-today .rcal-colday { color: var(--primary-700); }
 .rcal-lane { position: relative; border-left: 1px solid var(--ink-100); overflow: hidden; cursor: copy; }
 .rcal-off { position: absolute; left: 0; right: 0; pointer-events: none; background: repeating-linear-gradient(45deg, var(--ink-25), var(--ink-25) 6px, transparent 6px, transparent 12px); }
 .rcal-line { position: absolute; left: 0; right: 0; height: 1px; background: var(--ink-50); }
@@ -3535,7 +3546,12 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    даёт 3.64:1 и 3.04:1. Тёмного 4px из 12px — сетка остаётся спокойной.
    От занятого слота отличается по-прежнему не цветом: занятый — это белая
    карточка .rcal-appt с рамкой, тенью и текстом ПОВЕРХ сетки, а не фон. */
-.rcal-slot.off { background: repeating-linear-gradient(45deg, var(--ink-100), var(--ink-100) 8px, var(--ink-400) 8px, var(--ink-400) 12px); cursor: default; }
+/* RCAL_TRIM_V1 (3.22.0, владелец: «remove this gray areas … make more appealing») —
+   те же два цвета (порог 3:1 держится: --ink-400 к белому 3.64:1, к --ink-50 больше
+   3:1), но ТОНКИЕ линии по почти белому грунту вместо широких серых полос: нерабочее
+   время читается фактурой, а не серой стеной. Общая для всех колонок нерабочая
+   полоса сверху и снизу больше не рисуется вовсе (полотно по окнам, room-calendar.js). */
+.rcal-slot.off { background: repeating-linear-gradient(45deg, var(--ink-50) 0, var(--ink-50) 7px, var(--ink-400) 7px, var(--ink-400) 8px); cursor: default; }
 .rcal-slot:not(.off):hover { background: var(--primary-50); }
 .rcal-slot:not(.off):hover::after { content: '+'; position: absolute; inset: 0; display: grid; place-items: center;
     color: var(--primary-600); font-weight: 700; font-size: 13.5px; opacity: .65; pointer-events: none; }

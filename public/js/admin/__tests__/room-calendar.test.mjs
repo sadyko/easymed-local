@@ -184,12 +184,12 @@ const EXTRA_DOCTORS = [
   [75, 'jurayev', 'Жураев Бекзод', 'офтальмолог'],
 ];
 
-function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false, lines = false, docref = false, diag = 0 } = {}) {
+function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false, lines = false, docref = false, diag = 0, hours = ['09:00', '18:00'] } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
   const wh = {};
-  for (const k of WD) wh[k] = { enabled: true, from: '09:00', to: '18:00' };
+  for (const k of WD) wh[k] = { enabled: true, from: hours[0], to: hours[1] };   // hours — RCAL_TRIM_V1
   if (doctorOff) wh[WD[day.getDay()]] = { enabled: false, from: '09:00', to: '18:00' };
 
   // ЭТА УСТАНОВКА — ФИЛИАЛ B, и буква берётся ДО первого пациента: установке,
@@ -348,8 +348,8 @@ const WORKING_SET_KEY = 'rcal.workingset.v1';
 function putWorkingSet(ws) { LS.set(WORKING_SET_KEY, JSON.stringify(ws)); }
 
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false, lines = false, docref = false, diag = 0 } = {}) {
-  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm, lines, docref, diag });
+async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false, lines = false, docref = false, diag = 0, hours } = {}) {
+  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm, lines, docref, diag, hours });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
@@ -426,6 +426,56 @@ test('ось КАБИНЕТОВ рисуется, и та же запись ок
   const appts = byClass(box, 'rcal-appt');
   assert.equal(appts.length, 1, 'на оси кабинетов запись пропала');
   assert.ok(/Иванов Иван/.test(textOf(appts[0])));
+});
+
+// RCAL_TRIM_V1 (3.22.0, владелец по снимку календаря: «remove this gray areas and … not more than
+// one line of this type of gray areas»). Полотно всегда начиналось с 08:00: кабинеты, открытые с
+// 09:00, получали сверху час штриховки — три ряда при шаге 20. Теперь полотно — по окнам выбранных
+// колонок, по шагу сетки.
+const laneOf = (box, resId) => byClass(box, 'rcal-lane').find((l) => String(l.dataset.res) === String(resId));
+const slotsOf = (lane) => byClass(lane, 'rcal-slot');
+const isOff = (s) => String(s.className).split(/\s+/).includes('off');
+
+test('RCAL_TRIM_V1: сетка начинается с открытия (09:00), а не с 08:00 — нерабочих рядов сверху и снизу нет', async () => {
+  const { box } = await render({ workingSet: { resType: 'doctor', selected: { doctor: [7], room: [] }, period: 1, step: 20 } });
+  const slots = slotsOf(laneOf(box, 7));
+  assert.ok(slots.length > 0, 'у врача нет дорожки');
+  assert.equal(slots[0].attrs['data-min'], String(9 * 60), 'первый ряд — не 09:00: ' + slots[0].attrs['data-min']);
+  assert.equal(slots[slots.length - 1].attrs['data-min'], String(18 * 60 - 20), 'последний ряд — не 17:40');
+  assert.ok(!slots.some(isOff), 'у врача с 09:00 до 18:00 в сетке остались нерабочие ряды: ' + slots.filter(isOff).length);
+  const labels = byClass(box, 'rcal-tlabel').map(textOf);
+  assert.equal(labels[0].trim(), '09:00', 'первая подпись времени — не 09:00: ' + JSON.stringify(labels));
+  assert.ok(byClass(box, 'rcal-appt').length === 1, 'запись в 10:00 пропала');
+});
+
+test('RCAL_TRIM_V1: неровное открытие (09:10 при шаге 20) — не больше одного нерабочего ряда сверху; подпись — начало полотна', async () => {
+  const { box } = await render({ hours: ['09:10', '17:50'], workingSet: { resType: 'doctor', selected: { doctor: [7], room: [] }, period: 1, step: 20 } });
+  const slots = slotsOf(laneOf(box, 7));
+  const lead = slots.findIndex((s) => !isOff(s));
+  assert.equal(lead, 1, 'нерабочих рядов сверху ' + lead + ', а должен быть один (09:00–09:20)');
+  assert.equal(slots[0].attrs['data-min'], String(9 * 60));
+  const trail = slots.length - 1 - slots.map(isOff).lastIndexOf(false);
+  assert.ok(trail <= 1, 'нерабочих рядов снизу ' + trail);
+  assert.equal(byClass(box, 'rcal-tlabel').map(textOf)[0].trim(), '09:00');
+});
+
+test('RCAL_TRIM_V1: кабинет подписан словом («Консультация · 2-й этаж»), а не ключом «consultation»; квадратик — иконка, у врача — его пастель', async () => {
+  const { box } = await render();
+  // Врач: квадратик в шапке колонки — тот же оттенок, что у его карточки в сетке.
+  const docHead = byClass(box, 'rcal-colhead').find((c) => /Петров Пётр/.test(textOf(c)));
+  const av = byClass(docHead, 'rcal-av')[0];
+  const hue = (el) => String(el.className).split(/\s+/).find((c) => c.startsWith('pastel-'));
+  assert.ok(hue(av), 'у квадратика врача нет цвета (раньше в style уходило имя класса av-N): ' + av.className);
+  assert.equal(hue(av), hue(byClass(box, 'rcal-appt')[0]), 'цвет квадратика врача не совпадает с цветом его карточки');
+  assert.ok(!(av.style && av.style.background), 'фон квадратика снова пишется в style: ' + (av.style && av.style.background));
+
+  walk(box).find((n) => n.tagName === 'BUTTON' && /Кабинеты/.test(textOf(n))).click();
+  await flush();
+  const head = byClass(box, 'rcal-colhead').find((c) => /Кабинет 201/.test(textOf(c)));
+  assert.ok(head, 'нет колонки кабинета');
+  assert.ok(/Консультация · 2-й этаж/.test(textOf(head)), 'тип кабинета не словом: ' + textOf(head));
+  assert.ok(!/consultation/.test(textOf(head)), 'в шапке остался ключ базы: ' + textOf(head));
+  assert.ok(byClass(head, 'rcal-av-room').length === 1, 'у кабинета нет квадратика с иконкой');
 });
 
 test('подсказка карточки НЕСЁТ СТАТУС', async () => {
