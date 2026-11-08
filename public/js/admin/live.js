@@ -35,8 +35,9 @@
 //
 // Видимого текста у модуля нет: экран просто становится свежим — без мигания и
 // без уведомлений.
-import { liveRelevant } from './live-relevance.js';
+import { liveRelevant, LIVE_RELEVANCE, LIVE_SPREAD_MS } from './live-relevance.js';
 
+export { LIVE_SPREAD_MS };
 export const LIVE_URL = '/api/live';
 export const VERSION_URL = '/api/live/version';
 export const POLL_MS = 15000;
@@ -223,22 +224,45 @@ export function createLiveClient(env = {}, opts = {}) {
             mode = 'sse';
             stopPoll();
         };
+        // Ревью M2 — СВЕРКА ВЕРСИИ. Сервер шлёт догоняющее событие ДО hello, так что после
+        // него версии совпадают. Не совпали — значит, мы что-то пропустили и не знаем что:
+        // первый поток страницы (без ?since) оборвался до первого change, и браузер
+        // переподключил его сам — без Last-Event-ID и без догоняющего; или часы сервера
+        // ушли назад при перезапуске, и все новые номера меньше нашего. Тогда — сброс:
+        // каждый экран перечитывает себя один раз. То же по ping: кадр потерялся в пути.
+        const checkVersion = (e, first) => {
+            const d = parse(e && e.data);
+            const nv = d ? Number(d.v) : NaN;
+            if (!Number.isFinite(nv)) return;
+            if (v == null) { if (first) v = nv; return; }
+            if (nv !== v) apply({ v: nv, tables: [], reset: true });
+        };
         src.addEventListener('hello', (e) => {
             if (es !== src) return;
             heard();
-            const d = parse(e && e.data);
-            if (d && v == null && Number.isFinite(Number(d.v))) v = Number(d.v);
+            checkVersion(e, true);
         });
         src.addEventListener('change', (e) => {
             if (es !== src) return;
             heard();
             apply(parse(e && e.data));
         });
-        src.addEventListener('ping', () => { if (es === src) heard(); });
+        src.addEventListener('ping', (e) => {
+            if (es !== src) return;
+            heard();
+            checkVersion(e, false);
+        });
         src.onerror = () => {
             if (es !== src) return;
             errors++;
-            pollSoon(T.pollMs);   // пока потока нет — опрос
+            if (src.readyState === ES_CLOSED) {
+                // Ревью M6 — сервер ответил не 200 (выключено, вышли из системы), а
+                // EventSource кода ответа не показывает: спросить причину сразу.
+                stopPoll();
+                pollSoon(0);
+            } else {
+                pollSoon(T.pollMs);   // пока потока нет — опрос
+            }
             if (src.readyState === ES_CLOSED || errors >= T.giveUp) {
                 closeEs();
                 mode = 'poll';
@@ -262,6 +286,13 @@ export function createLiveClient(env = {}, opts = {}) {
             const url = VERSION_URL + (v != null ? '?since=' + encodeURIComponent(v) : '');
             const res = await E.fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
             if (res && res.status === 401) { shutdown(); return; }
+            // Ревью M6 — живое обновление выключено на сервере (EASYMED_LIVE=0): больше не
+            // стучимся ни потоком, ни опросом — экраны работают как до 3.22.0.
+            if (res && res.status === 503) {
+                let body = null;
+                try { body = await res.json(); } catch { body = null; }
+                if (body && (body.off === true || (body.error && body.error.code === 'live_unavailable'))) { shutdown(); return; }
+            }
             if (res && res.ok) apply(await res.json());
         } catch { /* сеть моргнула — следующий опрос */ }
         if (mode !== 'sse') pollSoon(T.pollMs);
@@ -351,6 +382,8 @@ export function createLiveClient(env = {}, opts = {}) {
         aliveCheckMs: T.aliveCheckMs,
         setTimeout: E.setTimeout,
         clearTimeout: E.clearTimeout,
+        now: E.now,           // ревью M3 — предел частоты экрана
+        random: E.random,     // ревью M3 — разброс экрана
         document: () => E.document,
     };
 }
@@ -453,15 +486,31 @@ export function keepScroll(el, fn) {
  *   reload   — тихое перечитывание экрана ЕГО ЖЕ дорогой (фильтры, прокрутку,
  *              выбор и раскрытую строку оно обязано сохранять само);
  *   isBusy   — дополнительное правило занятости экрана (необязательно).
+ *   minIntervalMs, spreadMs — ревью M3: по умолчанию из правила экрана
+ *              (LIVE_RELEVANCE[screen].minIntervalMs) и LIVE_SPREAD_MS.
+ *
+ * Ревью M4 — ЗАНЯТОСТЬ ПРОВЕРЯЕТСЯ И В МИГ ПОДМЕНЫ. Перечитывание идёт сетью (у кассы —
+ * семь запросов), и за это время кассир успевает щёлкнуть в поиск или открыть окно.
+ * Поэтому reload получает { canSwap } и спрашивает его прямо перед тем, как заменить
+ * разметку. Занят — reload возвращает функцию подмены вместо того, чтобы подменять:
+ * прочитанное придерживается и встаёт, как только экран свободен (проверка раз в ~2 с).
+ * Пришло новое изменение, пока придержано, — придержанное выбрасывается и читается свежее.
  * Возвращает stop().
  */
-export function watchScreen({ root, screen, relevant, reload, isBusy, client } = {}) {
+export function watchScreen({ root, screen, relevant, reload, isBusy, client, minIntervalMs, spreadMs } = {}) {
     const cl = client || liveClient();
     if (!cl || typeof reload !== 'function') return () => {};
     const pred = typeof relevant === 'function' ? relevant : liveRelevant(screen);
+    const rule = LIVE_RELEVANCE[screen] || {};
+    const minGap = Number.isFinite(minIntervalMs) ? minIntervalMs : (Number(rule.minIntervalMs) || 0);
+    const spread = Number.isFinite(spreadMs) ? spreadMs : LIVE_SPREAD_MS;
+    const now = () => { try { return Number(cl.now()) || 0; } catch { return 0; } };
+    const rnd = () => { try { return Math.min(1, Math.max(0, Number(cl.random()) || 0)); } catch { return 0; } };
     let stopped = false;
     let pending = false;
     let running = false;
+    let held = null;          // ревью M4: прочитанное, ждущее свободного экрана
+    let lastDone = -Infinity; // ревью M3: когда экран последний раз перерисован
     let timer = null;
     let alive = null;
     let unsub = () => {};
@@ -471,28 +520,46 @@ export function watchScreen({ root, screen, relevant, reload, isBusy, client } =
         if (screenBusy(root, doc())) return true;
         try { return typeof isBusy === 'function' && !!isBusy(); } catch { return false; }
     };
+    // Можно ли перерисовывать прямо сейчас (и в начале чтения, и в миг подмены).
+    const free = () => !stopped && !!root && root.isConnected !== false && shownOnScreen(root) && !busy();
     const stop = () => {
         if (stopped) return;
         stopped = true;
+        held = null;
         unsub();
         if (timer) { cl.clearTimeout(timer); timer = null; }
         if (alive) { cl.clearTimeout(alive); alive = null; }
     };
-    const arm = () => {
+    const arm = (ms) => {
         if (timer || stopped) return;
-        timer = cl.setTimeout(() => { timer = null; attempt(); }, cl.recheckMs);
+        timer = cl.setTimeout(() => { timer = null; attempt(); }, Math.max(0, ms));
     };
     function attempt() {
         if (stopped) return;
         if (!root || root.isConnected === false) { stop(); return; }
-        if (running || !pending) return;
-        if (!shownOnScreen(root) || busy()) { arm(); return; }
+        if (running || (!pending && !held)) return;
+        if (!free()) { arm(cl.recheckMs); return; }
+        if (held && !pending) {
+            const swap = held;
+            held = null;
+            try { swap(); } catch { /* экран сам скажет, если не смог */ }
+            lastDone = now();
+            return;
+        }
+        held = null;   // пришло новое изменение — прочитанное раньше устарело
+        const wait = lastDone + minGap - now();
+        if (wait > 0) { arm(wait); return; }
         pending = false;
         running = true;
         Promise.resolve()
-            .then(() => reload())
-            .catch(() => { /* сеть моргнула — следующее изменение перечитает */ })
-            .then(() => { running = false; if (pending) attempt(); });
+            .then(() => reload({ canSwap: free }))
+            .then((res) => { if (typeof res === 'function') held = res; },
+                () => { /* сеть моргнула — следующее изменение перечитает */ })
+            .then(() => {
+                running = false;
+                if (!held) lastDone = now();
+                if (pending || held) attempt();
+            });
     }
     // Экран вынули, а изменений нет — подписка всё равно снимается (поток не держится зря).
     const checkAlive = () => {
@@ -501,7 +568,12 @@ export function watchScreen({ root, screen, relevant, reload, isBusy, client } =
         if (!root || root.isConnected === false) { stop(); return; }
         alive = cl.setTimeout(checkAlive, cl.aliveCheckMs);
     };
-    unsub = cl.onLive(pred, () => { pending = true; attempt(); });
+    // Ревью M3 — разброс: у каждого экрана своя доля 0…spread поверх тишины live.js.
+    unsub = cl.onLive(pred, () => {
+        pending = true;
+        const jitter = spread > 0 ? Math.floor(rnd() * spread) : 0;
+        if (jitter > 0) arm(jitter); else attempt();
+    });
     alive = cl.setTimeout(checkAlive, cl.aliveCheckMs);
     return stop;
 }

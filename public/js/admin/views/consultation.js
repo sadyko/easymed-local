@@ -165,6 +165,7 @@ const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', profile: 'p
 export async function renderConsultation(container, { onNavigate, payload, tabId, onPayload, onShow } = {}) {
     stopAutoFresh();   // DIAG_ROUTE_V1 (D6) — новый экран — свой таймер (один на модуль)
     if (liveStop) { liveStop(); liveStop = null; }   // LIVE_REFRESH_V1 — и своя подписка на изменения
+    if (liveDayStop) { liveDayStop(); liveDayStop = null; }   // LIVE_REFRESH_V1 (ревью M3) — и «Моего дня»
     containerRef = container;
     onNavigateRef = onNavigate || null;
     tabIdRef = tabId || null;
@@ -222,8 +223,11 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // Today's referrals feed the KPI cards (3) and (4). Loaded after the first
     // paint so the queue never waits on it; repaint once it lands.
     loadTodayReferrals().then(() => { if (state.tab === 'appointments') paint(); });
-    // LIVE_REFRESH_V1 — подписка кабинета на изменения (onCabinetLive ниже).
+    // LIVE_REFRESH_V1 — подписка кабинета на изменения (onCabinetLive ниже). Ревью M3
+    // (3.22.0): две подписки — «Мои приёмы» (правило 'cabinet', не чаще раза в 2 с) и
+    // «Мой день» (узкое 'cabinetDay', не чаще раза в 20 с).
     liveStop = watchScreen({ root: container, screen: 'cabinet', reload: onCabinetLive });
+    liveDayStop = watchScreen({ root: container, screen: 'cabinetDay', reload: onCabinetDayLive });
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +237,7 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
 // the refresh». Таймер DIAG_ROUTE_V1 (раз в 60 с) оставлен страховкой, но ждать минуту
 // врачу больше не нужно: кабинет подписан на поток изменений (live.js, правило 'cabinet'
 // в live-relevance.js: визиты, строки услуг, счёт и оплата — касса отпускает к осмотру,
-// возврат строки, результаты анализов) и перечитывает то, что на экране, теми же тихими
+// возврат строки) и перечитывает то, что на экране, теми же тихими
 // дорогами, что «Обновить»:
 //   • «Мои приёмы» — refreshQueueQuietly (фильтр, период, поиск, раскрытые группы и
 //     прокрутка списка на месте; перерисовываются только список и плитки);
@@ -243,16 +247,31 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
 // (data-visit-wizard — то же правило 3.22.0, что у таймера: dialogOpen ниже берёт его
 // оттуда), курсор в поле кабинета, панель скрыта — изменение ждёт и применяется, когда
 // кабинет свободен. Одна подписка на модуль: новое открытие кабинета снимает прежнюю.
+//
+// РЕВЬЮ 3.22.0. M3 — «Мои приёмы» и «Мой день» подписаны порознь: у «Моего дня» правило
+// уже (без результатов анализов) и предел частоты 20 с — это сводка с деньгами врача
+// (отчёт в пуле потоков), и тридцать дашбордов не должны пересчитываться на каждое
+// сохранение в клинике. «Мои приёмы» — по-прежнему сразу (2 с): направленный пациент —
+// главное, о чём просил владелец. M4 — занятость проверяется и в миг перерисовки
+// (canSwap): занят — прочитанное придерживается до свободного кабинета. M5 — прокрутка
+// колонки дня и «Записей вперёд» в «Моём дне» на месте (doctor-dashboard.js).
 let liveStop = null;
+let liveDayStop = null;
 
-/** Изменение для кабинета пришло, и кабинет свободен. Экспорт — для проверки. */
-export async function onCabinetLive() {
+/** «Мои приёмы»: изменение пришло, и кабинет свободен. Экспорт — для проверки. */
+export async function onCabinetLive({ canSwap = null } = {}) {
     if (state.tab === 'appointments') {
-        if (queueLoaded) await refreshQueueQuietly();
-        return;
+        if (queueLoaded) return refreshQueueQuietly({ canSwap });
+        return undefined;
     }
     if (queueLoaded) state.queueStale = true;   // откроют «Мои приёмы» — перечитаются (ensureTabData)
-    if (state.tab === 'dashboard') await refreshDoctorDashboard({ quiet: true });
+    return undefined;
+}
+
+/** «Мой день»: изменение пришло, и кабинет свободен (ревью M3: своё правило и предел). */
+export async function onCabinetDayLive({ canSwap = null } = {}) {
+    if (state.tab === 'dashboard') return refreshDoctorDashboard({ quiet: true, canSwap });
+    return undefined;
 }
 
 // Рабочий список — по требованию. До DOCTOR_DASHBOARD_V1 он грузился всегда,
@@ -402,16 +421,23 @@ export async function autoFreshTick() {
     return refreshQueueQuietly();
 }
 
-/** Перечитать очередь и перерисовать только список и плитки — фильтр, поиск и прокрутка на месте. */
-async function refreshQueueQuietly() {
+/** Перечитать очередь и перерисовать только список и плитки — фильтр, поиск и прокрутка на месте.
+ *  LIVE_REFRESH_V1 (ревью M4) — canSwap: занят в миг перерисовки — вернуть перерисовку
+ *  функцией (live.js выполнит её, когда кабинет свободен). */
+async function refreshQueueQuietly({ canSwap = null } = {}) {
     const ok = await reloadQueue();
     if (!ok || !cabinetOnScreen()) return false;
-    const body = containerRef.querySelector('#svc-body');
-    const top = body ? body.scrollTop : 0;
-    paintBody();
-    paintKpi();
-    if (body && top) body.scrollTop = top;
-    return true;
+    const repaint = () => {
+        if (!cabinetOnScreen()) return false;
+        const body = containerRef.querySelector('#svc-body');
+        const top = body ? body.scrollTop : 0;
+        paintBody();
+        paintKpi();
+        if (body && top) body.scrollTop = top;
+        return true;
+    };
+    if (typeof canSwap === 'function' && !canSwap()) return repaint;
+    return repaint();
 }
 
 /** Панель кабинета показали снова (ctx.onShow): вкладка «Мои приёмы» перечитывается сразу. */

@@ -62,12 +62,13 @@ const VISITS = [
 ];
 let VISIT_SERVICES = [vs(801, 'v-1', 'queued', 'ОАК')];
 let vsReads = 0;
+let onVs = null;   // вмешаться в миг чтения очереди
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/db')) {
     const table = body && body.table;
-    if (table === 'visit_services') vsReads++;
+    if (table === 'visit_services') { vsReads++; if (onVs) onVs(); }
     let rows = {
       visit_services: VISIT_SERVICES, visits: VISITS, lab_results: [], admissions: [], lab_panels: [], lab_panel_analytes: [], services: [],
       departments: [{ id: 'd-1', name: 'Лаборатория', kind: 'laboratory' }], service_types: [], doc_settings: [],
@@ -99,7 +100,11 @@ const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(
 const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 let version = 1;
-const emit = (tables) => FakeES.live()[0].emit('change', { v: ++version, tables, rpc: [] });
+const emit = (tables) => FakeES.live()[0].emit('change', { v: ++version, tables });
+// Ревью M3 (3.22.0) — тишина live.js + разброс экрана (random = 0,5 → 1 с); перед каждым
+// случаем — пауза дольше предела частоты экрана (2–3 с), чтобы он не мешал проверке.
+const WAIT = live.DEBOUNCE_MS + live.LIVE_SPREAD_MS + 10;
+const pause = () => clock.advance(3500);
 async function settle(ms) { await clock.advance(ms); await tick(60); }
 
 const root = mk('div');
@@ -109,11 +114,12 @@ FakeES.live()[0].open();
 FakeES.live()[0].emit('hello', { v: version });
 
 test('новый заказ в лабораторию — очередь перечиталась сама, без «Загрузка…» и уведомлений', async () => {
+  await pause();
   assert.match(textOf(root), /Лаб-Пациент-Первый/);
   const before = vsReads;
   VISIT_SERVICES = [vs(802, 'v-2', 'queued', 'Глюкоза'), ...VISIT_SERVICES];
   emit(['visit_services', 'invoices']);
-  await clock.advance(live.DEBOUNCE_MS + 10);
+  await clock.advance(WAIT);
   assert.doesNotMatch(textOf(root), /Загрузка…/, 'тихо: очередь не заменялась «Загрузкой…»');
   await tick(60);
   assert.ok(vsReads > before, 'очередь перечитана');
@@ -122,6 +128,7 @@ test('новый заказ в лабораторию — очередь пер�
 });
 
 test('изменение не для лаборатории (смена кассы) — не перечитывается', async () => {
+  await pause();
   const before = vsReads;
   emit(['cash_shifts', 'cash_movements']);
   await settle(live.DEBOUNCE_MS + live.RECHECK_MS);
@@ -129,6 +136,7 @@ test('изменение не для лаборатории (смена касс
 });
 
 test('открыто окно ввода результатов — ждёт; закрыли — перечиталась (результат анализатора)', async () => {
+  await pause();
   const before = vsReads;
   modalOpen = true;
   emit(['lab_results']);
@@ -137,4 +145,44 @@ test('открыто окно ввода результатов — ждёт; з
   modalOpen = false;
   await settle(live.RECHECK_MS + 10);
   assert.ok(vsReads > before);
+});
+
+test('ревью M4: окно открыли, пока шло чтение, — очередь не перерисована; закрыли — встало прочитанное без нового чтения', async () => {
+  await pause();
+  VISIT_SERVICES = [vs(804, 'v-1', 'queued', 'Ферритин'), ...VISIT_SERVICES];
+  onVs = () => { modalOpen = true; };
+  emit(['visit_services']);
+  await settle(WAIT);
+  onVs = null;
+  const reads = vsReads;
+  assert.doesNotMatch(textOf(root), /Ферритин/, 'под окном очередь не перерисована');
+  modalOpen = false;
+  await settle(live.RECHECK_MS + 10);
+  assert.match(textOf(root), /Ферритин/, 'окно закрыли — прочитанное встало');
+  assert.equal(vsReads, reads, 'без нового чтения');
+});
+
+test('ревью L6: настоящее окно ввода результатов видно правилу занятости live.js (а не флагу теста)', async () => {
+  await pause();
+  VISIT_SERVICES = [vs(805, 'v-2', 'in_progress', 'Гемоглобин')];
+  emit(['visit_services']);
+  await settle(WAIT);
+  const body = document.body;
+  body.children.length = 0;
+  const matches = (n, part) => {
+    if (part[0] === '.') return String(n.className || '').split(/\s+/).includes(part.slice(1));
+    const m = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(part);
+    if (!m || !n.attrs || !Object.prototype.hasOwnProperty.call(n.attrs, m[1])) return false;
+    return m[2] === undefined || n.attrs[m[1]] === m[2];
+  };
+  const realDoc = { querySelector: (sel) => walk(body).slice(1).find((n) => sel.split(',').map((x) => x.trim()).some((p) => matches(n, p))) || null };
+  assert.equal(live.dialogOpen(realDoc), false);
+  const doBox = walk(root).find((n) => String(n.className || '').split(/\s+/).includes('lq-do'));
+  assert.ok(doBox, 'карточка с главным действием на экране');
+  const btn = walk(doBox).find((n) => n.tagName === 'BUTTON');
+  assert.match(textOf(btn), /Внести результаты/);
+  btn.click();
+  await tick(80);
+  assert.equal(live.dialogOpen(realDoc), true, 'окно ввода результатов — «занят»: очередь под ним не перечитается');
+  body.children.length = 0;
 });

@@ -857,14 +857,35 @@ export async function renderDoctorDashboard(host, { onOpenWork, onOpenInpatients
  *  LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — { quiet: true }: «Мой день» обновлён
  *  потоком изменений (consultation.js, live.js) — пациента отправили к врачу, касса
  *  отпустила приём. Перерисовка та же (одним шагом, раскрытые группы — в state), но
- *  график не «вырастает» заново: обновление незаметно, кроме самих чисел. */
+ *  график не «вырастает» заново: обновление незаметно, кроме самих чисел.
+ *  Ревью 3.22.0: M5 — колонка дня (.dd-day-list) и «Записи вперёд» (.dd-upcoming)
+ *  прокручиваются сами по себе и пересобираются вместе с сеткой: их прокрутка теперь
+ *  остаётся на месте (keepScroll в live.js бережёт только предков, не потомков). M4 —
+ *  canSwap: врач занят в миг перерисовки — перерисовка возвращается функцией и
+ *  выполняется live.js, когда кабинет свободен. */
 let quietPaint = false;
-export async function refreshDoctorDashboard({ quiet = false } = {}) {
+const DD_SCROLLERS = ['.dd-day-list', '.dd-upcoming'];   // ревью M5
+function paintKeepingScroll() {
+    const at = DD_SCROLLERS.map((sel) => {
+        try { const el = hostRef && hostRef.querySelector(sel); return el ? Number(el.scrollTop) || 0 : 0; } catch { return 0; }
+    });
+    paint();
+    DD_SCROLLERS.forEach((sel, i) => {
+        if (!at[i]) return;
+        try { const el = hostRef && hostRef.querySelector(sel); if (el) el.scrollTop = at[i]; } catch { /* колонки нет */ }
+    });
+}
+export async function refreshDoctorDashboard({ quiet = false, canSwap = null } = {}) {
     state.loading = true;
     await loadDoctorDashboard();
     state.loading = false;
-    quietPaint = !!quiet;
-    try { paint(); } finally { quietPaint = false; }
+    const repaint = () => {
+        quietPaint = !!quiet;
+        try { if (quiet) paintKeepingScroll(); else paint(); } finally { quietPaint = false; }
+        return true;
+    };
+    if (quiet && typeof canSwap === 'function' && !canSwap()) return repaint;   // ревью M4
+    return repaint();
 }
 
 export function resetDoctorDashboard() {

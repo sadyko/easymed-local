@@ -17,7 +17,7 @@ import { ringWebhook } from './services/telephony/ring-webhook.js';   // CALL_RI
 import { branchSyncRoutes } from './routes/branch-sync.js';   // BRANCH_SYNC_V1
 import { lisProxyRoutes } from './routes/lisproxy.js';   // LIS_PROXY_V1
 import { actAsEndedGuard, actAsRouterGuard } from './middleware/act-as.js';   // ADMIN_ACT_AS_V1
-import { createLiveBus } from './services/live/bus.js';   // LIVE_REFRESH_V1 — шина изменений для живых экранов
+import { createLiveBus, liveEnabled } from './services/live/bus.js';   // LIVE_REFRESH_V1 — шина изменений для живых экранов; liveEnabled — выключатель (ревью M6)
 import { liveRoutes } from './routes/live.js';   // LIVE_REFRESH_V1 — GET /api/live (SSE) и /api/live/version
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -32,7 +32,9 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {} } =
   // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — шина изменений этой базы: маршруты
   // записи сообщают ей «записано», поток /api/live разносит это экранам. Одна на базу —
   // её же находят приём анализаторов и обмен филиалов (liveBump по базе).
-  createLiveBus(db);
+  // Ревью M6 — EASYMED_LIVE=0 (у тестов — live.enabled:false): шины нет — /api/live
+  // отвечает 503 live_unavailable, вкладки замолкают, экраны — как до 3.22.0.
+  if (live.enabled !== undefined ? live.enabled !== false : liveEnabled(process.env)) createLiveBus(db);
   const app = express();
   app.disable('x-powered-by');
   // PERF_SLOWLOG_V1 — самым первым: меряем полное время запроса, включая

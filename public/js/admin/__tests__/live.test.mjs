@@ -8,7 +8,7 @@ import {
     createLiveClient, watchScreen, dialogOpen, editingInside, screenBusy, BUSY_SELECTOR,
     DEBOUNCE_MS, POLL_MS, HIDDEN_CLOSE_MS, RECHECK_MS, SILENCE_MS, onLive, __setLiveClientForTests,
 } from '../live.js';
-import { LIVE_RELEVANCE, liveRelevant } from '../live-relevance.js';
+import { LIVE_RELEVANCE, LIVE_SPREAD_MS, liveRelevant } from '../live-relevance.js';
 
 function setup({ es = true, fetchImpl = null } = {}) {
     FakeES.reset();
@@ -228,6 +228,184 @@ test('сброс от сервера («могло измениться всё»
     assert.equal(got[0].reset, true);
 });
 
+// ---- ревью 3.22.0: M2 — версия hello/ping, не совпавшая со своей, — сброс --------
+test('ревью M2: первый поток оборвался до первого change, браузер переподключил его сам — hello с новой версией будит экраны', async () => {
+    const { client, clock } = setup();
+    const got = [];
+    client.onLive(() => true, (c) => got.push(c));
+    const es = FakeES.all[0];
+    assert.equal(es.url, '/api/live');
+    es.open();
+    es.emit('hello', { v: 100 });
+    es.fail(false);                 // Wi-Fi моргнул: тот же объект, тот же адрес, без Last-Event-ID
+    await clock.advance(3000);
+    es.open();
+    es.emit('hello', { v: 105 });   // за время обрыва регистратура выставила счёт
+    await clock.advance(DEBOUNCE_MS + 10);
+    assert.equal(got.length, 1, 'экран узнал о пропущенном');
+    assert.equal(got[0].reset, true, 'что именно пропущено — не известно: сброс');
+    assert.equal(client.status().v, 105);
+    es.emit('hello', { v: 105 });   // та же версия — ничего
+    await clock.advance(DEBOUNCE_MS + 10);
+    assert.equal(got.length, 1);
+});
+
+test('ревью M2: часы сервера ушли назад после перезапуска — hello с меньшей версией: сброс, дальше события доходят', async () => {
+    const { client, clock } = setup();
+    const got = [];
+    client.onLive(() => true, (c) => got.push(c));
+    const es = FakeES.all[0];
+    es.open();
+    es.emit('hello', { v: 1000 });
+    es.emit('change', change(1001, ['visits']));
+    await clock.advance(DEBOUNCE_MS + 10);
+    assert.equal(got.length, 1);
+    es.fail(false);
+    es.open();
+    es.emit('hello', { v: 500 });
+    await clock.advance(DEBOUNCE_MS + 10);
+    assert.equal(got.length, 2);
+    assert.equal(got[1].reset, true);
+    es.emit('change', change(501, ['invoices']));
+    await clock.advance(DEBOUNCE_MS + 10);
+    assert.equal(got.length, 3, 'событие с меньшим, чем прежде, номером не отброшено');
+    assert.deepEqual(got[2].tables, ['invoices']);
+});
+
+test('ревью M2: ping с другой версией — сброс; с той же — ничего; догоняющее до hello — точное, без сброса', async () => {
+    const { client, clock } = setup();
+    const got = [];
+    client.onLive(() => true, (c) => got.push(c));
+    const es = FakeES.all[0];
+    es.open();
+    es.emit('hello', { v: 10 });
+    es.emit('ping', { v: 10 });
+    await clock.advance(DEBOUNCE_MS + 10);
+    assert.equal(got.length, 0);
+    es.emit('ping', { v: 12 });     // кадр потерялся по дороге
+    await clock.advance(DEBOUNCE_MS + 10);
+    assert.equal(got.length, 1);
+    assert.equal(got[0].reset, true);
+    // Переподключение с номером: сервер шлёт догоняющее ДО hello.
+    es.fail(true);
+    await clock.advance(1100);
+    const es2 = FakeES.all[1];
+    assert.equal(es2.url, '/api/live?since=12');
+    es2.open();
+    es2.emit('change', { v: 15, tables: ['payments'] });
+    es2.emit('hello', { v: 15 });
+    await clock.advance(DEBOUNCE_MS + 10);
+    assert.equal(got.length, 2);
+    assert.deepEqual(got[1], { tables: ['payments'], rpc: [], reset: false }, 'точное догоняющее, не сброс');
+});
+
+// ---- ревью 3.22.0: M6 — выключено на сервере ------------------------------------
+test('ревью M6: поток закрыт сервером — сразу опрос; 503 live_unavailable — поток и опрос стоп навсегда', async () => {
+    const { client, clock, fetches } = setup({ fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({ off: true, error: { code: 'live_unavailable' } }) }) });
+    client.onLive(() => true, () => {});
+    FakeES.all[0].fail(true);       // 503 у EventSource не виден — только «закрыто»
+    await clock.advance(0);
+    assert.deepEqual(fetches, ['/api/live/version'], 'причину спросили сразу, не через 15 с');
+    assert.equal(client.status().mode, 'gone');
+    await clock.advance(10 * 60_000);
+    assert.equal(FakeES.all.length, 1, 'не переподключается');
+    assert.equal(fetches.length, 1, 'не опрашивает');
+});
+
+test('ревью M6: без EventSource — 503 live_unavailable на опросе тоже останавливает', async () => {
+    const { client, clock, fetches } = setup({ es: false, fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({ off: true, error: { code: 'live_unavailable' } }) }) });
+    client.onLive(() => true, () => {});
+    await clock.advance(POLL_MS * 4);
+    assert.equal(fetches.length, 1);
+    assert.equal(client.status().mode, 'gone');
+});
+
+test('ревью M6: 503 без кода live_unavailable (сервер перегружен) — не стоп, опрос продолжается', async () => {
+    const { client, clock, fetches } = setup({ es: false, fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({ error: { code: 'busy' } }) }) });
+    client.onLive(() => true, () => {});
+    await clock.advance(POLL_MS * 2 + 10);
+    assert.ok(fetches.length >= 3);
+    assert.notEqual(client.status().mode, 'gone');
+});
+
+// ---- ревью 3.22.0: M3 — разброс и предел частоты; M4 — занятость в миг подмены ------
+test('ревью M3: разброс 0–2 с поверх тишины — экраны клиники не перечитываются в одну секунду', async () => {
+    const { client, clock } = setup();   // random = 0.5 → разброс 1 с
+    const root = screenRoot();
+    let reloads = 0;
+    watchScreen({ root, screen: 'cashier', reload: () => { reloads++; }, client });
+    const es = FakeES.all[0];
+    es.open(); es.emit('hello', { v: 1 });
+    es.emit('change', change(2, ['invoices']));
+    await clock.advance(DEBOUNCE_MS + 990);
+    assert.equal(reloads, 0, 'ещё рано: тишина + разброс');
+    await clock.advance(20);
+    assert.equal(reloads, 1);
+    assert.ok(LIVE_SPREAD_MS === 2000);
+});
+
+test('ревью M3: предел частоты экрана — не чаще minIntervalMs, отложенное выполняется после', async () => {
+    const { client, clock } = setup();
+    const root = screenRoot();
+    const at = [];
+    watchScreen({ root, screen: 'cashier', reload: () => { at.push(clock.now()); }, client, spreadMs: 0, minIntervalMs: 5000 });
+    const es = FakeES.all[0];
+    es.open(); es.emit('hello', { v: 1 });
+    for (let v = 2; v < 12; v++) { es.emit('change', change(v, ['payments'])); await clock.advance(DEBOUNCE_MS + 10); }
+    await clock.advance(10_000);
+    assert.ok(at.length >= 2, 'перечитывалось');
+    for (let i = 1; i < at.length; i++) assert.ok(at[i] - at[i - 1] >= 5000, 'интервал ' + (at[i] - at[i - 1]));
+});
+
+test('ревью M3: правила экранов — пределы частоты; «Мой день» уже «Моих приёмов» (без результатов анализов)', () => {
+    assert.equal(LIVE_RELEVANCE.cashier.minIntervalMs, 2000);
+    assert.equal(LIVE_RELEVANCE.cabinet.minIntervalMs, 2000);
+    assert.equal(LIVE_RELEVANCE.laboratory.minIntervalMs, 3000);
+    assert.equal(LIVE_RELEVANCE.procedures.minIntervalMs, 3000);
+    assert.ok(LIVE_RELEVANCE.cabinetDay.minIntervalMs >= 20000);
+    const day = liveRelevant('cabinetDay');
+    assert.equal(day({ tables: ['lab_results'] }), false, 'результат анализатора «Мой день» не будит');
+    assert.equal(day({ tables: ['visit_services'] }), true, 'направленный пациент — будит');
+    assert.equal(liveRelevant('cabinet')({ tables: ['lab_results'] }), false, '«Мои приёмы» результаты не читают');
+    assert.equal(liveRelevant('cabinet')({ tables: ['visit_services'] }), true, 'направленный пациент — сразу в «Мои приёмы»');
+});
+
+test('ревью M4: занят в миг подмены — новое придержано и встаёт, когда экран свободен; свежее изменение — читает заново', async () => {
+    const { client, clock, doc } = setup();
+    const root = screenRoot();
+    let reads = 0;
+    const shown = [];
+    watchScreen({ root, screen: 'cashier', client, spreadMs: 0, minIntervalMs: 0, reload: async ({ canSwap }) => {
+        const n = ++reads;
+        doc.modal = n === 1;   // пока шло чтение, кассир открыл окно оплаты
+        const swap = () => { shown.push(n); return true; };
+        if (!canSwap()) return swap;
+        swap();
+        return undefined;
+    } });
+    const es = FakeES.all[0];
+    es.open(); es.emit('hello', { v: 1 });
+    es.emit('change', change(2, ['invoices']));
+    await clock.advance(DEBOUNCE_MS + 10);
+    assert.equal(reads, 1);
+    assert.deepEqual(shown, [], 'под окном не подменено');
+    await clock.advance(RECHECK_MS * 3);
+    assert.deepEqual(shown, [], 'окно открыто — ждёт');
+    doc.modal = false;
+    await clock.advance(RECHECK_MS + 10);
+    assert.deepEqual(shown, [1], 'окно закрыли — придержанное встало без нового чтения');
+    assert.equal(reads, 1);
+    // Придержанное, а пришло новое — читать заново, старое выбросить.
+    doc.modal = true;
+    es.emit('change', change(3, ['invoices']));
+    await clock.advance(DEBOUNCE_MS + 10);
+    assert.equal(reads, 1, 'занят — даже не читает');
+    doc.modal = false;
+    await clock.advance(RECHECK_MS + 10);
+    assert.equal(reads, 2);
+    assert.deepEqual(shown, [1, 2]);
+});
+
 // ---- правило занятости и watchScreen ------------------------------------------
 function screenRoot(doc) {
     const kids = new Set();
@@ -257,7 +435,7 @@ test('watchScreen: своё изменение перечитывает; зан�
     const { client, clock, doc } = setup();
     const root = screenRoot();
     let reloads = 0;
-    const stop = watchScreen({ root, screen: 'cashier', reload: () => { reloads++; }, client });
+    const stop = watchScreen({ root, screen: 'cashier', reload: () => { reloads++; }, client, spreadMs: 0, minIntervalMs: 0 });
     const es = FakeES.all[0];
     es.open();
     es.emit('hello', { v: 1 });
@@ -308,7 +486,7 @@ test('watchScreen: перечитывание не накладывается �
     const root = screenRoot();
     let release;
     let started = 0;
-    watchScreen({ root, screen: 'cabinet', reload: () => { started++; return new Promise((r) => { release = r; }); }, client });
+    watchScreen({ root, screen: 'cabinet', reload: () => { started++; return new Promise((r) => { release = r; }); }, client, spreadMs: 0, minIntervalMs: 0 });
     const es = FakeES.all[0];
     es.open(); es.emit('hello', { v: 1 });
     es.emit('change', change(2, ['visit_services']));
@@ -348,5 +526,5 @@ test('правила экранов: касса — счета и оплаты; 
     assert.equal(is('procedures', ['invoices']), false);
     assert.equal(liveRelevant('cashier')({ reset: true, tables: [], rpc: [] }), true);
     assert.equal(liveRelevant('нет-такого')({ tables: ['invoices'] }), false);
-    assert.deepEqual(Object.keys(LIVE_RELEVANCE).sort(), ['cabinet', 'cashier', 'laboratory', 'procedures']);
+    assert.deepEqual(Object.keys(LIVE_RELEVANCE).sort(), ['cabinet', 'cabinetDay', 'cashier', 'laboratory', 'procedures']);
 });
