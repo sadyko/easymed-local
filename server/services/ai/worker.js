@@ -11,7 +11,7 @@
 // Комментарии Facebook/Instagram — НИТКА: chat_key — id строки корня нитки
 // (отметки, слияние, проверка оператора — по нитке), а отвечаем на тот
 // комментарий, что пришёл: source_id — его comment_id у Meta.
-import { readAiSettings, setAiBlocked } from './settings.js';
+import { readAiSettings, setAiBlocked, clearNoModuleBlock, hasAiModule } from './settings.js';
 import { claimNextJob, markSending, finishJob, retryJob, dropQueuedJobs, expireStaleJobs } from './queue.js';
 import { operatorRecent, isFlagged, flagChat } from './guards.js';
 import { conversationFor } from './conversation.js';
@@ -39,6 +39,7 @@ const DEFAULT_DEPS = {
   privateReply: (db, id, text) => privateReplyToComment(db, Number(id), text, null),
   metaLead: (db, args) => toCrm(db, args),
   facts: (db) => clinicFacts(db),
+  hasModule: (db) => hasAiModule(db),
 };
 
 const clip = (t) => String(t == null ? '' : t).trim();
@@ -121,7 +122,7 @@ function sendAny(db, d, job, target, text, publicText = '') {
  * написать в чат, а владелец — выключить ИИ. Возвращает null или причину.
  */
 function stopReason(db, job, t) {
-  const s = readAiSettings(db);
+  const s = readAiSettings(db, t);
   if (!s.enabled || s.blocked) return 'switch_off';
   if (operatorRecent(db, job.channel, job.chat_key, t) || isFlagged(db, job.channel, job.chat_key)) return 'operator';
   if (job.channel === 'meta_dm') {
@@ -156,6 +157,9 @@ function telegramReachable(db, d, job) {
 export async function processOneJob(db, deps = {}) {
   const d = { ...DEFAULT_DEPS, ...deps };
   const now = d.now();
+  // AI_CHAT_V1: модуль `ai` снова в лицензии — «нет модуля» снимается сам, без
+  // захода владельца на экран. Сбой проверки лицензии исполнитель не роняет.
+  try { clearNoModuleBlock(db, d.hasModule); } catch (e) { console.warn('[ai] licence check:', e && e.message); }
   // AI_CHAT_V1 (A3): ждущая задача старше 10 минут (сервер стоял, перезапуск)
   // не отвечается — поздний ответ хуже тишины; её чат уходит оператору.
   for (const c of expireStaleJobs(db, now)) flagChat(db, c.channel, c.chat_key, 'timeout', now);
@@ -173,7 +177,7 @@ export async function processOneJob(db, deps = {}) {
     if (job.channel === 'meta_comment') {
       target = db.prepare('SELECT id, comment_id, root_id, private_replied_at FROM meta_comments WHERE comment_id = ?').get(String(job.source_id)) || null;
     }
-    const s = readAiSettings(db);
+    const s = readAiSettings(db, t);
     if (!s.enabled || s.blocked) return applyStop(db, job, 'switch_off', t);
     if (job.channel === 'meta_comment') {
       if (!target) { finishJob(db, job.id, 'dropped', 'gone', t); return 'dropped'; }

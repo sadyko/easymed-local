@@ -4,6 +4,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { aiSettingsGet, aiSettingsSave, aiFlags } from './ai.js';
 import { flagChat } from '../ai/guards.js';
+import { setAiBlocked, readAiSettings } from '../ai/settings.js';
 
 const ADMIN = { id: 1, role: 'admin', extra_roles: [] };
 const REG = { id: 2, role: 'registrar', extra_roles: [] };
@@ -45,4 +46,13 @@ test('строка "false" не включает ИИ; 402 несёт код mod
   const db = fresh();
   assert.equal(aiSettingsSave(db, { enabled: 'false' }, ADMIN, { hasModule: hasAi }).enabled, false);
   assert.throws(() => aiSettingsSave(db, { enabled: true }, ADMIN, { hasModule: () => false }), (e) => e.status === 402 && e.code === 'module_missing');
+});
+
+test('AI_CHAT_V1: ai_settings_get снимает no_module, когда модуль снова подключён', () => {
+  const db = fresh();
+  aiSettingsSave(db, { enabled: true }, ADMIN, { hasModule: hasAi });
+  setAiBlocked(db, 'no_module');
+  assert.equal(aiSettingsGet(db, {}, ADMIN, { hasModule: () => false }).blocked, 'no_module');
+  assert.equal(aiSettingsGet(db, {}, ADMIN, { hasModule: hasAi }).blocked, '');
+  assert.equal(readAiSettings(db).blocked, '');
 });

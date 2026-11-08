@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { readAiSettings, setAiEnabled, setAiBlocked } from './settings.js';
+import { readAiSettings, setAiEnabled, setAiBlocked, clearNoModuleBlock } from './settings.js';
 
 function fresh() { const db = openDb(':memory:'); migrate(db); return db; }
 
@@ -31,4 +31,37 @@ test('повторное включение при включённом ИИ н�
   setAiEnabled(db, true, 7, '2026-11-08T10:00:00Z');
   setAiEnabled(db, true, 7, '2026-11-08T10:30:00Z');
   assert.equal(readAiSettings(db).enabled_at, '2026-11-08T10:00:00Z');
+});
+
+// AI_CHAT_V1 — «ИИ остановлен» не должен держаться вечно: лимит — месячный,
+// модуль могут подключить снова.
+test('лимит прошлого месяца (UTC) снимается сам при чтении и в базе', () => {
+  const db = fresh();
+  setAiBlocked(db, 'limit', '2026-10-31T23:59:00Z');
+  assert.equal(readAiSettings(db, Date.parse('2026-10-31T23:59:30Z')).blocked, 'limit', 'тот же месяц — стоит');
+  assert.equal(readAiSettings(db, Date.parse('2026-11-01T00:00:10Z')).blocked, '', 'новый месяц — снят');
+  const row = db.prepare('SELECT blocked, blocked_at FROM ai_settings WHERE id = 1').get();
+  assert.deepEqual({ ...row }, { blocked: '', blocked_at: null });
+});
+
+test('лимит того же месяца и no_module сами по месяцу не снимаются', () => {
+  const db = fresh();
+  setAiBlocked(db, 'limit', '2026-11-02T08:00:00Z');
+  assert.equal(readAiSettings(db, Date.parse('2026-11-30T23:00:00Z')).blocked, 'limit');
+  setAiBlocked(db, 'no_module', '2026-09-02T08:00:00Z');
+  assert.equal(readAiSettings(db, Date.parse('2026-11-30T23:00:00Z')).blocked, 'no_module');
+});
+
+test('no_module снимается, когда модуль ai снова в лицензии; лимит — нет', () => {
+  const db = fresh();
+  setAiBlocked(db, 'no_module', '2026-11-08T10:00:00Z');
+  assert.equal(clearNoModuleBlock(db, () => false), false);
+  assert.equal(readAiSettings(db).blocked, 'no_module');
+  assert.equal(clearNoModuleBlock(db, () => true), true);
+  assert.equal(readAiSettings(db).blocked, '');
+  setAiBlocked(db, 'limit', new Date().toISOString());
+  let asked = 0;
+  assert.equal(clearNoModuleBlock(db, () => { asked++; return true; }), false);
+  assert.equal(readAiSettings(db).blocked, 'limit');
+  assert.equal(asked, 0, 'лицензию проверяем только при no_module');
 });

@@ -16,7 +16,7 @@ const BACKOFF_MS = [15_000, 30_000, 60_000, 120_000, 240_000];
 const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 export function enqueueChatJob(db, { channel, chatKey, sourceId, createdAt, now = Date.now() }) {
-  const s = readAiSettings(db);
+  const s = readAiSettings(db, now);
   if (!s.enabled || s.blocked) return 'off';
   const created = Date.parse(createdAt);
   if (!Number.isFinite(created) || !s.enabled_at || created < Date.parse(s.enabled_at) || now - created > MAX_AGE_MS) return 'old';

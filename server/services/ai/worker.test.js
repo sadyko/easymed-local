@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { setAiEnabled, readAiSettings } from './settings.js';
+import { setAiEnabled, readAiSettings, setAiBlocked } from './settings.js';
 import { enqueueChatJob, GIVE_UP_MS } from './queue.js';
 import { isFlagged, flagChat } from './guards.js';
 import { processOneJob, HANDOFF_TEXT, COMMENT_PUBLIC_TEXT } from './worker.js';
@@ -75,7 +75,7 @@ test('отмеченный чат и недавний оператор — ни 
 test('лимит: блокировка, отметка; сеть: повтор', async () => {
   const lim = world({ error: 'limit' });
   assert.equal(await processOneJob(lim.db, lim.deps), 'blocked');
-  assert.equal(readAiSettings(lim.db).blocked, 'limit');
+  assert.equal(readAiSettings(lim.db, T0 + 3000).blocked, 'limit');
   assert.equal(isFlagged(lim.db, 'telegram', '100'), true);
   const net = world({ error: 'network' });
   assert.equal(await processOneJob(net.db, net.deps), 'retry');
@@ -344,4 +344,16 @@ test('комментарий: личный ответ не ушёл — публ
   assert.equal(calls.pub.length, 0);
   assert.equal(db.prepare('SELECT outcome FROM ai_chat_jobs').get().outcome, 'send_failed');
   assert.equal(isFlagged(db, 'meta_comment', String(rootId)), true);
+});
+
+test('AI_CHAT_V1: no_module снимается в начале шага, когда модуль снова подключён', async () => {
+  const { db, deps } = world({ outcome: 'reply', text: 'Ответ.' });
+  setAiBlocked(db, 'no_module', iso(T0));
+  assert.equal(await processOneJob(db, { ...deps, hasModule: () => false }), 'dropped', 'модуля нет — ИИ стоит');
+  assert.equal(readAiSettings(db, T0).blocked, 'no_module');
+  setAiBlocked(db, '');
+  enqueueChatJob(db, { channel: 'telegram', chatKey: '100', sourceId: '8', createdAt: iso(T0 + 1000), now: T0 + 2000 });
+  setAiBlocked(db, 'no_module', iso(T0));
+  assert.equal(await processOneJob(db, { ...deps, hasModule: () => true }), 'done');
+  assert.equal(readAiSettings(db, T0).blocked, '');
 });

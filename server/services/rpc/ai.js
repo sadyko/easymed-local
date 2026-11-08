@@ -4,20 +4,16 @@
 //   ai_flags         — чаты «Нужен оператор» (видит тот, кто видит чаты).
 import { grantAllowsAdminOr } from '../grants.js';
 import { canViewSection } from '../roles.js';
-import { readAiSettings, setAiEnabled, setAiBlocked } from '../ai/settings.js';
+import { readAiSettings, setAiEnabled, setAiBlocked, hasAiModule, clearNoModuleBlock } from '../ai/settings.js';
 import { dropQueuedJobs } from '../ai/queue.js';
 import { flaggedChats } from '../ai/guards.js';
 import { clinicFacts } from '../ai/facts.js';
-import { controlState } from '../control/state.js';
-import { getDataDir } from '../control/config.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
 }
 
-function defaultHasModule(db) {
-  try { return controlState(db, getDataDir()).has('ai'); } catch { return false; }
-}
+const defaultHasModule = hasAiModule;
 
 function requireAiLevel(db, user, need) {
   if (!grantAllowsAdminOr(db, user, 'commerce_ai', need)) {
@@ -35,6 +31,8 @@ function factCounts(db) {
 
 export function aiSettingsGet(db, _args, user, { hasModule = defaultHasModule } = {}) {
   requireAiLevel(db, user, 'view');
+  // AI_CHAT_V1: модуль снова подключён — «ИИ остановлен» снимается сам.
+  clearNoModuleBlock(db, hasModule);
   return { ...readAiSettings(db), has_module: !!hasModule(db), facts: factCounts(db) };
 }
 
