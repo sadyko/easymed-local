@@ -3448,7 +3448,12 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 0 4px; }
 .rcal-leg { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-600); }
 .rcal-dot { width: 9px; height: 9px; border-radius: 999px; }
-.rcal-leg-off { width: 14px; height: 10px; border-radius: 3px; background: repeating-linear-gradient(45deg, var(--ink-50) 0, var(--ink-50) 3px, var(--ink-400) 3px, var(--ink-400) 4px); }
+/* OFFHOURS_LEGEND_CALM_V1 (3.22.0, ревью) — квадратик «вне приёма» — та же тихая
+   заливка, что у закрытой клетки (.rcal-slot.off, OFFHOURS_CALM_V3), а не прежняя
+   тёмная штриховка, которой в сетке больше нет. Контур — чтобы светлый квадратик
+   читался на белом фоне легенды как образец, а не как пустое место. */
+.rcal-leg-off { width: 14px; height: 10px; border-radius: 3px; background: repeating-linear-gradient(45deg, var(--ink-50) 0, var(--ink-50) 9px, var(--ink-100) 9px, var(--ink-100) 10px);
+    box-shadow: inset 0 0 0 1px var(--ink-200); }
 
 /* WORKING_WINDOW_V1 — сетка расписания и есть рабочее окно этого экрана:
    .card здесь не используется, поэтому рамку и тень окна она получает
@@ -3558,7 +3563,12 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-slot.off { background: repeating-linear-gradient(45deg, var(--ink-50) 0, var(--ink-50) 9px, var(--ink-100) 9px, var(--ink-100) 10px);
     border-bottom-color: transparent; cursor: default; }
 .rcal-slot.off.hr { border-top-color: var(--ink-100); }
-.rcal-off-info { position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
+/* OFFHOURS_LABEL_EVERY_STEP_V1 (3.22.0, ревью) — подпись рисуется на любом шаге
+   сетки (room-calendar.js), и на шаге 5 минут (строка 12px) выходит за свою клетку
+   на соседние клетки того же закрытого промежутка. z-index: 1 — слой над клетками
+   (иначе следующая клетка закрасила бы выступ своей заливкой), но не над карточкой
+   приёма: у .rcal-appt тот же слой, и в дорожке она идёт позже — значит сверху. */
+.rcal-off-info { position: absolute; left: 7px; top: 50%; transform: translateY(-50%); z-index: 1;
     font-size: 12.5px; color: var(--ink-500); pointer-events: none; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 14px); }
 /* SLOT_HOVER_CALM_V1 (владелец, 2026-11-08: «when I move the mouse it is

@@ -184,12 +184,13 @@ const EXTRA_DOCTORS = [
   [75, 'jurayev', 'Жураев Бекзод', 'офтальмолог'],
 ];
 
-function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false, lines = false, docref = false, diag = 0, hours = ['09:00', '18:00'] } = {}) {
+function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false, lines = false, docref = false, diag = 0, hours = ['09:00', '18:00'], lunch = null } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
   const wh = {};
-  for (const k of WD) wh[k] = { enabled: true, from: hours[0], to: hours[1] };   // hours — RCAL_TRIM_V1
+  // OFFHOURS_LABEL_EVERY_STEP_V1 — lunch: обед врача ['13:00','14:00'] (закрытый промежуток внутри дня).
+  for (const k of WD) wh[k] = { enabled: true, from: hours[0], to: hours[1], ...(lunch ? { lunchEnabled: true, lunchFrom: lunch[0], lunchTo: lunch[1] } : {}) };   // hours — RCAL_TRIM_V1
   if (doctorOff) wh[WD[day.getDay()]] = { enabled: false, from: '09:00', to: '18:00' };
 
   // ЭТА УСТАНОВКА — ФИЛИАЛ B, и буква берётся ДО первого пациента: установке,
@@ -348,8 +349,8 @@ const WORKING_SET_KEY = 'rcal.workingset.v1';
 function putWorkingSet(ws) { LS.set(WORKING_SET_KEY, JSON.stringify(ws)); }
 
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false, lines = false, docref = false, diag = 0, hours } = {}) {
-  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm, lines, docref, diag, hours });
+async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false, lines = false, docref = false, diag = 0, hours, lunch = null } = {}) {
+  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm, lines, docref, diag, hours, lunch });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
@@ -457,6 +458,79 @@ test('RCAL_TRIM_V1: неровное открытие (09:10 при шаге 20)
   const trail = slots.length - 1 - slots.map(isOff).lastIndexOf(false);
   assert.ok(trail <= 1, 'нерабочих рядов снизу ' + trail);
   assert.equal(byClass(box, 'rcal-tlabel').map(textOf)[0].trim(), '09:00');
+});
+
+// OFFHOURS_LABEL_EVERY_STEP_V1 (3.22.0, ревью OFFHOURS_CALM_V3). Закрытый час — тихая заливка
+// (владелец отверг штриховку и тонкие линии: «too sharp to eyes», «still sharp»), а смысл
+// несёт подпись «Не работает». Но на шаге 5 и 10 минут её не было вовсе (её держало правило
+// высоты строки для подписи слота), а длинный закрытый промежуток подписывался только первой
+// клеткой — прокрутил, и обед читается как свободное время.
+// SLOT_LABEL_SPACING_V1 — подпись рабочей клетки не ближе часа к предыдущей подписи дорожки:
+// полотно с 08:40 при шаге 20 подписывало 08:40 и 09:00 соседними рядами.
+const minutesWith = (lane, cls) => slotsOf(lane).filter((s) => byClass(s, cls).length).map((s) => Number(s.attrs['data-min']));
+const at = (h, m = 0) => h * 60 + m;
+
+for (const step of [5, 10]) {
+  test(`OFFHOURS_LABEL_EVERY_STEP_V1: шаг ${step} минут — обед подписан «Не работает»`, async () => {
+    const { box } = await render({ lunch: ['13:00', '14:00'], workingSet: { resType: 'doctor', selected: { doctor: [7], room: [] }, period: 1, step } });
+    const lane = laneOf(box, 7);
+    const off = minutesWith(lane, 'rcal-off-info');
+    assert.ok(off.includes(at(13)), `на шаге ${step} закрытый обед не подписан: ${JSON.stringify(off)}`);
+    const cell = slotsOf(lane).find((s) => s.attrs['data-min'] === String(at(13)));
+    assert.match(textOf(cell), /Не работает/);
+    assert.deepEqual(off, [at(13)], 'подпись «Не работает» стоит не только в начале часового обеда');
+  });
+}
+
+test('OFFHOURS_LABEL_EVERY_STEP_V1: длинный закрытый промежуток подписан в начале и на каждом целом часе', async () => {
+  const { box } = await render({ lunch: ['12:00', '15:00'], workingSet: { resType: 'doctor', selected: { doctor: [7], room: [] }, period: 1, step: 15 } });
+  assert.deepEqual(minutesWith(laneOf(box, 7), 'rcal-off-info'), [at(12), at(13), at(14)]);
+});
+
+test('OFFHOURS_LABEL_EVERY_STEP_V1: на шаге 5 длинный промежуток тоже повторяет подпись каждый час', async () => {
+  const { box } = await render({ lunch: ['12:00', '15:00'], workingSet: { resType: 'doctor', selected: { doctor: [7], room: [] }, period: 1, step: 5 } });
+  assert.deepEqual(minutesWith(laneOf(box, 7), 'rcal-off-info'), [at(12), at(13), at(14)]);
+});
+
+test('OFFHOURS_LABEL_EVERY_STEP_V1: промежуток с 12:30 — подпись в начале, ближайший час (13:00) пропущен, дальше раз в час', async () => {
+  const { box } = await render({ lunch: ['12:30', '15:00'], workingSet: { resType: 'doctor', selected: { doctor: [7], room: [] }, period: 1, step: 15 } });
+  assert.deepEqual(minutesWith(laneOf(box, 7), 'rcal-off-info'), [at(12, 30), at(14)]);
+});
+
+test('OFFHOURS_LABEL_EVERY_STEP_V1: закрыто с первой клетки полотна (09:00–17:00) — подпись сверху и раз в час до конца промежутка', async () => {
+  const { box } = await render({ lunch: ['09:00', '17:00'], workingSet: { resType: 'doctor', selected: { doctor: [7], room: [] }, period: 1, step: 20 } });
+  const lane = laneOf(box, 7);
+  assert.equal(slotsOf(lane)[0].attrs['data-min'], String(at(9)));
+  assert.deepEqual(minutesWith(lane, 'rcal-off-info'), [9, 10, 11, 12, 13, 14, 15, 16].map((h) => at(h)));
+  assert.ok(!minutesWith(lane, 'rcal-slot-info').some((m) => m < at(17)), 'подпись рабочего слота внутри закрытого промежутка');
+  assert.ok(minutesWith(lane, 'rcal-slot-info').includes(at(17)), 'первая рабочая клетка после промежутка без подписи');
+});
+
+test('OFFHOURS_LABEL_EVERY_STEP_V1: дорожка «Не назначено» подписи «Не работает» не несёт', async () => {
+  const { box } = await render({ cross: true, nodoc: true });   // запись без врача — дорожка «Не назначено» есть
+  const un = laneOf(box, '__unassigned__');
+  assert.ok(un, 'дорожки «Не назначено» нет — проверять нечего');
+  assert.deepEqual(minutesWith(un, 'rcal-off-info'), [], '«Не работает» у дорожки, у которой нет графика');
+});
+
+test('SLOT_LABEL_SPACING_V1: полотно с 08:40 при шаге 20 — подписаны 08:40 и 10:00, но не 09:00', async () => {
+  const { box } = await render({ hours: ['08:40', '18:00'], workingSet: { resType: 'doctor', selected: { doctor: [7], room: [] }, period: 1, step: 20 } });
+  const lane = laneOf(box, 7);
+  assert.equal(slotsOf(lane)[0].attrs['data-min'], String(at(8, 40)));
+  const lbl = minutesWith(lane, 'rcal-slot-info');
+  assert.equal(lbl[0], at(8, 40), 'первая рабочая клетка полотна не подписана');
+  assert.ok(!lbl.includes(at(9)), '08:40 и 09:00 подписаны соседними рядами: ' + JSON.stringify(lbl));
+  assert.ok(lbl.includes(at(10)), 'раз в час подпись должна вернуться: ' + JSON.stringify(lbl));
+  for (let i = 1; i < lbl.length; i += 1) assert.ok(lbl[i] - lbl[i - 1] >= 60, 'подписи ближе часа: ' + JSON.stringify(lbl));
+});
+
+test('SLOT_LABEL_SPACING_V1: перерыв до 12:45 — первая рабочая клетка после него подписана, 13:00 — нет, 14:00 — да', async () => {
+  const { box } = await render({ lunch: ['12:00', '12:45'], workingSet: { resType: 'doctor', selected: { doctor: [7], room: [] }, period: 1, step: 15 } });
+  const lbl = minutesWith(laneOf(box, 7), 'rcal-slot-info');
+  assert.ok(lbl.includes(at(12, 45)), 'первая рабочая клетка после перерыва без подписи: ' + JSON.stringify(lbl));
+  assert.ok(!lbl.includes(at(13)), '12:45 и 13:00 подписаны соседними рядами: ' + JSON.stringify(lbl));
+  assert.ok(lbl.includes(at(14)), JSON.stringify(lbl));
+  assert.ok(lbl.includes(at(9)) && lbl.includes(at(10)) && lbl.includes(at(11)), 'обычные часы до перерыва потеряли подпись: ' + JSON.stringify(lbl));
 });
 
 test('RCAL_TRIM_V1: кабинет подписан словом («Консультация · 2-й этаж»), а не ключом «consultation»; квадратик — иконка, у врача — его пастель', async () => {

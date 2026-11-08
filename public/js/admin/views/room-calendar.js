@@ -1565,13 +1565,32 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         // подпись в КАЖДОЙ четверти часа давала стену одинакового текста на
         // весь экран. Теперь она стоит раз в час и на первой рабочей клетке
         // после нерабочего промежутка (приём с 09:15 не остаётся без неё).
+        // OFFHOURS_LABEL_EVERY_STEP_V1 (3.22.0, ревью) — подпись «Не работает» не
+        // зависит от высоты строки: заливка закрытого часа намеренно тихая
+        // (владелец отверг штриховку и тонкие линии), и смысл несёт только этот
+        // текст. На шаге 5 и 10 минут его не было вовсе — правило высоты строки
+        // для подписи слота гасило и её. В низкой клетке текст выходит за неё
+        // вниз, на соседние клетки того же закрытого промежутка (.rcal-off-info).
+        // Дорожка «Не назначено» графика не имеет — «не работает» там неправда.
+        const offLabel = res.id !== UNASSIGNED_ID;
         let prevOff = null;   // null — «до первой клетки»: и рабочая, и закрытая подписываются
+        // SLOT_LABEL_SPACING_V1 (3.22.0, ревью) — минута последней подписи дорожки:
+        // повтор на целом часе — не ближе часа к ней (полотно с 08:40 при шаге 20
+        // подписывало 08:40 и 09:00 соседними рядами; то же — после перерыва до :45).
+        let lastLabel = -Infinity;
         for (let m = canvas.from; m < canvas.to; m += state.step) {
             const off = isOffHour(win, m);
-            const labelHere = label && !off && (m % 60 === 0 || prevOff !== false);
+            const hourly = m % 60 === 0 && m - lastLabel >= 60;
+            // Начало промежутка (первая клетка полотна, первая рабочая после
+            // закрытого, первая закрытая после рабочего) подписывается всегда.
+            const startsRun = prevOff !== off;
+            const labelHere = label && !off && (startsRun || hourly);
             // OFFHOURS_CALM_V3 — закрытый час теперь тихая заливка, а не
             // штриховка; что он закрыт, говорит подпись на первой его клетке.
-            const offLabelHere = label && off && prevOff !== true;
+            // OFFHOURS_LABEL_EVERY_STEP_V1 — и на каждом целом часе внутри длинного
+            // промежутка (обед, полдня): прокрутил — и подпись снова на экране.
+            const offLabelHere = offLabel && off && (startsRun || hourly);
+            if (labelHere || offLabelHere) lastLabel = m;
             prevOff = off;
             body.appendChild(h('div', {
                 class: 'rcal-slot' + (off ? ' off' : '') + (m % 60 === 0 ? ' hr' : ''),
