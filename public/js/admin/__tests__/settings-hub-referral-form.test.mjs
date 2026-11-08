@@ -23,6 +23,7 @@ class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.c
  appendChild(c){this.children.push(c);return c;} removeChild(c){const i=this.children.indexOf(c);if(i>-1)this.children.splice(i,1);return c;}
  get firstChild(){return this.children[0]||null;} replaceChildren(){this.children.length=0;}
  setAttribute(k,v){this.attrs[k]=String(v); if (k === 'value') this.value = String(v);} getAttribute(k){return this.attrs[k]??null;} hasAttribute(k){return k in this.attrs;}
+ removeAttribute(k){delete this.attrs[k];}   // REFERRAL_RATE_CAP_V1 — граница поля процента снимается у суммы
  addEventListener(t,fn){(this._l[t]||(this._l[t]=[])).push(fn);} removeEventListener(){}
  dispatchEvent(e){for(const fn of this._l[e.type]||[])fn(e);return true;}
  click(){this.dispatchEvent({type:'click',currentTarget:this,preventDefault(){},stopPropagation(){}});}
@@ -182,6 +183,39 @@ test('особые ставки по услугам: рисует, добавл�
   // Отрицательная или нечисловая ставка — не запись.
   inp.value = '-3';
   assert.ok(!ctl.value.some((e) => e.service_id === 1));
+});
+
+// REFERRAL_RATE_CAP_V1 (3.22.0, ревью) — процент — от 0 до 100, сумма — не меньше нуля:
+// таблица называет ошибку (`problem`), и «Сохранить» её не пропускает (то же правило,
+// что у сервера — shared/referral-reward.js serviceRatesProblem).
+test('особые ставки по услугам: процент больше 100 и отрицательная ставка — ошибка формы, а не молчаливый пропуск', async () => {
+  const { serviceRatesControl } = await import('../views/settings-hub.js');
+  const ctl = serviceRatesControl(JSON.stringify([{ service_id: 2, unit: 'pct', value: 25 }]), '');
+  await ctl.load({ services: [{ id: 2, name: 'УЗИ', type: 'imaging' }] });
+  assert.equal(ctl.problem, null);
+  const inp = walk(ctl).find((n) => n.tagName === 'INPUT' && n.attrs['data-rate-service'] === '2');
+  const unit = walk(ctl).find((n) => n.tagName === 'SELECT' && n.attrs['data-rate-unit-service'] === '2');
+  assert.equal(inp.attrs.max, '100', 'у процента — верхняя граница поля');
+  inp.value = '250';
+  assert.equal(ctl.problem, 'Особая ставка в процентах — от 0 до 100.');
+  inp.value = '100';
+  assert.equal(ctl.problem, null);
+  inp.value = '-3';
+  assert.equal(ctl.problem, 'Особая ставка в процентах — от 0 до 100.');
+  unit.value = 'fix';
+  unit.dispatchEvent({ type: 'change' });
+  assert.equal(ctl.problem, 'Особая ставка суммой не может быть меньше нуля.');
+  assert.equal(inp.attrs.max, undefined, 'у суммы верхней границы нет');
+  inp.value = '250000';
+  assert.equal(ctl.problem, null, 'сумма больше 100 — не ошибка');
+  inp.value = '';
+  assert.equal(ctl.problem, null, 'пустая ставка — записи нет, ошибки нет');
+
+  // «Сохранить» окна справочника спрашивает таблицу до записи (как обязательные поля).
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../views/settings-hub.js', import.meta.url), 'utf8');
+  const save = src.slice(src.indexOf('async function save()'), src.indexOf('saveBtn.disabled = true;', src.indexOf('async function save()')));
+  assert.match(save, /controls\[f\.key\]\.problem/, 'save() проверяет ошибку таблицы особых ставок');
 });
 
 test('особые ставки по услугам: без строк — так и сказано; испорченный JSON — пусто, а не падение', async () => {

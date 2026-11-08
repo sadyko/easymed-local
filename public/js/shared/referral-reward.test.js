@@ -3,7 +3,7 @@
 // таблицы истинности и каждый откат по отдельности.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveReferralRate, rewardForLine, parseRates, referralGroupOf, REFERRAL_GROUPS, serviceRateOf } from './referral-reward.js';
+import { resolveReferralRate, rewardForLine, parseRates, referralGroupOf, REFERRAL_GROUPS, serviceRateOf, serviceRatesProblem } from './referral-reward.js';   // serviceRatesProblem: REFERRAL_RATE_CAP_V1
 
 // GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — ключ ставки — группа (services.type).
 const LAB = 'lab', XRAY = 'imaging';
@@ -178,4 +178,24 @@ test('serviceRateOf: особая ставка или null — для подпи
   assert.equal(serviceRateOf(src, 123), null);
   assert.equal(serviceRateOf(src, null), null);
   assert.equal(serviceRateOf(null, 7), null);
+});
+
+// REFERRAL_RATE_CAP_V1 (3.22.0, ревью) — особая ставка за услугу: процент — от 0 до 100,
+// сумма — не меньше нуля. Одно правило на форму («Особые ставки по отдельным услугам») и
+// на запись сервера (/api/db referral_sources): «250» вместо «25» платило в десять раз больше.
+test('serviceRatesProblem: процент 0…100, сумма ≥ 0; пустая ставка и не-массив — не ошибка', () => {
+  const ok = [
+    [], '', null, undefined, '{oops', '[]',
+    [{ service_id: 1, unit: 'pct', value: 0 }, { service_id: 2, unit: 'pct', value: 100 }, { service_id: 3, unit: 'pct', value: 25.5 }],
+    [{ service_id: 4, unit: 'fix', value: 0 }, { service_id: 5, unit: 'fix', value: 999999 }],
+    [{ service_id: 6, unit: 'pct', value: '' }, { service_id: 7, unit: 'pct', value: null }],   // записи нет — читатель её пропускает
+    JSON.stringify([{ service_id: 8, unit: 'pct', value: 40 }]),
+  ];
+  for (const v of ok) assert.equal(serviceRatesProblem(v), null, JSON.stringify(v));
+  const pct = serviceRatesProblem([{ service_id: 1, unit: 'pct', value: 250 }]);
+  assert.equal(pct, 'Особая ставка в процентах — от 0 до 100.');
+  assert.equal(serviceRatesProblem([{ service_id: 1, value: 100.01 }]), pct, 'без единицы — процент');
+  assert.equal(serviceRatesProblem([{ service_id: 1, unit: 'pct', value: -1 }]), pct);
+  assert.equal(serviceRatesProblem(JSON.stringify([{ service_id: 1, unit: 'pct', value: '150' }])), pct, 'строка JSON и число строкой');
+  assert.equal(serviceRatesProblem([{ service_id: 1, unit: 'fix', value: -5000 }]), 'Особая ставка суммой не может быть меньше нуля.');
 });

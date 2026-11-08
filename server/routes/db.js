@@ -10,6 +10,7 @@ import { readIdentity } from '../services/branch-sync/identity.js';
 import { COMPANY_CLINIC_WIDE, COMPANY_PARTNER, storedProfileProblems } from '../../public/js/shared/clinic-profile.js';   // CLINIC_PROFILE_V1, BRANCH_PROFILE_V1 (COMPANY_PARTNER)
 import { BRANCH_MESSAGES, BRANCH_MAIN_COLUMNS, OWN_FROM_COMPANY, storedBranchProblems, ownBuildingProblems } from '../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
 import { CONSULT_API_KINDS, CONSULT_MESSAGES, consultTypeProblem } from '../../public/js/shared/consultation-price.js';   // DOCTOR_PROFILE_V1
+import { serviceRatesProblem } from '../../public/js/shared/referral-reward.js';   // REFERRAL_RATE_CAP_V1 — границы особой ставки за услугу
 import { keepLegacyLogo } from '../services/clinic-logo-legacy.js';   // CLINIC_PROFILE_V1 (ревью M3)
 import { companyAddressRefusal, branchAddressRefusal } from '../services/api/partner-address.js';   // CLINIC_API_STEP7_V1
 import { targetBranches } from '../services/branch-targets.js';   // CLINIC_API_STEP7_V1 (ревью слияния №3) — одна на двух стражей
@@ -614,6 +615,10 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     // BRANCH_PROFILE_V1 — формат: карта, часы, отметки, коды — те же правила, что у экрана.
     const branchFormat = branchFormatRefusal(compiled.meta, req.body);
     if (branchFormat) return res.status(400).json({ error: { code: 'bad_request', message: branchFormat.message, field: branchFormat.field } });
+    // REFERRAL_RATE_CAP_V1 (3.22.0, ревью) — особая ставка источника за услугу: процент —
+    // от 0 до 100, сумма — не меньше нуля (shared/referral-reward.js, то же правило у формы).
+    const rateCap = referralRatesFormatRefusal(compiled.meta, req.body);
+    if (rateCap) return res.status(400).json({ error: { code: 'bad_request', message: rateCap, field: 'service_rates' } });
     // DOCTOR_PROFILE_V1 — «Виды консультаций»: длительность приёма и вид для
     // партнёров — те же правила, что у экрана (shared/consultation-price.js);
     // одно значение «для партнёров» — у одного вида (UNIQUE мигр. 243 — запасной замок).
@@ -1038,6 +1043,20 @@ function branchFormatRefusal(meta, body) {
     const problems = storedBranchProblems(row);
     const field = Object.keys(problems)[0];
     if (field) return { field, message: problems[field] };
+  }
+  return null;
+}
+// REFERRAL_RATE_CAP_V1 (3.22.0, ревью) — особые ставки источника за услугу (service_rates):
+// процент — от 0 до 100, сумма — не меньше нуля. Какой бы экран ни писал строку — та же
+// граница, что у формы «Особые ставки по отдельным услугам» (shared/referral-reward.js).
+// null — запись можно выполнять.
+function referralRatesFormatRefusal(meta, body) {
+  if (!meta || meta.table !== 'referral_sources' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
+  const v = body && body.values;
+  for (const row of Array.isArray(v) ? v : [v]) {
+    if (!row || typeof row !== 'object' || !Object.prototype.hasOwnProperty.call(row, 'service_rates')) continue;
+    const p = serviceRatesProblem(row.service_rates);
+    if (p) return p;
   }
   return null;
 }
