@@ -84,7 +84,7 @@ test('max_tokens с запасом на мышление; один инстру�
 });
 
 test('клиент: ответ раньше, чем клиника бросит ждать (60 с)', () => {
-  assert.deepEqual(CLIENT_OPTIONS, { timeout: 45_000, maxRetries: 1 });
+  assert.deepEqual(CLIENT_OPTIONS, { timeout: 50_000, maxRetries: 0 });
 });
 
 test('готовность к запуску: нет SDK или ключа — предупреждения, не исключение', async () => {

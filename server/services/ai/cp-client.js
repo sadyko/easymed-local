@@ -45,6 +45,11 @@ export async function askControlPlane(payload, { dataDir = getDataDir(), endpoin
     return { error: code === 'no_module' ? 'no_module' : 'limit' };
   }
   if (res.status === 413) return { error: 'too_large' };
+  // 400 — сервер управления отверг сам запрос (например, нет ни одной реплики
+  // пациента): повтор того же запроса не поможет никогда, поэтому это
+  // bad_response — передача оператору без повтора. 503 и прочие 5xx — сбой у
+  // Anthropic или на сервере управления: 'network', очередь повторит с паузой.
+  if (res.status === 400) return { error: 'bad_response' };
   if (!res.ok) return { error: res.status === 401 ? 'not_enrolled' : 'network' };
   if (!body || !OUTCOMES.has(body.outcome) || !SHAPE_OK[body.outcome](body)) return { error: 'bad_response' };
   return body;

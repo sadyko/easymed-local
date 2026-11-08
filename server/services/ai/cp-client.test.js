@@ -39,6 +39,11 @@ test('413 — слишком большой запрос; кривая форм�
   const mk = (status, body) => async () => ({ ok: status < 400, status, json: async () => body });
   const ask = (status, body) => askControlPlane(payload, { dataDir: dir, endpoint: 'http://cp', fetchImpl: mk(status, body) });
   assert.deepEqual(await ask(413, {}), { error: 'too_large' });
+  // 400 не пройдёт и при повторе (нет реплики пациента и т. п.) — передача, без повтора;
+  // 503 и прочие 5xx — сбой у Anthropic или сервера управления, очередь повторит.
+  assert.deepEqual(await ask(400, { error: { code: 'bad_request' } }), { error: 'bad_response' });
+  assert.deepEqual(await ask(503, { error: { code: 'upstream' } }), { error: 'network' });
+  assert.deepEqual(await ask(500, null), { error: 'network' });
   const good = [
     { outcome: 'reply', text: 'Да' },
     { outcome: 'reply_comment', public_text: 'a', private_text: 'b' },
