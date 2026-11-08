@@ -81,7 +81,11 @@ const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(
 const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 let version = 1;
-const emit = (tables) => FakeES.live()[0].emit('change', { v: ++version, tables, rpc: [] });
+const emit = (tables) => FakeES.live()[0].emit('change', { v: ++version, tables });
+// Ревью M3 (3.22.0) — тишина live.js + разброс экрана (random = 0,5 → 1 с); перед каждым
+// случаем — пауза дольше предела частоты экрана (2–3 с), чтобы он не мешал проверке.
+const WAIT = live.DEBOUNCE_MS + live.LIVE_SPREAD_MS + 10;
+const pause = () => clock.advance(3500);
 async function settle(ms) { await clock.advance(ms); await tick(40); }
 
 const root = mk('div');
@@ -90,11 +94,12 @@ FakeES.live()[0].open();
 FakeES.live()[0].emit('hello', { v: version });
 
 test('касса отпустила процедуру и назначили палатную — очередь перечиталась сама', async () => {
+  await pause();
   assert.match(textOf(root), /Ожидает кассу/);
   const before = lists;
   ROWS = [row('outpatient', 1, 'queued', 'Перевязка', 'Процедурный-Первый'), row('inpatient', 7, 'queued', 'Укол в палате', 'Палатный-Второй')];
   emit(['visit_services', 'admission_services']);
-  await settle(live.DEBOUNCE_MS + 10);
+  await settle(WAIT);
   assert.equal(lists, before + 1);
   assert.match(textOf(root), /Палатный-Второй/);
   assert.doesNotMatch(textOf(root), /Ожидает кассу/, 'касса отпустила — «Выполнить» вместо «Ожидает кассу»');
@@ -102,6 +107,7 @@ test('касса отпустила процедуру и назначили п�
 });
 
 test('изменение не для процедурной (счёт) — не перечитывается', async () => {
+  await pause();
   const before = lists;
   emit(['invoices', 'cash_shifts']);
   await settle(live.DEBOUNCE_MS + live.RECHECK_MS);
@@ -109,6 +115,7 @@ test('изменение не для процедурной (счёт) — не 
 });
 
 test('открыто окно «Выполнить процедуру» — ждёт; закрыли — перечиталась', async () => {
+  await pause();
   const before = lists;
   modalOpen = true;
   ROWS = [...ROWS, row('outpatient', 9, 'queued', 'Массаж', 'Процедурный-Третий')];

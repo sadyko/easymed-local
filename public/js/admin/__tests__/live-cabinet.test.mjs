@@ -126,7 +126,11 @@ const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
 const tick = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 const vsReads = () => dbCalls.filter((t) => t === 'visit_services').length;
 let version = 1;
-const emit = (tables) => FakeES.live()[0].emit('change', { v: ++version, tables, rpc: [] });
+const emit = (tables) => FakeES.live()[0].emit('change', { v: ++version, tables });
+// Ревью M3 (3.22.0) — тишина live.js + разброс экрана (random = 0,5 → 1 с); перед каждым
+// случаем — пауза дольше предела частоты экрана (2–3 с), чтобы он не мешал проверке.
+const WAIT = live.DEBOUNCE_MS + live.LIVE_SPREAD_MS + 10;
+const pause = () => clock.advance(3500);
 async function settle(ms) { await clock.advance(ms); await tick(80); }
 
 const root = mk('div');
@@ -143,13 +147,14 @@ test('«Мои приёмы» подписаны: один поток, перв�
 });
 
 test('направили пациента — «Мои приёмы» перечитались сами, фильтр «Все статусы» на месте', async () => {
+  await pause();
   const sel = statusSelect();
   sel.dispatchEvent({ type: 'change', target: { value: 'all' }, currentTarget: sel });
   await tick(40);
   const before = vsReads();
   ROWS = [vs('q2', 'queued', 'Направленный-Второй'), ...ROWS];
   emit(['visit_services', 'visits']);
-  await settle(live.DEBOUNCE_MS + 10);
+  await settle(WAIT);
   assert.ok(vsReads() > before, 'список перечитан');
   assert.match(textOf(root), /Направленный-Второй/, 'новый пациент в списке без «Обновить»');
   assert.match(textOf(root), /Осмотренный-Первый/, '«Все статусы» не сброшены в «Активные»');
@@ -158,6 +163,7 @@ test('направили пациента — «Мои приёмы» переч
 });
 
 test('изменение не для кабинета (движение денег в кассе) — список не перечитывается', async () => {
+  await pause();
   const before = vsReads();
   emit(['cash_movements']);
   await settle(live.DEBOUNCE_MS + live.RECHECK_MS);
@@ -165,6 +171,7 @@ test('изменение не для кабинета (движение дене
 });
 
 test('открыт мастер «Направить на услуги» — ждёт; закрыли — перечиталось (то же правило 3.22.0)', async () => {
+  await pause();
   const before = vsReads();
   busyAs = '[data-visit-wizard]';
   ROWS = [vs('q3', 'queued', 'Направленный-Третий'), ...ROWS];
@@ -179,6 +186,7 @@ test('открыт мастер «Направить на услуги» — ж�
 });
 
 test('открыто окно (.modal) — ждёт; закрыли — перечиталось', async () => {
+  await pause();
   const before = vsReads();
   busyAs = '.modal';
   ROWS = [vs('q4', 'queued', 'Направленный-Четвёртый'), ...ROWS];
@@ -191,6 +199,7 @@ test('открыто окно (.modal) — ждёт; закрыли — пере
 });
 
 test('таймер кабинета спрашивает то же правило (мастер — data-visit-wizard)', async () => {
+  await pause();
   asked.length = 0;
   busyAs = '[data-visit-wizard]';
   try {
@@ -200,13 +209,14 @@ test('таймер кабинета спрашивает то же правил�
 });
 
 test('«Мой день»: изменение для кабинета перечитывает дашборд (визиты дня)', async () => {
+  await pause();
   const dash = mk('div');
   await cabinet.renderConsultation(dash, { onNavigate() {}, tabId: 'consultation', payload: {} });
   await tick(80);
   assert.equal(client.status().subscribers, 1, 'новое открытие кабинета — одна подписка');
   const visitsBefore = dbCalls.filter((t) => t === 'visits').length;
   emit(['visit_services']);
-  await settle(live.DEBOUNCE_MS + 10);
+  await settle(WAIT);
   assert.ok(dbCalls.filter((t) => t === 'visits').length > visitsBefore, '«Мой день» перечитан');
   cabinet.stopAutoFresh();
 });

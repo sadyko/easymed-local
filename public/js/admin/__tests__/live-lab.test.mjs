@@ -99,7 +99,11 @@ const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(
 const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 let version = 1;
-const emit = (tables) => FakeES.live()[0].emit('change', { v: ++version, tables, rpc: [] });
+const emit = (tables) => FakeES.live()[0].emit('change', { v: ++version, tables });
+// Ревью M3 (3.22.0) — тишина live.js + разброс экрана (random = 0,5 → 1 с); перед каждым
+// случаем — пауза дольше предела частоты экрана (2–3 с), чтобы он не мешал проверке.
+const WAIT = live.DEBOUNCE_MS + live.LIVE_SPREAD_MS + 10;
+const pause = () => clock.advance(3500);
 async function settle(ms) { await clock.advance(ms); await tick(60); }
 
 const root = mk('div');
@@ -109,11 +113,12 @@ FakeES.live()[0].open();
 FakeES.live()[0].emit('hello', { v: version });
 
 test('новый заказ в лабораторию — очередь перечиталась сама, без «Загрузка…» и уведомлений', async () => {
+  await pause();
   assert.match(textOf(root), /Лаб-Пациент-Первый/);
   const before = vsReads;
   VISIT_SERVICES = [vs(802, 'v-2', 'queued', 'Глюкоза'), ...VISIT_SERVICES];
   emit(['visit_services', 'invoices']);
-  await clock.advance(live.DEBOUNCE_MS + 10);
+  await clock.advance(WAIT);
   assert.doesNotMatch(textOf(root), /Загрузка…/, 'тихо: очередь не заменялась «Загрузкой…»');
   await tick(60);
   assert.ok(vsReads > before, 'очередь перечитана');
@@ -122,6 +127,7 @@ test('новый заказ в лабораторию — очередь пер�
 });
 
 test('изменение не для лаборатории (смена кассы) — не перечитывается', async () => {
+  await pause();
   const before = vsReads;
   emit(['cash_shifts', 'cash_movements']);
   await settle(live.DEBOUNCE_MS + live.RECHECK_MS);
@@ -129,6 +135,7 @@ test('изменение не для лаборатории (смена касс
 });
 
 test('открыто окно ввода результатов — ждёт; закрыли — перечиталась (результат анализатора)', async () => {
+  await pause();
   const before = vsReads;
   modalOpen = true;
   emit(['lab_results']);

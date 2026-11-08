@@ -27,7 +27,13 @@ class FakeNode {
     removeEventListener() {}
     fire(t) { for (const fn of this._l[t] || []) fn.call(this, { currentTarget: this, target: this, preventDefault() {}, stopPropagation() {} }); }
     click() { this.fire('click'); }
-    querySelector() { return null; }
+    // Только «[атрибут]» (ревью L4: обёртка таблицы data-cashier-scroll); прочее — null.
+    querySelector(sel) {
+        const m = /^\[([\w-]+)\]$/.exec(String(sel));
+        if (!m) return null;
+        const all = []; const w = (e) => { for (const c of e.children || []) { all.push(c); w(c); } }; w(this);
+        return all.find((n) => n.attrs && Object.prototype.hasOwnProperty.call(n.attrs, m[1])) || null;
+    }
     querySelectorAll() { return []; }
     contains(n) { if (n === this) return true; for (const c of this.children) if (c === n || (c.contains && c.contains(n))) return true; return false; }
     setSelectionRange() {}
@@ -98,9 +104,14 @@ globalThis.fetch = async (url, opts = {}) => {
         data = { rows: invoices.slice(), counts: null };
     } else if (name === 'cashier_unbilled' || name === 'cashier_refunds') data = { rows: [], totals: null };
     else if (name === 'list_deposits' || name === 'list_card_sales') data = { rows: [] };
-    else if (name === 'cashier_invoice_search') data = { rows: [], has_more: false };
+    else if (name === 'cashier_invoice_search') {
+        // Ревью L3 — «Счета за все дни» страницами по 2.
+        const off = Number(body.offset) || 0;
+        data = { rows: FOUND.slice(off, off + 2), has_more: off + 2 < FOUND.length };
+    }
     return { ok: true, status: 200, json: async () => ({ data }), headers: { getSetCookie: () => [] } };
 };
+let FOUND = [];
 
 // ---- поток изменений: настоящий клиент на подделках ----
 const clock = fakeClock();
@@ -119,8 +130,11 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 const count = (n) => calls.filter((c) => c === n).length;
 
 let version = 1;
-const emit = (tables) => FakeES.live()[0].emit('change', { v: ++version, tables, rpc: [] });
+const emit = (tables) => FakeES.live()[0].emit('change', { v: ++version, tables });
 async function settle(ms) { await clock.advance(ms); await tick(40); }
+// Тишина live.js + разброс экрана (ревью M3; random = 0,5 → 1 с) + предел частоты кассы.
+const WAIT = live.DEBOUNCE_MS + live.LIVE_SPREAD_MS + 10;
+const cards = () => (textOf(container).match(/Приём оплат/g) || []).length;
 
 const container = mkEl('div');
 invoices = [inv(1)];
@@ -141,7 +155,7 @@ test('выставлен счёт — касса перечиталась сам
     let shownDuringFetch = null;
     onInvoices = () => { shownDuringFetch = textOf(container); };
     emit(['invoices', 'invoice_items']);
-    await settle(live.DEBOUNCE_MS + 10);
+    await settle(WAIT);
     onInvoices = null;
     assert.equal(count('cashier_invoices'), before + 1, 'один тихий перечит');
     assert.match(shownDuringFetch || '', /Счёт-Пациент-1/, 'пока шёл запрос, прежний список стоял на экране');
@@ -170,20 +184,134 @@ test('открыто окно (оплата) — касса ждёт; окно �
     assert.match(textOf(container), /Счёт-Пациент-3/);
 });
 
+// Поисковое поле: 500 мс дебаунса ui.js (SEARCH_DEBOUNCE_V1) + 200 мс своего таймера кассы.
+const TYPE_MS = 760;
+const typeInto = async (inp, text) => { inp.value = text; inp.fire('input'); await tick(TYPE_MS); };
+
 test('фильтр и строка поиска на месте; фокус в поле поиска не прыгает', async () => {
     const st = desk.__test_cardState;
     st.filter = 'all';
-    st.search = 'Счёт';
+    await typeInto(walk(container).find((n) => n.tagName === 'INPUT'), 'Счёт');
+    assert.equal(st.search, 'Счёт');
     const before = count('cashier_invoices');
     focusCalls = 0;
     invoices = [inv(4, 'paid'), inv(3)];
     emit(['payments']);
-    await settle(live.DEBOUNCE_MS + 10);
+    await settle(WAIT);
     assert.equal(count('cashier_invoices'), before + 1);
     assert.equal(st.filter, 'all', 'фильтр не сброшен');
     assert.equal(st.search, 'Счёт', 'поиск не сброшен');
     assert.equal(focusCalls, 0, 'тихое перечитывание фокус не забирает');
     assert.match(textOf(container), /Счёт-Пациент-4/);
+});
+
+// ---- ревью 3.22.0 --------------------------------------------------------------------
+const pause = () => settle(2500);   // предел частоты кассы (2 с) после прошлого перечитывания
+const input = () => walk(container).find((n) => n.tagName === 'INPUT');
+
+test('ревью M1: «Обновить» во время тихого перечитывания — один «Приём оплат», не два', async () => {
+    await pause();
+    const st = desk.__test_cardState;
+    st.filter = 'all';
+    await typeInto(input(), '');
+    assert.equal(st.search, '');
+    assert.equal(cards(), 1);
+    const refreshBtn = () => walk(container).find((n) => n.tagName === 'BUTTON' && /Обновить/.test(textOf(n)));
+    let clicked = false;
+    // кассир жмёт «Обновить», пока тихое перечитывание ждёт счета
+    onInvoices = () => { if (clicked) return; clicked = true; refreshBtn().click(); };
+    invoices = [inv(5), inv(4, 'paid'), inv(3)];
+    emit(['invoices']);
+    await settle(WAIT);
+    await tick(200);
+    onInvoices = null;
+    assert.ok(clicked, 'гонка воспроизведена');
+    assert.equal(cards(), 1, 'один «Приём оплат»');
+    assert.equal(container.children[0].children.length, 3, 'плашка смены, плитки, «Приём оплат»');
+    assert.match(textOf(container), /Счёт-Пациент-5/);
+});
+
+test('ревью M4: курсор в поиске, пока шло чтение, — подмена ждёт; набранное в прежнем поле не теряется; новое поле живое', async () => {
+    await pause();
+    const st = desk.__test_cardState;
+    const oldInp = input();
+    invoices = [inv(6), inv(5)];
+    onInvoices = () => { document.activeElement = oldInp; };   // щёлкнул в поиск во время чтения
+    emit(['invoices']);
+    await settle(WAIT);
+    onInvoices = null;
+    assert.equal(cards(), 1);
+    assert.doesNotMatch(textOf(container), /Счёт-Пациент-6/, 'курсор в поиске — разметку не подменили');
+    assert.equal(input(), oldInp, 'поле под курсором на месте');
+    // печатает и сразу уходит из поля: набор ещё ждёт дебаунс поля (500 + 200 мс)
+    oldInp.value = 'Пациент-6';
+    oldInp.fire('input');
+    document.activeElement = null;
+    await settle(live.RECHECK_MS + 10);
+    assert.match(textOf(container), /Счёт-Пациент-6/, 'свободна — придержанное встало без нового чтения');
+    assert.doesNotMatch(textOf(container), /Счёт-Пациент-5/, 'и отфильтровано тем, что успели набрать');
+    const newInp = input();
+    assert.notEqual(newInp, oldInp);
+    assert.equal(newInp.value, 'Пациент-6');
+    assert.equal(st.search, 'Пациент-6');
+    await typeInto(newInp, 'Пациент-5');
+    assert.equal(st.search, 'Пациент-5', 'новое поле — живое');
+    await tick(TYPE_MS);   // поздний дебаунс прежнего поля пришёл — и ничего не испортил
+    assert.equal(st.search, 'Пациент-5');
+    await typeInto(newInp, '');
+});
+
+test('ревью L4: горизонтальная прокрутка таблицы счетов сохраняется', async () => {
+    await pause();
+    const root = container.children[0];
+    const wrap = root.querySelector('[data-cashier-scroll]');
+    assert.ok(wrap, 'таблица на экране');
+    wrap.scrollLeft = 140;
+    invoices = [inv(7), inv(6)];
+    emit(['invoices']);
+    await settle(WAIT);
+    const wrap2 = root.querySelector('[data-cashier-scroll]');
+    assert.notEqual(wrap2, wrap, 'таблица новая');
+    assert.equal(wrap2.scrollLeft, 140);
+});
+
+test('ревью L3: «Счета за все дни» с раскрытым «Показать ещё» — первая страница свежая, раскрытое на месте', async () => {
+    await pause();
+    const st = desk.__test_cardState;
+    const found = (id, status = 'unpaid') => ({ id, invoice_number: 'OLD-' + id, status, created_at: '2026-10-01T09:00:00Z',
+        patient_name: 'Архив-' + id, total_amount: 1000, paid_amount: status === 'paid' ? 1000 : 0 });
+    FOUND = [found(101), found(102), found(103), found(104)];
+    await typeInto(input(), 'Архив');
+    assert.equal(st.found.result && st.found.result.rows.length, 2, 'первая страница');
+    walk(container).find((n) => n.attrs && n.attrs['data-found-more']).click();
+    await tick(60);
+    assert.equal(st.found.result.rows.length, 4, 'раскрыто');
+    FOUND[0] = found(101, 'paid');
+    emit(['payments']);
+    await settle(WAIT);
+    await tick(60);
+    assert.equal(st.found.result.rows.length, 4, 'раскрытое не свернулось');
+    assert.equal(st.found.result.rows[0].status, 'paid', 'первая страница — свежая');
+    assert.deepEqual(st.found.result.rows.map((r) => r.id), [101, 102, 103, 104]);
+    await typeInto(input(), '');
+});
+
+test('ревью L6: настоящее окно оплаты видно правилу занятости live.js (а не флагу теста)', async () => {
+    const body = document.body;
+    body.children.length = 0;
+    // Подбор по BUSY_SELECTOR: .класс, [атрибут], [атрибут="значение"] — среди потомков body.
+    const matches = (n, part) => {
+        if (part[0] === '.') return String(n.className || '').split(/\s+/).includes(part.slice(1));
+        const m = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(part);
+        if (!m || !n.attrs || !Object.prototype.hasOwnProperty.call(n.attrs, m[1])) return false;
+        return m[2] === undefined || n.attrs[m[1]] === m[2];
+    };
+    const realDoc = { querySelector: (sel) => walk(body).slice(1).find((n) => sel.split(',').map((s) => s.trim()).some((p) => matches(n, p))) || null };
+    assert.equal(live.dialogOpen(realDoc), false);
+    desk.__test_payModal(mkEl('div'), inv(9), 100000);
+    await tick(40);
+    assert.equal(live.dialogOpen(realDoc), true, 'окно оплаты — «занят»: касса не перечитается под ним');
+    body.children.length = 0;
 });
 
 test('новое открытие кассы — прежняя подписка снята, новая одна', async () => {
