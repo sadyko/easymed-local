@@ -4,7 +4,7 @@
 // повторяют.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast } from '../ui.js';
-import { tr, trf } from '../i18n.js';
+import { tr, trf, getLang, monthName } from '../i18n.js';   // getLang, monthName: REFERRAL_ADJ_LABEL_I18N_V1
 import { reportPrintHtml } from './report-print.js?v=jrn4';   // та же печатная страница, что у отчётов
 import { fmtSum } from '../referrals-logic.js';
 
@@ -32,6 +32,11 @@ export function kpiRow(...tiles) {
 export function sumText(v) {
     return trf('{sum} сум', { sum: fmtSum(v) });
 }
+
+// REFERRAL_ADJ_LABEL_I18N_V1 (3.22.0, ревью) — словарь языка экрана для колонок
+// «Подробнее» (referrals-logic.js serviceDetailColumns): подпись «Корректировка за
+// <месяц>» переводится шаблоном, как ячейка отчёта (reports-hub.js reportTx).
+export const detailTx = () => ({ tr, trf, lang: getLang(), monthName });
 
 /**
  * Строка фильтров: поиск слева, справа «Период» с двумя датами. onChange

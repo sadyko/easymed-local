@@ -9,7 +9,7 @@
 // меняет только две колонки счёта.
 import { h, Tag, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';
-import { rpc, kpi, kpiRow, loadingEl, errorEl, nameCell, actionButtons, openPrint, detailModal, simpleTable, sumText } from './referrals-common.js';
+import { rpc, kpi, kpiRow, loadingEl, errorEl, nameCell, actionButtons, openPrint, detailModal, simpleTable, sumText, detailTx } from './referrals-common.js';   // detailTx: REFERRAL_ADJ_LABEL_I18N_V1
 import { matches, subline, dmy, dynamicsCell, printSheet, ACTIVITY_LABELS, ACTIVITY_TAG, VISIT_STATUS_RU, ymdLocal, serviceDetailColumns } from '../referrals-logic.js';   // serviceDetailColumns: REFERRAL_DETAIL_BY_SERVICE_V1
 import { ACTIVITY_WINDOWS } from '../../shared/referral-activity.js';
 
@@ -107,7 +107,7 @@ export async function renderReferralsActivity(host, ctx = {}) {
         return { from: ymdLocal(d), to };
     }
     // REFERRAL_DETAIL_BY_SERVICE_V1 — по услугам, как «Подробнее» у «Представителей».
-    const detailColumns = (money) => serviceDetailColumns(money, { sumText, tr });
+    const detailColumns = (money) => serviceDetailColumns(money, { sumText, tr, tx: detailTx() });   // REFERRAL_ADJ_LABEL_I18N_V1 — «Корректировка за …» на языке экрана
     function sheetFor(s, det) {
         return printSheet({
             title: trf('Направления врача {name}', { name: s.name }) + (s.code ? ' (№ ' + s.code + ')' : ''),

@@ -3,6 +3,7 @@
 // динамики и статуса, лист для печати. Без DOM — чтобы её читал тест, а
 // вкладки (views/referrals-*.js) занимались только разметкой.
 import { dynamics } from '../shared/referral-activity.js';
+import { viaTemplate } from './views/report-totals.js?v=rt3';   // REFERRAL_ADJ_LABEL_I18N_V1 — тот же экземпляр, что у отчётов
 
 const pad2 = (n) => String(n).padStart(2, '0');
 export function ymdLocal(d) {
@@ -100,11 +101,15 @@ export const LINE_STATUS_RU = Object.freeze({
 // Колонки «Подробнее» по услугам — одни на обе вкладки («Представители» и
 // «Активность врачей») и на печать. Строка без статуса — деньги из счёта, чьей
 // строки визита в периоде нет (сервер: sourceDetailLines).
-export function serviceDetailColumns(money, { sumText, tr }) {
+// REFERRAL_ADJ_LABEL_I18N_V1 (3.22.0, ревью) — tx ({ tr, trf, lang, monthName } из
+// i18n.js): строка с шаблоном (service_t — «Корректировка за <месяц>») — на языке
+// экрана тем же правилом, что ячейка отчёта (report-totals.js viaTemplate); названия
+// услуг клиники — как есть.
+export function serviceDetailColumns(money, { sumText, tr, tx = null }) {
     return [
         { label: 'Дата', value: (l) => dmy(l.date) },
         { label: 'Пациент', value: (l) => l.patient || '—' },
-        { label: 'Услуга', value: (l) => l.service || '—' },
+        { label: 'Услуга', value: (l) => (l.service_t && tx ? viaTemplate(l.service, l.service_t, tx) : (l.service || '—')) },
         { label: 'Статус', value: (l) => (l.status ? tr(LINE_STATUS_RU[l.status] || l.status) : '—') },
         ...(money ? [
             { label: 'Получено', value: (l) => sumText(l.received), num: true, print: (l) => Math.round(l.received) },
