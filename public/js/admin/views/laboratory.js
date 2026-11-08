@@ -60,6 +60,7 @@ import { isAdminActor } from '../admin-actor.js';   // настройку кли
 // ADMIN_ACT_AS_V1 (R3) — «Проверить и выдать» (verified_by) — подпись лаборанта:
 // от чужого имени кнопки неактивны с подсказкой, сервер отказывает сам.
 import { lockSignButton, refuseSignWhileActing } from '../act-as-client.js';
+import { watchScreen, keepScroll } from '../live.js';   // LIVE_REFRESH_V1 — очередь лаборатории обновляется сама
 
 // LIVE_AUDIT_FIX_V1 — ЗЕРКАЛО СЕРВЕРА. Результаты пишет и подтверждает только
 // лаборатория или администратор (rpc/lab.js WRITE_ROLES, реестр lab_results).
@@ -219,8 +220,26 @@ export async function renderLaboratory(container, ctx = {}) {
     // the shell's isRouteAllowed('labs') already refused such a role the view).
     const sub = ctx.payload && ctx.payload.sub;
     state.mode = ((sub === 'panels' || sub === 'stats' || sub === 'devices') && canEditLabPanels()) ? sub : 'queue';
+    if (liveStop) { liveStop(); liveStop = null; }   // LIVE_REFRESH_V1 — новое открытие раздела — своя подписка
     mount();
     await paintMode();
+    liveStop = watchScreen({ root: container, screen: 'laboratory', reload: onLabLive });   // LIVE_REFRESH_V1
+}
+
+// LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — ОЧЕРЕДЬ ЛАБОРАТОРИИ ОБНОВЛЯЕТСЯ САМА.
+// Новый заказ, оплата (касса отпускает пробу), возврат строки и результат с анализатора
+// появлялись только по «Обновить». Раздел подписан на поток изменений (live.js, правило
+// 'laboratory' в live-relevance.js) и перечитывает очередь тихо — fetchAndPaint({ quiet }):
+// без «Загрузка…», фильтр, поиск, раскрытые карточки (state.open), отмеченные анализы
+// (state.picked) и прокрутка на месте; сбой сети — прежняя очередь без уведомления. Под
+// открытым окном (забор, ввод и проверка результатов — все .modal) и с курсором в поле
+// раздела — ждёт (правило занятости live.js). «Панели», «Статистика», «Анализаторы» не
+// перечитываются (у «Анализаторов» своя живая лента); вернутся в очередь — она читается
+// заново и так.
+let liveStop = null;
+function onLabLive() {
+    if (state.mode !== 'queue' || !refs.list) return null;
+    return fetchAndPaint({ quiet: true });
 }
 
 // Paints the body the current mode needs. The queue, the panel editor and the
@@ -666,11 +685,13 @@ let lastFetchToken = 0;
 // (refunded-lines.js — один на все экраны: партии по 500, сбой — null, и лист
 // как был: ворота сервера откажут и пробе, и результату сами).
 
-async function fetchAndPaint() {
+async function fetchAndPaint({ quiet = false } = {}) {   // LIVE_REFRESH_V1 — quiet: тихое перечитывание (onLabLive)
     const token = ++lastFetchToken;
-    clear(refs.list);
-    refs.list.appendChild(h('div', { class: 'empty' }, 'Загрузка…'));
-    refs.emptyEl.style.display = 'none';
+    if (!quiet) {
+        clear(refs.list);
+        refs.list.appendChild(h('div', { class: 'empty' }, 'Загрузка…'));
+        refs.emptyEl.style.display = 'none';
+    }
 
     // LAB_ONE_CLINIC_V1 — границу очереди решает настройка клиники, и её надо
     // знать ДО запросов: фильтр накладывается на запрос, а не на полученные
@@ -730,6 +751,7 @@ async function fetchAndPaint() {
         ]);
         if (token !== lastFetchToken) return;
         const vsData = (vsOpen || []).concat(vsDone || []);
+        if (vsErr && quiet) return;   // LIVE_REFRESH_V1 — тихо: на экране прежняя очередь
         if (vsErr) { toast(trf('Не удалось загрузить очередь: {msg}', { msg: vsErr.message || vsErr }), 'fail'); paintEmpty(); return; }
 
         state.panelByService = {};
@@ -815,7 +837,9 @@ async function fetchAndPaint() {
         // не различить. Признак спрашивается ОДНИМ запросом на всех показанных
         // пациентов: он про пациента СЕЙЧАС, а не про заказ, и живёт там же,
         // откуда его берут кабинет врача и процедурная.
-        state.inBed = new Set();
+        // LIVE_REFRESH_V1 — набирается в сторонке и встаёт вместе с очередью (ниже): тихое
+        // перечитывание не показывает «все амбулаторные» на время запроса.
+        const inBedNow = new Set();
         try {
             const pids = [...new Set(Object.values(patientMap)
                 .map((v) => v.patient && v.patient.id).filter(Boolean))];
@@ -823,7 +847,7 @@ async function fetchAndPaint() {
                 const { data: adm } = await supabase.from('admissions')
                     .select('id, patient_id, status').in('patient_id', pids).in('status', IN_BED_STATUSES);
                 if (token !== lastFetchToken) return;
-                for (const a of (adm || [])) state.inBed.add(String(a.patient_id));
+                for (const a of (adm || [])) inBedNow.add(String(a.patient_id));
             }
         } catch (e) { console.warn('[labs] origin:', e && e.message); }
 
@@ -842,10 +866,12 @@ async function fetchAndPaint() {
         state.patientMap = patientMap;
         state.resultsByVs = resultsByVs;
         state.slotsByService = slotsByService;   // LAB_PANEL_DEDUP_V1 (ревью L3)
-        paintFilters();
-        paintRows();
+        state.inBed = inBedNow;   // LIVE_REFRESH_V1
+        // LIVE_REFRESH_V1 — перерисовка одним шагом; прокрутка очереди на месте.
+        keepScroll(refs.list, () => { paintFilters(); paintRows(); });
     } catch (e) {
         if (token !== lastFetchToken) return;
+        if (quiet) return;   // LIVE_REFRESH_V1 — тихо: прежняя очередь, без уведомления
         toast(trf('Не удалось загрузить очередь: {msg}', { msg: (e && e.message) || e }), 'fail');
         paintEmpty();
     }

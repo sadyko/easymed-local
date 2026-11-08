@@ -388,6 +388,29 @@ export function shownOnScreen(root) {
 }
 
 /**
+ * Перерисовать, не сдвинув прокрутку: запоминает прокрутку элемента и его предков (и
+ * страницы), выполняет fn и возвращает их, если перерисовка их сдвинула (список на
+ * миг стал короче). Возвращает то, что вернул fn.
+ */
+export function keepScroll(el, fn) {
+    const saved = [];
+    try {
+        for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+            if (n.scrollTop) saved.push([n, n.scrollTop]);
+        }
+    } catch { /* без DOM — нечего беречь */ }
+    const y = typeof window !== 'undefined' && window && typeof window.scrollY === 'number' ? window.scrollY : null;
+    try {
+        return fn();
+    } finally {
+        for (const [n, top] of saved) { try { if (n.scrollTop !== top) n.scrollTop = top; } catch { /* элемент ушёл */ } }
+        if (y != null) {
+            try { if (window.scrollY !== y && typeof window.scrollTo === 'function') window.scrollTo(0, y); } catch { /* без окна */ }
+        }
+    }
+}
+
+/**
  * Рабочий экран подписывается на изменения, пока смонтирован.
  *   root     — корень экрана (вынут из документа — подписка снимается сама);
  *   screen   — ключ правила (live-relevance.js) или relevant — свой предикат;

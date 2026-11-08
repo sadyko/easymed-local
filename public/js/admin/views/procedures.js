@@ -40,6 +40,7 @@ import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1
 import { lockSignButton, refuseSignWhileActing } from '../act-as-client.js';
 import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B4, п. 9a) — «Услуга возвращена»
 import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4, п. 9a) — один вопрос на загрузку
+import { watchScreen, keepScroll } from '../live.js';   // LIVE_REFRESH_V1 — очередь процедур обновляется сама
 
 const STATUS_RU = { added: 'Назначено', queued: 'В очереди', in_progress: 'Выполняется', completed: 'Выполнено' };
 const OPEN = ['added', 'queued', 'in_progress'];
@@ -50,7 +51,17 @@ const isOpenWork = (r) => OPEN.includes(r.status) && !r.refunded;
 const state = { rows: [], filter: 'open', showAll: true, search: '', place: 'all',   // PROC_SEARCH_V1 / PROC_PERFORMER_V1
     performer: '', performers: [] };   // PROC_SCOPE_V1 — фильтр «Исполнитель» ('' — все, 'none' — не назначен, id)
 
+// LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — ОЧЕРЕДЬ ПРОЦЕДУР ОБНОВЛЯЕТСЯ САМА. Касса
+// отпустила процедуру («Ожидает кассу» → «Выполнить»), назначили новую — кабинетную
+// (visit_services) или палатную (admission_services), вернули деньги за строку — очередь
+// перечитывается сама (live.js, правило 'procedures' в live-relevance.js): тот же load() с
+// тем же фильтром исполнителя; «В работе / Выполнено / Все», «где» и поиск — в state;
+// сбой сети — прежняя очередь без уведомления. Под открытым окном «Выполнить процедуру» и
+// с курсором в поиске — ждёт (правило занятости live.js).
+let liveStop = null;
+
 export async function renderProcedures(container) {
+    if (liveStop) { liveStop(); liveStop = null; }   // LIVE_REFRESH_V1
     clear(container);
     // SECTION_HERO_V1 — шапка раздела — тёмный баннер (своих вкладок у раздела нет).
     container.appendChild(sectionHero({ section: 'procedures', title: 'Процедуры', sub: 'Очередь процедур — процедурный кабинет и палаты' }).el);
@@ -60,9 +71,13 @@ export async function renderProcedures(container) {
     state.performer = '';   // PROC_SCOPE_V1 — каждое открытие раздела — без фильтра исполнителя
     await load();
     paint(body);
+    liveStop = watchScreen({ root: container, screen: 'procedures', reload: async () => {   // LIVE_REFRESH_V1
+        if (!(await load({ quiet: true }))) return;
+        keepScroll(body, () => paint(body));
+    } });
 }
 
-async function load() {
+async function load({ quiet = false } = {}) {   // LIVE_REFRESH_V1 — quiet: сбой — без уведомления, прежние строки (false)
     // Одна очередь на два вида процедур. Склейка, сортировка и правило
     // видимости — на сервере (rpc/procedures.js): палатная строка живёт в
     // другой таблице, и браузеру её одним запросом не достать.
@@ -72,8 +87,9 @@ async function load() {
     const { data, error } = await supabase.rpc('procedures_list', args);
     if (error) {
         console.warn('[procedures]', error.message);
+        if (quiet) return false;   // LIVE_REFRESH_V1 — тихо: прежняя очередь
         toast(trf('Не удалось загрузить процедуры: {msg}', { msg: error.message }), 'fail');
-        state.rows = []; return;
+        state.rows = []; return false;
     }
     // REFUND_ANY_V1 (ревью B4, п. 9a) — какие кабинетные процедуры касса
     // вернула: один вопрос на загрузку (refunded-lines.js), номерами только
@@ -88,6 +104,7 @@ async function load() {
     state.showAll = (data && data.scope) === 'all';
     state.performers = (data && Array.isArray(data.performers)) ? data.performers : [];   // PROC_SCOPE_V1
     if (!state.showAll) state.performer = '';
+    return true;   // LIVE_REFRESH_V1
 }
 
 // PROC_SCOPE_V1 — «Исполнитель» у администратора и старшей медсестры: все / не назначен /
