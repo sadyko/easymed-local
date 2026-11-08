@@ -30,6 +30,7 @@ import {
   readInboxState, recordInboxPoll, conversationByConvId, upsertConversation, insertMessage,
   refreshConversationSummary, upsertComment, isoZ,
 } from './inbox-store.js';
+import { aiNoteMetaMessage, aiNoteMetaCommentById } from '../ai/hooks.js';   // AI_CHAT_V1
 
 const INITIAL_DELAY_MS = 25_000;
 export const INBOX_PERIOD_MS = 60_000;
@@ -87,10 +88,15 @@ async function pollConversations(db, platform, ctx) {
       for (const m of list(conv.messages)) {
         if (!m || !m.id) continue;
         const fromId = str(m.from && m.from.id);
-        insertMessage(db, row.id, {
+        const msg = {
           msg_id: String(m.id), direction: ownIds.has(fromId) ? 'out' : 'in',
           text: str(m.message), attachments: parseAttachments(m), created_at: isoZ(m.created_time),
-        }, { readBefore });
+        };
+        // AI_CHAT_V1 — только впервые записанное входящее; выключенный ИИ, старое
+        // и пришедшее до включения очередь отбрасывает сама. Хук не бросает.
+        if (insertMessage(db, row.id, msg, { readBefore })) {
+          aiNoteMetaMessage(db, { convRowId: row.id, msgId: msg.msg_id, direction: msg.direction, createdAt: msg.created_at });
+        }
       }
       refreshConversationSummary(db, row.id);
     })();
@@ -117,6 +123,9 @@ async function pollFacebookComments(db, ctx) {
             author_id: fromId, author_name: str(c.from && c.from.name), text: str(c.message),
             created_at: isoZ(c.created_time), is_page: fromId === pageId, is_hidden: !!c.is_hidden,
           }, { readBefore });
+          // AI_CHAT_V1 — задача по нитке (корень), ответ — на этот комментарий.
+          // Повторный опрос безвреден: UNIQUE(channel, source_id).
+          aiNoteMetaCommentById(db, c.id);
         }
       })();
     }
@@ -134,12 +143,15 @@ async function pollInstagramComments(db, ctx) {
   for (const media of Array.isArray(r.data) ? r.data : []) {
     if (!media || !media.id) continue;
     db.transaction(() => {
-      const put = (c, parentId) => upsertComment(db, {
-        platform: 'instagram', comment_id: c.id, parent_id: parentId,
-        post_id: media.id, post_text: str(media.caption), post_url: str(media.permalink),
-        author_id: str(c.from && c.from.id), author_name: str(c.username || (c.from && c.from.username)),
-        text: str(c.text), created_at: isoZ(c.timestamp), is_page: !!own(c), is_hidden: !!c.hidden,
-      }, { readBefore });
+      const put = (c, parentId) => {
+        upsertComment(db, {
+          platform: 'instagram', comment_id: c.id, parent_id: parentId,
+          post_id: media.id, post_text: str(media.caption), post_url: str(media.permalink),
+          author_id: str(c.from && c.from.id), author_name: str(c.username || (c.from && c.from.username)),
+          text: str(c.text), created_at: isoZ(c.timestamp), is_page: !!own(c), is_hidden: !!c.hidden,
+        }, { readBefore });
+        aiNoteMetaCommentById(db, c.id);   // AI_CHAT_V1 — как у Facebook: по нитке
+      };
       for (const c of list(media.comments)) {
         if (!c || !c.id) continue;
         put(c, '');

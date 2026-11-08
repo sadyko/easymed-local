@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { getDataDir } from '../control/config.js';   // SUPERVISED_INSTALL_V1
 import { clinicNames } from './setup.js';   // CLINIC_PROFILE_V1 — узбекское название клиники в узбекской строке
 import { parseStart, onStart as deeplinkStart, onCallback as deeplinkCallback, takePendingLead, onContactForLead } from './deeplinks.js';   // TG_DEEPLINK_V1 — ссылки для рекламы
+import { aiTakesTelegramText } from '../ai/hooks.js';   // AI_CHAT_V1
 
 // Корень проекта считаем от расположения модуля, а не от process.cwd():
 // сервер могут запустить ярлыком из любой папки, и тогда cwd указывает мимо.
@@ -259,6 +260,12 @@ async function handleMessage(db, token, msg, deps) {
   if (cmd === '/start' || cmd === '/help' || cmd === '/menu') {
     return reply(db, token, chatId, greeting(db), { reply_markup: menuKeyboard }, deps);
   }
+
+  // AI_CHAT_V1 — ИИ включён: свободный текст отвечает ИИ-помощник (очередь,
+  // ai/worker.js), и «сообщение получено» бот не шлёт — ответ придёт следом.
+  // Только текст: фото или документ без подписи ИИ не прочтёт, их — как раньше
+  // оператору. Выключенный ИИ (по умолчанию) — ни одной строки в очереди.
+  if (text && aiTakesTelegramText(db, { chatId, messageId: msg.message_id, createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') })) return;
 
   // Всё остальное — вопрос живому человеку. Сообщение уже в «Чате с
   // пациентами»; пациенту подтверждаем, что его прочитают, и оставляем
