@@ -530,10 +530,19 @@ export const REGISTRY = {
   // staff: an internal referral. Readable, writable NOWHERE — the link is made
   // by a trigger when the doctor is hired, so a form cannot point one doctor's
   // source at another doctor.
+  // REFERRAL_RATES_GUARD_V1 (3.22.0, ревью) — регистратура ЗАВОДИТ источник
+  // (`nonAdminColumns`: имя, контакты, категория), но ставки и реквизиты выплаты
+  // нового источника — те же деньги, что при правке: только по праву плитки
+  // «Список источников: Изменение» вместе с «Ценами и процентами» (moneyColumns
+  // в permission-catalog.js; query-compiler.js moneyGuard). Прежде вставка по
+  // списку ролей денег не проверяла вовсе, и регистратор заводил партнёра с любой
+  // особой ставкой. Окно «Настроек» не-администратору денежных полей и так не
+  // показывает (settings-hub.js grantCols), импорт пишет только заполненные ячейки.
   referral_sources: { read:{roles:ALL_STAFF,columns:['id','name','code','doctor_id','category','category_id','last_name','first_name','middle_name',
                  'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','service_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty','representative_id','active']},   // REFERRALS_CRM_V1 — specialty (форма), representative_id (только чтение: пишет RPC referrals_assign_representative)
                write:{ grant:'settings.referral_sources',insert:{roles:['admin','registrar'],columns:['name','category','category_id','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','service_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty']},
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','service_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty'],
+                 nonAdminColumns:['name','category','category_id','last_name','first_name','middle_name','phone','workplace','district','specialty']},   // REFERRAL_RATES_GUARD_V1
                  update:{roles:['admin'],columns:['name','category','category_id','last_name','first_name','middle_name',
                  'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','service_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty','active'],bulkBy:['doctor_id']},delete:{roles:[]}},   // bulkBy: V3120_FIX (M9) — referral-reward-editor.js правит свой источник врача по doctor_id
                filters:['id','active','category_id','doctor_id'], json:['own_rates','service_rates'],   // REFERRAL_SERVICE_RATES_V1 (mig 273) — особые ставки по услугам, JSON как own_rates
