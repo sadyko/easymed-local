@@ -113,6 +113,56 @@ test('карточка источника: номер карты — тольк�
   assert.equal(keep.name, 'Анвар', 'ФИО по-прежнему собирается в name');
 });
 
+// REFERRAL_FORM_NO_MONEY_EDIT_V1 (3.22.0, ревью) — роль с «Список источников: Изменение»
+// без «Цен и процентов» видит в окне только колонки без денег (grantColumns плитки):
+// «Тип оплаты» ей не показан и в запись не уходит. beforeSave всё равно ставил
+// card_number = null («тип не карта»), и сервер отвечал 403 «Поле card_number меняет
+// только администратор.» — такая роль не могла сохранить НИ ОДНОЙ правки источника.
+// Номер карты стирается только тогда, когда тип оплаты действительно прислан.
+test('карточка источника: правка без «Цен и процентов» — без номера карты в записи, и сервер её принимает', async () => {
+  const { lookupConfig } = await import('../views/settings-hub.js');
+  const { catalogByKey } = await import('../../shared/permission-catalog.js');
+  const { openDb } = await import('../../../../server/db/connection.js');
+  const { migrate } = await import('../../../../server/db/migrate.js');
+  const { compile } = await import('../../../../server/db/query-compiler.js');
+  const cfg = lookupConfig('referral_sources');
+  const grantCols = catalogByKey().get('settings.referral_sources').grantColumns.referral_sources;
+
+  const db = openDb(':memory:');
+  migrate(db);
+  try {
+    const grant = (grants) => {
+      const r = db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get('registrar');
+      const p = r ? JSON.parse(r.permissions) : { sections: [], levels: {} };
+      p.grants = { ...(p.grants || {}), ...grants };
+      if (r) db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify(p), 'registrar');
+      else db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run('registrar', JSON.stringify(p));
+    };
+    grant({ settings: 'view', 'settings.referral_sources': 'edit' });
+    const id = Number(db.prepare("INSERT INTO referral_sources (name, first_name, payment_type, card_number) VALUES ('Партнёр', 'Партнёр', 'card', '8600 1234')").run().lastInsertRowid);
+    const row = db.prepare('SELECT * FROM referral_sources WHERE id = ?').get(id);
+    const REG = { id: 51, role: 'registrar', extra_roles: [] };
+    const update = (values) => compile({ table: 'referral_sources', op: 'update', values, filters: [{ col: 'id', op: 'eq', val: id }] }, REG, { db });
+
+    // Что собирает окно этой роли: поля плитки без денег (как renderEditor с grantCols), «Активен» правки.
+    const fields = cfg.fields.filter((f) => grantCols.includes(f.key) && !f.saveVia && f.type !== 'readonly');
+    assert.ok(!fields.some((f) => f.key === 'payment_type' || f.key === 'card_number'), 'денежных полей в окне нет');
+    const payload = { active: 1 };
+    for (const f of fields) if (row[f.key] != null && row[f.key] !== '') payload[f.key] = row[f.key];
+    payload.phone = '+998901112233';
+    assert.equal(cfg.beforeSave(payload, { isEdit: true, row }), undefined);
+    assert.ok(!('card_number' in payload), 'номер карты роли без денег не трогается');
+    assert.doesNotThrow(() => update(payload), 'правка роли с «Изменением» проходит');
+
+    // С «Ценами и процентами» тип оплаты в окне есть: сменили на наличные — номер стирается, сервер принимает.
+    grant({ 'settings.referral_sources.money': 'edit' });
+    const money = { ...payload, payment_type: 'cash', card_number: '8600 1234' };
+    cfg.beforeSave(money, { isEdit: true, row });
+    assert.strictEqual(money.card_number, null);
+    assert.doesNotThrow(() => update(money));
+  } finally { db.close(); }
+});
+
 test('карточка источника: категория — только внешняя (is_internal = 0)', async () => {
   const { lookupConfig } = await import('../views/settings-hub.js');
   const cat = lookupConfig('referral_sources').fields.find((f) => f.key === 'category_id');
