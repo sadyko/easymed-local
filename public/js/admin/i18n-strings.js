@@ -3887,6 +3887,9 @@ export const STRINGS = {
   "Услуга № {id} (не найдена)": {"en":"Service No. {id} (not found)","ru":"Услуга № {id} (не найдена)","uz":"Xizmat № {id} (topilmadi)"},
   "Укажите: {field}": {"en":"Enter: {field}","ru":"Укажите: {field}","uz":"Kiriting: {field}"},
   "Особая (услуга)": {"en":"Special (service)","ru":"Особая (услуга)","uz":"Maxsus (xizmat)"},
+  // REFERRAL_MODE_SUMMARY_V1 (3.22.0, ревью) — «Режим ставок» сводки «Рефералов»: режим источника + особые ставки
+  "По категории + особые по услугам": {"en":"From category + special service rates","ru":"По категории + особые по услугам","uz":"Toifa bo'yicha + xizmatlar bo'yicha maxsus stavkalar"},
+  "Своя + особые по услугам": {"en":"Own + special service rates","ru":"Своя + особые по услугам","uz":"O'z stavkasi + xizmatlar bo'yicha maxsus stavkalar"},
   "Вознаграждение по категории (общая ставка)": {"en": "Reward from the category (shared rate)", "ru": "Вознаграждение по категории (общая ставка)", "uz": "Toifa bo'yicha mukofot (umumiy stavka)"},
   "Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.": {"en": "Empty — the standard percent above applies. A filled row overrides it: % is a share of the service price, sum is a fixed amount per service.", "ru": "Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.", "uz": "Bo'sh — yuqoridagi standart foiz amal qiladi. To'ldirilgan qator uni bekor qiladi: % — xizmat narxidan ulush, so'm — har bir xizmat uchun belgilangan summa."},
   "Чтобы задать врачу свою ставку, снимите галочку.": {"en":"To set this doctor's own rate, untick the box.","ru":"Чтобы задать врачу свою ставку, снимите галочку.","uz":"Shifokorga o‘z stavkasini belgilash uchun belgini olib tashlang."},   // REFERRAL_OWN_BOX_V1
