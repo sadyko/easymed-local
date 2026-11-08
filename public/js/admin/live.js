@@ -65,7 +65,12 @@ export function createLiveClient(env = {}, opts = {}) {
         fetch: has('fetch') ? env.fetch : (...a) => g.fetch(...a),
         document: has('document') ? env.document : g.document,
         window: has('window') ? env.window : g.window,
-        setTimeout: env.setTimeout || ((fn, ms) => g.setTimeout(fn, ms)),
+        // Под Node таймер не держит процесс (в браузере unref нет) — как у таймера кабинета.
+        setTimeout: env.setTimeout || ((fn, ms) => {
+            const t = g.setTimeout(fn, ms);
+            if (t && typeof t.unref === 'function') t.unref();
+            return t;
+        }),
         clearTimeout: env.clearTimeout || ((h) => g.clearTimeout(h)),
         now: env.now || (() => Date.now()),
         random: env.random || Math.random,
@@ -315,15 +320,28 @@ export function createLiveClient(env = {}, opts = {}) {
 }
 
 // ---- один клиент на вкладку ------------------------------------------------------
-let shared = null;
+// Только на настоящей странице (http/https). Экраны в тестах под Node рисуются в
+// поддельном документе: там клиента нет, и экран просто не подписывается — ни опроса,
+// ни таймеров, ни лишних запросов в чужие заглушки fetch. Тест живых экранов
+// подставляет свой клиент (__setLiveClientForTests).
+let shared;   // undefined — ещё не решено; null — живого обновления здесь нет
+function realPage() {
+    try {
+        return typeof window !== 'undefined' && !!window && !!window.location
+            && /^https?:$/.test(String(window.location.protocol || ''));
+    } catch { return false; }
+}
 function liveClient() {
-    if (!shared) shared = createLiveClient();
+    if (shared === undefined) shared = realPage() ? createLiveClient() : null;
     return shared;
 }
 /** Подписка через общий клиент вкладки. Возвращает отписку. */
-export function onLive(predicate, handler, opts) { return liveClient().onLive(predicate, handler, opts); }
-/** Только для тестов: подменить общий клиент (null — вернуть настоящий при следующем вызове). */
-export function __setLiveClientForTests(client) { shared = client || null; }
+export function onLive(predicate, handler, opts) {
+    const c = liveClient();
+    return c ? c.onLive(predicate, handler, opts) : () => {};
+}
+/** Только для тестов: подменить общий клиент (null — выключить; undefined — решить заново). */
+export function __setLiveClientForTests(client) { shared = client; }
 
 // ---- правило занятости ------------------------------------------------------------
 /**
@@ -380,6 +398,7 @@ export function shownOnScreen(root) {
  */
 export function watchScreen({ root, screen, relevant, reload, isBusy, client } = {}) {
     const cl = client || liveClient();
+    if (!cl || typeof reload !== 'function') return () => {};
     const pred = typeof relevant === 'function' ? relevant : liveRelevant(screen);
     let stopped = false;
     let pending = false;
@@ -423,7 +442,6 @@ export function watchScreen({ root, screen, relevant, reload, isBusy, client } =
         if (!root || root.isConnected === false) { stop(); return; }
         alive = cl.setTimeout(checkAlive, cl.aliveCheckMs);
     };
-    if (typeof reload !== 'function') return stop;
     unsub = cl.onLive(pred, () => { pending = true; attempt(); });
     alive = cl.setTimeout(checkAlive, cl.aliveCheckMs);
     return stop;

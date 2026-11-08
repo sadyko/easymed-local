@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { fakeClock, FakeES, fakeDocument, flush } from './live-fakes.mjs';
 import {
     createLiveClient, watchScreen, dialogOpen, editingInside, screenBusy, BUSY_SELECTOR,
-    DEBOUNCE_MS, POLL_MS, HIDDEN_CLOSE_MS, RECHECK_MS,
+    DEBOUNCE_MS, POLL_MS, HIDDEN_CLOSE_MS, RECHECK_MS, onLive, __setLiveClientForTests,
 } from '../live.js';
 import { LIVE_RELEVANCE, liveRelevant } from '../live-relevance.js';
 
@@ -303,6 +303,19 @@ test('watchScreen: перечитывание не накладывается �
     assert.equal(started, 1, 'второе чтение не стартует поверх первого');
     release(); await flush();
     assert.equal(started, 2, 'отложенное выполнено после первого');
+});
+
+test('не настоящая страница (экраны в тестах под Node) — общего клиента нет: ни потока, ни опроса, ни таймеров', () => {
+    FakeES.reset();
+    __setLiveClientForTests(undefined);
+    let reloads = 0;
+    const stop = watchScreen({ root: screenRoot(), screen: 'cashier', reload: () => { reloads++; } });
+    const off = onLive(() => true, () => {});
+    assert.equal(typeof stop, 'function');
+    assert.equal(typeof off, 'function');
+    assert.equal(FakeES.all.length, 0);
+    stop(); off();
+    assert.equal(reloads, 0);
 });
 
 test('правила экранов: касса — счета и оплаты; лаборатория — результаты; процедуры — палатные строки', () => {
