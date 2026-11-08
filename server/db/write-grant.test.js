@@ -6,7 +6,7 @@ import { openDb } from './connection.js';
 import { migrate } from './migrate.js';
 import { compile } from './query-compiler.js';
 import { REGISTRY, writeGrantKey } from './schema-registry.js';
-import { catalogByKey } from '../../public/js/shared/permission-catalog.js';
+import { catalogByKey, moneyRowOf } from '../../public/js/shared/permission-catalog.js';
 
 const REG = { id: 51, role: 'registrar', extra_roles: [] };
 const ADMIN = { id: 1, role: 'admin', extra_roles: [] };
@@ -90,6 +90,48 @@ test('прибавка, а не урезание: закрытая плитка 
     addGrants(db, 'registrar', { settings: 'view', 'settings.referral_sources': 'none' });
     assert.ok(run(db, { table: 'referral_sources', op: 'insert', values: { name: 'Доктор Х' }, returning: true }, REG).id);
     assert.throws(() => run(db, { table: 'referral_sources', op: 'update', values: { name: 'Y' }, filters: [{ col: 'id', op: 'eq', val: 1 }] }, REG), refused);
+  } finally { db.close(); }
+});
+
+// REFERRAL_RATES_GUARD_V1 (3.22.0, ревью) — НОВЫЙ ИСТОЧНИК СО СТАВКОЙ — ТЕ ЖЕ
+// ПРАВИЛА, ЧТО У ПРАВКИ. Регистратура заводит источник (имя, контакты,
+// категория) и с закрытой плиткой, но ставки и реквизиты выплаты нового
+// источника — только с «Изменением» плитки вместе с «Ценами и процентами».
+// Прежде вставка по списку ролей реестра не проверяла денег вовсе: регистратор
+// заводил партнёра с особой ставкой 999 999 сум за УЗИ, и «Рефералы» её платили.
+test('источник направления: регистратура без «Цен и процентов» не заводит источник со ставкой или реквизитами выплаты', () => {
+  const db = seed();
+  try {
+    const cat = Number(db.prepare("INSERT INTO referral_source_categories (name, standard_percent) VALUES ('Внешние', 10)").run().lastInsertRowid);
+    const sample = {
+      payment_type: 'card', card_number: '8600 0000 0000 0000', reward_mode: 'own', own_percent: 90,
+      own_rates: [{ group: 'imaging', unit: 'pct', value: 50 }], service_rates: [{ service_id: 31, unit: 'fix', value: 999999 }],
+      inpatient_bonus_enabled: 1, inpatient_pct: 50, inpatient_fixed: 100000,
+    };
+    const money = moneyRowOf('settings.referral_sources').moneyColumns.referral_sources;
+    for (const c of money) assert.ok(Object.prototype.hasOwnProperty.call(sample, c), 'проба не покрывает денежную колонку ' + c);
+    const ins = (values) => run(db, { table: 'referral_sources', op: 'insert', values }, REG);
+    const plain = { name: 'Доктор Х', last_name: 'Х', first_name: 'Доктор', phone: '+998901234567', workplace: 'Поликлиника 1',
+      district: 'Юнусабад', specialty: 'ЛОР', category_id: cat, category: 'Внешние' };
+
+    // Ненастроенная роль (плитка закрыта): имя, контакты, категория — как прежде; любая денежная колонка — 403.
+    assert.ok(ins(plain).id, 'регистратура перестала заводить источник');
+    for (const c of money) assert.throws(() => ins({ name: 'С ' + c, [c]: sample[c] }), refused, c + ' записалась без права');
+    // «Изменение» плитки без «Цен и процентов» — то же.
+    addGrants(db, 'registrar', { settings: 'view', 'settings.referral_sources': 'edit' });
+    assert.ok(ins({ ...plain, name: 'Доктор Y' }).id);
+    for (const c of money) assert.throws(() => ins({ name: 'С ' + c, [c]: sample[c] }), refused, c + ' записалась с одним «Изменением»');
+    // «Цены и проценты» без «Изменения» плитки — тоже нет.
+    addGrants(db, 'registrar', { 'settings.referral_sources': 'view', 'settings.referral_sources.money': 'edit' });
+    assert.throws(() => ins({ name: 'Z', service_rates: sample.service_rates }), refused);
+    const before = db.prepare('SELECT COUNT(*) n FROM referral_sources').get().n;
+    // «Изменение» + «Цены и проценты» — вся карточка, и ставка записана как прислана.
+    addGrants(db, 'registrar', { 'settings.referral_sources': 'edit', 'settings.referral_sources.money': 'edit' });
+    const id = ins({ name: 'Партнёр со ставкой', ...sample }).id;
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM referral_sources').get().n, before + 1);
+    assert.deepEqual(JSON.parse(db.prepare('SELECT service_rates s FROM referral_sources WHERE id = ?').get(id).s), sample.service_rates);
+    // Администратор — как всегда.
+    assert.ok(run(db, { table: 'referral_sources', op: 'insert', values: { name: 'Админ', ...sample } }, ADMIN).id);
   } finally { db.close(); }
 });
 

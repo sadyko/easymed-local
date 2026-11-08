@@ -67,7 +67,10 @@ test('особая ставка услуги: строка по ней — по 
   assert.equal(sum['Вознаграждение'], 60000);
 });
 
-test('особая ставка услуги: фикс за услугу; «Режим ставок» в сводке — «Особая (услуга)»', () => {
+// REFERRAL_MODE_SUMMARY_V1 (3.22.0, ревью) — в сводке «Режим ставок» — режим ИСТОЧНИКА
+// («По категории» / «Своя») и «+ особые по услугам», если хоть одна строка ушла по
+// особой ставке; в детализации у строки по-прежнему «Особая (услуга)».
+test('особая ставка услуги: фикс за услугу; «Режим ставок» в сводке — режим источника + особые', () => {
   const c = clinic();
   c.billAndPay(c.line({ patient: 2, service: 2 }));   // УЗИ → фикс 70 000, не 10 % от 200 000
   const det = objects(runReport(c.db, { kind: 'referrals_detail', ...c.range }, admin));
@@ -77,8 +80,27 @@ test('особая ставка услуги: фикс за услугу; «Ре
   assert.match(String(uzi['Ставка']), /^фикс /);
   const sum = objects(runReport(c.db, { kind: 'referrals', ...c.range }, admin)).find((o) => o['Источник'] === 'Партнёр Т.');
   assert.ok(sum, 'партнёр в сводке');
-  assert.equal(sum['Режим ставок'], 'Особая (услуга)');
+  assert.equal(sum['Режим ставок'], 'По категории + особые по услугам');
   assert.equal(sum['Вознаграждение'], 70000);
+});
+
+test('REFERRAL_MODE_SUMMARY_V1: «Режим ставок» сводки не зависит от того, какая строка пришла первой', () => {
+  for (const order of [[1, 2, 1], [2, 1, 1]]) {   // особая строка (УЗИ) — первой или в середине
+    const c = clinic();
+    for (const service of order) c.billAndPay(c.line({ patient: 1, service }));
+    const det = objects(runReport(c.db, { kind: 'referrals_detail', ...c.range }, admin)).filter((o) => o['Источник'] === 'Партнёр П.');
+    assert.deepEqual(det.map((o) => o['Ставка']).sort(), ['10 %', '10 %', '25 %'], 'детализация: у строки — её ставка');
+    const sum = objects(runReport(c.db, { kind: 'referrals', ...c.range }, admin)).find((o) => o['Источник'] === 'Партнёр П.');
+    assert.equal(sum['Режим ставок'], 'По категории + особые по услугам', 'порядок ' + order.join(','));
+  }
+  // Свои ставки: «Своя», с особой строкой — «Своя + особые по услугам».
+  const c = clinic();
+  c.db.prepare("UPDATE referral_sources SET reward_mode = 'own', own_percent = 5 WHERE name = 'Партнёр П.'").run();
+  c.billAndPay(c.line({ patient: 1, service: 1 }));
+  const own = () => objects(runReport(c.db, { kind: 'referrals', ...c.range }, admin)).find((o) => o['Источник'] === 'Партнёр П.');
+  assert.equal(own()['Режим ставок'], 'Своя');
+  c.billAndPay(c.line({ patient: 1, service: 2 }));
+  assert.equal(own()['Режим ставок'], 'Своя + особые по услугам');
 });
 
 test('особая ставка услуги: у партнёра без особых ставок ничего не меняется', () => {

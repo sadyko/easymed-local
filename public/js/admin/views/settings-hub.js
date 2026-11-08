@@ -29,7 +29,7 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 import { searchableSelect } from './searchable-select.js';   // REFERRAL_SERVICE_RATES_V1 — выбор услуги для особой ставки
 // GROUPS_FIVE_REFERRAL_V1 — ставки направлений по пяти группам услуг: ключи из
 // общего правила расчёта, подписи — те же, что у группировки услуг.
-import { REFERRAL_GROUPS, referralGroupOf } from '../../shared/referral-reward.js';
+import { REFERRAL_GROUPS, referralGroupOf, serviceRateEntryProblem } from '../../shared/referral-reward.js';   // serviceRateEntryProblem: REFERRAL_RATE_CAP_V1
 import { TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';
 // ROLES_EDITOR_V2 — «Роли» — свой файл экрана (views/roles-editor.js). Он жил
 // здесь и тянул за собой NAV_MODULES; вынесен по конвенции «один файл на
@@ -1246,6 +1246,14 @@ export function serviceRatesControl(initialRaw, hint) {
         // Значение ставится и свойством: .value читает сохранение, а атрибут
         // selected у <option> — только браузер.
         r.unit.value = cur && cur.unit === 'fix' ? 'fix' : 'pct';
+        // REFERRAL_RATE_CAP_V1 (3.22.0, ревью) — у процента верхняя граница поля 100,
+        // у суммы её нет; саму ошибку называет problem ниже, и «Сохранить» её не пропускает.
+        const capInput = () => {
+            if (r.unit.value !== 'fix') r.input.setAttribute('max', '100');
+            else if (typeof r.input.removeAttribute === 'function') r.input.removeAttribute('max');
+        };
+        r.unit.addEventListener('change', capInput);
+        capInput();
         rows.push(r);
         return r;
     }
@@ -1299,6 +1307,18 @@ export function serviceRatesControl(initialRaw, hint) {
                 out.push({ service_id: r.serviceId, unit: r.unit.value === 'fix' ? 'fix' : 'pct', value });
             }
             return out;
+        },
+    });
+    // REFERRAL_RATE_CAP_V1 (3.22.0, ревью) — первая ошибка показанных строк (процент вне
+    // 0…100, отрицательная сумма) или null: то же правило, что у сервера
+    // (shared/referral-reward.js). Прежде «250» вместо «25» сохранялось молча.
+    Object.defineProperty(wrap, 'problem', {
+        get() {
+            for (const r of rows) {
+                const p = serviceRateEntryProblem(r.unit.value === 'fix' ? 'fix' : 'pct', String(r.input.value == null ? '' : r.input.value).trim());
+                if (p) return p;
+            }
+            return null;
         },
     });
     return wrap;
@@ -1783,6 +1803,8 @@ async function renderEditor(container, key) {
                 }
                 if (f.type === 'readonly') continue;   // REFERRAL_SOURCE_CODE_V1 — присваивает база, не форма
                 if (f.type === 'checkbox') { payload[f.key] = readControl(f); continue; }
+                // REFERRAL_RATE_CAP_V1 (3.22.0, ревью) — особая ставка вне границ — не сохраняем, а называем.
+                if (f.type === 'service_rates' && controls[f.key].problem) { toast(tr(controls[f.key].problem), 'fail'); return; }
                 // Массив ставок уходит как есть: колонка объявлена JSON в
                 // реестре, компилятор сериализует её сам. Пустой массив — это
                 // «ставок нет», его тоже надо записать, чтобы снять прежние.

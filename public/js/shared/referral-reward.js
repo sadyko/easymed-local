@@ -103,6 +103,30 @@ export function serviceRateOf(source, serviceId) {
   return rateForService(source.service_rates, serviceId);
 }
 
+// REFERRAL_RATE_CAP_V1 (3.22.0, ревью) — ГРАНИЦЫ ОСОБОЙ СТАВКИ ЗА УСЛУГУ при ЗАПИСИ:
+// процент — от 0 до 100, сумма — не меньше нуля. Одно правило на форму
+// (settings-hub.js serviceRatesControl) и на сервер (routes/db.js, /api/db
+// referral_sources): «250» вместо «25» сохранялось и платило в десять раз больше.
+// Читатель выше по-прежнему терпим (испорченная запись — «ставки нет»); пустая
+// ставка — не запись, а не ошибка. Возвращает фразу отказа (статья словаря) или null.
+export const SERVICE_RATE_PCT_RANGE = 'Особая ставка в процентах — от 0 до 100.';
+export const SERVICE_RATE_FIX_NEGATIVE = 'Особая ставка суммой не может быть меньше нуля.';
+export function serviceRateEntryProblem(unit, value) {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  if (unit === 'fix') return n < 0 ? SERVICE_RATE_FIX_NEGATIVE : null;
+  return n < 0 || n > 100 ? SERVICE_RATE_PCT_RANGE : null;
+}
+export function serviceRatesProblem(raw) {
+  for (const e of parseRates(raw)) {
+    if (!e || typeof e !== 'object') continue;
+    const p = serviceRateEntryProblem(e.unit === 'fix' ? 'fix' : 'pct', e.value);
+    if (p) return p;
+  }
+  return null;
+}
+
 const pct = (v) => ({ unit: 'pct', value: num(v) ?? 0 });
 
 // Ставка для одной позиции счёта. Всегда возвращает объект — «ставки нет»

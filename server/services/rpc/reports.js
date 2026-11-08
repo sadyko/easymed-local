@@ -2250,7 +2250,8 @@ function bookedEntries(db, months) {
 // Ревью U10 (NIT) — referral_via ('visit' | 'line', REFERRAL_LINE_V1): корректировка закрытого
 // месяца говорит, от визита она или от строки (и примечание «обоим» печатается и для неё).
 const REFERRAL_ADJ_FIELDS = ['referral', 'referral_code', 'referral_source_id', 'internal', 'category_name', 'mode',
-  'where', 'beneficiary_key', 'beneficiary_doctor_id', 'ben', 'source_id', 'referral_via'];
+  'where', 'beneficiary_key', 'beneficiary_doctor_id', 'ben', 'source_id', 'referral_via',
+  'base_mode', 'special_rate'];   // REFERRAL_MODE_SUMMARY_V1 — режим источника и особая ставка строки
 
 /** Корректировки, которые приходятся на открытый месяц target (день — date). */
 function computeAdjustments(db, closed, target, ctx, date) {
@@ -2829,6 +2830,25 @@ function lineSourcesOf(db, rows) {
  * услугу» удаляет позицию счёта, «вернуть и выставить новую» уводит её к новой строке) — без
  * позиции счёта и вознаграждения не даёт никому.
  */
+// REFERRAL_SERVICE_RATES_V1 — «Режим» строки, ушедшей по особой ставке за услугу.
+const MODE_SPECIAL = 'Особая (услуга)';
+// REFERRAL_MODE_SUMMARY_V1 (3.22.0, ревью) — «Режим ставок» строки сводки «Рефералов»:
+// режим ИСТОЧНИКА («По категории» / «Своя»; стационар — свой) и «+ особые по услугам»,
+// если хоть одна строка корзины ушла по особой ставке. Прежде сводка брала «Режим»
+// первой строки корзины и в зависимости от порядка строк называла один и тот же
+// источник то «Особая (услуга)», то «По категории». Строка без base_mode (записанная
+// в закрытом месяце до этой правки) отдаёт свой «Режим»; только особые строки без
+// режима источника — «Особая (услуга)», как прежде.
+function referralModeAdd(b, r) {
+  const special = !!r.special_rate || r.mode === MODE_SPECIAL;
+  if (special) b.special = true;
+  if (b.baseMode == null) b.baseMode = r.base_mode || (special ? null : (r.mode || null));
+}
+function referralModeLabel(b) {
+  if (!b.baseMode) return b.special ? MODE_SPECIAL : b.mode;
+  return b.special ? b.baseMode + ' + особые по услугам' : b.baseMode;
+}
+
 function referralLines(db, args, ctx, { doctorId = null } = {}) {
   const scope = referrerScope(args);
   const sources = new Map(db.prepare(
@@ -2895,7 +2915,11 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
         category_name: (cat && cat.name) || row.referral_category || '',
         // REFERRAL_SERVICE_RATES_V1 — особая ставка названа своим именем: сумма,
         // не похожая ни на категорию, ни на «свою», иначе читается как ошибка.
-        mode: serviceRateOf(src, row.service_id) ? 'Особая (услуга)' : (src && src.reward_mode === 'own' ? 'Своя' : 'По категории'),
+        mode: serviceRateOf(src, row.service_id) ? MODE_SPECIAL : (src && src.reward_mode === 'own' ? 'Своя' : 'По категории'),
+        // REFERRAL_MODE_SUMMARY_V1 (3.22.0, ревью) — режим ИСТОЧНИКА и отметка особой
+        // ставки отдельно: сводка «Рефералов» называет режим источника, а не первой строки.
+        base_mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
+        special_rate: !!serviceRateOf(src, row.service_id),
         rate,
         paid,
         pay_factor: factor,
@@ -3252,8 +3276,10 @@ function referralsReport(db, args, ctx) {
       kind: r.internal ? 'internal' : 'external', where: r.where,
       doctor_id: r.beneficiary_doctor_id ?? null,   // REPORTS_AUDIT_FIX_V1 — сотрудник-получатель
       category: r.category_name, mode: r.mode,
+      baseMode: null, special: false,   // REFERRAL_MODE_SUMMARY_V1 — «Режим ставок» корзины
       patients: new Set(), count: 0, amount: 0, tax: 0, paid: 0, reward: 0,
     };
+    referralModeAdd(b, r);   // REFERRAL_MODE_SUMMARY_V1
     // Корректировка (V3120_FIX) — не услуга и не новый пациент.
     if (r.where !== 'adj') b.patients.add(r.patient_id);
     // Строка фикса за госпитализацию — не услуга: в «Услуг» не считается.
@@ -3270,7 +3296,7 @@ function referralsReport(db, args, ctx) {
     // корзины нет (в ней смешиваются ставки групп и фиксированные суммы), а
     // вознаграждение начисляется только с оплаченного.
     const eff = b.paid ? b.reward / b.paid * 100 : 0;
-    return [ctx.label(b.origin), b.code, b.source, REFERRER_KIND_RU[b.kind], WHERE_RU[b.where], b.category, b.mode,
+    return [ctx.label(b.origin), b.code, b.source, REFERRER_KIND_RU[b.kind], WHERE_RU[b.where], b.category, referralModeLabel(b),   // REFERRAL_MODE_SUMMARY_V1
             b.patients.size, b.count, round2(b.amount), ...vatCells(b.amount, b.tax), round2(b.paid), round2(eff), round2(b.reward)];
   });
   return {

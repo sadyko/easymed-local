@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { REGISTRY, tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, nonAdminColumns } from './schema-registry.js';
+import { moneyRowOf } from '../../public/js/shared/permission-catalog.js';   // REFERRAL_RATES_GUARD_V1
 
 test('users registry read columns include extra_roles', () => {
   assert.ok(readableColumns('users').includes('extra_roles'));
@@ -210,6 +211,14 @@ test('referral reward columns are wired, and the name-matched rewards table is n
   assert.equal(embedEntry('referral_sources','referral_source_categories').fk, 'category_id');
   // A registrar books visits and may add a source, but rates are the admin's.
   assert.ok(!canWrite('referral_sources','update','registrar'), 'registrar can rewrite reward rates');
+  // REFERRAL_RATES_GUARD_V1 (3.22.0, ревью) — …и не ВСТАВЛЯЕТ их с новым источником:
+  // колонки регистратуры — без единой денежной колонки плитки «Цены и проценты».
+  const deskCols = nonAdminColumns('referral_sources','insert','registrar');
+  assert.ok(Array.isArray(deskCols) && deskCols.includes('name'), 'registrar insert is not narrowed');
+  for (const c of moneyRowOf('settings.referral_sources').moneyColumns.referral_sources) {
+    assert.ok(!deskCols.includes(c), 'registrar inserts money column ' + c);
+  }
+  assert.equal(nonAdminColumns('referral_sources','insert','admin'), null);
   assert.ok(!canRead('referral_rewards','admin'), 'referral_rewards still readable through /api/db');
 });
 

@@ -181,8 +181,16 @@ function moneyBy(db, { from, to }, user, scope) {
     }
     // REFERRAL_DETAIL_BY_SERVICE_V1 — и по строке счёта: «Подробнее» показывает
     // каждую услугу отдельной строкой со своими деньгами.
-    if (r.invoice_item_id != null) {
-      const k = Number(r.invoice_item_id);
+    // REFERRAL_DETAIL_SUM_V1 (3.22.0, ревью) — строка отчёта без строки счёта
+    // визита тоже получает свой ключ: корректировка закрытого месяца (где «adj»,
+    // ключ — строка выплаты и её месяц) и стационар (где «in»: строка счёта
+    // госпитализации или фикс за госпитализацию). Прежде они попадали в шапку
+    // окна, но не в его строки, и строки с шапкой не сходились.
+    const k = r.invoice_item_id != null ? Number(r.invoice_item_id)
+      : r.where === 'adj' ? 'adj:' + (r.line_key || '') + ':' + (r.for_month || '')
+        : r.where === 'in' ? 'in:' + (r.line_kind === 'fixed' ? 'fix' + r.admission_id : r.item_id) + ':' + (r.beneficiary_key || '')
+          : null;
+    if (k != null) {
       const it = acc.items.get(k) || { received: 0, reward: 0, date: r.date || null, patient: r.patient || '', service: r.service || '' };
       it.received += received; it.reward += num(r.reward);
       acc.items.set(k, it);

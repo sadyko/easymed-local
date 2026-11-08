@@ -104,11 +104,38 @@ export function patientListPage(db, args, user) {
   const day = clinicToday(db);
   const lvSql = `SELECT pid, MAX(CASE WHEN ok = 1 THEN jd END) AS last_jd
                    FROM (${visitsWithHappenedSql()}) GROUP BY pid`;
-  const from = `FROM patients p LEFT JOIN (${lvSql}) lv ON lv.pid = p.id ${whereSql}`;
   const cols = readableColumns('patients').map((c) => 'p.' + c).join(', ');
 
-  const total = db.prepare(`SELECT COUNT(*) AS n ${from}`).get(day, day, ...params).n;
-  const rows = db.prepare(`SELECT ${cols} ${from} ORDER BY ${order} LIMIT ? OFFSET ?`)
+  // PATIENT_LIST_ONE_PASS_V1 (3.22.0, ревью) — агрегат «последнего визита» проходит
+  // ВСЕ визиты клиники (двумя EXISTS на визит), а сервер синхронный: пока он
+  // считается, ждут все. Прежде он считался дважды на вызов — для COUNT и для
+  // страницы, — даже без отбора по периоду (0,6–1,7 с на 100 000 пациентов).
+  //   • без периода: COUNT — по одной картотеке (LEFT JOIN к одной строке на пациента
+  //     число строк не меняет), страница присоединяет агрегат только для сортировки
+  //     по последнему визиту;
+  //   • с периодом: агрегат один — строки страницы и итог (COUNT(*) OVER ()) из одной
+  //     выборки; итог отдельным счётом — только у страницы за концом выборки.
+  // Агрегат — WITH … AS MATERIALIZED: иначе SQLite вталкивает условия периода в
+  // подзапрос (HAVING), и выражение «состоялся» с его EXISTS считается на каждое
+  // упоминание — втрое дольше (тот же приём, что у ключей периода в reports.js).
+  // Ответ — тот же, что у прежнего запроса (patient-list.test.js сверяет с ним).
+  const lvWith = `WITH lv AS MATERIALIZED (${lvSql})`;
+  const lvJoin = 'LEFT JOIN lv ON lv.pid = p.id';
+  if (!lastFrom && !lastTo) {
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM patients p ${whereSql}`).get(...params).n;
+    const byVisit = sort === 'last_visit_desc' || sort === 'last_visit_asc';
+    const rows = byVisit
+      ? db.prepare(`${lvWith} SELECT ${cols} FROM patients p ${lvJoin} ${whereSql} ORDER BY ${order} LIMIT ? OFFSET ?`)
+        .all(day, day, ...params, limit, offset)
+      : db.prepare(`SELECT ${cols} FROM patients p ${whereSql} ORDER BY ${order} LIMIT ? OFFSET ?`)
+        .all(...params, limit, offset);
+    return { rows, total: Number(total) || 0 };
+  }
+  const from = `FROM patients p ${lvJoin} ${whereSql}`;
+  const found = db.prepare(`${lvWith} SELECT ${cols}, COUNT(*) OVER () AS "__total" ${from} ORDER BY ${order} LIMIT ? OFFSET ?`)
     .all(day, day, ...params, limit, offset);
+  let total = found.length ? found[0].__total : 0;
+  if (!found.length && offset > 0) total = db.prepare(`${lvWith} SELECT COUNT(*) AS n ${from}`).get(day, day, ...params).n;
+  const rows = found.map(({ __total, ...row }) => row);
   return { rows, total: Number(total) || 0 };
 }
