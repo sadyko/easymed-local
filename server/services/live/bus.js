@@ -229,6 +229,18 @@ export function createLiveBus(db, opts = {}) {
   return bus;
 }
 
+/**
+ * LIVE_REFRESH_V1 (ревью 3.22.0, M6) — ВЫКЛЮЧАТЕЛЬ. EASYMED_LIVE=0|off|false|no
+ * (переменная окружения ПК-сервера, как EASYMED_MDNS и EASYMED_REPORT_WORKERS) —
+ * шина не заводится: ни триггеров, ни событий, /api/live отвечает 503
+ * live_unavailable, и вкладки перестают стучаться — экраны работают как до 3.22.0.
+ * Пусто или любое другое значение — включено.
+ */
+export function liveEnabled(env = process.env) {
+  const v = String((env && env.EASYMED_LIVE) || '').trim().toLowerCase();
+  return !['0', 'off', 'false', 'no'].includes(v);
+}
+
 /** Шина базы или null (тесты модулей без приложения шины не заводят). */
 export function liveBusFor(db) {
   try { return (db && BUSES.get(db)) || null; } catch { return null; }

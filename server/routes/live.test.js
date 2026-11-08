@@ -11,18 +11,18 @@ import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';
 import { tmpDir } from '../test-helpers/tmpdir.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
-import { liveBusFor, LIVE_TABLES } from '../services/live/bus.js';
+import { liveBusFor, liveEnabled, LIVE_TABLES } from '../services/live/bus.js';
 import { LIVE_RELEVANCE } from '../../public/js/admin/live-relevance.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function stand(t, { dataDir = licensedDataDir(), heartbeatMs } = {}) {
+async function stand(t, { dataDir = licensedDataDir(), heartbeatMs, live: liveOpts = {} } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const u = db.prepare('INSERT INTO users (id, username, password_hash, full_name, role) VALUES (?,?,?,?,?)');
   u.run(1, 'boss', hashPassword('password1'), 'Админ', 'admin');
   u.run(9, 'kassa', hashPassword('password1'), 'Кассир', 'cashier');
-  const live = heartbeatMs ? { heartbeatMs } : {};
+  const live = { ...(heartbeatMs ? { heartbeatMs } : {}), ...liveOpts };
   const server = await listen(createApp(db, { dataDir, live }));
   const base = `http://127.0.0.1:${server.address().port}`;
   const streams = [];
@@ -135,7 +135,9 @@ test('поток: text/event-stream, не сжат и не закэширова�
 });
 
 test('запись через /api/db приходит событием с именем таблицы; чтение и отказ — нет', async (t) => {
-  const { open, post, db } = await stand(t);
+  const { open, post, db, bus } = await stand(t);
+  const onBus = [];
+  bus.subscribe((ev) => onBus.push(ev));
   const s = await open('kassa');
   await s.next((f) => f.event === 'hello');
   // Чтение — ничего.
@@ -149,16 +151,22 @@ test('запись через /api/db приходит событием с им�
   assert.ok(bad.status >= 400, 'запись отвергнута: ' + bad.status);
   await sleep(300);
   assert.equal(changes({ frames: s.frames.slice(before) }).length, 0, 'отказ события не дал');
-  // Успех — событие с таблицей (таблица и не наблюдаемая — имя называет сам маршрут).
+  // Успех — событие с таблицей: на шине — имя, названное маршрутом (и ненаблюдаемое);
+  // в поток уходят только таблицы, которые смотрят экраны (ревью L2), — здесь пусто,
+  // но версия идёт дальше, чтобы вкладка не потеряла счёт (ревью M2).
+  const busBefore = onBus.length;
   const ok = await post('/api/db', 'boss', { table: 'patients', op: 'insert', values: { full_name: 'Новый Пациент' } });
   assert.equal(ok.status, 200, JSON.stringify(ok.json));
-  const ev = await s.next((f) => f.event === 'change' && f.json.tables.includes('patients'), 2000, 'событие patients');
+  const ev = await s.next((f) => f.event === 'change' && s.frames.indexOf(f) >= before, 2000, 'событие записи');
+  assert.ok(onBus.slice(busBefore).some((e) => e.tables.includes('patients')), 'маршрут назвал таблицу шине');
   assert.ok(Number(ev.id) === ev.json.v, 'id кадра — версия (по нему браузер догоняет после обрыва)');
-  assert.deepEqual(Object.keys(ev.json).sort(), ['rpc', 'tables', 'v']);
+  assert.deepEqual(ev.json, { v: ev.json.v, tables: [] }, 'в потоке — ни имён RPC, ни ненаблюдаемых таблиц');
 });
 
-test('RPC: запись — событие с именем RPC и записанными таблицами; чтение, отказ и чтение вне списка — нет', async (t) => {
-  const { open, post } = await stand(t);
+test('RPC: запись — событие с записанными таблицами (имя RPC — только на сервере); чтение, отказ и чтение вне списка — нет', async (t) => {
+  const { open, post, bus } = await stand(t);
+  const onBus = [];
+  bus.subscribe((ev) => onBus.push(ev));
   const s = await open('boss');
   await s.next((f) => f.event === 'hello');
   // Только чтение (READ_ONLY_RPCS) — ничего.
@@ -171,8 +179,9 @@ test('RPC: запись — событие с именем RPC и записан
   // Запись — событие.
   const opened = await post('/api/rpc/open_cash_shift', 'kassa', { opening_float: 0 });
   assert.equal(opened.status, 200, JSON.stringify(opened.json));
-  const ev = await s.next((f) => f.event === 'change' && f.json.rpc.includes('open_cash_shift'), 2000, 'событие open_cash_shift');
-  assert.deepEqual(ev.json.tables, ['cash_shifts'], 'база назвала, что записал RPC');
+  const ev = await s.next((f) => f.event === 'change' && f.json.tables.includes('cash_shifts'), 2000, 'событие open_cash_shift');
+  assert.deepEqual(ev.json, { v: ev.json.v, tables: ['cash_shifts'] }, 'база назвала, что записал RPC; имени RPC в потоке нет (ревью L2)');
+  assert.ok(onBus.some((e) => e.rpc.includes('open_cash_shift')), 'имя RPC осталось на сервере');
   // Отказ (смена уже открыта) — ничего.
   const n = changes(s).length;
   const again = await post('/api/rpc/open_cash_shift', 'kassa', { opening_float: 0 });
@@ -218,10 +227,14 @@ test('догоняющий: ?since= и Last-Event-ID — пропущенное 
   const r = await fetch(`${base}/api/live/version?since=${v0}`, { headers: { Cookie: cookies.kassa } });
   assert.equal(r.status, 200);
   assert.match(String(r.headers.get('cache-control')), /no-store/);
-  assert.deepEqual(await r.json(), { v: bus.version, tables: ['visits'], rpc: [] });
+  assert.deepEqual(await r.json(), { v: bus.version, tables: ['visits'] });
   const s = await open('kassa', { path: '/api/live?since=' + v0 });
   const ev = await s.next((f) => f.event === 'change', 2000, 'догоняющее событие');
-  assert.deepEqual(ev.json, { v: bus.version, tables: ['visits'], rpc: [] });
+  assert.deepEqual(ev.json, { v: bus.version, tables: ['visits'] });
+  // Ревью M2 — догоняющее событие идёт ДО hello: вкладка, увидев hello с другой версией
+  // без догоняющего, считает «могло измениться всё»; с ним — точное.
+  await s.next((f) => f.event === 'hello', 2000, 'hello');
+  assert.ok(s.frames.findIndex((f) => f.event === 'change') < s.frames.findIndex((f) => f.event === 'hello'), 'догоняющее — раньше hello');
   const s2 = await open('kassa', { headers: { 'Last-Event-ID': String(v0 - 5) } });
   const ev2 = await s2.next((f) => f.event === 'change', 2000, 'сброс');
   assert.equal(ev2.json.reset, true, 'номер до запуска сервера — «могло измениться всё»');
@@ -247,6 +260,82 @@ test('поток не пишется в журнал медленных запр
   await sleep(100);
   const n = db.prepare("SELECT COUNT(*) AS n FROM ops_events WHERE kind = 'slow_request'").get().n;
   assert.equal(n, 0, 'живой поток — не «медленный запрос»');
+});
+
+// ---- ревью 3.22.0 ------------------------------------------------------------------
+
+test('ревью M6: выключатель EASYMED_LIVE=0|off|false|no — поток 503 live_unavailable, версия «off», триггеров нет, запись работает', async (t) => {
+  for (const v of ['0', 'off', 'false', 'no', ' OFF ']) assert.equal(liveEnabled({ EASYMED_LIVE: v }), false, v);
+  for (const v of [undefined, '', '1', 'on', 'yes']) assert.equal(liveEnabled({ EASYMED_LIVE: v }), true, String(v));
+  const { base, cookies, post, db } = await stand(t, { live: { enabled: false } });
+  const s = await fetch(base + '/api/live', { headers: { Cookie: cookies.kassa } });
+  assert.equal(s.status, 503);
+  assert.equal((await s.json()).error.code, 'live_unavailable');
+  const r = await fetch(base + '/api/live/version', { headers: { Cookie: cookies.kassa } });
+  assert.equal(r.status, 503);
+  const body = await r.json();
+  assert.equal(body.off, true, 'версия говорит «выключено»');
+  assert.equal(body.error.code, 'live_unavailable');
+  assert.equal(liveBusFor(db), null, 'шины нет');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_temp_master WHERE name LIKE 'em_live_%'").get().n, 0, 'временных триггеров нет');
+  const w = await post('/api/rpc/open_cash_shift', 'kassa', { opening_float: 0 });
+  assert.equal(w.status, 200, 'запись работает как до 3.22.0');
+});
+
+test('ревью L1: retry у каждого подключения свой — 2–10 с (после перезапуска ПК не ломятся в одну секунду)', async (t) => {
+  let k = 0;
+  const seq = [0, 0.999, 0.5];
+  const { open } = await stand(t, { live: { random: () => seq[k++ % seq.length] } });
+  const got = [];
+  for (let i = 0; i < 3; i++) {
+    const s = await open('kassa');
+    const f = await s.next((x) => x.retry != null, 2000, 'retry');
+    got.push(Number(f.retry));
+    s.close();
+  }
+  assert.deepEqual(got, [2000, 9992, 6000]);
+  for (const ms of got) assert.ok(ms >= 2000 && ms <= 10000, String(ms));
+});
+
+test('ревью L5: не больше 8 потоков на сессию — девятый закрывает самый старый', async (t) => {
+  const { open, bus } = await stand(t);
+  const list = [];
+  for (let i = 0; i < 9; i++) {
+    const s = await open('kassa');
+    await s.next((f) => f.event === 'hello', 2000, 'hello ' + i);
+    list.push(s);
+  }
+  const until = Date.now() + 2000;
+  while (!list[0].ended && Date.now() < until) await sleep(20);
+  assert.equal(list[0].ended, true, 'самый старый закрыт');
+  assert.ok(list.slice(1).every((s) => !s.ended), 'остальные живы');
+  assert.equal(bus.listenerCount, 8);
+  const other = await open('boss');
+  await other.next((f) => f.event === 'hello');
+  assert.equal(bus.listenerCount, 9, 'предел — на сессию, не на клинику');
+});
+
+test('ревью L6: /api/live и /api/live/version сессию не продлевают (и в верхнем регистре); обычный запрос — продлевает', async (t) => {
+  const { base, cookies, db } = await stand(t);
+  const seen = () => db.prepare('SELECT last_seen_at FROM sessions WHERE user_id = 9 ORDER BY rowid DESC LIMIT 1').get().last_seen_at;
+  const old = new Date(Date.now() - 10 * 60000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const setOld = () => db.prepare('UPDATE sessions SET last_seen_at = ? WHERE user_id = 9').run(old);
+  for (const p of ['/api/live/version', '/API/LIVE/version']) {
+    setOld();
+    const r = await fetch(base + p, { headers: { Cookie: cookies.kassa } });
+    assert.equal(r.status, 200, p);
+    assert.equal(seen(), old, p + ' продлил сессию');
+  }
+  setOld();
+  const ac = new AbortController();
+  const s = await fetch(base + '/api/live', { headers: { Cookie: cookies.kassa }, signal: ac.signal });
+  assert.equal(s.status, 200);
+  ac.abort();
+  assert.equal(seen(), old, 'поток продлил сессию');
+  setOld();
+  const me = await fetch(base + '/api/auth/me', { headers: { Cookie: cookies.kassa } });
+  assert.equal(me.status, 200);
+  assert.notEqual(seen(), old, 'контроль: обычный запрос сессию продлевает');
 });
 
 test('страж: всё, что смотрят экраны, база ловит (LIVE_TABLES ⊇ таблиц экранов)', () => {

@@ -35,7 +35,7 @@ test('обмен филиалов: пустая или повторная пор
   assert.equal(bus.flush(), null);
 });
 
-test('анализатор: результат, легший в бланк, — событие lab_results (и строка заказа — её поймала база)', (t) => {
+test('анализатор: результат, легший в бланк, — событие lab_results от самого приёма (receive.js), без перехвата базой', (t) => {
   const db = fresh(t);
   db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Пациент Анализа')").run();
   db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (55,3,'2026-10-01T09:00:00Z','scheduled')").run();
@@ -45,7 +45,11 @@ test('анализатор: результат, легший в бланк, — 
   db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5,'ОАК',9,1)").run();
   db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed)
               VALUES (5,'WBC','Лейкоциты','10^9/л',1,'WBC',1)`).run();
-  const bus = createLiveBus(db, { coalesceMs: 10_000 });
+  // Ревью L6 — без перехвата базой (watch: []): событие может дать только явный вызов
+  // liveBump в server/lis/receive.js. Уберут его — тест краснеет (с перехватом
+  // lab_results поймали бы триггеры, и пропажа вызова прошла бы незамеченной).
+  const bus = createLiveBus(db, { coalesceMs: 10_000, watch: [] });
+  assert.equal(bus.capture, false, 'перехват выключен — проверяется сам вызов в receive.js');
   const oru = [
     'MSH|^~\\&|BC-5300|Mindray|||20260910143943||ORU^R01|42|P|2.3.1',
     'OBR|1||LAB-000001|00001^Automated Count^99MRC',
