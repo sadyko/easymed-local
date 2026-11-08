@@ -10,6 +10,7 @@ import { relayRoutes, RELAY_MOUNT } from './routes/relay.js';   // BRANCH_SYNC_R
 import { relayTokenRouter, RELAY_TOKEN_MOUNT } from './routes/relay-token.js';   // BRANCH_IDENTITY_V1
 import { branchRouter } from './routes/branch.js';   // BRANCH_SELF_SERVICE_V1
 import { publicFeedRoutes, PUBLIC_FEED_MOUNT } from './routes/public-feed.js';   // PUBLIC_LICENCE_V1
+import { aiRoutes, AI_MOUNT } from './routes/ai.js';   // AI_CHAT_V1
 
 // control-plane/server/app.js -> control-plane/ -> control-plane/public
 const CONTROL_PLANE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -36,7 +37,9 @@ const PUBLIC_DIR = path.join(CONTROL_PLANE_ROOT, 'public');
 //
 // /cp/* must be routed by nginx straight to this process as its own upstream —
 // never through the gateway, and preferably not even on the same machine.
-export function createApp(db) {
+// `options.ai` — зависимости ИИ-ручки (AI_CHAT_V1), только для тестов: подменить
+// callClaude, чтобы ни один тест не дошёл до настоящего Claude.
+export function createApp(db, { ai } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
@@ -68,6 +71,13 @@ export function createApp(db) {
   // the reason deploy is: a vendor session must buy nothing here. See
   // routes/public-feed.js.
   app.use(PUBLIC_FEED_MOUNT, publicFeedRoutes(db));
+
+  // AI_CHAT_V1 — ИИ-помощник клиник: ответ пациенту по install_token. Выше
+  // 100kb-разборщика по двум причинам deploy и relay: переписка плюс публичный
+  // снимок клиники бывает сотни килобайт (у ручки свой предел 1 МБ), и токен из
+  // заголовка X-Install-Token проверяется ДО чтения тела. Выше attachVendorUser:
+  // сессия вендора здесь ничего не даёт. См. routes/ai.js.
+  app.use(AI_MOUNT, aiRoutes(db, ai));
 
   app.use('/cp', express.json({ limit: '100kb' }));
   // VENDOR_LOGIN_V1 — resolves the vendor session cookie into req.vendorUser
