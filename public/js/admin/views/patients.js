@@ -43,6 +43,62 @@ let selectedDup = new Set();
 
 const PAGE_SIZE = 30;
 
+// PATIENT_LIST_COLUMNS_V1 (владелец, 2026-11-07: «make it possible to see other
+// patient detail») — дополнительные колонки картотеки по выбору («Колонки»).
+// Основные восемь колонок остаются как есть; выбранные встают после
+// «Регистратора». Выбор — удобство ЭТОГО компьютера (localStorage): у стойки и у
+// администратора списки разные, и общим он быть не должен.
+// lookup — колонка-ссылка: название берётся из справочника одним запросом, когда
+// колонку включили.
+const raw = (p, k) => (p && p._raw ? p._raw[k] : p && p[k]);
+const EXTRA_COLS = [
+    { key: 'national_id',     label: 'ПИНФЛ',            value: (p) => raw(p, 'national_id') },
+    { key: 'gender',          label: 'Пол',              value: (p) => (p.gender === 'M' ? 'М' : p.gender === 'F' ? 'Ж' : '') },
+    { key: 'region',          label: 'Регион',           value: (p) => raw(p, 'region') },
+    { key: 'district',        label: 'Район',            value: (p) => raw(p, 'district') },
+    { key: 'address',         label: 'Адрес',            value: (p) => raw(p, 'address') },
+    { key: 'category',        label: 'Категория',        lookup: 'patient_categories', col: 'category_id' },
+    { key: 'referrer',        label: 'Кто направил',     lookup: 'referral_sources',   col: 'referral_source_id' },
+    { key: 'payer',           label: 'Плательщик',       lookup: 'payers',             col: 'payer_id' },
+    { key: 'registration',    label: 'Дата регистрации', value: (p) => fmtDay(raw(p, 'registration_date')) },
+    { key: 'phone_secondary', label: 'Второй телефон',   value: (p) => formatPhone(raw(p, 'phone_secondary')) || raw(p, 'phone_secondary') },
+    { key: 'passport_number', label: 'Паспорт',          value: (p) => raw(p, 'passport_number') },
+    { key: 'email',           label: 'E-mail',           value: (p) => raw(p, 'email') },
+    { key: 'language',        label: 'Язык',             value: (p) => raw(p, 'language') },
+];
+const COLS_KEY = 'patients.extraCols';
+function loadExtraCols() {
+    try {
+        const v = JSON.parse(localStorage.getItem(COLS_KEY) || '[]');
+        return new Set(Array.isArray(v) ? v.filter((k) => EXTRA_COLS.some((c) => c.key === k)) : []);
+    } catch (_) { return new Set(); }
+}
+function saveExtraCols(set) {
+    try { localStorage.setItem(COLS_KEY, JSON.stringify([...set])); } catch (_) { /* приватное окно — выбор живёт до перезагрузки */ }
+}
+let extraCols = new Set();
+const lookupNames = {};   // table -> Map(id -> name), пока экран открыт
+async function ensureLookups() {
+    const tables = [...new Set(EXTRA_COLS.filter((c) => c.lookup && extraCols.has(c.key)).map((c) => c.lookup))];
+    await Promise.all(tables.filter((t) => !lookupNames[t]).map(async (t) => {
+        try {
+            const { data } = await supabase.from(t).select('id, name').limit(2000);
+            lookupNames[t] = new Map((data || []).map((r) => [String(r.id), r.name]));
+        } catch (_) { lookupNames[t] = new Map(); }
+    }));
+}
+const shownExtraCols = () => EXTRA_COLS.filter((c) => extraCols.has(c.key));
+function extraValue(c, p) {
+    if (c.lookup) {
+        const id = raw(p, c.col);
+        if (id == null || id === '') return '';
+        const m = lookupNames[c.lookup];
+        return (m && m.get(String(id))) || '';
+    }
+    const v = c.value(p);
+    return v == null ? '' : String(v);
+}
+
 const state = {
     filter: 'all',
     search: '',
@@ -50,6 +106,9 @@ const state = {
     sort:   'recent',
     page:   1,
     total:  0,
+    // PATIENT_LIST_LAST_VISIT_V1 — «Фильтр»: период последнего визита ('YYYY-MM-DD').
+    lastFrom: '',
+    lastTo:   '',
 };
 
 const refs = {
@@ -78,6 +137,8 @@ export async function renderPatients(container, { onNavigate, embedded = false }
     state.sort   = 'recent';
     state.page   = 1;
     state.total  = 0;
+    state.lastFrom = '';   // PATIENT_LIST_LAST_VISIT_V1
+    state.lastTo   = '';
 
     refs.container  = container;
     refs.onNavigate = onNavigate;
@@ -239,10 +300,23 @@ function mount() {
         },
     }, Icon('ChevronRight', { size: 14 }));
 
+    // PATIENT_LIST_LAST_VISIT_V1 — «Последний визит»: первое нажатие — сначала
+    // недавние, повторное — сначала давние. Сортирует сервер всю картотеку.
+    refs.lastSortArrow = h('span', { style: { display: 'inline-flex', marginLeft: '4px' } });
+    const lastVisitSortBtn = h('button', {
+        type: 'button', 'data-sort': 'last_visit',
+        title: 'Сортировать по последнему визиту; нажмите ещё раз — обратный порядок',
+        onclick: () => {
+            state.sort = state.sort === 'last_visit_desc' ? 'last_visit_asc' : 'last_visit_desc';
+            state.page = 1; paintSortChrome(); fetchAndPaint();
+        },
+    }, 'Последний визит', refs.lastSortArrow);
+    refs.sortButtons.last_visit = lastVisitSortBtn;
     const sortSegmented = h('div', { class: 'segmented' },
         sortBtn('recent', 'Сначала новые'),   // V3120_FIX — было «Sort: Recent»
         sortBtn('az',     'A–Z'),
         sortBtn('mrn',    'MRN'),
+        lastVisitSortBtn,
     );
 
     // REGISTRATURA_CLEANUP_V1 — table-header actions: duplicates chip + calculator + create.
@@ -274,6 +348,20 @@ function mount() {
         onclick: () => openCreatePatient() },
         Icon('Plus', { size: 14 }), ' Создать пациента');
 
+    // PATIENT_LIST_LAST_VISIT_V1 · PATIENT_LIST_COLUMNS_V1 — «Фильтр» и «Колонки»
+    // справа под «Создать пациента» (владелец: «put filter button on the right side
+    // under create a patient»). Обе открывают свою полосу под шапкой списка.
+    extraCols = loadExtraCols();
+    refs.filterBadge = h('span', { class: 'tag tag-info', style: { display: 'none', marginLeft: '4px', fontSize: '12.5px' } }, '1');
+    const filterBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-act': 'patients-filter',
+        onclick: () => togglePanel('filter') }, Icon('Filter', { size: 14 }), ' ', 'Фильтр', refs.filterBadge);
+    refs.colsBadge = h('span', { class: 'tag', style: { display: 'none', marginLeft: '4px', fontSize: '12.5px' } }, '');
+    const colsBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-act': 'patients-columns',
+        onclick: () => togglePanel('cols') }, Icon('Grid', { size: 14 }), ' ', 'Колонки', refs.colsBadge);
+    openPanel = null;   // новая страница — обе полосы закрыты
+    refs.filterPanel = buildFilterPanel();
+    refs.colsPanel = buildColsPanel();
+
     // DUP_MERGE_V1 — «select all visible» header checkbox (only meaningful in the
     // Duplicates filter) + the floating merge action bar.
     const dupHeadCb = h('input', { type: 'checkbox', title: 'Выбрать все на странице',
@@ -283,7 +371,7 @@ function mount() {
             for (const p of (refs.lastRows || [])) { if (on) selectedDup.add(p.id); else selectedDup.delete(p.id); }
             paintRows(refs.lastRows || []); paintMergeBar();
         } });
-    refs.dupHeadCb = dupHeadCb;
+    refs.dupHeadCb = dupHeadCb;   // PATIENT_LIST_COLUMNS_V1 — headRow() берёт его отсюда
     const mergeCount = h('b', null, '0');
     refs.mergeCount = mergeCount;
     const mergeBar = h('div', { class: 'dup-merge-bar', style: {
@@ -349,8 +437,12 @@ function mount() {
                         refs.searchInp,
                     ),
                     refs.dobInp,
+                    // PATIENT_LIST_LAST_VISIT_V1 — справа, под «Создать пациента».
+                    h('div', { class: 'reg-base-main' }, filterBtn, colsBtn),
                 ),
             ),
+            refs.filterPanel,
+            refs.colsPanel,
             mergeBar,
             // REG_TBL_FIT_V1 — таблица должна прокручиваться САМА, а не тянуть
             // за собой всю страницу.
@@ -365,8 +457,31 @@ function mount() {
             h('div', { style: { overflowX: 'auto' } },
             // REG_LIST_COMPACT_V1 — ref: колонка флажков видна только в режиме «Дубликаты».
             refs.baseTbl = h('table', { class: 'tbl reg-base-tbl' + (state.filter === 'duplicates' ? ' is-dup' : '') },
-                h('thead', null, h('tr', null,
-                    h('th', { style: { width: '34px', textAlign: 'center' }, 'data-dupcol': '' }, dupHeadCb),   // DUP_MERGE_V1
+                refs.thead = h('thead', null, headRow()),
+                refs.tbody,
+            )),
+            refs.emptyEl,
+            h('div', { class: 'row', style: { padding: '12px 20px', borderTop: '1px solid var(--ink-100)' } },
+                refs.pagerLabel,
+                h('span', { class: 'grow' }),
+                h('div', { class: 'row', style: { gap: '4px' } },
+                    refs.prevBtn,
+                    refs.nextBtn,
+                ),
+            ),
+        ),
+    ));
+
+    paintFilterCardChrome();
+    paintSortChrome();
+    paintFilterChrome();   // PATIENT_LIST_LAST_VISIT_V1
+}
+
+// PATIENT_LIST_COLUMNS_V1 — шапка строится функцией: выбор колонок перерисовывает
+// её без пересборки страницы (поле поиска не теряет набранное).
+function headRow() {
+    return h('tr', null,
+                    h('th', { style: { width: '34px', textAlign: 'center' }, 'data-dupcol': '' }, refs.dupHeadCb),   // DUP_MERGE_V1
                     // PATIENT_ROW_V2 — восемь колонок вместо десяти, и это НЕ
                     // потеря данных: «Пол» переехал в личность (номер карты ·
                     // пол · город — одна строка под именем), «Визитов» — под
@@ -390,26 +505,77 @@ function mount() {
                     h('th', null, 'Последний визит'),
                     h('th', { style: { textAlign: 'right' } }, 'Баланс'),
                     h('th', null, 'Регистратор'),
+                    ...shownExtraCols().map((c) => h('th', { 'data-extra-col': c.key }, c.label)),   // PATIENT_LIST_COLUMNS_V1
                     h('th', { style: { width: '104px' } }),
                     // PATIENT_BOT_INVITE_V1 — Telegram-бот пациента: значок или «Ссылка на бот».
                     h('th', { class: 'pt-bot-col' }),
-                )),
-                refs.tbody,
-            )),
-            refs.emptyEl,
-            h('div', { class: 'row', style: { padding: '12px 20px', borderTop: '1px solid var(--ink-100)' } },
-                refs.pagerLabel,
-                h('span', { class: 'grow' }),
-                h('div', { class: 'row', style: { gap: '4px' } },
-                    refs.prevBtn,
-                    refs.nextBtn,
-                ),
-            ),
-        ),
-    ));
+    );
+}
 
-    paintFilterCardChrome();
-    paintSortChrome();
+// ---- «Фильтр» и «Колонки» -----------------------------------------------------
+let openPanel = null;
+function togglePanel(which) {
+    openPanel = openPanel === which ? null : which;
+    if (refs.filterPanel) refs.filterPanel.style.display = openPanel === 'filter' ? 'flex' : 'none';
+    if (refs.colsPanel) refs.colsPanel.style.display = openPanel === 'cols' ? 'flex' : 'none';
+}
+const panelStyle = { display: 'none', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 20px',
+    background: 'var(--ink-50)', borderBottom: '1px solid var(--ink-100)', fontSize: '13.5px' };
+const dateStyle = { height: '32px', padding: '0 10px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontSize: '13.5px', fontFamily: 'inherit' };
+
+// PATIENT_LIST_LAST_VISIT_V1 — период ПОСЛЕДНЕГО визита: «с» и/или «по». Пациент
+// без визитов в отбор не попадает (последнего визита у него нет).
+function buildFilterPanel() {
+    const fromInp = h('input', { type: 'date', 'data-filter': 'last-from', style: dateStyle });
+    const toInp = h('input', { type: 'date', 'data-filter': 'last-to', style: dateStyle });
+    refs.lastFromInp = fromInp; refs.lastToInp = toInp;
+    const apply = () => {
+        const f = fromInp.value || '', t = toInp.value || '';
+        if (f && t && f > t) { toast('Начало периода позже его конца.', 'fail'); return; }
+        state.lastFrom = f; state.lastTo = t; state.page = 1;
+        paintFilterChrome(); fetchAndPaint();
+    };
+    const reset = () => {
+        fromInp.value = ''; toInp.value = '';
+        state.lastFrom = ''; state.lastTo = ''; state.page = 1;
+        paintFilterChrome(); fetchAndPaint();
+    };
+    return h('div', { class: 'pt-filter-panel', style: { ...panelStyle } },
+        h('span', { class: 'cell-strong' }, 'Последний визит'),
+        h('label', { class: 'row', style: { gap: '6px' } }, h('span', { class: 'muted' }, 'с'), fromInp),
+        h('label', { class: 'row', style: { gap: '6px' } }, h('span', { class: 'muted' }, 'по'), toInp),
+        h('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-filter': 'apply', onclick: apply }, 'Применить'),
+        h('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'data-filter': 'reset', onclick: reset }, Icon('X', { size: 13 }), ' ', 'Сбросить'),
+        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Пациенты, у которых последний визит был в этот период.'),
+    );
+}
+function paintFilterChrome() {
+    const on = !!(state.lastFrom || state.lastTo);
+    if (refs.filterBadge) refs.filterBadge.style.display = on ? '' : 'none';
+    const n = extraCols.size;
+    if (refs.colsBadge) { refs.colsBadge.style.display = n ? '' : 'none'; refs.colsBadge.textContent = '+' + n; }
+}
+
+// PATIENT_LIST_COLUMNS_V1 — галочки дополнительных колонок.
+function buildColsPanel() {
+    const boxes = EXTRA_COLS.map((c) => h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer' } },
+        h('input', { type: 'checkbox', 'data-col': c.key, checked: extraCols.has(c.key),
+            onchange: async (e) => {
+                if (e.currentTarget.checked) extraCols.add(c.key); else extraCols.delete(c.key);
+                saveExtraCols(extraCols);
+                paintFilterChrome();
+                await ensureLookups();
+                repaintHead();
+                paintRows(refs.lastRows || []);
+            } }),
+        h('span', null, c.label)));
+    return h('div', { class: 'pt-cols-panel', style: { ...panelStyle } },
+        h('span', { class: 'cell-strong' }, 'Показать колонки:'), ...boxes);
+}
+function repaintHead() {
+    if (!refs.thead) return;
+    clear(refs.thead);
+    refs.thead.appendChild(headRow());
 }
 
 function filterCard(key, m) {
@@ -477,8 +643,15 @@ function sortBtn(key, label) {
 
 function paintSortChrome() {
     for (const [key, btn] of Object.entries(refs.sortButtons)) {
-        if (state.sort === key) btn.classList.add('on');
-        else                    btn.classList.remove('on');
+        // PATIENT_LIST_LAST_VISIT_V1 — «last_visit» горит в обоих направлениях.
+        const on = key === 'last_visit' ? String(state.sort).startsWith('last_visit') : state.sort === key;
+        if (on) btn.classList.add('on');
+        else    btn.classList.remove('on');
+    }
+    if (refs.lastSortArrow) {
+        clear(refs.lastSortArrow);
+        if (state.sort === 'last_visit_desc') refs.lastSortArrow.appendChild(Icon('ArrowDown', { size: 13 }));
+        if (state.sort === 'last_visit_asc') refs.lastSortArrow.appendChild(Icon('ArrowUp', { size: 13 }));
     }
 }
 
@@ -683,12 +856,15 @@ async function fetchAndPaint() {
         filter:   state.filter,
         sort:     state.sort,
         doctorId: refs.doctorId,
+        lastFrom: state.lastFrom,   // PATIENT_LIST_LAST_VISIT_V1
+        lastTo:   state.lastTo,
     };
     if (state.filter === 'duplicates') {
         opts.filter = 'all';
         opts.idsIn = [...duplicateIdSet];
     }
-    const result = await loadPatientsPaged(opts);
+    const [result] = await Promise.all([loadPatientsPaged(opts), ensureLookups()]);   // PATIENT_LIST_COLUMNS_V1 — названия ссылок к первой отрисовке
+    if (result.error && token === lastFetchToken) toast(trf('Список не загрузился: {msg}', { msg: result.error }), 'fail');
 
     // A later keystroke / page click already kicked off a fresh query — drop
     // this stale response so it can't overwrite the newer rows.
@@ -715,7 +891,7 @@ function setLoadingRow() {
     refs.tbody.appendChild(h('tr', null,
         // PATIENT_ROW_V2 — 10 колонок (REG_LIST_AGE_COL_V1 + PATIENT_BOT_INVITE_V1): число обязано
         // совпадать с шапкой, иначе строка загрузки не растянется на таблицу.
-        h('td', { colspan: '10', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка…'),
+        h('td', { colspan: String(10 + extraCols.size), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка…'),
     ));
     refs.emptyEl.style.display = 'none';
 }
@@ -995,6 +1171,11 @@ function patientRow(p) {
             h('span', { class: 'reg-by' }, Icon('User', { size: 13 }),
                 registrar ? h('span', { class: 'pt-reg-nm', title: registrar }, registrar) : noneCell('Не указан')),
         ),
+        // PATIENT_LIST_COLUMNS_V1 — выбранные дополнительные колонки.
+        ...shownExtraCols().map((c) => {
+            const v = extraValue(c, p);
+            return h('td', { 'data-extra-col': c.key }, v ? h('span', { title: v }, v) : noneCell('—'));
+        }),
         // 7 — action «Карточка»
         h('td', { onclick: (e) => e.stopPropagation() },
             // REG_LIST_ADAPT_V1 — подпись в своём span: на узкой карточке

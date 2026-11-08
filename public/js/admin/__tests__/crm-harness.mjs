@@ -199,6 +199,9 @@ globalThis.fetch = async (url, opts) => {
       }
     }
     if (body.table === 'users' && body.op === 'select') return jsonOk(S.staff);
+    // CRM_DUP_ADD_SERVICES_V1 — каталог услуг и строки заявки, когда тесту они нужны.
+    if (body.table === 'services' && body.op === 'select') return jsonOk(S.services || []);
+    if (body.table === 'crm_request_services' && body.op === 'select') return jsonOk(applyFilters(S.reqLines || [], body.filters));
     if (body.table === 'crm_request_tags') {
       if (body.op === 'select') return jsonOk(applyFilters(S.leadTags, body.filters));
       if (body.op === 'insert') {

@@ -208,7 +208,30 @@ export async function loadPatientsPaged({
     // phone/PINFL with someone else" — used by the Duplicates filter card).
     // Empty array short-circuits to zero rows so an empty result is honest.
     idsIn = null,
+    // PATIENT_LIST_LAST_VISIT_V1 — отбор по периоду последнего визита ('YYYY-MM-DD').
+    lastFrom = '', lastTo = '',
 } = {}) {
+    // PATIENT_LIST_LAST_VISIT_V1 — «Последний визит» — вычисление по визитам, а не
+    // колонка: сортировку и отбор по нему делает сервер (rpc/patient-list.js) по всей
+    // картотеке, с теми же поиском, датой рождения, «Дубликатами» и зданиями.
+    // Обычная страница идёт прежним путём через /api/db — ничего не меняется.
+    if (!doctorId && (String(sort).startsWith('last_visit') || lastFrom || lastTo)) {
+        if (Array.isArray(idsIn) && idsIn.length === 0) return { rows: [], total: 0 };
+        const { data, error } = await supabase.rpc('patient_list_page', {
+            search, dob, sort, limit, offset,
+            last_from: lastFrom || null, last_to: lastTo || null,
+            ids: Array.isArray(idsIn) ? idsIn : null,
+            branch_ids: branchSelectionNarrows() ? getSelectedBranchIds() : null,
+        });
+        if (error) {
+            console.warn('[patient_list_page]', error.message);
+            return { rows: [], total: 0, error: error.message || String(error) };
+        }
+        const rows = ((data && data.rows) || []).map(shapePatient);
+        await attachBaseAggregates(rows);
+        return { rows, total: (data && data.total) || 0 };
+    }
+
     // Doctor-scoped login still uses the legacy code path (it joins via
     // visit_services and is cheap enough to do client-side).
     if (doctorId) {
@@ -305,7 +328,13 @@ export async function loadPatientsPaged({
         return { rows: [], total: 0 };
     }
     const rows = (data || []).map(shapePatient);
-    // RegBase aggregates (Визитов/ДМС/Баланс/Регистратор/Последний визит) — one batch RPC, not N+1.
+    await attachBaseAggregates(rows);
+    return { rows, total: count || 0 };
+}
+
+// RegBase aggregates (Визитов/ДМС/Баланс/Регистратор/Последний визит) — one batch RPC, not N+1.
+// PATIENT_LIST_LAST_VISIT_V1 — вынесено из loadPatientsPaged: им пользуются оба пути страницы.
+async function attachBaseAggregates(rows) {
     if (rows.length) {
         try {
             const { data: aggs } = await supabase.rpc('patient_base_aggregates', { p_ids: rows.map(r => r.id) });
@@ -332,7 +361,6 @@ export async function loadPatientsPaged({
             }
         } catch (e) { console.warn('[patient_base_aggregates]', e.message); }
     }
-    return { rows, total: count || 0 };
 }
 
 async function loadPatientsForDoctor(doctorId, limit) {

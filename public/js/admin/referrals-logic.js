@@ -89,6 +89,30 @@ export const VISIT_STATUS_RU = Object.freeze({
     scheduled: 'Запланирован', confirmed: 'Подтверждён', arrived: 'Пришёл', cancelled: 'Отменён', no_show: 'Не пришёл',
 });
 
+// REFERRAL_DETAIL_BY_SERVICE_V1 — состояние ОДНОЙ услуги в «Подробнее» (строка
+// визита, машина состояний мигр. 041). Слова — те же, что у процедур
+// (procedures.js STATUS_RU) и карты пациента.
+export const LINE_STATUS_RU = Object.freeze({
+    added: 'Назначено', queued: 'В очереди', collected: 'Проба взята', in_progress: 'Выполняется',
+    resulted: 'Результат готов', completed: 'Выполнено',
+});
+
+// Колонки «Подробнее» по услугам — одни на обе вкладки («Представители» и
+// «Активность врачей») и на печать. Строка без статуса — деньги из счёта, чьей
+// строки визита в периоде нет (сервер: sourceDetailLines).
+export function serviceDetailColumns(money, { sumText, tr }) {
+    return [
+        { label: 'Дата', value: (l) => dmy(l.date) },
+        { label: 'Пациент', value: (l) => l.patient || '—' },
+        { label: 'Услуга', value: (l) => l.service || '—' },
+        { label: 'Статус', value: (l) => (l.status ? tr(LINE_STATUS_RU[l.status] || l.status) : '—') },
+        ...(money ? [
+            { label: 'Получено', value: (l) => sumText(l.received), num: true, print: (l) => Math.round(l.received) },
+            { label: 'Вознаграждение', value: (l) => sumText(l.reward), num: true, print: (l) => Math.round(l.reward) },
+        ] : []),
+    ];
+}
+
 /**
  * Лист для печати в форме, которую понимает reportPrintHtml (views/report-print.js):
  * колонки — подписи, строки — массивы в том же порядке. Числа остаются числами,

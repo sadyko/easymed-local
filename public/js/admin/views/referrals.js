@@ -118,12 +118,28 @@ export async function renderReferrals(container, ctx = {}) {
         }
     }
 
+    // REFERRAL_EDIT_FROM_REPS_V1 — «Изменить» у врача в «Представителях»:
+    // карточка врача живёт во вкладке «Врачи-источники» (редактор справочника,
+    // settings-hub.js), поэтому кнопка переключает вкладку и открывает там
+    // карточку этой строки — ту же, что открывает щелчок по ней.
+    const tabCtx = {
+        ...ctx,
+        openSourceCard: TABS_VISIBLE.some((t) => t.id === 'sources') ? async (sourceId) => {
+            // Вкладка, откуда пришли, при возврате рисуется заново: иначе она
+            // показывала бы прежний номер и телефон, которые только что сменили.
+            if (active !== 'sources') mounted.delete(active);
+            await select('sources');
+            const open = hosts.sources && hosts.sources.openLookupRow;
+            return typeof open === 'function' ? open(sourceId) : false;
+        } : null,
+    };
+
     async function ensureMounted(id) {
         if (mounted.has(id)) return;
         mounted.add(id);
         const tab = TABS.find((t) => t.id === id);
         try {
-            await tab.render(hosts[id], ctx);
+            await tab.render(hosts[id], tabCtx);
         } catch (e) {
             clear(hosts[id]);
             hosts[id].appendChild(h('div', { class: 'empty', style: { padding: '30px' } },

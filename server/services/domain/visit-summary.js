@@ -55,6 +55,35 @@ const CHUNK = 500;
 const empty = () => ({ visit_count: 0, last_visit: null, last_visit_day: null, next_visit: null, next_visit_day: null });
 
 /**
+ * PATIENT_LIST_LAST_VISIT_V1 — правило «состоялся» одним SQL-фрагментом: визиты
+ * (не отменённые и не «не пришёл»), у каждого — pid, jd (julianday), d (местный
+ * день) и ok (1 — состоялся по правилу выше). Им пользуются эта сводка и
+ * картотека (rpc/patient-list.js: сортировка и отбор по последнему визиту) —
+ * одно определение, а не две копии, которые разойдутся с первой же правкой.
+ *
+ * Параметры фрагмента — ДВА раза сегодня клиники ('YYYY-MM-DD'), затем
+ * параметры `where`.
+ * @param {string} [where] — условие на v (например, v.patient_id IN (…)).
+ */
+export function visitsWithHappenedSql(where = '1=1') {
+  const local = localDate('v.visit_date');
+  const gone = NOT_HAPPENED_STATUSES.map((s) => `'${s}'`).join(', ');
+  const worked = WORKED_LINE_STATUSES.map((s) => `'${s}'`).join(', ');
+  return `SELECT v.patient_id AS pid, julianday(v.visit_date) AS jd, ${local} AS d,
+                 CASE WHEN ${local} = ? THEN 1
+                      WHEN ${local} > ? THEN 0
+                      WHEN v.status = 'arrived' THEN 1
+                      WHEN EXISTS (SELECT 1 FROM visit_services vs
+                                    WHERE vs.visit_id = v.id AND vs.status IN (${worked})) THEN 1
+                      WHEN EXISTS (SELECT 1 FROM invoices iv
+                                    WHERE iv.visit_id = v.id AND iv.paid_amount > 0) THEN 1
+                      ELSE 0 END AS ok
+            FROM visits v
+           WHERE (${where})
+             AND v.status NOT IN (${gone})`;
+}
+
+/**
  * Визиты пациентов по правилу выше, одним запросом на пачку.
  *
  * @param {import('better-sqlite3').Database} db
@@ -72,9 +101,6 @@ export function patientVisitSummary(db, patientIds, { today = null } = {}) {
   if (!ids.length) return out;
   const day = today == null ? clinicToday(db) : String(today);
   if (!YMD.test(day)) throw new Error('patientVisitSummary: today must be YYYY-MM-DD, got ' + day);
-  const local = localDate('v.visit_date');
-  const gone = NOT_HAPPENED_STATUSES.map((s) => `'${s}'`).join(', ');
-  const worked = WORKED_LINE_STATUSES.map((s) => `'${s}'`).join(', ');
   // LAST_VISIT_TRUE_V1 (ревью, minor-1) — «состоялся» ОПИСАН один раз
   // (внутренний SELECT, колонка ok). LAST_VISIT_TRUE_V1 (полировка, п. 16) — но
   // SQLite разворачивает этот подзапрос во внешний, и выражение ok с его EXISTS
@@ -95,18 +121,7 @@ export function patientVisitSummary(db, patientIds, { today = null } = {}) {
                      SUM(ok)                           AS happened,
                      MAX(CASE WHEN ok = 1 THEN jd END) AS last_jd,
                      MIN(CASE WHEN d > ? THEN jd END)  AS next_jd
-                FROM (SELECT v.patient_id AS pid, julianday(v.visit_date) AS jd, ${local} AS d,
-                             CASE WHEN ${local} = ? THEN 1
-                                  WHEN ${local} > ? THEN 0
-                                  WHEN v.status = 'arrived' THEN 1
-                                  WHEN EXISTS (SELECT 1 FROM visit_services vs
-                                                WHERE vs.visit_id = v.id AND vs.status IN (${worked})) THEN 1
-                                  WHEN EXISTS (SELECT 1 FROM invoices iv
-                                                WHERE iv.visit_id = v.id AND iv.paid_amount > 0) THEN 1
-                                  ELSE 0 END AS ok
-                        FROM visits v
-                       WHERE v.patient_id IN (${part.map(() => '?').join(', ')})
-                         AND v.status NOT IN (${gone}))
+                FROM (${visitsWithHappenedSql(`v.patient_id IN (${part.map(() => '?').join(', ')})`)})
                GROUP BY pid)`).all(day, day, day, ...part);
     for (const r of rows) {
       out.set(Number(r.pid), {

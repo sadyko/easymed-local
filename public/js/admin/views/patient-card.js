@@ -53,6 +53,7 @@ import { radioChips, phoneInput, mailInput } from './registration.js?v=aug17f';
 // сервер (server/services/rpc/patient-card.js), и `tabAccess` ниже — это его
 // ответ, а не мнение браузера. Спрятанная вкладка защитой не является.
 import { currentRoleLabel, hasActorRole, canOrderAdmission, isRouteAllowed } from '../permissions.js';   // V3120_FIX — canOrderAdmission, isRouteAllowed
+import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';   // SVC_REFERRER_COLUMN_V1 — подпись направившего как во всех экранах регистратора
 
 // LIVE_AUDIT_FIX_V1 (C6) — зеркало REMOVE_SERVICE_ROLES (server/services/rpc/
 // billing.js): «Заменить услугу» и «Убрать» исполняет сервер только
@@ -379,6 +380,12 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             clinicItemId:  r.clinic_item_id || null,
             doctorId:      r.doctor_id,
             doctorName:    (r.users && r.users.full_name) || '',
+            // SVC_REFERRER_COLUMN_V1 — направивший СТРОКИ (кто направил на эту
+            // услугу, правится карандашом) и направивший ВИЗИТА (кто привёл
+            // пациента, правится в окне визита). Платятся оба (REFERRAL_LINE_V1).
+            referralId:        r.line_referral ? r.line_referral.id : null,
+            referralName:      r.line_referral ? referralSourceLabel(r.line_referral) : '',
+            visitReferralName: r.visit_referral ? referralSourceLabel(r.visit_referral) : '',
             invoiceItemId: r.invoice_item_id,
             name:   (r.services && r.services.name) || (r.products && r.products.name) || '—',
             qty:    r.quantity,
@@ -989,6 +996,19 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         return _svcDocPool;
     }
 
+    // SVC_REFERRER_COLUMN_V1 — источники направления для правки «Направил»
+    // строки. Меняет его сервер (patient_card_set_line_referrer: администратор и
+    // регистратура) — экран лишь не показывает выбор тем, кому сервер откажет.
+    const SVC_REFERRAL_ROLES = ['admin', 'registrar'];   // зеркало DESK_ROLES (domain/line-referral.js)
+    let _svcRefPool = null;
+    async function svcReferralPool() {
+        if (_svcRefPool) return _svcRefPool;
+        const { data } = await supabase.from('referral_sources')
+            .select('id, name, code').eq('active', true).order('name');
+        _svcRefPool = data || [];
+        return _svcRefPool;
+    }
+
     // SVC_PAGE_SEARCH_V1 — у постоянного пациента список услуг вырастает в
     // бесконечную простыню: последние строки уезжают за экран, а найти в ней
     // что-то можно только глазами. Показываем первые PAGE строк, остальное —
@@ -1034,7 +1054,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             completed: 'выполнено', cancelled: 'отменено',
         };
         const haystack = (s) => [
-            s.name, s.doctorName, s.date ? fmtDateTime(s.date) : '',
+            s.name, s.doctorName, s.referralName, s.visitReferralName, s.date ? fmtDateTime(s.date) : '',
             s.status, RU_STATUS[s.status] || '', String(s.total ?? ''),
         ].filter(Boolean).join(' ').toLowerCase();
         const matches = (s) => !q || haystack(s).includes(q);
@@ -1052,7 +1072,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             countEl.textContent = q ? trf('{n} из {max}', { n: rows.length, max: services.length }) : String(services.length);
 
             if (!rows.length) {
-                tbody.appendChild(h('tr', null, h('td', { colspan: '7', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } },
+                tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } },
                     'Ничего не найдено — измените запрос.')));
                 moreWrap.style.display = 'none';
                 return;
@@ -1074,34 +1094,88 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             const removable = editable;
 
             const docCell = h('td', null, s.doctorName || '—');
+            // SVC_REFERRER_COLUMN_V1 — сверху направивший ЭТОЙ услуги; ниже мелко —
+            // направивший визита (кто привёл пациента), если он есть и другой:
+            // ему платят за каждую строку визита, и молчать о нём значило бы
+            // показывать «—» у строки, за которую бонус всё-таки начисляется.
+            const refCell = h('td', null,
+                h('div', null, s.referralName || '—'),
+                s.visitReferralName && s.visitReferralName !== s.referralName
+                    ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' }, title: tr('Кто привёл пациента — меняется в окне визита') },
+                        trf('визит: {name}', { name: s.visitReferralName }))
+                    : null);
             // PATIENT_TAB_ACCESS_V1 — «Сменить врача» и «Заменить услугу» — это
             // ИЗМЕНЕНИЕ вкладки «Услуги», «Убрать» — УДАЛЕНИЕ. Кнопка, которая
             // всегда кончается отказом сервера, читается как сломанная
             // программа, поэтому её здесь просто нет; сервер отказывает вторым
             // рубежом (rpc/index.js change_unpaid_service / remove_unpaid_service).
-            const editBtn = editable && tabEdit('services') ? h('button', {
-                class: 'btn btn-outline btn-sm', type: 'button', title: 'Сменить врача',
+            // SVC_REFERRER_COLUMN_V1 — карандаш правит и «Направил» этой строки.
+            // Врача меняют, пока услугу не начали (editable); направившего — в
+            // любом статусе, но только стойка: администратор и регистратура
+            // (patient_card_set_line_referrer; закрытый месяц сервер не трогает).
+            // Направившего визита карандаш не меняет — у него окно визита.
+            const canRef = hasActorRole(SVC_REFERRAL_ROLES);
+            const editBtn = (editable || canRef) && tabEdit('services') ? h('button', {
+                class: 'btn btn-outline btn-sm', type: 'button',
+                title: editable && canRef ? 'Сменить врача / направившего' : editable ? 'Сменить врача' : 'Сменить направившего',
                 onclick: async (ev) => {
                     const btn = ev.currentTarget;
                     btn.disabled = true;
-                    const pool = (await svcDoctorPool()).filter(d => Array.isArray(d.service_rates)
-                        && d.service_rates.some(r => r && String(r.service_id) === String(s.serviceId)));
+                    const [docPool, refPool] = await Promise.all([
+                        editable ? svcDoctorPool() : Promise.resolve([]),
+                        canRef ? svcReferralPool() : Promise.resolve([]),
+                    ]);
                     btn.disabled = false;
-                    if (!pool.length) { toast('На эту услугу не назначен ни один врач (Сотрудники → «Услуги и ставки»).', 'info'); return; }
-                    const sel = h('select', { style: { padding: '5px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', maxWidth: '180px' } },
+                    const pool = docPool.filter(d => Array.isArray(d.service_rates)
+                        && d.service_rates.some(r => r && String(r.service_id) === String(s.serviceId)));
+                    const canDoc = editable && pool.length > 0;
+                    if (!canDoc && !canRef) { toast('На эту услугу не назначен ни один врач (Сотрудники → «Услуги и ставки»).', 'info'); return; }
+                    const selStyle = { padding: '5px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', maxWidth: '180px' };
+
+                    const sel = canDoc ? h('select', { style: selStyle },
                         ...(s.doctorId && !pool.some(d => String(d.id) === String(s.doctorId))
                             ? [h('option', { value: s.doctorId, selected: true }, s.doctorName || trf('Врач #{id}', { id: s.doctorId }))] : []),
-                        ...pool.map(d => h('option', { value: d.id, selected: String(d.id) === String(s.doctorId) }, d.full_name)));
+                        ...pool.map(d => h('option', { value: d.id, selected: String(d.id) === String(s.doctorId) }, d.full_name))) : null;
+
+                    // Выключенный источник, уже стоящий на строке, остаётся в
+                    // списке — иначе одно открытие правки молча «сняло» бы его.
+                    const refSel = canRef ? h('select', { style: selStyle },
+                        h('option', { value: '', selected: s.referralId == null }, '— никто не направлял —'),
+                        ...(s.referralId != null && !refPool.some(x => String(x.id) === String(s.referralId))
+                            ? [h('option', { value: s.referralId, selected: true }, s.referralName || trf('Источник #{id}', { id: s.referralId }))] : []),
+                        ...refPool.map(x => h('option', { value: x.id, selected: String(x.id) === String(s.referralId) },
+                            referralSourceLabel(x) || String(x.id)))) : null;
+
                     const save = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'ОК');
                     save.addEventListener('click', async () => {
-                        const { error } = await supabase.rpc('patient_card_set_doctor',
-                            { patient_id: patientId, visit_service_id: s.id, doctor_id: Number(sel.value) });
-                        if (error) { toast(trf('Не сохранилось: {msg}', { msg: rpcMsg(error) }), 'fail'); return; }
-                        toast('Врач изменён.');
-                        await reload();
+                        const docChanged = !!sel && String(sel.value) !== String(s.doctorId ?? '');
+                        const nextRef = refSel && refSel.value !== '' ? Number(refSel.value) : null;
+                        const refChanged = !!refSel && String(nextRef ?? '') !== String(s.referralId ?? '');
+                        if (!docChanged && !refChanged) { toast('Ничего не изменилось.', 'info'); return; }
+                        save.disabled = true;
+                        try {
+                            if (docChanged) {
+                                const { error } = await supabase.rpc('patient_card_set_doctor',
+                                    { patient_id: patientId, visit_service_id: s.id, doctor_id: Number(sel.value) });
+                                if (error) { toast(trf('Не сохранилось: {msg}', { msg: rpcMsg(error) }), 'fail'); return; }
+                            }
+                            // Врач — первым: сервер проверяет «сам к себе не направляет»
+                            // уже против НОВОГО исполнителя строки.
+                            if (refChanged) {
+                                const { error } = await supabase.rpc('patient_card_set_line_referrer',
+                                    { patient_id: patientId, visit_service_id: s.id, referral_source_id: nextRef });
+                                if (error) { toast(trf('Не сохранилось: {msg}', { msg: rpcMsg(error) }), 'fail'); await reload(); return; }
+                            }
+                            toast(docChanged && refChanged ? 'Врач и направивший изменены.'
+                                : docChanged ? 'Врач изменён.' : 'Направивший изменён.');
+                            await reload();
+                        } finally { save.disabled = false; }
                     });
-                    clear(docCell);
-                    docCell.appendChild(h('span', { class: 'row', style: { gap: '6px' } }, sel, save));
+                    if (sel) { clear(docCell); docCell.appendChild(sel); }
+                    // Одна кнопка «ОК» на обе правки — в последней изменяемой ячейке.
+                    const host = refSel ? refCell : docCell;
+                    clear(host);
+                    host.appendChild(h('span', { class: 'row', style: { gap: '6px' } }, refSel || sel, save));
                 },
             }, Icon('Edit', { size: 13 })) : null;
 
@@ -1206,6 +1280,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 h('td', { class: 'num', style: { fontSize: '12.5px' } }, s.date ? fmtDateTime(s.date) : '—'),
                 nameCell,
                 docCell,
+                refCell,
                 h('td', { class: 'num', style: { textAlign: 'right' } }, String(s.qty || 1)),
                 h('td', { class: 'num', style: { textAlign: 'right' } }, fmtPrice(s.total)),
                 h('td', null, StatusTag(s.status)),
@@ -1216,7 +1291,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
         wrap.appendChild(h('table', { class: 'tbl' },
             h('thead', null, h('tr', null,
-                h('th', null, 'Дата'), h('th', null, 'Услуга'), h('th', null, 'Врач'),
+                h('th', null, 'Дата'), h('th', null, 'Услуга'), h('th', null, 'Врач'), h('th', null, 'Направил'),
                 h('th', { style: { textAlign: 'right' } }, 'Кол-во'),
                 h('th', { style: { textAlign: 'right' } }, 'Сумма'),
                 h('th', null, 'Статус'), h('th', null, ''))),

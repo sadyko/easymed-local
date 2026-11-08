@@ -3442,7 +3442,7 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 0 4px; }
 .rcal-leg { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-600); }
 .rcal-dot { width: 9px; height: 9px; border-radius: 999px; }
-.rcal-leg-off { width: 14px; height: 10px; border-radius: 3px; background: repeating-linear-gradient(45deg, var(--ink-100), var(--ink-100) 3px, transparent 3px, transparent 6px); }
+.rcal-leg-off { width: 14px; height: 10px; border-radius: 3px; background: repeating-linear-gradient(45deg, var(--ink-50) 0, var(--ink-50) 3px, var(--ink-400) 3px, var(--ink-400) 4px); }
 
 /* WORKING_WINDOW_V1 — сетка расписания и есть рабочее окно этого экрана:
    .card здесь не используется, поэтому рамку и тень окна она получает
@@ -3534,11 +3534,33 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    иначе «штриховка» снова превращается в ровную заливку. --ink-400 (#7a8892)
    даёт 3.64:1 и 3.04:1. Тёмного 4px из 12px — сетка остаётся спокойной.
    От занятого слота отличается по-прежнему не цветом: занятый — это белая
-   карточка .rcal-appt с рамкой, тенью и текстом ПОВЕРХ сетки, а не фон. */
-.rcal-slot.off { background: repeating-linear-gradient(45deg, var(--ink-100), var(--ink-100) 8px, var(--ink-400) 8px, var(--ink-400) 12px); cursor: default; }
-.rcal-slot:not(.off):hover { background: var(--primary-50); }
-.rcal-slot:not(.off):hover::after { content: '+'; position: absolute; inset: 0; display: grid; place-items: center;
-    color: var(--primary-600); font-weight: 700; font-size: 13.5px; opacity: .65; pointer-events: none; }
+   карточка .rcal-appt с рамкой, тенью и текстом ПОВЕРХ сетки, а не фон.
+   OFFHOURS_CALM_V3 (владелец, 2026-11-08: «too sharp to eyes», и после
+   тонких линий — «still sharp») — любая штриховка, которая держит 3:1 между
+   полосками, на целом нерабочем утре шести колонок рябит, как её ни
+   истончай. Поэтому закрытый час больше НЕ узор, а тихая серая заливка
+   (--ink-50 с едва заметной фактурой --ink-100) без линеек между четвертями
+   часа, а смысл «врач не работает» несёт ТЕКСТ: подпись «Не работает» на
+   первой клетке каждого закрытого промежутка (room-calendar.js,
+   .rcal-off-info). Текст читается на любом мониторе — то, ради чего V2
+   поднимал контраст, — и не кричит. */
+.rcal-slot.off { background: repeating-linear-gradient(45deg, var(--ink-50) 0, var(--ink-50) 9px, var(--ink-100) 9px, var(--ink-100) 10px);
+    border-bottom-color: transparent; cursor: default; }
+.rcal-slot.off.hr { border-top-color: var(--ink-100); }
+.rcal-off-info { position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
+    font-size: 12.5px; color: var(--ink-500); pointer-events: none; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 14px); }
+/* SLOT_HOVER_CALM_V1 (владелец, 2026-11-08: «when I move the mouse it is
+   blinking») — клетка под мышью мгновенно заливалась, гасила подпись и
+   рисовала «+» посередине: при движении по сетке это мигало. Теперь заливка
+   проявляется плавно и с короткой задержкой (быстрый проход мышью не зажигает
+   клетки по пути), подпись остаётся на месте, «+» — тихо у правого края. */
+.rcal-slot:not(.off) { transition: background-color 160ms ease-out; }
+.rcal-slot:not(.off):hover { background: var(--primary-50); transition-delay: 90ms; }
+.rcal-slot:not(.off)::after { content: '+'; position: absolute; top: 0; bottom: 0; right: 8px; display: grid; place-items: center;
+    color: var(--primary-600); font-weight: 700; font-size: 13.5px; opacity: 0; pointer-events: none;
+    transition: opacity 160ms ease-out; }
+.rcal-slot:not(.off):hover::after { opacity: .6; transition-delay: 90ms; }
 .rcal-dayfirst { border-left: 2px solid var(--ink-200) !important; }
 .rcal-appt { cursor: grab; }
 .rcal-appt.dragging { opacity: .9; cursor: grabbing; z-index: 9 !important; box-shadow: 0 8px 28px rgba(11, 20, 24, .18); }
@@ -3686,14 +3708,13 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     color: var(--ink-600); font-weight: 700; }
 
 /* ПОДПИСЬ СЛОТА — «ML · по записи». Спокойная: это фоновое знание о колонке, а
-   не событие. На наведении уступает место «+»: два знака в одной клетке
-   одновременно не читаются ни один. */
+   не событие. На наведении остаётся на месте: «+» стоит у правого края
+   (SLOT_HOVER_CALM_V1), гашение подписи под мышью мигало. */
 .rcal-slot-info { position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
     font-size: 12.5px; color: var(--ink-400); pointer-events: none; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 14px);
     transition: opacity var(--dur-1) var(--ease-out); }
 .rcal-slot-info b { color: var(--ink-500); font-weight: 700; }
-.rcal-slot:hover .rcal-slot-info { opacity: 0; }
 
 /* КАРТОЧКА ПРИЁМА В ТРИ СТРОКИ, А НЕ В ЧЕТЫРЕ. Четвёртая не влезала в
    получасовой приём и обрезалась на полбуквы — а обрезанной оказывалась то
@@ -7858,27 +7879,6 @@ button.dho-attn-i:hover{ filter:brightness(0.97); }
 .rm-section.is-open .rm-count { display: none; }
 .rm-body { padding-bottom: 4px; }
 @media (prefers-reduced-motion: reduce) { .rm-chev { transition: none; } }
-@media (max-width: 720px) {
-    .rm-row { flex-direction: column; align-items: stretch; }
-    .rm-levels { justify-content: flex-start; }
-}
-
-/* ---- DEPARTMENTS_V1 — отделы: список, мастер, карточка ---- */
-.dept-tools { display: flex; align-items: center; gap: 10px; padding: 6px 0 12px; font-size: 12.5px; }
-.dept-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.dept-name { font-weight: 600; color: var(--ink-900); }
-table.list td.num, table.list th.num { text-align: right; font-variant-numeric: tabular-nums; }
-table.list tr.is-off td { color: var(--ink-400); }
-.dept-steps { display: flex; gap: 6px; list-style: none; margin: 0 0 14px; padding: 0; flex-wrap: wrap; }
-.dept-steps li { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border: 1px solid var(--ink-100); border-radius: 999px;
-  font-size: 13.5px; color: var(--ink-500); background: var(--white); }
-.dept-steps li.is-done { cursor: pointer; color: var(--ink-700); }
-.dept-steps li.is-on { border-color: var(--primary-500); color: var(--primary-700); font-weight: 600; }
-.dept-step-n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--ink-100); font-size: 12.5px; font-weight: 600; }
-.dept-steps li.is-on .dept-step-n { background: var(--primary-600); color: #fff; }
-.dept-steps li.is-done .dept-step-n { background: var(--ok-50); color: var(--ok-700); }
-.dept-wizard-body { padding: 18px 20px 6px; }
-.dept-wizard-foot { display: flex; align-items: center; gap: 10px; padding: 12px 20px 16px; border-top: 1px solid var(--ink-100); }
 
 /* ROLES_CLEAR_V1 (2026-11-07) — владелец: «setting roles is very messy right
    now … make it accurate and clear». Логика не тронута — только как читается.
@@ -8014,6 +8014,27 @@ table.list tr.is-off td { color: var(--ink-400); }
   .roles-reach-k { flex: none; }
 }
 
+@media (max-width: 720px) {
+    .rm-row { flex-direction: column; align-items: stretch; }
+    .rm-levels { justify-content: flex-start; }
+}
+
+/* ---- DEPARTMENTS_V1 — отделы: список, мастер, карточка ---- */
+.dept-tools { display: flex; align-items: center; gap: 10px; padding: 6px 0 12px; font-size: 12.5px; }
+.dept-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.dept-name { font-weight: 600; color: var(--ink-900); }
+table.list td.num, table.list th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.list tr.is-off td { color: var(--ink-400); }
+.dept-steps { display: flex; gap: 6px; list-style: none; margin: 0 0 14px; padding: 0; flex-wrap: wrap; }
+.dept-steps li { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border: 1px solid var(--ink-100); border-radius: 999px;
+  font-size: 13.5px; color: var(--ink-500); background: var(--white); }
+.dept-steps li.is-done { cursor: pointer; color: var(--ink-700); }
+.dept-steps li.is-on { border-color: var(--primary-500); color: var(--primary-700); font-weight: 600; }
+.dept-step-n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--ink-100); font-size: 12.5px; font-weight: 600; }
+.dept-steps li.is-on .dept-step-n { background: var(--primary-600); color: #fff; }
+.dept-steps li.is-done .dept-step-n { background: var(--ok-50); color: var(--ok-700); }
+.dept-wizard-body { padding: 18px 20px 6px; }
+.dept-wizard-foot { display: flex; align-items: center; gap: 10px; padding: 12px 20px 16px; border-top: 1px solid var(--ink-100); }
 .dept-form { display: grid; gap: 14px; max-width: 760px; }
 .dept-form .field { margin: 0; }
 .dept-two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }

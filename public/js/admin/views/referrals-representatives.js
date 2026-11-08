@@ -15,6 +15,7 @@ import {
 } from './referrals-common.js';
 import {
     defaultPeriod, groupByRepresentative, matches, subline, fmtSum, dmy, printSheet, VISIT_STATUS_RU,
+    serviceDetailColumns,   // REFERRAL_DETAIL_BY_SERVICE_V1
 } from '../referrals-logic.js';
 
 export async function renderReferralsRepresentatives(host, ctx = {}) {
@@ -153,6 +154,12 @@ export async function renderReferralsRepresentatives(host, ctx = {}) {
                 h('td', null, actionButtons({
                     onDetails: () => openDetails(s),
                     onPrint: () => printSource(s),
+                    // REFERRAL_EDIT_FROM_REPS_V1 — то же право, что у закрепления в этой
+                    // строке: «Список источников: Изменение».
+                    onEdit: canAssign && typeof ctx.openSourceCard === 'function' ? async () => {
+                        const opened = await ctx.openSourceCard(s.id);
+                        if (!opened) toast(tr('Карточку врача открыть не удалось — найдите его во вкладке «Врачи-источники».'), 'fail');
+                    } : null,
                 }))));
         }
         return h('table', { class: 'tbl ref-tbl' },
@@ -162,24 +169,14 @@ export async function renderReferralsRepresentatives(host, ctx = {}) {
             tb);
     }
 
-    function detailColumns(money) {
-        return [
-            { label: 'Дата', value: (v) => dmy(v.date) },
-            { label: 'Пациент', value: (v) => v.patient || '—' },
-            { label: 'Услуги', value: (v) => v.services || '—' },
-            { label: 'Статус', value: (v) => tr(VISIT_STATUS_RU[v.status] || v.status) },
-            ...(money ? [
-                { label: 'Получено', value: (v) => sumText(v.received), num: true, print: (v) => Math.round(v.received) },
-                { label: 'Вознаграждение', value: (v) => sumText(v.reward), num: true, print: (v) => Math.round(v.reward) },
-            ] : []),
-        ];
-    }
+    // REFERRAL_DETAIL_BY_SERVICE_V1 — строка окна — УСЛУГА, а не визит.
+    const detailColumns = (money) => serviceDetailColumns(money, { sumText, tr });
 
     function sheetFor(s, det) {
         const cols = detailColumns(det.money).map((c) => ({ label: c.label, value: c.print || c.value }));
         return printSheet({
             title: trf('Направления врача {name}', { name: s.name }) + (s.code ? ' (№ ' + s.code + ')' : ''),
-            from: det.from, to: det.to, columns: cols, rows: det.visits,
+            from: det.from, to: det.to, columns: cols, rows: det.lines || [],
         });
     }
 
@@ -200,7 +197,7 @@ export async function renderReferralsRepresentatives(host, ctx = {}) {
             stat(String(det.visits.length), 'Визитов'), stat(String(det.patients), 'Пациентов'),
             det.money ? stat(sumText(det.received), 'Получено') : null,
             det.money ? stat(sumText(det.reward), 'Вознаграждение') : null));
-        m.body.appendChild(simpleTable(detailColumns(det.money), det.visits, { emptyText: tr('За период визитов от этого врача не было.') }));
+        m.body.appendChild(simpleTable(detailColumns(det.money), det.lines || [], { emptyText: tr('За период визитов от этого врача не было.') }));
     }
 
     async function printSource(s) {

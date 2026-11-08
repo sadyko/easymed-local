@@ -48,7 +48,14 @@ export function leadVisibleTo(db, user, assignedTo, opts) {
  */
 export function crmLeadsByPhone(db, args, user) {
   requireBoardRead(user);
-  const rows = leadsForPhone(db, (args && args.phone) || '');
+  // CRM_DUP_SAME_PATIENT_V1 (2026-11-08) — выбран пациент: только ЕГО заявки.
+  // Один телефон бывает у всей семьи, и владелец видел в окне дубля чужие
+  // карточки («похожие») рядом с карточкой самого пациента. С patient_id
+  // отбор строгий — и по видимым, и по чужим заявкам: заявка другого пациента
+  // на этом номере не повод ни для строки, ни для «есть у другого оператора».
+  const pid = args && args.patient_id != null && args.patient_id !== '' ? Number(args.patient_id) : null;
+  let rows = leadsForPhone(db, (args && args.phone) || '');
+  if (pid != null && Number.isFinite(pid)) rows = rows.filter((r) => Number(r.patient_id) === pid);
   if (!rows.length) return [];
   const names = new Map(db.prepare(
     `SELECT id, full_name FROM users WHERE id IN (${rows.map(() => '?').join(',')})`)

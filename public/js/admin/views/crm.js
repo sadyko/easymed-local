@@ -635,8 +635,12 @@ function uid() {
 // — она называется только фактом, без имени, стадии, хозяина и даты.
 // opts.edit — окно спрашивает при ПРАВКЕ номера: кнопка «Сохранить всё равно».
 export function askDuplicateLead(rows, opts = {}) {
+    const addCount = Number(opts.addCount) || 0;   // CRM_DUP_ADD_SERVICES_V1
     return new Promise((resolve) => {
-        const ov = h('div', { class: 'modal', 'data-crm-dup': '' });
+        // CRM_DUP_BEFORE_SCHEDULE_V1 — поверх окна «Даты приёма» (z-index 160):
+        // обычный .modal (100) открывался ПОД ним, и вопрос, которого ждало
+        // сохранение, оператор не видел вовсе (снимок владельца 2026-11-07).
+        const ov = h('div', { class: 'modal', 'data-crm-dup': '', style: { zIndex: '200' } });
         let done = false;
         const finish = (v) => { if (done) return; done = true; ov.remove(); resolve(v); };
         const fmtD = (iso) => (iso || '').slice(0, 10).split('-').reverse().join('.');
@@ -664,8 +668,11 @@ export function askDuplicateLead(rows, opts = {}) {
                         r.assigned_name ? ' · ' : null,
                         r.assigned_name ? trf('Ведёт {name}', { name: r.assigned_name }) : null)),
                 Tag(tr(r.stage_label || r.status || ''), { kind, dot: true }),
+                // CRM_DUP_ADD_SERVICES_V1 — в новой заявке уже набраны услуги:
+                // кнопка открывает карточку И кладёт их туда, а не просто открывает.
                 h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-dup-open': String(r.id),
-                    onclick: () => finish({ open: r.id }) }, Icon('ArrowRight', { size: 13 }), ' ', 'Открыть')));
+                    onclick: () => finish({ open: r.id, add: addCount > 0 }) }, Icon(addCount > 0 ? 'Plus' : 'ArrowRight', { size: 13 }), ' ',
+                    addCount > 0 ? 'Открыть и добавить услуги' : 'Открыть')));
         }
         ov.appendChild(h('div', { class: 'modal-backdrop', onclick: () => finish(null) }));
         ov.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '560px', maxWidth: 'calc(100vw - 32px)' } },
@@ -2347,8 +2354,23 @@ async function paint() {
                             const sv = svcCatalog.find(x => String(x.id) === String(svcChosen));
                             if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: r.scheduled_date || '', status: 'pending' });
                         }
+                        // CRM_DUP_ADD_SERVICES_V1 — услуги, набранные в новой заявке до
+                        // вопроса о дубле, ложатся К прежним строкам карточки, а не
+                        // вместо них; уже стоящая в карточке услуга второй раз не встаёт.
+                        // Пишутся в базу обычным сохранением карточки.
+                        const carried = (prefill && Array.isArray(prefill.addServices)) ? prefill.addServices : [];
+                        let added = 0;
+                        for (const c of carried) {
+                            const dup = picked.some((p) => (c.service_id != null && String(p.service_id) === String(c.service_id))
+                                || (c.service_id == null && c.consultation_type_id != null && String(p.consultation_type_id) === String(c.consultation_type_id)));
+                            if (dup) continue;
+                            picked.push({ service_id: c.service_id, ...(c.consultation_type_id != null ? { consultation_type_id: c.consultation_type_id } : {}),
+                                name: c.name, price: c.price, date: '' });
+                            added += 1;
+                        }
                         linesLoaded = true;
                         syncPrimary(); paintPicked();
+                        if (added) toast(trf('Добавлено услуг в карточку: {n} — нажмите «Сохранить» или «Записать на дату».', { n: added }), 'ok');
                         prefillBookedTimes();   // CRM_REAL_BOOKING_V1 — час уже записанной строки
                     });
             } else if (svcChosen) {
@@ -2492,16 +2514,33 @@ async function paint() {
         let dupAckKey = null;
         // true — сохранять; false — человек выбрал «Отмена» или «Открыть».
         async function confirmNoDuplicate(phone, selfId) {
-            const key = phoneKey(phone);
+            // CRM_DUP_SAME_PATIENT_V1 — ответ «создать всё равно» принадлежит паре
+            // номер + пациент: другой пациент на том же номере — другой вопрос.
+            const digits = phoneKey(phone);
+            const key = digits ? digits + '|' + (linkedPatient && linkedPatient.id != null ? linkedPatient.id : '') : '';
             if (!key || key === dupAckKey) return true;
-            const { data: dups, error: dupErr } = await supabase.rpc('crm_leads_by_phone', { phone });
+            // CRM_DUP_SAME_PATIENT_V1 — выбран пациент из базы: спрашиваем о ЕГО
+            // заявках, а не обо всех на этом номере (у семьи один телефон).
+            const { data: dups, error: dupErr } = await supabase.rpc('crm_leads_by_phone',
+                linkedPatient && linkedPatient.id != null ? { phone, patient_id: linkedPatient.id } : { phone });
             // Проверка не ответила — не повод терять заявку: сохраняем как
             // раньше, без предупреждения.
             if (dupErr || !Array.isArray(dups)) return true;
             // Сама редактируемая заявка себе не дубль.
-            const others = dups.filter((d) => !(selfId != null && d.can_open && String(d.id) === String(selfId)));
+            // CRM_DUP_SKIP_ARRIVED_V1 (2026-11-07) — карточка в стадии «Пришёл»
+            // (kind = 'won', она одна — миграция 077) не дубль: пациент уже
+            // дошёл до услуги, его новое обращение — новая заявка, и открывать
+            // завершённую карточку оператору незачем (просьба владельца).
+            // Чужую карточку (can_open: false) сервер называет без стадии —
+            // о ней по-прежнему предупреждаем.
+            const others = dups.filter((d) => !(selfId != null && d.can_open && String(d.id) === String(selfId))
+                && !(d.can_open && d.stage_kind === 'won'));
             if (!others.length) return true;
-            const choice = await askDuplicateLead(others, { edit: selfId != null });
+            // CRM_DUP_ADD_SERVICES_V1 — услуги переносятся только из НОВОЙ заявки:
+            // у правки они и так в своей карточке.
+            const carry = selfId == null ? picked.filter((p) => p.service_id != null || p.consultation_type_id != null)
+                .map((p) => ({ service_id: p.service_id ?? null, consultation_type_id: p.consultation_type_id ?? null, name: p.name, price: p.price })) : [];
+            const choice = await askDuplicateLead(others, { edit: selfId != null, addCount: carry.length });
             if (!choice) return false;
             if (choice.open != null) {
                 const { data: existing, error: exErr } = await supabase.from('crm_requests')
@@ -2509,7 +2548,7 @@ async function paint() {
                     .eq('id', choice.open).maybeSingle();
                 if (exErr || !existing) { toast(exErr ? exErr.message : 'Заявка не найдена.', 'fail'); return false; }
                 close();
-                requestModal(existing);
+                requestModal(existing, choice.add && carry.length ? { addServices: carry } : null);
                 return false;
             }
             dupAckKey = key;
@@ -2772,7 +2811,24 @@ async function paint() {
             class: 'btn btn-success', type: 'button',
             title: 'Назначить дату каждой услуге — регистратура подхватит их в эти дни',
         }, Icon('Check', { size: 14 }), ' Записать на дату');
-        scheduleBtn.addEventListener('click', () => {
+        // CRM_DUP_BEFORE_SCHEDULE_V1 — вопрос «У этого номера уже есть карточка»
+        // задаётся ЗДЕСЬ, по нажатию, до окна дат и до окна заведения карты.
+        // Раньше его задавал persist() из «Сохранить и записать» — то есть уже
+        // после того, как оператор расставил врачей и даты, и из-под окна дат.
+        // Ответ запоминается для номера (dupAckKey), и persist() не спрашивает
+        // второй раз. Правка заявки спрашивает, только если номер сменили — как
+        // и сам persist().
+        async function dupCheckBeforeSchedule(phone) {
+            if (!phone) return true;
+            if (isEdit) {
+                if (phoneKey(phone) === phoneKey(r.phone || '')) return true;
+                return confirmNoDuplicate(phone, r.id);
+            }
+            return confirmNoDuplicate(phone, null);
+        }
+        let scheduleBusy = false;
+        scheduleBtn.addEventListener('click', async () => {
+            if (scheduleBusy) return;
             if (!picked.length) { toast('Добавьте хотя бы одну услугу.', 'fail'); svcInp.focus(); return; }
             // CRM_REG_BEFORE_SCHEDULE_V1 — сначала карта пациента, потом врач и дата.
             //
@@ -2781,12 +2837,21 @@ async function paint() {
             // не заводя карты вовсе: регистратура получала услуги, висящие на
             // заявке, и в день приёма заводила человека заново — с риском
             // второй карты и с ручной сверкой «тот ли это».
-            if (linkedPatient) { openScheduleSheet(); return; }
+            if (linkedPatient) {
+                // Телефон — тот же, что возьмёт persist(): из поля или из карты.
+                scheduleBusy = true;
+                const go = await dupCheckBeforeSchedule(phoneInp.value.trim() || linkedPatient.phone || '').finally(() => { scheduleBusy = false; });
+                if (go) openScheduleSheet();
+                return;
+            }
 
             const name = nameInp.value.trim();
             const phone = phoneInp.value.trim();
             if (!name) { toast('Укажите ФИО пациента.', 'fail'); nameInp.focus(); return; }
             if (!phone) { toast('Укажите телефон пациента.', 'fail'); phoneInp.focus(); return; }
+            scheduleBusy = true;
+            const go = await dupCheckBeforeSchedule(phone).finally(() => { scheduleBusy = false; });
+            if (!go) return;
 
             patientRegistrationModal({
                 requestRow: r || null,

@@ -3,7 +3,7 @@
 // таблицы истинности и каждый откат по отдельности.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveReferralRate, rewardForLine, parseRates, referralGroupOf, REFERRAL_GROUPS } from './referral-reward.js';
+import { resolveReferralRate, rewardForLine, parseRates, referralGroupOf, REFERRAL_GROUPS, serviceRateOf } from './referral-reward.js';
 
 // GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — ключ ставки — группа (services.type).
 const LAB = 'lab', XRAY = 'imaging';
@@ -134,4 +134,48 @@ test('GROUPS_FIVE_REFERRAL_V1: запись со старым ключом type_
   // осталась, число не угадывается как группа — действует процент выше.
   const src = { reward_mode: 'own', own_percent: 7, own_rates: rates([{ type_id: 3, unit: 'pct', value: 50 }]) };
   assert.deepEqual(rate(src, null, LAB), { unit: 'pct', value: 7 });
+});
+
+// REFERRAL_SERVICE_RATES_V1 (мигр. 273) — особая ставка за ОТДЕЛЬНУЮ услугу
+// стоит выше обоих режимов: это исключение «за эту услугу платим больше», и
+// оно обязано действовать и поверх категории, и поверх своих групп.
+const SPECIAL = rates([{ service_id: 7, unit: 'pct', value: 25 },
+                       { service_id: 8, unit: 'fix', value: 50000 },
+                       { service_id: 9, unit: 'pct', value: '' }]);
+
+test('особая ставка услуги: перекрывает ставку категории в режиме «по категории»', () => {
+  const src = { reward_mode: 'category', service_rates: SPECIAL };
+  assert.deepEqual(resolveReferralRate({ source: src, category: CATEGORY, serviceGroup: LAB, serviceId: 7 }), { unit: 'pct', value: 25 });
+  assert.deepEqual(resolveReferralRate({ source: src, category: CATEGORY, serviceGroup: LAB, serviceId: 8 }), { unit: 'fix', value: 50000 });
+});
+
+test('особая ставка услуги: перекрывает свои группы и свой процент в режиме «своя»', () => {
+  const src = { reward_mode: 'own', own_percent: 5, own_rates: rates([{ group: LAB, unit: 'pct', value: 15 }]), service_rates: SPECIAL };
+  assert.deepEqual(resolveReferralRate({ source: src, category: CATEGORY, serviceGroup: LAB, serviceId: 7 }), { unit: 'pct', value: 25 });
+});
+
+test('особая ставка услуги: другая услуга той же группы — по общему правилу', () => {
+  const src = { reward_mode: 'category', service_rates: SPECIAL };
+  assert.deepEqual(resolveReferralRate({ source: src, category: CATEGORY, serviceGroup: LAB, serviceId: 123 }), { unit: 'pct', value: 20 });
+  // Строка без услуги (свободный текст) особой ставки не имеет; «7» строкой —
+  // та же услуга 7 (id из /api/db приходит числом, из формы — строкой).
+  assert.deepEqual(resolveReferralRate({ source: src, category: CATEGORY, serviceGroup: null, serviceId: null }), { unit: 'pct', value: 10 });
+  assert.deepEqual(resolveReferralRate({ source: src, category: CATEGORY, serviceGroup: LAB, serviceId: '7' }), { unit: 'pct', value: 25 });
+});
+
+test('особая ставка услуги: запись без числа — как будто её нет; испорченный JSON — тоже', () => {
+  const src = { reward_mode: 'category', service_rates: SPECIAL };
+  assert.deepEqual(resolveReferralRate({ source: src, category: CATEGORY, serviceGroup: LAB, serviceId: 9 }), { unit: 'pct', value: 20 });
+  const broken = { reward_mode: 'category', service_rates: '{oops' };
+  assert.deepEqual(resolveReferralRate({ source: broken, category: CATEGORY, serviceGroup: LAB, serviceId: 7 }), { unit: 'pct', value: 20 });
+  // Источник без колонки вовсе (старый снимок строки) — прежнее правило.
+  assert.deepEqual(resolveReferralRate({ source: { reward_mode: 'category' }, category: CATEGORY, serviceGroup: LAB, serviceId: 7 }), { unit: 'pct', value: 20 });
+});
+
+test('serviceRateOf: особая ставка или null — для подписи «Режим» в отчёте', () => {
+  const src = { service_rates: SPECIAL };
+  assert.deepEqual(serviceRateOf(src, 7), { unit: 'pct', value: 25 });
+  assert.equal(serviceRateOf(src, 123), null);
+  assert.equal(serviceRateOf(src, null), null);
+  assert.equal(serviceRateOf(null, 7), null);
 });

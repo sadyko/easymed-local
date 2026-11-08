@@ -3,8 +3,15 @@
 // (правило с именем источника, потом правило с именем категории), и понять,
 // откуда взялась цифра, можно было только сверив три экрана глазами.
 //
+//   особая ставка ИСТОЧНИКА за ЭТУ услугу (service_rates) — в любом режиме; иначе:
 //   режим 'category':  ставка группы у КАТЕГОРИИ → стандартный процент       → 0
 //   режим 'own':       ставка группы у ИСТОЧНИКА → свой процент источника    → 0
+//
+// REFERRAL_SERVICE_RATES_V1 (мигр. 273) — особая ставка за ОТДЕЛЬНУЮ услугу
+// стоит выше обоих режимов. Владелец (2026-11-07): «за некоторые услуги платим
+// больше общего» — а общее у большинства партнёров задаёт категория. Заставлять
+// ради одной услуги снимать галочку и переписывать ставки категории в карточку —
+// тот самый второй экран, которого избегает правило ниже.
 //
 // В режиме 'own' категория не читается НИ ПРИ КАКИХ условиях — решение
 // владельца 2026-09-08: карточка источника должна объяснять его выплату
@@ -72,13 +79,40 @@ function rateForGroup(rates, serviceGroup) {
   return null;
 }
 
+// REFERRAL_SERVICE_RATES_V1 — особая ставка за конкретную услугу внутри
+// массива источника, либо null. Ключ — services.id. Запись без числа — как
+// будто её нет (см. num выше); запись без service_id не читается.
+function rateForService(rates, serviceId) {
+  const want = Number(serviceId);
+  if (serviceId == null || !Number.isFinite(want)) return null;
+  for (const e of parseRates(rates)) {
+    if (!e || e.service_id == null || Number(e.service_id) !== want) continue;
+    const value = num(e.value);
+    if (value === null) continue;
+    const unit = e.unit === 'fix' ? 'fix' : 'pct';
+    return { unit, value };
+  }
+  return null;
+}
+
+// Особая ставка источника за услугу — или null. Экспорт ради отчёта: колонка
+// «Режим» обязана назвать особую ставку своим именем, иначе сумма, не похожая
+// ни на категорию, ни на «свою», читается как ошибка расчёта.
+export function serviceRateOf(source, serviceId) {
+  if (!source) return null;
+  return rateForService(source.service_rates, serviceId);
+}
+
 const pct = (v) => ({ unit: 'pct', value: num(v) ?? 0 });
 
 // Ставка для одной позиции счёта. Всегда возвращает объект — «ставки нет»
 // выражается нулём, чтобы у вызывающего не было ветки на null.
 // serviceGroup — services.type позиции (одно из пяти; см. referralGroupOf).
-export function resolveReferralRate({ source, category, serviceGroup }) {
+// serviceId — services.id позиции; null у строки без услуги (свободный текст).
+export function resolveReferralRate({ source, category, serviceGroup, serviceId = null }) {
   if (!source) return pct(0);
+  const special = rateForService(source.service_rates, serviceId);   // REFERRAL_SERVICE_RATES_V1
+  if (special) return special;
   if (source.reward_mode === 'own') {
     return rateForGroup(source.own_rates, serviceGroup) || pct(source.own_percent);
   }

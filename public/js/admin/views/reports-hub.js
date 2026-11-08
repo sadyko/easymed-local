@@ -1696,10 +1696,17 @@ function renderCashierReport(el, d, period) {
         d.kpi.refunds > 0 ? ccrTile(tr('Возвраты'), d.kpi.refunds, 'out') : null,
         ccrTile(multi ? tr('Итого по этому зданию (доход − расход)') : tr('Итого (доход − расход)'), d.kpi.net, 'net')));
 
+    // CASHIER_REPORT_AMOUNT_COL_V1 — колонка денег ищется по имени «Сумма», а не
+    // по номеру. Номера 5 и 3 были верны до 2026-09-04: отчёт по всем зданиям
+    // (c2497c86c) поставил «Здание» первой колонкой, «Сумма» сдвинулась на 6 и 4,
+    // а экран продолжал считать деньгами «Способ оплаты» и «Тип расхода»: в
+    // колонке метода печаталось «не число» (так ru-RU выводит NaN), сумма шла
+    // без разрядов, а «Итого» над таблицей складывало NaN и показывало 0 UZS при
+    // 1 695 000 в плитках (снимок владельца 2026-11-07).
     el.appendChild(ccrTable({ title: 'Поступления', tone: 'in', kind: 'income', period: period || '',
-        columns: d.income.columns, rows: d.income.rows, numericCol: 5 }));
+        columns: d.income.columns, rows: d.income.rows, numericCol: d.income.columns.indexOf('Сумма') }));
     el.appendChild(ccrTable({ title: 'Расходы', tone: 'out', kind: 'expense', period: period || '',
-        columns: d.expense.columns, rows: d.expense.rows, numericCol: 3 }));
+        columns: d.expense.columns, rows: d.expense.rows, numericCol: d.expense.columns.indexOf('Сумма') }));
 }
 
 // Почасовая гистограмма. Все 24 часа всегда на месте: «в 8 утра не звонят» —

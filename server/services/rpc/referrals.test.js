@@ -275,3 +275,35 @@ test('REFERRAL_REP_ON_CREATE_V1: список медпредставителей
   assert.equal(isReadOnlyRpc('referrals_representative_options'), true);
   assert.equal(isReadOnlyRpc('referrals_assign_representative'), false, 'закрепление — запись');
 });
+
+// REFERRAL_DETAIL_BY_SERVICE_V1 — «Подробнее» по УСЛУГАМ: у визита, где врач —
+// источник визита, — все живые услуги; у визита, где он источник только строки, —
+// только эта строка; отменённая строка не показывается.
+test('подробнее: строки — услуги, а не визиты (REFERRAL_DETAIL_BY_SERVICE_V1)', () => {
+  const { db, A } = fresh();
+  const svc = db.prepare('INSERT INTO services (name, price) VALUES (?, 1000)');
+  const ent = Number(svc.run('Консультация ЛОРа').lastInsertRowid);
+  const xr = Number(svc.run('X-ray').lastInsertRowid);
+  const mri = Number(svc.run('МРТ').lastInsertRowid);
+  const line = db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, referred_by_source_id) VALUES (?,?,1,1000,1000,?,?)');
+  // визит источника A (2 дня назад): две живые услуги и одна отменённая
+  const vA = db.prepare("SELECT id FROM visits WHERE patient_id = 10 AND referral_source_id = ?").get(A).id;
+  line.run(vA, ent, 'completed', null);
+  line.run(vA, xr, 'queued', null);
+  line.run(vA, mri, 'cancelled', null);
+  // визит без источника: A направил только на МРТ, консультация — не его
+  db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (13, 'Пациент Четвёртый', '+998900000004')").run();
+  const v13 = Number(db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (13, 3, ?, 'scheduled')").run(atNoon(5)).lastInsertRowid);
+  line.run(v13, ent, 'added', null);
+  line.run(v13, mri, 'added', A);
+
+  const d = referralsSourceDetail(db, { source_id: A, ...period }, admin);
+  const got = d.lines.map((l) => [l.patient, l.service, l.status]);
+  assert.deepEqual(got, [
+    ['Пациент Первый', 'Консультация ЛОРа', 'completed'],
+    ['Пациент Первый', 'X-ray', 'queued'],
+    ['Пациент Четвёртый', 'МРТ', 'added'],
+  ]);
+  assert.ok(d.lines.every((l) => l.received === 0 && l.reward === 0), 'счетов нет — денег нет, но поля есть');
+  assert.equal(d.visits.length, 4, 'шапка «Визитов» по-прежнему считает визиты');
+});

@@ -41,7 +41,7 @@ export function leadsForPhone(db, rawPhone, { open = false } = {}) {
   // the board a duplicate and silently stop creating leads at all.
   if (key.length < MIN_PHONE_DIGITS) return [];
   const rows = db.prepare(`
-    SELECT r.id, r.full_name, r.phone, r.status, r.created_at, r.updated_at, r.assigned_to,
+    SELECT r.id, r.full_name, r.phone, r.status, r.created_at, r.updated_at, r.assigned_to, r.patient_id,
            s.kind AS stage_kind, s.label AS stage_label
       FROM crm_requests r
       LEFT JOIN crm_stages s ON s.key = r.status

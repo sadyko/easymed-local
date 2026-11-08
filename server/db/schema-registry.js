@@ -531,12 +531,12 @@ export const REGISTRY = {
   // by a trigger when the doctor is hired, so a form cannot point one doctor's
   // source at another doctor.
   referral_sources: { read:{roles:ALL_STAFF,columns:['id','name','code','doctor_id','category','category_id','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty','representative_id','active']},   // REFERRALS_CRM_V1 — specialty (форма), representative_id (только чтение: пишет RPC referrals_assign_representative)
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','service_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty','representative_id','active']},   // REFERRALS_CRM_V1 — specialty (форма), representative_id (только чтение: пишет RPC referrals_assign_representative)
                write:{ grant:'settings.referral_sources',insert:{roles:['admin','registrar'],columns:['name','category','category_id','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty']},
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','service_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty']},
                  update:{roles:['admin'],columns:['name','category','category_id','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty','active'],bulkBy:['doctor_id']},delete:{roles:[]}},   // bulkBy: V3120_FIX (M9) — referral-reward-editor.js правит свой источник врача по doctor_id
-               filters:['id','active','category_id','doctor_id'], json:['own_rates'],
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','service_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty','active'],bulkBy:['doctor_id']},delete:{roles:[]}},   // bulkBy: V3120_FIX (M9) — referral-reward-editor.js правит свой источник врача по doctor_id
+               filters:['id','active','category_id','doctor_id'], json:['own_rates','service_rates'],   // REFERRAL_SERVICE_RATES_V1 (mig 273) — особые ставки по услугам, JSON как own_rates
                embed:{ referral_source_categories:{table:'referral_source_categories',fk:'category_id',columns:['id','name']} } },
   // DOCTOR_WORKSPACE_V1 — columns the My-services doctor dashboard and the
   // workspace read. `active` is a generated mirror of is_active (mig 032) so
@@ -873,7 +873,10 @@ export const REGISTRY = {
   referral_source_categories: { read:{roles:ALL_STAFF,columns:['id','name','standard_percent','rates','is_internal','active','created_at']},
     write:{ grant:'settings.referral_source_categories',insert:{roles:['admin'],columns:['name','standard_percent','rates','active']},
       update:{roles:['admin'],columns:['name','standard_percent','rates','active']},delete:{roles:[]}},
-    filters:['id','active'], json:['rates'], embed:{} },
+    // REFERRAL_SOURCE_FORM_V2 — is_internal как фильтр: карточка внешнего
+    // источника показывает только внешние категории (внутренних врачей заводит
+    // триггер из списка сотрудников, мигр. 122).
+    filters:['id','active','is_internal'], json:['rates'], embed:{} },
   // DISCOUNT_RULES_V1 (mig 129) — valid_from/valid_until, category_id (apply to a
   // patient group), service_ids (JSON list: apply to these services only), note.
   // CARD_BALANCE_V1 (mig 158) — remaining: остаток карты/сертификата. Только
