@@ -117,7 +117,7 @@ test('филиал пользуется модулем ai своей главн�
 test('через createApp: токен проверяется ДО разбора тела; тело больше 100 КБ проходит, больше 1 МБ — 413', async (t) => {
   const w = seed();
   const server = await listen(createApp(w.db, { ai: { callClaude: w.callClaude } })); t.after(() => server.close());
-  const big = (n) => ({ ...P, facts: { pad: 'x'.repeat(n) } });
+  const big = (n) => ({ ...P, facts: { pad: 'x'.repeat(Math.min(n, 200_000)) }, post_text: 'y'.repeat(Math.max(0, n - 200_000)) });
   // Чужой токен с телом в 2 МБ — 401, а не 413: тело даже не читалось.
   assert.equal((await post(server, big(2_000_000), 'nope')).status, 401);
   // 300 КБ больше общего лимита /cp (100 КБ), но в пределах своего 1 МБ.
@@ -126,4 +126,31 @@ test('через createApp: токен проверяется ДО разбор�
   // Битый JSON — 400 от общего обработчика ошибок, Claude не вызывается.
   assert.equal((await post(server, '{not json')).status, 400);
   assert.equal(w.calls.length, 1);
+});
+
+test('сбой Claude (например, 401 у Anthropic) — клинике 503 upstream, расход не пишется, текст не в логе', async (t) => {
+  const w = seed();
+  const app = express();
+  const boom = async () => { const e = new Error(`401 ${MARKER}`); e.status = 401; e.error = { type: 'error', error: { type: 'authentication_error' } }; throw e; };
+  app.use(AI_MOUNT, aiRoutes(w.db, { callClaude: boom }));
+  const server = await listen(app); t.after(() => server.close());
+  const logged = [];
+  const orig = { warn: console.warn, error: console.error };
+  console.warn = (...a) => logged.push(a); console.error = (...a) => logged.push(a);
+  let r;
+  try { r = await post(server, P); } finally { Object.assign(console, orig); }
+  assert.deepEqual(r, { status: 503, body: { error: { code: 'upstream' } } });
+  assert.equal(w.db.prepare('SELECT COUNT(*) n FROM ai_usage').get().n, 0);
+  assert.ok(logged.length > 0, 'сбой виден в логе');
+  assert.ok(!JSON.stringify(logged).includes(MARKER), 'ни сообщение ошибки, ни переписка не попали в лог');
+});
+
+test('сведения о клинике больше 250 000 знаков — 413 too_large; нет ни одной реплики пациента — 400; Claude не вызывался', async (t) => {
+  const w = await world(); t.after(() => w.server.close());
+  assert.deepEqual(await post(w.server, { ...P, facts: { pad: 'x'.repeat(250_001) } }), { status: 413, body: { error: { code: 'too_large' } } });
+  assert.equal((await post(w.server, { ...P, transcript: [{ from: 'clinic', text: 'hi' }] })).status, 400);
+  assert.equal((await post(w.server, { ...P, transcript: [] })).status, 400);
+  assert.equal((await post(w.server, { ...P, transcript: 'nope' })).status, 400);
+  assert.equal(w.calls.length, 0);
+  assert.equal((await post(w.server, { ...P, facts: { pad: 'x'.repeat(200_000) } })).status, 200);
 });

@@ -25,6 +25,7 @@ export const AI_MOUNT = '/cp/v1/ai/chat-reply';
 const BODY_LIMIT = '1mb';
 const MAX_TURNS = 20;
 const MAX_TEXT = 2000;
+const MAX_FACTS_CHARS = 250_000;
 
 // Тот же ответ, что у checkin.js и relay.js, для пропавшего, чужого и
 // выведенного из работы токена — иначе по разнице ответов можно перебирать
@@ -74,7 +75,29 @@ export function aiRoutes(db, { callClaude = realCallClaude, now = () => new Date
         : [],
       facts: b.facts && typeof b.facts === 'object' && !Array.isArray(b.facts) ? b.facts : {},
     };
-    const { result, usage = {} } = await callClaude(payload);
+    // Снимок клиники уходит Claude ЦЕЛИКОМ в каждом запросе (кэшируется, но
+    // первая запись кэша платная). Клиника шлёт сжатую форму (facts.js, A5:
+    // 2000 услуг < 200 000 знаков); больше — значит что-то не так, и платить
+    // за это мы не будем. Код too_large клиника понимает (cp-client.js).
+    if (JSON.stringify(payload.facts).length > MAX_FACTS_CHARS) return res.status(413).json({ error: { code: 'too_large' } });
+    // Отвечать не на что: ни одной реплики пациента среди последних 20.
+    if (!payload.transcript.some((m) => m.from === 'patient' && m.text.trim())) {
+      return res.status(400).json({ error: { code: 'bad_request', message: 'No patient message to answer.' } });
+    }
+    let answer;
+    try {
+      answer = await callClaude(payload);
+    } catch (e) {
+      // Сбой у Anthropic (ключ, лимит, перегрузка, таймаут) — клинике 503:
+      // это не её ошибка. В лог — только статус и тип ошибки: в сообщении
+      // ошибки SDK бывает тело ответа, а нам в логе не нужно ничего, что
+      // могло бы оказаться текстом переписки.
+      const type = e && e.error && (e.error.error?.type || e.error.type);
+      console.warn('[control-plane] AI upstream failure', (e && e.status) || 'no-status', type || 'no-type');
+      return res.status(503).json({ error: { code: 'upstream' } });
+    }
+    const { result, usage = {} } = answer || {};
+    if (!result) return res.status(503).json({ error: { code: 'upstream' } });
     // Учёт — после ответа Claude: запрос, упавший до ответа, денег не стоил.
     // Месяц — тот, что проверялся в gate, чтобы проверка и запись не
     // разъехались на стыке месяцев.
