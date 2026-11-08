@@ -5,7 +5,7 @@ import { migrate } from '../../db/migrate.js';
 import { setAiEnabled, readAiSettings } from './settings.js';
 import { enqueueChatJob, GIVE_UP_MS } from './queue.js';
 import { isFlagged, flagChat } from './guards.js';
-import { processOneJob, HANDOFF_TEXT } from './worker.js';
+import { processOneJob, HANDOFF_TEXT, COMMENT_PUBLIC_TEXT } from './worker.js';
 
 const T0 = Date.parse('2026-11-08T10:00:00Z');
 const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -197,7 +197,8 @@ test('комментарий: передача оператору — отмет
   const { rootId, replyId } = seedThread(db);
   assert.equal(await processOneJob(db, deps), 'handed_off');
   assert.equal(calls.pub[0].id, replyId);
-  assert.equal(calls.pub[0].text, HANDOFF_TEXT);
+  assert.equal(calls.pub[0].text, COMMENT_PUBLIC_TEXT);
+  assert.deepEqual(calls.priv, [{ id: replyId, text: HANDOFF_TEXT }]);
   assert.equal(isFlagged(db, 'meta_comment', String(rootId)), true);
 });
 
@@ -226,4 +227,110 @@ test('личные сообщения Meta: ответ помечен ИИ; ок
   assert.equal(closed.calls.asked.length, 0);
   assert.equal(closed.calls.dm.length, 0);
   assert.equal(isFlagged(closed.db, 'meta_dm', String(c2)), true);
+});
+
+// --- После ревью: публичный текст, повторная проверка, недостижимый чат ------
+
+test('комментарий: заявка — публично только короткая фраза, телефон не виден всем', async () => {
+  const { db, calls, deps } = metaWorld({ outcome: 'create_lead', name: 'Дилноза', phone: '+998901234567', wish: 'УЗИ',
+    text: 'Записали ваш номер +998901234567, администратор позвонит.' });
+  const { replyId } = seedThread(db);
+  assert.equal(await processOneJob(db, deps), 'done');
+  assert.deepEqual(calls.pub, [{ id: replyId, text: COMMENT_PUBLIC_TEXT }]);
+  assert.ok(!JSON.stringify(calls.pub).includes('998901234567'));
+  assert.equal(calls.priv[0].text, 'Записали ваш номер +998901234567, администратор позвонит.');
+});
+
+test('комментарий: reply и reply_comment с пустым public_text — публично короткая фраза', async () => {
+  const a = metaWorld({ outcome: 'reply', text: 'Да, в субботу с 9 до 15.' });
+  seedThread(a.db);
+  assert.equal(await processOneJob(a.db, a.deps), 'done');
+  assert.equal(a.calls.pub[0].text, COMMENT_PUBLIC_TEXT);
+  assert.equal(a.calls.priv[0].text, 'Да, в субботу с 9 до 15.');
+  const b = metaWorld({ outcome: 'reply_comment', public_text: '', private_text: 'Да.' });
+  seedThread(b.db);
+  assert.equal(await processOneJob(b.db, b.deps), 'done');
+  assert.equal(b.calls.pub[0].text, COMMENT_PUBLIC_TEXT);
+});
+
+test('оператор написал, пока ИИ думал — ничего не отправлено', async () => {
+  const w = world(null);
+  w.db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (5, 'op5', 'x', 'Оператор', 'admin')").run();
+  w.deps.ask = async () => {
+    w.db.prepare("INSERT INTO telegram_messages (chat_id, direction, text, kind, sent_by, created_at) VALUES ('100','out','Здравствуйте','text',5,?)").run(iso(T0 + 3500));
+    return { outcome: 'reply', text: 'x' };
+  };
+  assert.equal(await processOneJob(w.db, w.deps), 'skipped');
+  assert.equal(w.calls.tg.length, 0);
+  assert.deepEqual({ ...w.db.prepare('SELECT status, outcome FROM ai_chat_jobs').get() }, { status: 'dropped', outcome: 'operator' });
+});
+
+test('выключили, пока ИИ думал — ничего не отправлено, заявки нет', async () => {
+  const w = world(null);
+  w.deps.ask = async () => { setAiEnabled(w.db, false, 1, iso(T0 + 3500)); return { outcome: 'create_lead', name: 'A', phone: '', wish: 'x', text: 'x' }; };
+  assert.equal(await processOneJob(w.db, w.deps), 'dropped');
+  assert.equal(w.calls.tg.length, 0);
+  assert.equal(w.calls.leads.length, 0);
+  assert.equal(w.db.prepare('SELECT outcome FROM ai_chat_jobs').get().outcome, 'switch_off');
+});
+
+test('время после запроса — свежее: задача закрыта временем ответа', async () => {
+  const w = world({ outcome: 'reply', text: 'x' });
+  let t = T0 + 3000;
+  w.deps.now = () => t;
+  const ask = w.deps.ask;
+  w.deps.ask = async (p) => { t = T0 + 40_000; return ask(p); };
+  assert.equal(await processOneJob(w.db, w.deps), 'done');
+  assert.equal(w.db.prepare('SELECT finished_at FROM ai_chat_jobs').get().finished_at, iso(T0 + 40_000));
+});
+
+test('ошибка чтения базы до отправки — задача не висит в working', async () => {
+  const w = world({ outcome: 'reply', text: 'x' });
+  w.deps.facts = () => { throw new Error('SQLITE_BUSY'); };
+  assert.equal(await processOneJob(w.db, w.deps), 'failed');
+  assert.equal(w.db.prepare('SELECT status FROM ai_chat_jobs').get().status, 'failed');
+  assert.equal(w.calls.tg.length, 0);
+});
+
+test('Telegram недостижим (нет токена, чат отвязан, бот заблокирован) — без платного запроса и без отметки', async () => {
+  const cases = [
+    (w) => { w.deps.telegramToken = () => ''; },
+    (w) => { w.db.prepare("UPDATE telegram_links SET revoked_at = ? WHERE chat_id = '100'").run(iso(T0)); },
+    (w) => { w.db.prepare("UPDATE telegram_links SET blocked_at = ? WHERE chat_id = '100'").run(iso(T0)); },
+  ];
+  for (const setup of cases) {
+    const w = world({ outcome: 'reply', text: 'x' });
+    setup(w);
+    assert.equal(await processOneJob(w.db, w.deps), 'dropped');
+    assert.equal(w.calls.asked.length, 0);
+    assert.equal(w.db.prepare('SELECT outcome FROM ai_chat_jobs').get().outcome, 'unreachable');
+    assert.equal(isFlagged(w.db, 'telegram', '100'), false);
+  }
+});
+
+test('Meta: длинный текст режется до 2000 знаков', async () => {
+  const long = 'а'.repeat(3000);
+  const { db, calls, deps } = metaWorld({ outcome: 'reply', text: long });
+  const conv = Number(db.prepare(`INSERT INTO meta_conversations (platform, conv_id, peer_id, last_in_at) VALUES ('messenger','t1','p1',?)`).run(iso(T0 + 1000)).lastInsertRowid);
+  enqueueChatJob(db, { channel: 'meta_dm', chatKey: String(conv), sourceId: 'm1', createdAt: iso(T0 + 1000), now: T0 + 2000 });
+  assert.equal(await processOneJob(db, deps), 'done');
+  assert.equal(calls.dm[0].text.length, 2000);
+  assert.equal(db.prepare("SELECT by_ai FROM meta_messages WHERE direction = 'out'").get().by_ai, 1);
+
+  const c = metaWorld({ outcome: 'reply_comment', public_text: 'б'.repeat(2500), private_text: long });
+  seedThread(c.db);
+  assert.equal(await processOneJob(c.db, c.deps), 'done');
+  assert.equal(c.calls.pub[0].text.length, 2000);
+  assert.equal(c.calls.priv[0].text.length, 2000);
+  assert.equal(c.db.prepare('SELECT by_ai FROM meta_comments WHERE is_page = 1').get().by_ai, 1);
+});
+
+test('Meta: нераспознанный номер — заявка без номера, но сырой номер в комментарии CRM', async () => {
+  const { db, calls, deps } = metaWorld({ outcome: 'create_lead', name: 'Дилноза', phone: '12-34', wish: 'УЗИ', text: 'Администратор свяжется.' });
+  deps.metaLead = (db2, args) => { calls.metaLeads.push(args); return args.phone ? { ok: false, reason: 'bad_phone' } : { ok: true }; };
+  seedThread(db);
+  assert.equal(await processOneJob(db, deps), 'done');
+  assert.equal(calls.metaLeads.length, 2);
+  assert.equal(calls.metaLeads[1].phone, '');
+  assert.equal(calls.metaLeads[1].comment, 'Создано ИИ: УЗИ\nТелефон (не распознан): 12-34');
 });

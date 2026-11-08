@@ -42,16 +42,32 @@ const DEFAULT_DEPS = {
 };
 
 const clip = (t) => String(t == null ? '' : t).trim();
+const isoOf = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+// AI_CHAT_V1: sendConversationMessage / replyToComment / privateReplyToComment
+// отказывают тексту длиннее 2000 знаков — длинный ответ ИИ не должен стоить
+// пациенту ответа. Обрезанная половина суррогатной пары и хвостовой пробел
+// убираются: отправитель пишет текст обрезанным по краям, и по этому тексту
+// мы потом ищем строку, чтобы пометить её «ИИ».
+const META_MAX = 2000;
+const metaClip = (t) => clip(t).slice(0, META_MAX).replace(/[\uD800-\uDBFF]$/, '').trim();
+
+// AI_CHAT_V1 — правило владельца для комментариев: «под комментарием — что
+// ответ дан в личке, сам ответ — в личке». Публично всегда эта короткая фраза
+// (кроме reply_comment с непустым public_text): заявка или передача оператору
+// могут нести телефон и подробности, им не место под постом.
+export const COMMENT_PUBLIC_TEXT = 'Shaxsiy xabarlarda javob berdik. · Ответили вам в личных сообщениях.';
 
 async function send(db, d, job, text) {
-  const body = clip(text);
-  if (!body) return { ok: false, reason: 'empty' };
   if (job.channel === 'telegram') {
+    const body = clip(text);
+    if (!body) return { ok: false, reason: 'empty' };
     // Отметка by_ai для Telegram ставится внутри sendChatMessage ({ ai: true }).
     try { await d.sendTelegram(db, d.telegramToken(db), job.chat_key, body); return { ok: true }; }
     catch (e) { return { ok: false, reason: e.message }; }
   }
   if (job.channel === 'meta_dm') {
+    const body = metaClip(text);
+    if (!body) return { ok: false, reason: 'empty' };
     const r = await d.sendMetaDm(db, job.chat_key, body);
     // Помечаем именно только что записанную строку: исходящая без sent_by с тем
     // же текстом. «Последняя исходящая» могла бы оказаться ответом сотрудника,
@@ -68,9 +84,9 @@ async function send(db, d, job, text) {
 
 /** Публичный ответ и ответ в личку — на комментарий target (строка meta_comments). */
 async function sendComment(db, d, target, publicText, privateText) {
-  const pub = clip(publicText);
-  const priv = clip(privateText);
-  const p = pub ? await d.replyComment(db, target.id, pub) : { ok: false };
+  const pub = metaClip(publicText) || COMMENT_PUBLIC_TEXT;
+  const priv = metaClip(privateText);
+  const p = await d.replyComment(db, target.id, pub);
   if (p && p.ok) {
     // replyToComment кладёт ответ страницы в нитку с root_id = корень нитки.
     const rootKey = target.root_id || target.comment_id;
@@ -82,10 +98,52 @@ async function sendComment(db, d, target, publicText, privateText) {
   return { ok: !!(p && p.ok) || !!(q && q.ok) };
 }
 
-function sendAny(db, d, job, target, publicText, privateText) {
+/**
+ * Отправка по каналу. text — главный ответ (в чат или в личку под комментарием);
+ * publicText — только для reply_comment, у остальных под комментарием
+ * COMMENT_PUBLIC_TEXT.
+ */
+function sendAny(db, d, job, target, text, publicText = '') {
   return job.channel === 'meta_comment'
-    ? sendComment(db, d, target, publicText, privateText)
-    : send(db, d, job, privateText);
+    ? sendComment(db, d, target, publicText, text)
+    : send(db, d, job, text);
+}
+
+/**
+ * Можно ли сейчас отвечать в этот чат. Проверяется дважды: до запроса к серверу
+ * управления и ПОСЛЕ него — ответ ИИ идёт секунды, за это время сотрудник мог
+ * написать в чат, а владелец — выключить ИИ. Возвращает null или причину.
+ */
+function stopReason(db, job, t) {
+  const s = readAiSettings(db);
+  if (!s.enabled || s.blocked) return 'switch_off';
+  if (operatorRecent(db, job.channel, job.chat_key, t) || isFlagged(db, job.channel, job.chat_key)) return 'operator';
+  if (job.channel === 'meta_dm') {
+    const conv = conversationById(db, Number(job.chat_key));
+    if (!conv || !windowOpen(conv, t)) return 'window_closed';
+  }
+  return null;
+}
+
+const STOP_RESULT = { switch_off: 'dropped', operator: 'skipped', window_closed: 'handed_off' };
+
+function applyStop(db, job, reason, t) {
+  if (reason === 'switch_off') { finishJob(db, job.id, 'dropped', 'switch_off', t); dropQueuedJobs(db, t); }
+  else if (reason === 'operator') finishJob(db, job.id, 'dropped', 'operator', t);
+  else { flagChat(db, job.channel, job.chat_key, 'window_closed', t); finishJob(db, job.id, 'handed_off', 'window_closed', t); }
+  return STOP_RESULT[reason];
+}
+
+/**
+ * AI_CHAT_V1: Telegram, в который ответ заведомо не дойдёт (нет токена бота,
+ * чат отвязан, пациент заблокировал бота), — не повод для платного запроса к
+ * серверу управления. Отметку не ставим: оператору там тоже писать некуда.
+ */
+function telegramReachable(db, d, job) {
+  let token = '';
+  try { token = d.telegramToken(db) || ''; } catch { token = ''; }
+  if (!token) return false;
+  return !!db.prepare('SELECT 1 FROM telegram_links WHERE chat_id = ? AND revoked_at IS NULL AND blocked_at IS NULL').get(String(job.chat_key));
 }
 
 /** Одна задача. Возвращает: 'idle' | 'done' | 'handed_off' | 'skipped' | 'dropped' | 'blocked' | 'retry' | 'failed'. */
@@ -98,53 +156,63 @@ export async function processOneJob(db, deps = {}) {
 
   const job = claimNextJob(db, now);
   if (!job) return 'idle';
-  const handOff = (reason) => flagChat(db, job.channel, job.chat_key, reason || 'hand_off', now);
+  let t = now;
+  const handOff = (reason) => flagChat(db, job.channel, job.chat_key, reason || 'hand_off', t);
 
-  const s = readAiSettings(db);
-  if (!s.enabled || s.blocked) { finishJob(db, job.id, 'dropped', 'switch_off', now); dropQueuedJobs(db, now); return 'dropped'; }
-
-  let target = null;
-  if (job.channel === 'meta_comment') {
-    target = db.prepare('SELECT id, comment_id, root_id, private_replied_at FROM meta_comments WHERE comment_id = ?').get(String(job.source_id)) || null;
-    if (!target) { finishJob(db, job.id, 'dropped', 'gone', now); return 'dropped'; }
-    // Meta разрешает один личный ответ на комментарий; уже ответили (сотрудник
-    // или ИИ) — второй раз ИИ на этот комментарий не отвечает.
-    if (target.private_replied_at) { finishJob(db, job.id, 'dropped', 'already_replied', now); return 'dropped'; }
-  }
-  if (operatorRecent(db, job.channel, job.chat_key, now) || isFlagged(db, job.channel, job.chat_key)) {
-    finishJob(db, job.id, 'dropped', 'operator', now); return 'skipped';
-  }
-  if (job.channel === 'meta_dm') {
-    const conv = conversationById(db, Number(job.chat_key));
-    if (!conv || !windowOpen(conv, now)) { handOff('window_closed'); finishJob(db, job.id, 'handed_off', 'window_closed', now); return 'handed_off'; }
-  }
-
+  // Всё после взятия задачи — под try: упавшее чтение базы не должно оставить
+  // задачу в 'working' и не должно оборвать цикл исполнителя. До markSending
+  // закрывать задачу безопасно — пациенту ничего не ушло.
   try {
+    let target = null;
+    if (job.channel === 'meta_comment') {
+      target = db.prepare('SELECT id, comment_id, root_id, private_replied_at FROM meta_comments WHERE comment_id = ?').get(String(job.source_id)) || null;
+    }
+    const s = readAiSettings(db);
+    if (!s.enabled || s.blocked) return applyStop(db, job, 'switch_off', t);
+    if (job.channel === 'meta_comment') {
+      if (!target) { finishJob(db, job.id, 'dropped', 'gone', t); return 'dropped'; }
+      // Meta разрешает один личный ответ на комментарий; уже ответили (сотрудник
+      // или ИИ) — второй раз ИИ на этот комментарий не отвечает.
+      if (target.private_replied_at) { finishJob(db, job.id, 'dropped', 'already_replied', t); return 'dropped'; }
+    }
+    const before = stopReason(db, job, t);
+    if (before) return applyStop(db, job, before, t);
+    if (job.channel === 'telegram' && !telegramReachable(db, d, job)) {
+      finishJob(db, job.id, 'dropped', 'unreachable', t); return 'dropped';
+    }
+
     const conv = conversationFor(db, job.channel, job.chat_key);
     const answer = (await d.ask({
       channel: job.channel, transcript: conv.transcript, patient_name: conv.patientName, post_text: conv.postText, facts: d.facts(db),
     })) || { error: 'bad_response' };
+    // Ответ шёл секунды: дальше — время ответа, а не взятия задачи.
+    t = d.now();
 
     if (answer.error === 'limit' || answer.error === 'no_module') {
-      setAiBlocked(db, answer.error, new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z'));
+      setAiBlocked(db, answer.error, isoOf(t));
       handOff(answer.error);
-      finishJob(db, job.id, 'failed', answer.error, now);
-      dropQueuedJobs(db, now);
+      finishJob(db, job.id, 'failed', answer.error, t);
+      dropQueuedJobs(db, t);
       return 'blocked';
     }
     if (answer.error === 'network' || answer.error === 'not_enrolled') {
-      if (retryJob(db, job.id, now) === 'gave_up') { handOff('timeout'); return 'failed'; }
+      if (retryJob(db, job.id, t) === 'gave_up') { handOff('timeout'); return 'failed'; }
       return 'retry';
     }
+
+    // Повторная проверка ПОСЛЕ запроса: сотрудник написал, ИИ выключили, окно
+    // Meta закрылось, пока ИИ думал, — ответ не отправляется.
+    const after = stopReason(db, job, t);
+    if (after) return applyStop(db, job, after, t);
 
     markSending(db, job.id);
     // Ошибка, отличная от выше (bad_response, too_large), — то же, что hand_off:
     // повтор дал бы тот же ответ, пациент ждёт человека.
     if (answer.error || answer.outcome === 'hand_off') {
       const text = (answer.outcome === 'hand_off' && clip(answer.text)) || HANDOFF_TEXT;
-      await sendAny(db, d, job, target, text, text);
+      await sendAny(db, d, job, target, text);
       handOff(answer.error || answer.reason || 'hand_off');
-      finishJob(db, job.id, 'handed_off', 'hand_off', now);
+      finishJob(db, job.id, 'handed_off', 'hand_off', t);
       return 'handed_off';
     }
 
@@ -161,31 +229,34 @@ export async function processOneJob(db, deps = {}) {
             phone, name: clip(answer.name), comment: 'Создано ИИ: ' + clip(answer.wish),
           };
           lead = d.metaLead(db, args);
-          // Номер, который не номер, не должен стоить пациенту заявки.
-          if (lead && lead.ok === false && lead.reason === 'bad_phone') lead = d.metaLead(db, { ...args, phone: '' });
+          // Номер, который не номер, не должен стоить пациенту заявки; сырой
+          // номер остаётся в комментарии — администратор разберёт его сам.
+          if (lead && lead.ok === false && lead.reason === 'bad_phone') {
+            lead = d.metaLead(db, { ...args, phone: '', comment: args.comment + '\nТелефон (не распознан): ' + phone });
+          }
         }
       } catch (e) { lead = { ok: false, reason: e.message }; }
       if (!lead || lead.ok === false) {
         // «Администратор свяжется с вами» без заявки — обещание, которое никто
         // не выполнит. Вместо него — передача человеку.
-        await sendAny(db, d, job, target, HANDOFF_TEXT, HANDOFF_TEXT);
+        await sendAny(db, d, job, target, HANDOFF_TEXT);
         handOff('lead_failed');
-        finishJob(db, job.id, 'handed_off', 'lead_failed', now);
+        finishJob(db, job.id, 'handed_off', 'lead_failed', t);
         return 'handed_off';
       }
     }
 
-    const sent = await sendAny(db, d, job, target,
-      answer.public_text || answer.text, answer.private_text || answer.text);
-    if (!sent.ok) { handOff('send_failed'); finishJob(db, job.id, 'failed', 'send_failed', now); return 'failed'; }
-    finishJob(db, job.id, 'done', answer.outcome, now);
+    const sent = answer.outcome === 'reply_comment'
+      ? await sendAny(db, d, job, target, answer.private_text || answer.text, answer.public_text)
+      : await sendAny(db, d, job, target, answer.text);
+    if (!sent.ok) { handOff('send_failed'); finishJob(db, job.id, 'failed', 'send_failed', t); return 'failed'; }
+    finishJob(db, job.id, 'done', answer.outcome, t);
     return 'done';
   } catch (e) {
-    // Неожиданная ошибка не должна оставить задачу висеть в 'working'/'sending'
-    // и не должна повторяться (ответ мог уйти): закрываем, чат — оператору.
+    // Неожиданная ошибка: задача не должна висеть в 'working'/'sending' и не
+    // должна повторяться (после markSending ответ мог уйти) — закрываем, чат — оператору.
     console.warn('[ai] job', job.id, e && e.message);
-    handOff('error');
-    finishJob(db, job.id, 'failed', 'error', now);
+    try { handOff('error'); finishJob(db, job.id, 'failed', 'error', t); } catch { /* база недоступна — разберёт recoverJobsAtBoot */ }
     return 'failed';
   }
 }
