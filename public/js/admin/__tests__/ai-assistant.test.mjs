@@ -234,3 +234,26 @@ test('AI_CHAT_V1: переключатель — role=switch и подпись',
   assert.equal(sw.attrs.role, 'switch');
   assert.equal(sw.attrs['aria-label'], 'ИИ отвечает в чатах');
 });
+
+// AI_CHAT_V1: включён, но остановлен (лимит, нет модуля) — ИИ пациентам не
+// отвечает; «Отвечает ИИ» при этом было бы неправдой.
+test('AI_CHAT_V1: включён, но остановлен — «ИИ остановлен» на экране и в чипе', async () => {
+  rpcAnswers.ai_settings_get = { enabled: true, enabled_at: 'x', blocked: 'limit', has_module: true, facts: { services: 5, doctors: 1 } };
+  const c = mk('div'); await renderAiAssistant(c); await tick();
+  const label = byAttr(c, 'data-ai-state')[0];
+  assert.equal(label.attrs['data-ai-state'], 'stopped');
+  assert.ok(textOf(c).includes('ИИ остановлен'));
+  assert.ok(!textOf(c).includes('Отвечает ИИ'));
+  assert.ok(String(label.className).includes('is-stopped'));
+
+  const chip = marks.aiStatusChip();
+  await tick();
+  assert.equal(chip.textContent, 'ИИ остановлен');
+  assert.ok(String(chip.className).includes('is-stopped'));
+  assert.equal(chip.hidden, false);
+
+  assert.deepEqual(marks.aiStateOf({ enabled: true, blocked: '' }).key, 'on');
+  assert.deepEqual(marks.aiStateOf({ enabled: true, blocked: 'no_module' }).key, 'stopped');
+  assert.deepEqual(marks.aiStateOf({ enabled: false, blocked: 'limit' }).key, 'off');
+  assert.deepEqual(marks.aiStateOf(null).key, 'off');
+});

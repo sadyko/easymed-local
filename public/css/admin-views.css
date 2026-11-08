@@ -9366,6 +9366,8 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
 .ai-state[hidden] { display: none; }
 .ai-state.is-on { color: var(--ok-700); background: var(--ok-50); }
 .ai-state.is-off { color: var(--ink-600); background: var(--ink-50); }
+/* AI_CHAT_V1: «ИИ остановлен» — янтарный, как «Нужен оператор»: включён, но не отвечает (лимит, модуль). */
+.ai-state.is-stopped { color: var(--warn-800); background: var(--warn-50); }
 .ai-blocked { margin: 0; font-size: 12.5px; color: var(--crit-700); background: var(--crit-50); border-radius: 8px; padding: 8px 10px; }
 /* A8: «ИИ не знает ни одной услуги» — предупреждение, а не авария: ИИ включается, но зовёт оператора. */
 .ai-warn { margin: 0; font-size: 12.5px; color: var(--warn-800); background: var(--warn-50); border-radius: 8px; padding: 8px 10px; }

@@ -12,6 +12,7 @@ import { supabase } from '../../supabase.js';
 import { h, PageHead, clear, toast } from '../ui.js';
 import { tr } from '../i18n.js';
 import { commerceToolLevel } from '../permissions.js';
+import { aiStateOf } from '../ai-chat-marks.js';
 
 const BLOCKED_TEXT = {
     limit: 'Месячный лимит ИИ исчерпан — новые чаты получают операторы. Обратитесь к менеджеру Easy-Med.',
@@ -40,12 +41,15 @@ export async function renderAiAssistant(container) {
         clear(body);
         const on = !!(state && state.enabled);
         const hasModule = !!(state && state.has_module);
+        const st = aiStateOf(state);
         const sw = h('input', { type: 'checkbox', class: 'ai-switch-input', checked: on, disabled: !canEdit || (!hasModule && !on), role: 'switch', 'aria-label': tr('ИИ отвечает в чатах') });
         sw.addEventListener('change', () => save(sw.checked));
         body.appendChild(h('label', { class: 'ai-switch' }, sw,
             h('span', { class: 'ai-switch-text' },
                 h('strong', null, 'ИИ отвечает в чатах'),
-                h('span', { class: 'ai-state ' + (on ? 'is-on' : 'is-off') }, on ? 'Отвечает ИИ' : 'Отвечают операторы'))));
+                // Переключатель — настройка (enabled), подпись — что на деле:
+                // включённый, но остановленный ИИ не отвечает (aiStateOf).
+                h('span', { class: 'ai-state ' + st.cls, 'data-ai-state': st.key }, st.text))));
         // Модуля нет — говорим это, даже если сервер ещё не записал blocked:
         // выключенный переключатель без причины читается как поломка.
         const blocked = state && state.blocked && BLOCKED_TEXT[state.blocked] ? state.blocked : (!hasModule ? 'no_module' : '');

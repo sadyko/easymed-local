@@ -7,6 +7,18 @@ import { h } from './ui.js';
 import { tr } from './i18n.js';
 import { commerceToolLevel } from './permissions.js';
 
+// AI_CHAT_V1: три состояния, а не два. Включённый, но остановленный ИИ
+// (лимит месяца, модуль не подключён — blocked) пациентам не отвечает: чип
+// «Отвечает ИИ» при нём — неправда, из-за которой чаты остаются без ответа,
+// а «Отвечают операторы» скрыл бы, что переключатель всё ещё включён.
+export function aiStateOf(data) {
+    const enabled = !!(data && data.enabled);
+    const blocked = !!(data && data.blocked);
+    if (enabled && !blocked) return { key: 'on', cls: 'is-on', text: 'Отвечает ИИ' };
+    if (enabled) return { key: 'stopped', cls: 'is-stopped', text: 'ИИ остановлен' };
+    return { key: 'off', cls: 'is-off', text: 'Отвечают операторы' };
+}
+
 // Чип запрашивается один раз при открытии экрана и только у того, кому строка
 // «ИИ-помощник» открыта: остальным сервер ответил бы отказом, а отказ в шапке
 // чата — шум. Любой сбой — чипа просто нет, чат работает как раньше.
@@ -17,9 +29,9 @@ export function aiStatusChip() {
         try {
             const { data, error } = await supabase.rpc('ai_settings_get', {});
             if (error || !data || typeof data !== 'object') return;
-            const on = !!data.enabled;
-            chip.className = 'ai-state ' + (on ? 'is-on' : 'is-off');
-            chip.textContent = on ? tr('Отвечает ИИ') : tr('Отвечают операторы');
+            const st = aiStateOf(data);
+            chip.className = 'ai-state ' + st.cls;
+            chip.textContent = tr(st.text);
             chip.hidden = false;
         } catch (_) { /* без чипа */ }
     })();
