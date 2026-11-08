@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { setAiEnabled, setAiBlocked } from './settings.js';
-import { enqueueChatJob, claimNextJob, markSending, finishJob, retryJob, dropQueuedJobs, recoverJobsAtBoot } from './queue.js';
+import { enqueueChatJob, claimNextJob, markSending, finishJob, retryJob, dropQueuedJobs, recoverJobsAtBoot, expireStaleJobs } from './queue.js';
 
 const T0 = Date.parse('2026-11-08T10:00:00Z');
 const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -61,4 +61,24 @@ test('выключение роняет ждущие; перезапуск: work
   assert.equal(dropQueuedJobs(db), 2);
   finishJob(db, a.id, 'done', 'reply');
   assert.equal(db.prepare('SELECT status, outcome FROM ai_chat_jobs WHERE id = ?').get(a.id).outcome, 'reply');
+});
+
+test('устаревшая ждущая задача закрывается как timeout и не забирается', () => {
+  const db = fresh();
+  enqueueChatJob(db, job({ sourceId: 'old', now: T0 + 2000 }));
+  enqueueChatJob(db, job({ chatKey: '9', sourceId: 'fresh', createdAt: iso(T0 + 10 * 60_000), now: T0 + 11 * 60_000 }));
+  const gone = expireStaleJobs(db, T0 + 2000 + 11 * 60_000);
+  assert.deepEqual(gone.map((g) => ({ channel: g.channel, chat_key: g.chat_key })), [{ channel: 'telegram', chat_key: '100' }]);
+  const rows = db.prepare('SELECT source_id, status, outcome FROM ai_chat_jobs ORDER BY id').all();
+  assert.deepEqual(rows, [{ source_id: 'old', status: 'failed', outcome: 'timeout' }, { source_id: 'fresh', status: 'queued', outcome: '' }]);
+  assert.equal(claimNextJob(db, T0 + 2000 + 11 * 60_000).source_id, 'fresh');
+});
+
+test('retryJob не возвращает в очередь задачу в статусе sending', () => {
+  const db = fresh();
+  enqueueChatJob(db, job());
+  const j = claimNextJob(db, T0 + 3000);
+  markSending(db, j.id);
+  retryJob(db, j.id, T0 + 4000);
+  assert.equal(db.prepare('SELECT status FROM ai_chat_jobs WHERE id = ?').get(j.id).status, 'sending');
 });

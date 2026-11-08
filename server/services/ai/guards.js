@@ -13,7 +13,8 @@ export function lastOperatorAt(db, channel, chatKey) {
     return r && r.at ? r.at : null;
   }
   if (channel === 'meta_dm') {
-    const r = db.prepare(`SELECT MAX(created_at) at FROM meta_messages WHERE conversation_id = ? AND direction = 'out' AND sent_by IS NOT NULL`).get(Number(chatKey));
+    const r = db.prepare(`SELECT MAX(created_at) at FROM meta_messages WHERE conversation_id = ? AND direction = 'out' AND sent_by IS NOT NULL AND (status IS NULL OR status <> 'failed')`).get(Number(chatKey));
+    // AI_CHAT_V1: неудавшаяся отправка оператора пациенту не дошла — ИИ не замолкает.
     return r && r.at ? r.at : null;
   }
   if (channel === 'meta_comment') {

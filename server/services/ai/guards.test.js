@@ -48,3 +48,10 @@ test('отметка «Нужен оператор» держится до от�
   assert.equal(isFlagged(db, 'telegram', '100'), false, 'оператор ответил — отметка снята');
   assert.deepEqual(flaggedChats(db), []);
 });
+
+test('Meta: неудавшаяся отправка оператора не считается', () => {
+  const db = fresh();
+  const conv = db.prepare(`INSERT INTO meta_conversations (platform, conv_id, peer_id, peer_name, updated_time) VALUES ('messenger','c2','p2','Ann','2026-11-08T11:00:00Z')`).run().lastInsertRowid;
+  db.prepare(`INSERT INTO meta_messages (conversation_id, msg_id, direction, text, created_at, sent_by, status) VALUES (?, 'm2', 'out', 'hi', ?, 9, 'failed')`).run(conv, iso(NOW - 1000));
+  assert.equal(operatorRecent(db, 'meta_dm', String(conv), NOW), false);
+});

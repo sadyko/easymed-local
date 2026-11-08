@@ -12,9 +12,12 @@ export function readAiSettings(db) {
   return { enabled: r.enabled === 1, enabled_at: r.enabled_at || null, blocked: r.blocked || '' };
 }
 
+// AI_CHAT_V1: повторное «включить» при уже включённом ИИ точку отсчёта не двигает —
+// иначе сообщения, пришедшие между включениями, потерялись бы как «старые».
 export function setAiEnabled(db, on, userId = null, at = nowIso()) {
   if (on) {
-    db.prepare(`UPDATE ai_settings SET enabled = 1, enabled_at = ?, updated_by = ?, updated_at = ? WHERE id = 1`)
+    db.prepare(`UPDATE ai_settings SET enabled_at = CASE WHEN enabled = 0 OR enabled_at IS NULL THEN ? ELSE enabled_at END,
+                            enabled = 1, updated_by = ?, updated_at = ? WHERE id = 1`)
       .run(at, userId, at);
   } else {
     db.prepare(`UPDATE ai_settings SET enabled = 0, updated_by = ?, updated_at = ? WHERE id = 1`).run(userId, at);

@@ -25,3 +25,10 @@ test('blocked: лимит и модуль; пустая строка снима�
   assert.equal(readAiSettings(db).blocked, '');
   assert.throws(() => setAiBlocked(db, 'whatever'), /blocked/);
 });
+
+test('повторное включение при включённом ИИ не сдвигает enabled_at', () => {
+  const db = fresh();
+  setAiEnabled(db, true, 7, '2026-11-08T10:00:00Z');
+  setAiEnabled(db, true, 7, '2026-11-08T10:30:00Z');
+  assert.equal(readAiSettings(db).enabled_at, '2026-11-08T10:00:00Z');
+});

@@ -56,8 +56,10 @@ export function retryJob(db, id, now = Date.now()) {
     finishJob(db, id, 'failed', 'timeout', now);
     return 'gave_up';
   }
-  const wait = BACKOFF_MS[Math.min(j.attempts - 1, BACKOFF_MS.length - 1)];
-  db.prepare(`UPDATE ai_chat_jobs SET status = 'queued', next_at = ? WHERE id = ?`).run(iso(now + wait), id);
+  const wait = BACKOFF_MS[Math.max(0, Math.min(j.attempts - 1, BACKOFF_MS.length - 1))];
+  // AI_CHAT_V1: только 'working'. Задача в 'sending' (ответ, возможно, уже ушёл)
+  // в очередь не возвращается никогда — иначе пациент получит ответ дважды.
+  db.prepare(`UPDATE ai_chat_jobs SET status = 'queued', next_at = ? WHERE id = ? AND status = 'working'`).run(iso(now + wait), id);
   return 'retry';
 }
 
@@ -71,4 +73,18 @@ export function recoverJobsAtBoot(db, now = Date.now()) {
   const failed = db.prepare(`SELECT channel, chat_key FROM ai_chat_jobs WHERE status = 'sending'`).all();
   db.prepare(`UPDATE ai_chat_jobs SET status = 'failed', outcome = 'unknown_send', finished_at = ? WHERE status = 'sending'`).run(iso(now));
   return { requeued, failed };
+}
+
+/**
+ * AI_CHAT_V1: ждущая задача старше GIVE_UP_MS (сервер простоял, перезапуск) не
+ * отвечается — поздний ответ хуже тишины. Возвращает чаты, которые надо
+ * передать оператору (worker ставит им отметку 'timeout').
+ */
+export function expireStaleJobs(db, now = Date.now()) {
+  return db.transaction(() => {
+    const cutoff = iso(now - GIVE_UP_MS);
+    const chats = db.prepare(`SELECT DISTINCT channel, chat_key FROM ai_chat_jobs WHERE status = 'queued' AND created_at < ?`).all(cutoff);
+    db.prepare(`UPDATE ai_chat_jobs SET status = 'failed', outcome = 'timeout', finished_at = ? WHERE status = 'queued' AND created_at < ?`).run(iso(now), cutoff);
+    return chats;
+  })();
 }
