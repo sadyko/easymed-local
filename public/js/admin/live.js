@@ -10,6 +10,9 @@
 //     двадцать ПК клиники не ломились в сервер одновременно после его перезапуска);
 //   • пока потока нет (EventSource недоступен, поток рвётся) — запасной опрос
 //     /api/live/version раз в 15 с;
+//   • поток, молчащий дольше 70 с (сервер шлёт ping раз в 25 с), считается
+//     зависшим — ПК спал, Wi-Fi пропал без разрыва, прокси копит ответ: браузер
+//     сам этого не заметит часами, поэтому закрываем и подключаемся заново;
 //   • onLive(predicate, handler) — подписка экрана; возвращает отписку. Обработчик
 //     зовётся не на каждое событие, а раз в ~700 мс тишины (и не реже раза в 3 с при
 //     непрерывном потоке) — с объединением пропущенного;
@@ -45,6 +48,10 @@ export const HIDDEN_CLOSE_MS = 10000;
 export const BACKOFF_MIN_MS = 1000;
 export const BACKOFF_MAX_MS = 60000;
 export const ES_GIVE_UP_ERRORS = 3;
+// Сервер шлёт ping раз в 25 с. Тишина дольше 70 с — поток завис (ПК спал, Wi-Fi пропал
+// без разрыва соединения, прокси или антивирус копит ответ): браузер об этом не узнает
+// часами, поэтому поток закрываем сами и подключаемся заново с номером версии.
+export const SILENCE_MS = 70000;
 
 const ES_CLOSED = 2;
 
@@ -85,6 +92,7 @@ export function createLiveClient(env = {}, opts = {}) {
         backoffMin: opts.backoffMinMs ?? BACKOFF_MIN_MS,
         backoffMax: opts.backoffMaxMs ?? BACKOFF_MAX_MS,
         giveUp: opts.giveUpErrors ?? ES_GIVE_UP_ERRORS,
+        silenceMs: opts.silenceMs ?? SILENCE_MS,
     };
 
     const subs = new Set();
@@ -98,6 +106,8 @@ export function createLiveClient(env = {}, opts = {}) {
     let paused = false;      // вкладка давно скрыта — поток закрыт
     let gone = false;        // сессии нет — до перезагрузки страницы
     let wired = false;
+    let lastHeard = 0;       // когда поток последний раз подал голос (open/hello/change/ping)
+    let watchTimer = null;
 
     const hidden = () => { try { return !!(E.document && E.document.hidden); } catch { return false; } };
 
@@ -160,6 +170,26 @@ export function createLiveClient(env = {}, opts = {}) {
     function closeEs() {
         if (es) { try { es.close(); } catch { /* уже закрыт */ } }
         es = null;
+        if (watchTimer) { E.clearTimeout(watchTimer); watchTimer = null; }
+    }
+    // Сторож тишины (SILENCE_MS): поток молчит — закрыть и переподключиться.
+    function heard() { lastHeard = E.now(); }
+    function watchSilence() {
+        if (watchTimer) return;
+        const left = Math.max(0, lastHeard + T.silenceMs - E.now());
+        watchTimer = E.setTimeout(() => {
+            watchTimer = null;
+            if (!es || gone || paused) return;
+            if (E.now() - lastHeard >= T.silenceMs) {
+                closeEs();
+                errors++;
+                mode = 'poll';
+                pollSoon(T.pollMs);
+                scheduleReconnect();
+                return;
+            }
+            watchSilence();
+        }, left);
     }
     function clearReconnect() { if (reconnectTimer) { E.clearTimeout(reconnectTimer); reconnectTimer = null; } }
     function scheduleReconnect() {
@@ -184,21 +214,27 @@ export function createLiveClient(env = {}, opts = {}) {
         }
         es = src;
         mode = 'connecting';
+        heard();
+        watchSilence();
         src.onopen = () => {
             if (es !== src) return;
+            heard();
             errors = 0;
             mode = 'sse';
             stopPoll();
         };
         src.addEventListener('hello', (e) => {
             if (es !== src) return;
+            heard();
             const d = parse(e && e.data);
             if (d && v == null && Number.isFinite(Number(d.v))) v = Number(d.v);
         });
         src.addEventListener('change', (e) => {
             if (es !== src) return;
+            heard();
             apply(parse(e && e.data));
         });
+        src.addEventListener('ping', () => { if (es === src) heard(); });
         src.onerror = () => {
             if (es !== src) return;
             errors++;

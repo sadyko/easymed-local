@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { fakeClock, FakeES, fakeDocument, flush } from './live-fakes.mjs';
 import {
     createLiveClient, watchScreen, dialogOpen, editingInside, screenBusy, BUSY_SELECTOR,
-    DEBOUNCE_MS, POLL_MS, HIDDEN_CLOSE_MS, RECHECK_MS, onLive, __setLiveClientForTests,
+    DEBOUNCE_MS, POLL_MS, HIDDEN_CLOSE_MS, RECHECK_MS, SILENCE_MS, onLive, __setLiveClientForTests,
 } from '../live.js';
 import { LIVE_RELEVANCE, liveRelevant } from '../live-relevance.js';
 
@@ -108,6 +108,22 @@ test('обрыв: закрытый поток — опрос /api/live/version �
     await clock.advance(POLL_MS * 2);
     assert.equal(fetches.length, before, 'поток жив — опроса нет');
     assert.equal(got.length, 1);
+});
+
+test('зависший поток (ПК спал, Wi-Fi без разрыва): тишина дольше 70 с — переподключение с номером; ping держит поток', async () => {
+    const { client, clock } = setup();
+    client.onLive(() => true, () => {});
+    const es = FakeES.all[0];
+    es.open();
+    es.emit('hello', { v: 40 });
+    for (let i = 0; i < 6; i++) { await clock.advance(25_000); es.emit('ping', { v: 40 }); }
+    assert.equal(es.closed, false, 'пульс идёт — поток живёт (2,5 минуты)');
+    await clock.advance(SILENCE_MS + 10);
+    assert.equal(es.closed, true, 'тишина — поток закрыт');
+    await clock.advance(1500);
+    const es2 = FakeES.all[1];
+    assert.ok(es2 && !es2.closed, 'подключился заново');
+    assert.equal(es2.url, '/api/live?since=40', 'с номером: сервер пришлёт пропущенное');
 });
 
 test('три ошибки подряд без закрытия — берём переподключение на себя', async () => {

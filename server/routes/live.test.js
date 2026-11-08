@@ -185,6 +185,9 @@ test('пульс — комментарий раз в heartbeatMs; конец с
   const { open, post } = await stand(t, { heartbeatMs: 60 });
   const s = await open('kassa');
   await s.next((f) => f.comment === 'hb', 2000, 'пульс');
+  // Пульс и для самой вкладки: событие ping с версией (по его тишине она узнаёт зависший поток).
+  const ping = await s.next((f) => f.event === 'ping', 2000, 'ping');
+  assert.deepEqual(Object.keys(ping.json), ['v']);
   const out = await post('/api/auth/logout', 'kassa', {});
   assert.ok(out.status < 400);
   const until = Date.now() + 2000;

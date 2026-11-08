@@ -5,7 +5,10 @@
 //       event: hello  data: {"v":N}     — текущая версия, сразу после подключения;
 //       id: N  event: change  data: {"v":N,"tables":[…],"rpc":[…]}  — записано;
 //       : hb                            — пульс раз в HEARTBEAT_MS (держит соединение
-//                                         живым в прокси и роутерах и проверяет сессию).
+//                                         живым в прокси и роутерах и проверяет сессию);
+//       event: ping  data: {"v":N}      — тот же пульс для вкладки: комментарий
+//                                         EventSource не показывает, а по тишине
+//                                         ping вкладка узнаёт зависший поток.
 //     Догоняющий (?since=N или заголовок Last-Event-ID, который браузер ставит сам
 //     при переподключении) сразу получает одно событие с пропущенным:
 //       {"v","tables","rpc"} или {"v","reset":true,…} — «могло измениться всё».
@@ -84,7 +87,9 @@ export function liveRoutes(db, { heartbeatMs = HEARTBEAT_MS } = {}) {
       let alive = false;
       try { alive = !!sessionUser(db, req.sessionId, { background: true }); } catch { alive = false; }
       if (!alive) { cleanup(); try { res.end(); } catch { /* уже закрыт */ } return; }
-      send(': hb\n\n');
+      // Комментарий держит соединение в прокси; событие ping видит и сама вкладка:
+      // по его тишине (сон ПК, Wi-Fi без разрыва, копящий прокси) она переподключается.
+      send(`: hb\n\nevent: ping\ndata: ${JSON.stringify({ v: bus.version })}\n\n`);
     }, beat);
     if (typeof hb.unref === 'function') hb.unref();
     req.on('close', cleanup);
