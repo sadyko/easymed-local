@@ -86,6 +86,12 @@ async function send(db, d, job, text) {
 async function sendComment(db, d, target, publicText, privateText) {
   const pub = metaClip(publicText) || COMMENT_PUBLIC_TEXT;
   const priv = metaClip(privateText);
+  // AI_CHAT_V1: сначала личный ответ — в нём суть. Публичное «ответили вам в
+  // личных сообщениях» без личного ответа было бы неправдой (Meta отказывает в
+  // личном ответе на старый комментарий или на уже отвеченный), поэтому личный
+  // не ушёл — публично ничего, задача не удалась, нитка уходит оператору.
+  const q = priv ? await d.privateReply(db, target.id, priv) : { ok: false };
+  if (!(q && q.ok)) return { ok: false, reason: (q && q.reason) || 'private_failed' };
   const p = await d.replyComment(db, target.id, pub);
   if (p && p.ok) {
     // replyToComment кладёт ответ страницы в нитку с root_id = корень нитки.
@@ -94,8 +100,8 @@ async function sendComment(db, d, target, publicText, privateText) {
                   SELECT MAX(id) FROM meta_comments WHERE is_page = 1 AND sent_by IS NULL AND by_ai = 0
                     AND root_id = ? AND text = ?)`).run(rootKey, pub);
   }
-  const q = priv ? await d.privateReply(db, target.id, priv) : { ok: false };
-  return { ok: !!(p && p.ok) || !!(q && q.ok) };
+  // Личный ответ дошёл — пациент ответ получил, даже если публичная фраза не легла.
+  return { ok: true };
 }
 
 /**

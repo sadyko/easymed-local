@@ -334,3 +334,14 @@ test('Meta: нераспознанный номер — заявка без но
   assert.equal(calls.metaLeads[1].phone, '');
   assert.equal(calls.metaLeads[1].comment, 'Создано ИИ: УЗИ\nТелефон (не распознан): 12-34');
 });
+
+test('комментарий: личный ответ не ушёл — публично ничего, задача не удалась, нитка оператору', async () => {
+  const { db, calls, deps } = metaWorld({ outcome: 'reply', text: 'Да, в субботу с 9 до 15.' });
+  deps.privateReply = async (db2, id, text) => { calls.priv.push({ id, text }); return { ok: false, reason: 'already_replied' }; };
+  const { rootId } = seedThread(db);
+  assert.equal(await processOneJob(db, deps), 'failed');
+  assert.equal(calls.priv.length, 1);
+  assert.equal(calls.pub.length, 0);
+  assert.equal(db.prepare('SELECT outcome FROM ai_chat_jobs').get().outcome, 'send_failed');
+  assert.equal(isFlagged(db, 'meta_comment', String(rootId)), true);
+});
