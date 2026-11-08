@@ -50,6 +50,8 @@
 
 **A8. Switch screen warns when the AI has nothing to say** (Task 13/14): `ai_settings_get` also returns `facts: { services: N, doctors: M }` (counts from `clinicFacts`); the screen shows «ИИ не знает ни одной услуги: отметьте услуги для показа на сайте в «Настройки → Услуги для сайта и партнёров»» when `services === 0`.
 
+**A9. A lapsed clinic gets no AI.** Control plane (Task 17): after the clinic lookup and module check, refuse with `402 { error: { code: 'no_module' } }` when the subscription is not entitled — reuse `isEntitled(subscription, subscription_until)` exported from `control-plane/server/services/checkin.js` (select those two columns too). Test it.
+
 **Owner decision pending (do not implement):** replies typed by staff directly in the Facebook/Instagram app (not in Easy-Med) arrive with `sent_by NULL` and currently do NOT silence the AI. Keep it that way unless the owner decides otherwise.
 
 ## File map
