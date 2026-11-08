@@ -40,3 +40,9 @@ test('A8: ai_settings_get и save отдают facts с числом услуг 
   const s = aiSettingsSave(db, { enabled: true }, ADMIN, { hasModule: hasAi });
   assert.deepEqual(Object.keys(s.facts).sort(), ['doctors', 'services']);
 });
+
+test('строка "false" не включает ИИ; 402 несёт код module_missing', () => {
+  const db = fresh();
+  assert.equal(aiSettingsSave(db, { enabled: 'false' }, ADMIN, { hasModule: hasAi }).enabled, false);
+  assert.throws(() => aiSettingsSave(db, { enabled: true }, ADMIN, { hasModule: () => false }), (e) => e.status === 402 && e.code === 'module_missing');
+});

@@ -40,8 +40,13 @@ export function aiSettingsGet(db, _args, user, { hasModule = defaultHasModule } 
 
 export function aiSettingsSave(db, args, user, { hasModule = defaultHasModule } = {}) {
   requireAiLevel(db, user, 'edit');
-  const on = !!(args && args.enabled);
-  if (on && !hasModule(db)) throw new RpcError('Модуль «ИИ-помощник» не подключён. Обратитесь к менеджеру Easy-Med.', 402);
+  // Только настоящее true/1: строки «false»/«0» не должны включать ИИ.
+  const on = !!(args && (args.enabled === true || args.enabled === 1));
+  if (on && !hasModule(db)) {
+    const err = new RpcError('Модуль «ИИ-помощник» не подключён. Обратитесь к менеджеру Easy-Med.', 402);
+    err.code = 'module_missing';
+    throw err;
+  }
   const s = setAiEnabled(db, on, (user && user.id) || null);
   if (on) setAiBlocked(db, '');
   else dropQueuedJobs(db);
