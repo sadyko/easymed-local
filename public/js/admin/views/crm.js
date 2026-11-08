@@ -2372,8 +2372,14 @@ async function paint() {
                             const dup = picked.some((p) => waiting(p) && ((c.service_id != null && String(p.service_id) === String(c.service_id))
                                 || (c.service_id == null && c.consultation_type_id != null && String(p.consultation_type_id) === String(c.consultation_type_id))));
                             if (dup) { skipped.push(c.name); continue; }
+                            // CRM_DUP_CARRY_DOCTOR_V1 (3.22.0, ревью) — консультация едет со своим
+                            // врачом, а цена пересчитывается здесь правилом кассы (consultPriceOf,
+                            // виды и цены врачей этой карточки уже загружены): прежде врач
+                            // терялся, а цена оставалась выбранной под него.
+                            const consult = c.service_id == null && c.consultation_type_id != null;
                             picked.push({ service_id: c.service_id, ...(c.consultation_type_id != null ? { consultation_type_id: c.consultation_type_id } : {}),
-                                name: c.name, price: c.price, date: '' });
+                                ...(consult ? { doctor_id: c.doctor_id ?? null } : {}),
+                                name: c.name, price: consult ? consultPriceOf(c) : c.price, date: '' });
                             added += 1;
                         }
                         linesLoaded = true;
@@ -2561,8 +2567,11 @@ async function paint() {
             if (!others.length) return true;
             // CRM_DUP_ADD_SERVICES_V1 — услуги переносятся только из НОВОЙ заявки:
             // у правки они и так в своей карточке.
+            // CRM_DUP_CARRY_DOCTOR_V1 — у консультации врач едет вместе с ней (цена — его).
             const carry = selfId == null ? picked.filter((p) => p.service_id != null || p.consultation_type_id != null)
-                .map((p) => ({ service_id: p.service_id ?? null, consultation_type_id: p.consultation_type_id ?? null, name: p.name, price: p.price })) : [];
+                .map((p) => ({ service_id: p.service_id ?? null, consultation_type_id: p.consultation_type_id ?? null,
+                    doctor_id: p.service_id == null && p.consultation_type_id != null ? (p.doctor_id ?? null) : null,
+                    name: p.name, price: p.price })) : [];
             const choice = await askDuplicateLead(others, { edit: selfId != null, addCount: carry.length });
             if (!choice) return false;
             if (choice.open != null) {

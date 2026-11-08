@@ -221,3 +221,22 @@ test('CRM_DUP_SHEET_V1: ответ, данный за ОДНОГО пациен�
   S.patients = undefined;
   done();
 });
+
+// CRM_DUP_CARRY_DOCTOR_V1 (3.22.0, ревью) — консультация по виду приёма, перенесённая
+// «Открыть и добавить услуги», теряла врача, но сохраняла цену, выбранную под этого
+// врача. Теперь врач едет вместе со строкой, а цена пересчитывается в открытой
+// карточке правилом кассы (consultPriceOf) — для этого врача.
+// В 3.22.0 новая заявка консультаций не набирает (виды приёма грузятся только у
+// открытой карточки), поэтому проверка — по исходнику: путь заперт на будущее.
+test('CRM_DUP_CARRY_DOCTOR_V1: перенесённая консультация едет со своим врачом и ценой по правилу кассы', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../views/crm.js', import.meta.url), 'utf8');
+  const at = src.indexOf('async function confirmNoDuplicate(');
+  const fn = src.slice(at, src.indexOf('async function persist()', at));
+  assert.match(fn, /const carry = [\s\S]*?doctor_id: [^,]*p\.doctor_id/, 'врач консультации не попадает в перенос');
+  const mergeAt = src.indexOf('const carried = (prefill && Array.isArray(prefill.addServices))');
+  assert.ok(mergeAt > -1, 'приём переноса не найден');
+  const merge = src.slice(mergeAt, src.indexOf('linesLoaded = true;', mergeAt));
+  assert.match(merge, /doctor_id: c\.doctor_id/, 'перенесённая консультация приходит без врача');
+  assert.match(merge, /consultPriceOf\(c\)/, 'цена перенесённой консультации не пересчитана правилом кассы');
+});
