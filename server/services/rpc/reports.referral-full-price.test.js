@@ -13,11 +13,21 @@
 //     сумма счёта уменьшается до оплаченного), и «с доплатой» (reopen_balance);
 //   • закрытые месяцы — как записаны: месяц, закрытый до решения, не пересчитывается
 //     и не даёт корректировки от смены правила.
+// ВЛАДЕЛЕЦ (2026-11-08, второе решение): правило — «с дня обновления». Счета,
+// выставленные ДО того, как клиника поставила 3.22.0 (мигр. 283 записывает этот
+// момент, если счета в базе уже есть), считаются по прежнему правилу — прошлые суммы
+// не меняются ни на одном экране, в закрытых и в открытых месяцах. У новой базы
+// (и у тестов выше, которые сеют счета после migrate()) отметки нет — новое правило
+// для всех счетов.
 // Всё — через настоящие RPC кассы и настоящие отчёты.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';
 import { runReport, doctorPaySummary, doctorReferralReward, payPeriodClose } from './reports.js';
 import { createInvoiceForVisit, createInvoiceForAdmission, recordPayment, refundPayment } from './billing.js';
 import { voidInvoice } from './cashier.js';
@@ -55,9 +65,20 @@ const salaryOf = (db, rng, col, name = 'Направляев Н.') => {
 // своя ставка 5 %. «Клиника Х» — внешний партнёр, категория «Партнёры» 10 %.
 // «Фикс-партнёр» — та же категория и особая ставка за УЗИ: фикс 70 000.
 // Пациент 1 — от «Клиники Х», 2 — от Направляева, 3 — от «Фикс-партнёра».
-function clinic() {
+//
+// upgrading: база клиники ДО обновления (все миграции ниже 283); c.upgrade() ставит
+// 3.22.0 — мигр. 283 записывает момент обновления, если счета уже есть.
+const MIGRATIONS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'db', 'migrations');
+function clinic({ upgrading = false } = {}) {
   const db = openDb(':memory:');
-  migrate(db);
+  if (upgrading) {
+    const stage = tmpDir('em-rfp-');
+    for (const f of fs.readdirSync(MIGRATIONS)) {
+      if (parseInt(f, 10) >= 283 || !f.endsWith('.sql')) continue;
+      fs.copyFileSync(path.join(MIGRATIONS, f), path.join(stage, f));
+    }
+    migrate(db, stage);
+  } else migrate(db);
   const u = db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates, service_rate_default)
                         VALUES (?,?,?,?,?,?,'',0)`);
   u.run(1, 'uzi', 'x', 'doctor', 'Узистов У.', 1);
@@ -101,7 +122,8 @@ function clinic() {
     assert.equal(inv.total_amount, 160000, 'скидка 20 % не легла на счёт');
     return { inv, payment: pay(inv) };
   };
-  return { db, line, bill, pay, paidWith20, partner, fixer, own: own.id };
+  const upgrade = () => migrate(db);   // клиника ставит 3.22.0 (мигр. 283)
+  return { db, line, bill, pay, paidWith20, partner, fixer, own: own.id, upgrade };
 }
 
 // ─── ПРОЦЕНТ — ОТ ЦЕНЫ ДО СКИДКИ ─────────────────────────────────────────────
@@ -215,8 +237,8 @@ test('стационар: процент партнёра и своего вра
 
 // ─── ЗАКРЫТЫЕ МЕСЯЦЫ — КАК ЗАПИСАНЫ ──────────────────────────────────────────
 
-// Запись месяца, закрытого ДО решения 2026-11-08: те же строки, но без отметки
-// reward_base, и вознаграждение — по прежнему правилу (процент — после скидки).
+// Запись месяца, закрытого ещё в прежней версии (до 3.22.0): те же строки, но без
+// отметки reward_base, и вознаграждение — по прежнему правилу (процент — после скидки).
 function asClosedBeforeDecision(db, month, oldFee) {
   for (const r of db.prepare("SELECT id, data FROM pay_period_lines WHERE month = ? AND kind IN ('ref', 'ref_in')").all(month)) {
     const d = JSON.parse(r.data);
@@ -226,31 +248,10 @@ function asClosedBeforeDecision(db, month, oldFee) {
     db.prepare('UPDATE pay_period_lines SET fee = ?, data = ? WHERE id = ?').run(fee, JSON.stringify(d), r.id);
   }
 }
-
-test('месяц, закрытый до решения: остаётся по записи (16 000 / 8 000) и не даёт корректировки от смены правила; поздний возврат — по правилу того месяца', () => {
-  const c = clinic();
-  const { prev, prev2 } = months(c.db);
-  const at = prev2 + '-10T09:00:00Z';
-  const x = c.paidWith20(at, 1);
-  c.paidWith20(at, 2);
-  payPeriodClose(c.db, { month: prev2 }, admin);
-  asClosedBeforeDecision(c.db, prev2, (d) => round2((d.amount - d.discount) * Number(d.rate.value) / 100));
-  const closed = refRows(c.db, range(prev2));
-  assert.equal(rewardOf(closed, 'Клиника Х'), 16000, 'закрытый месяц пересчитан по новому правилу');
-  assert.equal(rewardOf(closed, 'Направляев Н.'), 8000);
-  assert.equal(salaryOf(c.db, range(prev2), 'Вознаграждение за направления'), 8000);
-  const legacy = run(c.db, 'referrals', range(prev2)).notes;
-  assert.ok(legacy.some((n) => /закрытых до 3\.22\.0/.test(n)), 'не объяснено, почему в закрытом месяце процент — после скидки');
-  // Смена правила — не событие строки: корректировок в первом открытом месяце нет.
-  assert.ok(refRows(c.db, range(prev)).every((o) => o['Где'] !== 'Корректировка'), 'смена правила дала корректировку за закрытый месяц');
-  assert.equal(salaryOf(c.db, range(prev), 'Корректировки'), 0);
-  // Поздний возврат половины денег (с доплатой) — корректировка по правилу ТОГО месяца:
-  // половина от записанных 16 000.
-  refundPayment(c.db, { payment_id: x.payment, amount: 80000, reason: 'после закрытия', reopen_balance: true }, admin);
-  const adj = refRows(c.db, range(prev)).filter((o) => o['Где'] === 'Корректировка');
-  assert.equal(rewardOf(adj, 'Клиника Х'), -8000);
-  assert.equal(rewardOf(refRows(c.db, range(prev2)), 'Клиника Х'), 16000, 'закрытый месяц сдвинулся');
-});
+const oldRule = (d) => round2((d.amount - d.discount) * Number(d.rate.value) / 100);
+// Примечание о счетах, выставленных до обновления (по прежнему правилу).
+const legacyNote = (notes) => notes.find((n) => /до обновления программы до 3\.22\.0/.test(n));
+const cutoffOf = (db) => (db.prepare('SELECT from_at FROM referral_full_price_from WHERE id = 1').get() || {}).from_at || null;
 
 test('месяц, закрытый по новому правилу: 20 000 по записи; поздний обычный возврат половины — корректировка −10 000', () => {
   const c = clinic();
@@ -260,18 +261,124 @@ test('месяц, закрытый по новому правилу: 20 000 по
   payPeriodClose(c.db, { month: prev2 }, admin);
   assert.equal(rewardOf(refRows(c.db, range(prev2)), 'Клиника Х'), 20000);
   assert.ok(refRows(c.db, range(prev)).every((o) => o['Где'] !== 'Корректировка'));
-  const notes = run(c.db, 'referrals', range(prev2)).notes;
-  assert.ok(!notes.some((n) => /закрытых до 3\.22\.0/.test(n)), 'примечание о прежнем правиле без прежних строк');
+  assert.equal(legacyNote(run(c.db, 'referrals', range(prev2)).notes), undefined, 'примечание о прежнем правиле без прежних строк');
   refundPayment(c.db, { payment_id: x.payment, amount: 80000, reason: 'после закрытия' }, admin);
   assert.equal(rewardOf(refRows(c.db, range(prev)).filter((o) => o['Где'] === 'Корректировка'), 'Клиника Х'), -10000);
   assert.equal(rewardOf(refRows(c.db, range(prev2)), 'Клиника Х'), 20000);
 });
 
-test('месяц, закрытый ещё без записи партнёров (до мигр. 202): партнёр считается живьём, но по правилу того времени', () => {
-  const c = clinic();
-  const { prev2 } = months(c.db);
-  const at = prev2 + '-12T09:00:00Z';
+// ─── «С ДНЯ ОБНОВЛЕНИЯ»: СЧЕТА ДО 3.22.0 — ПО ПРЕЖНЕМУ ПРАВИЛУ ─────────────────
+// Владелец 2026-11-08: счета, выставленные до того, как клиника поставила 3.22.0, —
+// процент от суммы после скидки, как было; счета с момента обновления — от цены до
+// скидки. Прошлые суммы не меняются ни в закрытых, ни в открытых месяцах.
+
+test('обновление: счёт до обновления — по прежнему правилу (16 000 / 8 000), месяц не закрыт; счёт после — от цены до скидки (20 000 / 10 000)', () => {
+  const c = clinic({ upgrading: true });
+  const { cur, prev } = months(c.db);
+  const at = prev + '-15T09:00:00Z';
   c.paidWith20(at, 1);
+  c.paidWith20(at, 2);
+  c.upgrade();   // прежняя версия показывала по этим счетам 16 000 / 8 000 — так и остаётся
+  assert.ok(cutoffOf(c.db), 'момент обновления не записан');
+  const old = refRows(c.db, range(prev));
+  assert.equal(rewardOf(old, 'Клиника Х'), 16000, 'счёт до обновления пересчитан по новому правилу');
+  assert.equal(rewardOf(old, 'Направляев Н.'), 8000);
+  assert.equal(sum(objects(run(c.db, 'referrals_detail', range(prev))), 'Вознаграждение'), 24000);
+  assert.equal(doctorReferralReward(c.db, { doctor_id: 2, ...range(prev) }, admin).reward, 8000);
+  assert.equal(doctorPaySummary(c.db, { doctor_id: 2, ...range(prev) }, admin).referral.reward, 8000);
+  assert.equal(salaryOf(c.db, range(prev), 'Вознаграждение за направления'), 8000);
+  assert.equal(referralsDoctorDetail(c.db, { doctor_id: 2, ...range(prev) }, admin).reward, 8000);
+  // Счета, выставленные после обновления, — новое правило.
+  const nowAt = new Date().toISOString();
+  c.paidWith20(nowAt, 1);
+  c.paidWith20(nowAt, 2);
+  const fresh = refRows(c.db, range(cur));
+  assert.equal(rewardOf(fresh, 'Клиника Х'), 20000);
+  assert.equal(rewardOf(fresh, 'Направляев Н.'), 10000);
+  // Под отчётом — когда сменилось правило; переводится шаблоном с датой.
+  const r = run(c.db, 'referrals', { from: prev + '-01', to: lastDay(cur) });
+  const note = legacyNote(r.notes);
+  assert.ok(note, 'не сказано, что счета до обновления — по прежнему правилу: ' + r.notes.join(' | '));
+  const day = c.db.prepare("SELECT strftime('%Y-%m-%d %H:%M', ?, 'localtime') d").get(cutoffOf(c.db)).d;
+  assert.ok(note.includes(day), 'в примечании нет момента обновления ' + day + ': ' + note);
+  const t = r.notes_t[r.notes.indexOf(note)];
+  assert.ok(t && t.template && t.params && t.params.date === day, 'примечание без шаблона для перевода');
+  // Новая база: счета «до обновления» не бывает — и примечания нет.
+  const n = clinic();
+  n.paidWith20(at, 1);
+  assert.equal(rewardOf(refRows(n.db, range(prev)), 'Клиника Х'), 20000, 'у новой базы — новое правило для всех счетов');
+  assert.equal(legacyNote(run(n.db, 'referrals', range(prev)).notes), undefined);
+});
+
+test('обновление: стационар — по тому же моменту (до — от суммы после скидки, после — от цены до скидки; фикс — как был)', () => {
+  const c = clinic({ upgrading: true });
+  const { cur, prev } = months(c.db);
+  c.db.prepare('UPDATE referral_sources SET inpatient_bonus_enabled = 1, inpatient_pct = 5, inpatient_fixed = 50000 WHERE id = ?').run(c.partner);
+  c.db.prepare('UPDATE users SET inpatient_referral_pct = 2, inpatient_referral_fixed = 0 WHERE id = 2').run();
+  // Госпитализация со счётом на 1 000 000, скидка счёта 10 % (100 000), оплачен.
+  const admissionBill = (id, createdAt) => {
+    c.db.prepare(`INSERT INTO admissions (id, admission_no, patient_id, doctor_id, status, referral_source_id, referring_doctor_id)
+                  VALUES (?, ?, 1, 1, 'active', ?, 2)`).run(id, 'A-' + id, c.partner);
+    c.db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, performer_id, quantity, unit_price, total, status, billable, performed_at)
+                  VALUES (?, ?, 1, 1, 1, 5, 200000, 1000000, 'added', 1, ?)`).run(id, id, createdAt);
+    const { invoice } = createInvoiceForAdmission(c.db, { admission_id: id, admission_service_ids: [id] }, admin);
+    c.db.prepare("UPDATE invoices SET discount_amount = 100000, total_amount = 900000, paid_amount = 900000, status = 'paid', created_at = ? WHERE id = ?")
+      .run(createdAt, invoice.id);
+  };
+  admissionBill(1, prev + '-15T09:00:00Z');
+  c.upgrade();
+  admissionBill(2, new Date().toISOString());
+  const inOf = (m) => refRows(c.db, range(m)).filter((o) => o['Где'] === 'Стационар');
+  assert.equal(rewardOf(inOf(prev), 'Клиника Х'), 45000 + 50000, 'до обновления: 5 % от 900 000 + фикс');
+  assert.equal(rewardOf(inOf(prev), 'Направляев Н.'), 18000);
+  assert.equal(rewardOf(inOf(cur), 'Клиника Х'), 50000 + 50000, 'после обновления: 5 % от 1 000 000 + фикс');
+  assert.equal(rewardOf(inOf(cur), 'Направляев Н.'), 20000);
+  assert.equal(doctorPaySummary(c.db, { doctor_id: 2, ...range(prev) }, admin).inpatient_referral.reward, 18000);
+});
+
+test('обновление: месяц со счетами до обновления, закрытый уже в 3.22.0, — записан по прежнему правилу; корректировок нет; поздний возврат — по нему же', () => {
+  const c = clinic({ upgrading: true });
+  const { prev, prev2 } = months(c.db);
+  const x = c.paidWith20(prev2 + '-10T09:00:00Z', 1);
+  c.upgrade();
+  payPeriodClose(c.db, { month: prev2 }, admin);
+  const rec = JSON.parse(c.db.prepare("SELECT data FROM pay_period_lines WHERE month = ? AND kind = 'ref'").get(prev2).data);
+  assert.equal(rec.reward_base, 'after_discount', 'запись не помнит, по какому правилу посчитана строка');
+  assert.equal(rewardOf(refRows(c.db, range(prev2)), 'Клиника Х'), 16000);
+  assert.ok(refRows(c.db, range(prev)).every((o) => o['Где'] !== 'Корректировка'));
+  refundPayment(c.db, { payment_id: x.payment, amount: 80000, reason: 'после закрытия', reopen_balance: true }, admin);
+  assert.equal(rewardOf(refRows(c.db, range(prev)).filter((o) => o['Где'] === 'Корректировка'), 'Клиника Х'), -8000);
+  assert.equal(rewardOf(refRows(c.db, range(prev2)), 'Клиника Х'), 16000);
+});
+
+test('обновление: месяц, закрытый ещё прежней версией (запись без отметки), — как записан (16 000 / 8 000); смена правила корректировки не даёт; поздний возврат — по правилу того месяца', () => {
+  const c = clinic({ upgrading: true });
+  const { prev, prev2 } = months(c.db);
+  const at = prev2 + '-10T09:00:00Z';
+  const x = c.paidWith20(at, 1);
+  c.paidWith20(at, 2);
+  payPeriodClose(c.db, { month: prev2 }, admin);
+  asClosedBeforeDecision(c.db, prev2, oldRule);   // так месяц записала прежняя версия
+  c.upgrade();
+  const closed = refRows(c.db, range(prev2));
+  assert.equal(rewardOf(closed, 'Клиника Х'), 16000, 'закрытый месяц пересчитан по новому правилу');
+  assert.equal(rewardOf(closed, 'Направляев Н.'), 8000);
+  assert.equal(salaryOf(c.db, range(prev2), 'Вознаграждение за направления'), 8000);
+  assert.ok(legacyNote(run(c.db, 'referrals', range(prev2)).notes), 'не объяснено, почему процент — после скидки');
+  // Смена правила — не событие строки: корректировок в первом открытом месяце нет.
+  assert.ok(refRows(c.db, range(prev)).every((o) => o['Где'] !== 'Корректировка'), 'смена правила дала корректировку за закрытый месяц');
+  assert.equal(salaryOf(c.db, range(prev), 'Корректировки'), 0);
+  // Поздний возврат половины денег (с доплатой) — половина от записанных 16 000.
+  refundPayment(c.db, { payment_id: x.payment, amount: 80000, reason: 'после закрытия', reopen_balance: true }, admin);
+  assert.equal(rewardOf(refRows(c.db, range(prev)).filter((o) => o['Где'] === 'Корректировка'), 'Клиника Х'), -8000);
+  assert.equal(rewardOf(refRows(c.db, range(prev2)), 'Клиника Х'), 16000, 'закрытый месяц сдвинулся');
+});
+
+test('обновление: месяц, закрытый ещё без записи партнёров (до мигр. 202), — партнёр живьём, по правилу своего счёта (16 000)', () => {
+  const c = clinic({ upgrading: true });
+  const { prev2 } = months(c.db);
+  c.paidWith20(prev2 + '-12T09:00:00Z', 1);
+  c.upgrade();
   payPeriodClose(c.db, { month: prev2 }, admin);
   c.db.prepare('UPDATE pay_periods SET partners = 0 WHERE month = ?').run(prev2);
   c.db.prepare('DELETE FROM pay_period_lines WHERE month = ? AND doctor_id IS NULL').run(prev2);
@@ -280,27 +387,45 @@ test('месяц, закрытый ещё без записи партнёров
 
 // ─── ПРИМЕЧАНИЯ — НА ТРЁХ ЯЗЫКАХ ─────────────────────────────────────────────
 
-test('примечания «Рефералов» о базе вознаграждения есть в словаре: uz и en — без кириллицы', () => {
-  const c = clinic();
-  const { cur, prev2 } = months(c.db);
-  c.paidWith20(prev2 + '-10T09:00:00Z', 1);
-  payPeriodClose(c.db, { month: prev2 }, admin);
-  asClosedBeforeDecision(c.db, prev2, (d) => round2((d.amount - d.discount) * Number(d.rate.value) / 100));
+const noCyr = (s) => typeof s === 'string' && s.length > 0 && !/[А-Яа-яЁё]/.test(s);
+
+test('примечания «Рефералов» о базе вознаграждения есть в словаре (и шаблон с датой обновления): uz и en — без кириллицы', () => {
+  // Обновлённая база: счёт до обновления, стационар после — база, стационар, «до обновления» шаблоном.
+  const c = clinic({ upgrading: true });
+  const { cur, prev } = months(c.db);
+  c.paidWith20(prev + '-10T09:00:00Z', 1);
+  c.upgrade();
   c.db.prepare('UPDATE referral_sources SET inpatient_bonus_enabled = 1, inpatient_pct = 5 WHERE id = ?').run(c.partner);
   c.db.prepare("INSERT INTO admissions (id, admission_no, patient_id, doctor_id, status, referral_source_id) VALUES (1, 'A-1', 1, 1, 'active', ?)").run(c.partner);
   c.db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, performer_id, quantity, unit_price, total, status, billable, performed_at)
-                VALUES (1, 1, 1, 1, 1, 1, 200000, 200000, 'added', 1, ?)`).run(cur + '-06T09:00:00Z');
+                VALUES (1, 1, 1, 1, 1, 1, 200000, 200000, 'added', 1, ?)`).run(new Date().toISOString());
   const { invoice } = createInvoiceForAdmission(c.db, { admission_id: 1, admission_service_ids: [1] }, admin);
   c.db.prepare("UPDATE invoices SET paid_amount = total_amount, status = 'paid' WHERE id = ?").run(invoice.id);
-  const notes = run(c.db, 'referrals', { from: prev2 + '-01', to: lastDay(cur) }).notes
-    .filter((n) => /до скидки|закрытых до 3\.22\.0/.test(n));
-  assert.ok(notes.length >= 3, 'ожидались три примечания о базе: ' + notes.join(' | '));
-  for (const n of notes) {
-    const e = STRINGS[n];
-    assert.ok(e, 'нет статьи словаря: ' + n.slice(0, 80));
-    assert.equal(e.ru, n);
+  const r = run(c.db, 'referrals', { from: prev + '-01', to: lastDay(cur) });
+  // Новая база с записью прежней версии (без момента обновления) — «до обновления» без даты.
+  const f = clinic();
+  const { prev2 } = months(f.db);
+  f.paidWith20(prev2 + '-10T09:00:00Z', 1);
+  payPeriodClose(f.db, { month: prev2 }, admin);
+  asClosedBeforeDecision(f.db, prev2, oldRule);
+  const s = run(f.db, 'referrals', range(prev2));
+  const picked = [];
+  for (const rep of [r, s]) {
+    rep.notes.forEach((n, i) => {
+      if (/до скидки|до обновления программы до 3\.22\.0/.test(n)) picked.push({ n, t: rep.notes_t[i] });
+    });
+  }
+  assert.ok(picked.some((p) => /счёта госпитализации до скидки/.test(p.n)), 'нет примечания стационара');
+  assert.ok(picked.some((p) => p.t && p.t.template), 'нет шаблона «до обновления» с датой');
+  assert.ok(picked.some((p) => !p.t && legacyNote([p.n])), 'нет примечания «до обновления» без даты');
+  for (const { n, t } of picked) {
+    const key = t && t.template ? t.template : n;
+    const e = STRINGS[key];
+    assert.ok(e, 'нет статьи словаря: ' + key.slice(0, 80));
+    assert.equal(e.ru, key);
     for (const lang of ['en', 'uz']) {
-      assert.ok(e[lang] && !/[А-Яа-яЁё]/.test(e[lang]), lang + ' с кириллицей или пуст: ' + n.slice(0, 60));
+      assert.ok(noCyr(e[lang]), lang + ' с кириллицей или пуст: ' + key.slice(0, 60));
+      if (t && t.template) assert.ok(e[lang].includes('{date}'), lang + ': в переводе потерян {date}');
     }
   }
 });

@@ -324,6 +324,9 @@ export const TABLE_PLAN = Object.freeze({
   meta_inbox_state: keep('service'),       // META_INBOX_V1 — курсоры опроса
   referral_source_counter: keep('service'),
   referral_rate_migration_log: keep('service'),
+  // REFERRAL_FULL_PRICE_V1 (мигр. 283) — момент обновления до 3.22.0: счета до него —
+  // по прежнему правилу вознаграждения. Удаление тестовых счетов его не касается.
+  referral_full_price_from: keep('service'),
   // Отметки разовых исправлений CRM: без них исправление прошло бы снова.
   crm_one_way_repair: keep('service'),
   crm_unify_repair: keep('service'),
