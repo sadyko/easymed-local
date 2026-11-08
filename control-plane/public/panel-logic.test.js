@@ -66,6 +66,7 @@ test('moduleToggles: marketing is never offered, even though it is in the sellab
 test('moduleToggles: real sellable modules appear with their granted state', () => {
   const chips = moduleToggles(SELLABLE_MODULES, ['crm']);
   assert.deepEqual(chips, [
+    { key: 'ai', label: 'ИИ-помощник', granted: false },   // AI_CHAT_V1
     { key: 'callcenter', label: 'Колл-центр', granted: false },
     { key: 'crm', label: 'CRM', granted: true },
     { key: 'telegram', label: 'Telegram', granted: false },
@@ -75,6 +76,7 @@ test('moduleToggles: real sellable modules appear with their granted state', () 
 test('moduleToggles: none granted', () => {
   const chips = moduleToggles(SELLABLE_MODULES, []);
   assert.deepEqual(chips, [
+    { key: 'ai', label: 'ИИ-помощник', granted: false },   // AI_CHAT_V1
     { key: 'callcenter', label: 'Колл-центр', granted: false },
     { key: 'crm', label: 'CRM', granted: false },
     { key: 'telegram', label: 'Telegram', granted: false },
@@ -84,6 +86,7 @@ test('moduleToggles: none granted', () => {
 test('moduleToggles: marketing stays excluded even if the clinic somehow already has it granted', () => {
   const chips = moduleToggles(SELLABLE_MODULES, ['crm', 'marketing']);
   assert.deepEqual(chips, [
+    { key: 'ai', label: 'ИИ-помощник', granted: false },   // AI_CHAT_V1
     { key: 'callcenter', label: 'Колл-центр', granted: false },
     { key: 'crm', label: 'CRM', granted: true },
     { key: 'telegram', label: 'Telegram', granted: false },
@@ -92,7 +95,7 @@ test('moduleToggles: marketing stays excluded even if the clinic somehow already
 
 test('moduleToggles: tolerates a granted list that is undefined', () => {
   const chips = moduleToggles(SELLABLE_MODULES, undefined);
-  assert.deepEqual(chips.map((c) => c.granted), [false, false, false]);
+  assert.deepEqual(chips.map((c) => c.granted), [false, false, false, false]);   // AI_CHAT_V1 — четыре модуля
 });
 
 // --- hasUnmanageableMarketingGrant ----------------------------------------------

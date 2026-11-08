@@ -48,7 +48,7 @@ export function formatLastSeen(lastSeenIso, now = new Date()) {
   return `${days} day${days === 1 ? '' : 's'} ago`;
 }
 
-const MODULE_LABELS = { crm: 'CRM', telegram: 'Telegram', callcenter: 'Колл-центр' };
+const MODULE_LABELS = { crm: 'CRM', telegram: 'Telegram', callcenter: 'Колл-центр', ai: 'ИИ-помощник' };   // AI_CHAT_V1
 
 function moduleLabel(key) {
   return MODULE_LABELS[key] || (key.charAt(0).toUpperCase() + key.slice(1));
