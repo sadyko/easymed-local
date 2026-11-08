@@ -28,7 +28,7 @@ import { graphGet, graphGetAll } from './graph.js';
 import { readSettingsRow, getTokens } from './settings.js';
 import {
   readInboxState, recordInboxPoll, conversationByConvId, upsertConversation, insertMessage,
-  refreshConversationSummary, upsertComment, isoZ,
+  refreshConversationSummary, upsertComment, isoZ, nowIso,
 } from './inbox-store.js';
 import { aiNoteMetaMessage, aiNoteMetaCommentById } from '../ai/hooks.js';   // AI_CHAT_V1
 
@@ -94,8 +94,10 @@ async function pollConversations(db, platform, ctx) {
         };
         // AI_CHAT_V1 — только впервые записанное входящее; выключенный ИИ, старое
         // и пришедшее до включения очередь отбрасывает сама. Хук не бросает.
+        // Время Meta не разобралось — insertMessage пишет «сейчас»; то же время
+        // и очереди, иначе свежее сообщение она сочла бы старым.
         if (insertMessage(db, row.id, msg, { readBefore })) {
-          aiNoteMetaMessage(db, { convRowId: row.id, msgId: msg.msg_id, direction: msg.direction, createdAt: msg.created_at });
+          aiNoteMetaMessage(db, { convRowId: row.id, msgId: msg.msg_id, direction: msg.direction, createdAt: msg.created_at || nowIso() });
         }
       }
       refreshConversationSummary(db, row.id);

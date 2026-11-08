@@ -5,12 +5,33 @@
 // проход опроса Meta (он идёт в транзакции — откатилась бы вся переписка),
 // ни оставлять пациента в Telegram без ответа «сообщение получено».
 import { enqueueChatJob } from './queue.js';
+import { readAiSettings } from './settings.js';
+import { operatorRecent, isFlagged } from './guards.js';
 
-/** true — сообщение взял ИИ (бот не отвечает «сообщение получено»). */
+const aiOn = (db) => { const s = readAiSettings(db); return !!s.enabled && !s.blocked; };
+
+/**
+ * true — сообщение взял ИИ (бот не отвечает «сообщение получено»).
+ *
+ * false — всё как до ИИ, задача не создаётся:
+ *  - пациент заблокировал бота (blocked_at): исполнитель всё равно не смог бы
+ *    ответить и молча закрыл бы задачу — пациент остался бы без ответа вовсе;
+ *  - чат ведёт человек: оператор писал недавно или чат отмечен «нужен
+ *    оператор». Здесь ИИ не вмешивается, а бот, как раньше, подтверждает
+ *    «сообщение получено» — иначе пациент в чате оператора слышал бы тишину.
+ */
 export function aiTakesTelegramText(db, { chatId, messageId, createdAt, now = Date.now() }) {
   if (!messageId) return false;
   try {
-    return enqueueChatJob(db, { channel: 'telegram', chatKey: String(chatId), sourceId: String(messageId), createdAt, now }) !== 'off';
+    if (!aiOn(db)) return false;
+    const chat = String(chatId);
+    const link = db.prepare('SELECT blocked_at FROM telegram_links WHERE chat_id = ? AND revoked_at IS NULL').get(chat);
+    if (!link || link.blocked_at) return false;
+    if (operatorRecent(db, 'telegram', chat, now) || isFlagged(db, 'telegram', chat)) return false;
+    // message_id у Telegram уникален только внутри чата: у двух пациентов он
+    // совпадает постоянно. Без chat_id в source_id UNIQUE(channel, source_id)
+    // молча отбросил бы сообщение второго пациента как «повтор».
+    return enqueueChatJob(db, { channel: 'telegram', chatKey: chat, sourceId: `${chat}:${messageId}`, createdAt, now }) !== 'off';
   } catch (e) { console.warn('[ai] telegram hook:', e.message); return false; }
 }
 
@@ -40,8 +61,12 @@ export function aiNoteMetaComment(db, { threadRowId, commentId, isPage, createdA
  */
 export function aiNoteMetaCommentById(db, commentId, now = Date.now()) {
   try {
-    const r = db.prepare('SELECT id, comment_id, root_id, is_page, created_at FROM meta_comments WHERE comment_id = ?').get(String(commentId));
-    if (!r) return 'skip';
+    // Опрос проходит до 1250 комментариев в минуту: выключенный ИИ (по
+    // умолчанию) не должен стоить двух поисков на каждый.
+    if (!aiOn(db)) return 'off';
+    const r = db.prepare('SELECT id, comment_id, root_id, is_page, is_hidden, created_at FROM meta_comments WHERE comment_id = ?').get(String(commentId));
+    // Скрытый комментарий (спам, скрыл сотрудник) — не отвечать на него публично.
+    if (!r || r.is_hidden === 1) return 'skip';
     const rootKey = r.root_id || r.comment_id;
     const root = db.prepare('SELECT id FROM meta_comments WHERE comment_id = ?').get(rootKey);
     const threadRowId = root ? root.id : r.id;

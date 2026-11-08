@@ -5,6 +5,7 @@ import { migrate } from '../../db/migrate.js';
 import { setAiEnabled } from './settings.js';
 import { aiTakesTelegramText, aiNoteMetaMessage, aiNoteMetaComment, aiNoteMetaCommentById } from './hooks.js';
 import { claimNextJob } from './queue.js';
+import { flagChat } from './guards.js';
 import { handleUpdate } from '../telegram/flow.js';
 import { upsertComment } from '../meta/inbox-store.js';
 
@@ -34,7 +35,7 @@ test('ИИ включён — задача в очереди, бот не отв
   await handleUpdate(db, 'x', textMsg('Сколько стоит УЗИ?'), deps);
   assert.equal(sent.length, 0);
   assert.deepEqual({ ...db.prepare('SELECT channel, chat_key, source_id FROM ai_chat_jobs').get() },
-    { channel: 'telegram', chat_key: '100', source_id: '7' });
+    { channel: 'telegram', chat_key: '100', source_id: '100:7' });
 });
 
 test('кнопки и команды бота ИИ не забирает', async () => {
@@ -93,4 +94,67 @@ test('A2: ответ страницы и неизвестный коммента
   upsertComment(db, { platform: 'facebook', comment_id: 'pg', post_id: 'p1', author_id: 'page', text: 'Спасибо', created_at: iso(), is_page: true });
   assert.equal(aiNoteMetaCommentById(db, 'pg'), 'skip');
   assert.equal(aiNoteMetaCommentById(db, 'nope'), 'skip');
+});
+
+// --- после ревью Task 12 ---
+
+function twoLinked() {
+  const db = linked();
+  db.prepare(`INSERT INTO telegram_links (chat_id, phone, tg_user_id, tg_name, last_seen_at) VALUES ('200','+998901112244','200','B',?)`).run(iso());
+  return db;
+}
+
+test('message_id у Telegram свой в каждом чате — одинаковый id у двух пациентов даёт две задачи', async () => {
+  const db = twoLinked(); const { sent, deps } = harness();
+  setAiEnabled(db, true, 1, '2020-01-01T00:00:00Z');
+  await handleUpdate(db, 'x', textMsg('Сколько стоит УЗИ?', 7), deps);
+  await handleUpdate(db, 'x', { message: { chat: { id: 200 }, from: { id: 200 }, message_id: 7, text: 'А анализ крови?' } }, deps);
+  assert.equal(sent.length, 0, 'оба взял ИИ');
+  const jobs = db.prepare('SELECT chat_key, source_id, status FROM ai_chat_jobs ORDER BY id').all().map((r) => ({ ...r }));
+  assert.deepEqual(jobs, [
+    { chat_key: '100', source_id: '100:7', status: 'queued' },
+    { chat_key: '200', source_id: '200:7', status: 'queued' },
+  ]);
+  // Взятие первой задачи не сливает чужой чат.
+  assert.equal(claimNextJob(db).chat_key, '100');
+  assert.equal(db.prepare(`SELECT status FROM ai_chat_jobs WHERE chat_key = '200'`).get().status, 'queued');
+});
+
+test('пациент заблокировал бота — ИИ не берёт, бот ведёт себя как раньше', async () => {
+  const db = linked(); const { sent, deps } = harness();
+  setAiEnabled(db, true, 1, '2020-01-01T00:00:00Z');
+  db.prepare(`UPDATE telegram_links SET blocked_at = ? WHERE chat_id = '100'`).run(iso());
+  await handleUpdate(db, 'x', textMsg('Сколько стоит УЗИ?'), deps);
+  assert.equal(sent.length, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM ai_chat_jobs').get().n, 0);
+});
+
+test('оператор недавно писал в чат — ИИ не берёт, «сообщение получено» как раньше', async () => {
+  const db = linked(); const { sent, deps } = harness();
+  setAiEnabled(db, true, 1, '2020-01-01T00:00:00Z');
+  const uid = db.prepare(`INSERT INTO users (username, password_hash) VALUES ('op', 'x')`).run().lastInsertRowid;
+  db.prepare(`INSERT INTO telegram_messages (chat_id, direction, text, kind, sent_by, created_at) VALUES ('100','out','Здравствуйте','text',?,?)`).run(uid, iso());
+  await handleUpdate(db, 'x', textMsg('Сколько стоит УЗИ?'), deps);
+  assert.equal(sent.length, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM ai_chat_jobs').get().n, 0);
+});
+
+test('чат отмечен «нужен оператор» — ИИ не берёт, «сообщение получено» как раньше', async () => {
+  const db = linked(); const { sent, deps } = harness();
+  setAiEnabled(db, true, 1, '2020-01-01T00:00:00Z');
+  flagChat(db, 'telegram', '100', 'hand_off');
+  await handleUpdate(db, 'x', textMsg('Сколько стоит УЗИ?'), deps);
+  assert.equal(sent.length, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM ai_chat_jobs').get().n, 0);
+});
+
+test('комментарий: ИИ выключен — off без поиска; скрытый комментарий — skip', () => {
+  const db = openDb(':memory:'); migrate(db);
+  const base = { platform: 'facebook', post_id: 'p1', author_id: 'u1', is_page: false, created_at: iso() };
+  upsertComment(db, { ...base, comment_id: 'h1', text: 'спам', is_hidden: true });
+  upsertComment(db, { ...base, comment_id: 'v1', text: 'Цена?' });
+  assert.equal(aiNoteMetaCommentById(db, 'v1'), 'off');
+  setAiEnabled(db, true, 1, '2020-01-01T00:00:00Z');
+  assert.equal(aiNoteMetaCommentById(db, 'h1'), 'skip');
+  assert.equal(aiNoteMetaCommentById(db, 'v1'), 'queued');
 });
