@@ -1342,10 +1342,10 @@ const DOCTOR = { id: 31, full_name: 'Петров Пётр', specialty: 'тер�
 const LAB_DAY = '2026-10-09';
 
 /** Заявка привязанного пациента, открытая ОПЕРАТОРОМ колл-центра, и лист дат. */
-async function doctorSheet({ lines = null, lead = null, doctors = null } = {}) {
+async function doctorSheet({ lines = null, lead = null, doctors = null, services = null } = {}) {
   forgetSlots();
   RPC.length = 0; ENSURE_PLAN = []; ENSURE_N = 0; SLOT_FAIL = false;
-  SERVICES = [DOC_SVC, LAB_SVC];
+  SERVICES = services || [DOC_SVC, LAB_SVC];   // SLOT_PACK_EXTRA_BUSY_V1 — своя услуга теста
   DOCTORS = doctors || [DOCTOR];   // CLINIC_API_FIX_V1 — врачи стенда (живая очередь)
   REQ_LINES = lines || [{ id: 901, service_id: DOC_SVC.id, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null }];
   const modal = await openRequest(Object.assign({
@@ -2668,4 +2668,98 @@ test('DOCTOR_PROFILE_V1: консультация в окне дат — сло�
   }
   SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
   window.easymed.state.user = null;
+});
+
+// ═══ CRM_JOIN_NOT_MOVE_V1 · JOIN_EXTENDS_BOOKING_V1 · SLOT_PACK_V1 (3.23.0) ═══════════
+//
+// Снимок владельца: пациент записан к врачу на 10:10–10:40; оператор открывает «Даты
+// приёма», добавляет к тому же врачу ещё услугу — окно предлагало 09:30, 11:00, …
+// (сетка 30 минут, своя запись вычтена) и на «Сохранить и записать» ПЕРЕНОСИЛО запись
+// на 09:30. Теперь первым стоит «в запись · 10:10» и выбран; перенос — только явным
+// «Перенести запись на …»; присоединение уходит без брони (join).
+const JOIN_VISIT = { id: 556, patient_id: 7, doctor_id: 31, status: 'scheduled', duration_minutes: 30,
+  visit_date: new Date(BOOK_DAY + 'T10:10').toISOString() };
+// Ответ calendar_slots БЕЗ своей записи пациента (EXCLUDE_OWN_VISIT_V1): в 10:40 —
+// чужая запись, начала вплотную (SLOT_PACK_V1).
+const PACKED_DAY = {
+  window: { from: '09:00', to: '18:00', breaks: [] }, packed: true, min_start: null, duration_minutes: 30,
+  busy: [{ visit_id: 900, from: '10:40', to: '11:10', patient_id: 99 }],
+  slots: ['09:00', '09:30', '10:00', '11:10', '11:40'].map((t) => ({ start: t })),
+};
+const optionsOf = (sel) => sel.children.filter((o) => o.tagName === 'OPTION');
+
+test('CRM_JOIN_NOT_MOVE_V1: пациент записан к врачу на 10:10 — «в запись · 10:10» первым и выбран, ниже «Перенести запись на …»', async () => {
+  const prevDay = SLOT_DAY;
+  SLOT_DAY = PACKED_DAY;
+  VISITS = [JOIN_VISIT];
+  try {
+    const { sheet } = await doctorSheet();
+    await fillRow(sheet, 0, BOOK_DAY, DOCTOR.id);
+    await tick(60);
+    const sel = timeSelects(sheet)[0];
+    assert.ok(sel, 'у строки нет поля времени');
+    const opts = optionsOf(sel);
+    assert.strictEqual(sel.getAttribute('data-join-time'), '10:10');
+    assert.strictEqual(textOf(opts[0]).trim(), 'в запись · 10:10', 'первым не стоит запись пациента: ' + opts.map(textOf).join(' | '));
+    assert.strictEqual(sel.value, '10:10', 'время записи не выбрано заранее — оператор перенёс бы её, не заметив');
+    assert.deepStrictEqual(opts.slice(1).map((o) => textOf(o).trim()),
+      ['Перенести запись на 09:00', 'Перенести запись на 09:30', 'Перенести запись на 10:00', 'Перенести запись на 11:10', 'Перенести запись на 11:40'],
+      'другие времена не названы переносом');
+    // JOIN_EXTENDS_BOOKING_V1 — следующая запись в 10:40 раньше конца (11:10): запись не удлинится, и сказано.
+    const n = walk(sheet).find((x) => x.attrs && 'data-join-note' in x.attrs);
+    assert.ok(n && /приём закончится в 11:10, следующая запись в 10:40/.test(textOf(n)), 'нет пометки о следующей записи: ' + (n && textOf(n)));
+
+    CALLS.length = 0;
+    saveSheet(sheet);
+    await tick(150);
+    const ev = rpcOf('ensure_visit');
+    assert.strictEqual(ev.length, 1);
+    assert.strictEqual(ev[0].body.book, undefined, 'строка в запись бронирует слот — сервер перенёс бы запись');
+    assert.deepStrictEqual(ev[0].body.join, { doctor_id: DOCTOR.id, start: new Date(BOOK_DAY + 'T10:10').toISOString(), duration_minutes: 30 });
+  } finally { SLOT_DAY = prevDay; VISITS = []; window.easymed.state.user = null; }
+});
+
+test('CRM_JOIN_NOT_MOVE_V1: перенос — только явным выбором «Перенести запись на 09:30»: тогда book на 09:30', async () => {
+  const prevDay = SLOT_DAY;
+  SLOT_DAY = PACKED_DAY;
+  VISITS = [JOIN_VISIT];
+  try {
+    const { sheet } = await doctorSheet();
+    await fillRow(sheet, 0, BOOK_DAY, DOCTOR.id);
+    await tick(60);
+    const sel = timeSelects(sheet)[0];
+    sel.value = '09:30'; fire(sel);
+    const n = walk(sheet).find((x) => x.attrs && 'data-join-note' in x.attrs);
+    assert.ok(!n || !textOf(n).trim(), 'у переноса пометка присоединения');
+    saveSheet(sheet);
+    await tick(150);
+    const ev = rpcOf('ensure_visit');
+    assert.strictEqual(ev.length, 1);
+    assert.ok(ev[0].body.book && !ev[0].body.join, 'явный перенос ушёл присоединением');
+    assert.strictEqual(new Date(ev[0].body.book.start).getTime(), new Date(BOOK_DAY + 'T09:30').getTime());
+  } finally { SLOT_DAY = prevDay; VISITS = []; window.easymed.state.user = null; }
+});
+
+test('SLOT_PACK_EXTRA_BUSY_V1: две новые услуги к одному врачу в один день — вторая встаёт сразу за первой', async () => {
+  const prevDay = SLOT_DAY;
+  const SHORT = { id: 22, name: 'Короткий приём', price: 50000, requires_doctor: 1, duration_minutes: 10, active: 1, type: 'consultation' };
+  SLOT_DAY = { window: { from: '09:00', to: '18:00', breaks: [] }, packed: true, min_start: null,
+    busy: [{ visit_id: 900, from: '10:10', to: '10:40', patient_id: 99 }],
+    slots: ['09:00', '09:30', '10:40', '11:10'].map((t) => ({ start: t })) };
+  VISITS = [];
+  try {
+    const { sheet } = await doctorSheet({ services: [DOC_SVC, LAB_SVC, SHORT], lines: [
+      { id: 901, service_id: DOC_SVC.id, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null },
+      { id: 904, service_id: SHORT.id, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null },
+    ] });
+    await fillRow(sheet, 0, BOOK_DAY, DOCTOR.id);
+    await fillRow(sheet, 1, BOOK_DAY, DOCTOR.id);
+    const [a] = timeSelects(sheet);
+    a.value = '09:30'; fire(a);
+    await tick(60);
+    const b = timeSelects(sheet)[1];
+    const times = optionsOf(b).map((o) => o.getAttribute('value')).filter(Boolean);
+    assert.ok(times.includes('10:00'), 'вторая услуга не встала сразу за первой (09:30–10:00): ' + times.join(', '));
+    assert.ok(!times.includes('09:30') && !times.includes('09:40'), 'время первой строки предложено второй: ' + times.join(', '));
+  } finally { SLOT_DAY = prevDay; SERVICES = []; window.easymed.state.user = null; }
 });

@@ -15,6 +15,7 @@
 // неотличим от «записи нет»).
 import { supabase } from '../../supabase.js';
 import { screenTakesBooked } from '../../shared/same-service.js';   // CRM_LINK_ALL_V1 (ревью денег S1) — одно правило с сетью R7b
+import { dayFrame, dayStartFits } from '../../shared/slot-pack.js';   // JOIN_EXTENDS_BOOKING_V1 — то же правило, что у сервера
 
 const isPosInt = (v) => Number.isInteger(Number(v)) && Number(v) > 0;
 const pad = (n) => String(n).padStart(2, '0');
@@ -117,22 +118,27 @@ export function isBookedTwin(line, b) {
  * («Записан», «Подтверждён», «Пришёл» — те, что держат время врача) — врач и
  * время визита, а также строки визита с врачом и своим временем (вторая услуга
  * к другому врачу в тот же день).
- * @returns {Promise<Array<{visitId:number, doctorId:number, when:string, day:string}>>}
+ * @returns {Promise<Array<{visitId:number, doctorId:number, when:string, day:string, durationMin?:number, head?:boolean}>>}
  *   when — местное 'YYYY-MM-DDTHH:MM'. Пустой список при отказе сервера —
  *   регистратор тогда выбирает время, как прежде.
+ *   JOIN_EXTENDS_BOOKING_V1 — у записи-визита (head) её длительность: окно
+ *   называет, удлинится ли запись на присоединённую услугу.
  */
 export async function loadPatientBookings(patientId, { now = new Date(), days = 15 } = {}) {
   if (!isPosInt(patientId)) return [];
   const { from } = localDayBounds(now);
   const end = new Date(now); end.setHours(0, 0, 0, 0); end.setDate(end.getDate() + days);
-  const { data: visits, error } = await supabase.from('visits').select('id, visit_date, doctor_id, status')
+  const { data: visits, error } = await supabase.from('visits').select('id, visit_date, doctor_id, status, duration_minutes')
     .eq('patient_id', Number(patientId)).in('status', ['scheduled', 'confirmed', 'arrived']).is('sync_origin', null)
     .gte('visit_date', from).lt('visit_date', end.toISOString()).order('visit_date').limit(50);
   if (error || !Array.isArray(visits) || !visits.length) return [];
   const out = [];
   for (const v of visits) {
     const when = localSlot(v.visit_date);
-    if (when && isPosInt(v.doctor_id)) out.push({ visitId: Number(v.id), doctorId: Number(v.doctor_id), when, day: when.slice(0, 10) });
+    if (when && isPosInt(v.doctor_id)) {
+      out.push({ visitId: Number(v.id), doctorId: Number(v.doctor_id), when, day: when.slice(0, 10),
+        durationMin: Math.max(5, Number(v.duration_minutes) || 15), head: true, status: v.status || '' });   // JOIN_EXTENDS_BOOKING_V1 · CRM_JOIN_NOT_MOVE_V1
+    }
   }
   const { data: lines, error: lErr } = await supabase.from('visit_services')
     .select('visit_id, doctor_id, scheduled_at, status')
@@ -167,6 +173,43 @@ export function bookedJoinFor(bookings, doctorId, dayIso) {
 export function joinMinutes(join) {
   const m = /T(\d{2}):(\d{2})$/.exec(String((join && join.when) || ''));
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+/**
+ * JOIN_EXTENDS_BOOKING_V1 (3.23.0) — УДЛИНИТСЯ ЛИ ЗАПИСЬ НА ПРИСОЕДИНЁННЫЕ УСЛУГИ.
+ * Правило сервера (rpc/visits.js extendJoined): время за записью свободно —
+ * внутри приёма врача и ни с кем не пересекается; иначе запись остаётся своей
+ * длины. Экран говорит это ДО записи, в списке времени.
+ * @param {{when:string, durationMin?:number}} join   запись (bookedJoinFor)
+ * @param {object} day   ответ calendar_slots этого врача и дня БЕЗ самой записи (patientId — EXCLUDE_OWN_VISIT_V1)
+ * @param {number} addMin   длительность присоединяемых услуг
+ * @returns {{fits:boolean, ends:string, next:string|null, until:string|null}|null}
+ *   null — не из чего считать (нет записи или ответа сервера)
+ */
+export function joinExtension(join, day, addMin) {
+  const start = joinMinutes(join);
+  const add = Math.max(0, Math.round(Number(addMin) || 0));
+  if (start == null || !day || !add) return null;
+  const endMin = start + Math.max(5, Number(join.durationMin) || 15);
+  const fmt = (m) => pad(Math.floor(m / 60) % 24) + ':' + pad(m % 60);
+  const out = { fits: false, ends: fmt(endMin + add), next: null, until: null };
+  if (endMin + add <= 24 * 60 && dayStartFits(day, add, endMin)) return { ...out, fits: true };
+  const frame = dayFrame(day);
+  const next = ((frame && frame.busy) || []).map((b) => b.from).filter((m) => m >= endMin && m < endMin + add).sort((a, b) => a - b)[0];
+  if (next != null) return { ...out, next: fmt(next) };
+  const seg = ((frame && frame.segments) || []).find((g) => g.from <= endMin && endMin < g.to);
+  return { ...out, until: fmt(seg ? seg.to : endMin) };
+}
+
+/**
+ * JOIN_EXTENDS_BOOKING_V1 — пометка списка времени: запись не удлинится (пусто — удлинится
+ * или нечего сказать). trf — переводчик вызывающего: модуль без i18n.js (его берут и тесты
+ * сервера, где нет DOM).
+ */
+export function joinExtensionNote(ext, trf) {
+  if (!ext || ext.fits) return '';
+  if (ext.next) return trf('приём закончится в {end}, следующая запись в {next}', { end: ext.ends, next: ext.next });
+  return trf('приём закончится в {end}, а врач принимает до {to}', { end: ext.ends, to: ext.until || '—' });
 }
 
 /** Подпись строки «из записи»: статус записи словами (переводит вызывающий через tr). */

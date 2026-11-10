@@ -13621,6 +13621,11 @@ export const STRINGS = {
   "Период — не длиннее года.": {"en":"The period must not exceed one year.","ru":"Период — не длиннее года.","uz":"Davr — bir yildan oshmasin."},   // MY_REFERRALS_V1
   "Исполнитель строки — не врач и не отмечен на эту услугу («Сотрудники» → «Услуги и ставки»).": {"en":"The line's performer is not a doctor and is not assigned to this service (“Employees” → “Services & rates”).","ru":"Исполнитель строки — не врач и не отмечен на эту услугу («Сотрудники» → «Услуги и ставки»).","uz":"Qator ijrochisi shifokor emas va bu xizmatga belgilanmagan («Xodimlar» → «Xizmatlar va tariflar»)."},   // DIAG_ROUTE_V1
   // /S4 · 3.22.0
+  // ── A 3.23.0 — CRM_JOIN_NOT_MOVE_V1 · JOIN_EXTENDS_BOOKING_V1 · LAB_NO_DOCTOR_V1 (crm.js «Даты приёма», booked-rows.js, service-picker-modal.js) ──
+  "Перенести запись на {time}": {"en":"Move the booking to {time}","ru":"Перенести запись на {time}","uz":"Yozuvni {time} ga ko‘chirish"},   // CRM_JOIN_NOT_MOVE_V1
+  "приём закончится в {end}, следующая запись в {next}": {"en":"the appointment would end at {end}; the next booking is at {next}","ru":"приём закончится в {end}, следующая запись в {next}","uz":"qabul {end} da tugaydi, keyingi yozuv {next} da"},   // JOIN_EXTENDS_BOOKING_V1
+  "приём закончится в {end}, а врач принимает до {to}": {"en":"the appointment would end at {end}, but the doctor works until {to}","ru":"приём закончится в {end}, а врач принимает до {to}","uz":"qabul {end} da tugaydi, shifokor esa {to} gacha qabul qiladi"},   // JOIN_EXTENDS_BOOKING_V1
+  // /A · 3.23.0
   // ── S1 3.22.0 — BOOKED_JOIN_V1 · DISCOUNT_V2 · CASHIER_DISCOUNT_V1 ──
   "в запись · {time}": {"en":"into the booking · {time}","ru":"в запись · {time}","uz":"yozuvga · {time}"},   // BOOKED_JOIN_V1
   // CASHIER_DISCOUNT_V1 — сервер (rpc/billing.js cashierInvoiceDiscount) и строка роли
