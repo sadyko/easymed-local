@@ -59,7 +59,7 @@ import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../s
 import { pendingCrmLines } from '../crm-lines.js';
 import { isDeskNow } from './wizard-desk.js';   // CRM_LINK_ALL_V1 (R3) — «сейчас» у стойки: одно правило с сервером
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin, localSlot, setLinePerformer } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»; localSlot — DOCTOR_REFERRAL_DESK_V1
-import { loadPatientBookings, bookedJoinFor } from './booked-rows.js';   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
+import { loadPatientBookings, bookedJoinFor, joinExtensionNote } from './booked-rows.js';   // JOIN_EXTENDS_BOOKING_V1 (ревью M5) — joinExtensionNote   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
 import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
 // CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на три двери:
 // у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
@@ -1531,10 +1531,24 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     for (const t of list) g.appendChild(h('option', { value: String(t), selected: selMs === t }, fmtSlot(t)));
                     return g;
                 };
-                const gs = [grp('Утро', slots.filter(t => new Date(t).getHours() < 12)),
-                            grp('День', slots.filter(t => { const hh = new Date(t).getHours(); return hh >= 12 && hh < 17; })),
-                            grp('Вечер', slots.filter(t => new Date(t).getHours() >= 17))].filter(Boolean);
-                for (const g of gs) timeSel.appendChild(g);
+                // CRM_JOIN_NOT_MOVE_V1 (ревью M1) — в этот день пациент записан к этому врачу:
+                // «в запись · 10:10» первым, другие времена — под «Перенести запись на» (те же
+                // слова, что в карточке CRM). Выбор другого времени — явный перенос записи.
+                const jHere = line.doctorId ? joinFor(line.doctorId, isoDay(line.ui.day)) : null;
+                const jMs = jHere && jHere.head ? new Date(jHere.when).getTime() : null;
+                if (jMs != null && slots.length) {
+                    timeSel.style.maxWidth = '170px';   // ревью L2 — «в запись · 10:10» целиком
+                    timeSel.appendChild(h('option', { value: String(jMs), selected: selMs === jMs, 'data-join': '' },
+                        trf('в запись · {time}', { time: fmtSlot(jMs) })));
+                    const others = slots.filter((t) => t !== jMs);
+                    if (others.length) timeSel.appendChild(h('optgroup', { label: tr('Перенести запись на'), 'data-move-group': '' },
+                        ...others.map((t) => h('option', { value: String(t), selected: selMs === t }, fmtSlot(t)))));
+                } else {
+                    const gs = [grp('Утро', slots.filter(t => new Date(t).getHours() < 12)),
+                                grp('День', slots.filter(t => { const hh = new Date(t).getHours(); return hh >= 12 && hh < 17; })),
+                                grp('Вечер', slots.filter(t => new Date(t).getHours() >= 17))].filter(Boolean);
+                    for (const g of gs) timeSel.appendChild(g);
+                }
                 timeSel.addEventListener('change', () => {
                     if (timeSel.value) { line.when = slotToLocalIso(Number(timeSel.value)); repaintRail(); repaintCatalog(); }
                 });
@@ -3483,14 +3497,16 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     // JOIN_EXTENDS_BOOKING_V1 — новые строки дня идут в запись пациента (ridesBooking):
                     // брони нет, а запись удлиняется на их длительность, если время за ней свободно
                     // (решает сервер, ensure_visit join; занято — запись остаётся своей длины).
-                    const riders = lines.filter(ridesBooking);
+                    // ревью M2 — строки по кодам услуг (сервер считает длину из строк записи, повтор
+                    // не растит); только к самой записи-визиту (строка второго врача — не запись).
+                    const riders = lines.filter((c) => ridesBooking(c) && (joinFor(c.doctorId, day) || {}).head);
                     if (riders.length) {
                         const r0 = riders[0];
                         evArgs.join = {
                             doctor_id: Number(r0.doctorId),
                             start: new Date(r0.when).toISOString(),
-                            duration_minutes: riders.filter((c) => c.doctorId === r0.doctorId && c.when === r0.when)
-                                .reduce((sum, c) => sum + lineDuration(c), 0),
+                            lines: riders.filter((c) => c.doctorId === r0.doctorId && c.when === r0.when)
+                                .map((c) => ({ service_id: Number(c.svc.id) })),
                         };
                     }
                 }
@@ -3505,6 +3521,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 }
                 const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', evArgs);
                 if (evErr) {
+                    // ревью M4 — запись изменилась, пока мастер был открыт: записи пациента и
+                    // свободное время перечитываются, регистратор выбирает время ещё раз.
+                    if (evErr.code === 'join_target_gone') {
+                        forgetSlots();
+                        wiz.bookingsReady = loadPatientBookings(patient && patient.id)
+                            .then((b) => { wiz.bookings = b; }).catch(() => { wiz.bookings = []; });
+                    }
                     // Отказ сервера показывается ЕГО словами (он называет врача
                     // и занятое время), а не «ensure_visit failed».
                     throw new Error(trf('Визит на {day}: {msg}', { day, msg: bookErrorText(evErr) }));
@@ -3532,6 +3555,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const answer = readEnsureVisit(ev, { time: timedHead ? fmtSlot(new Date(timedHead.when).getTime()) : '' });
                 if (answer.busy) toast(answer.text + ' ' + tr('Услуги записаны на существующий приём.'), 'warn');
                 if (answer.moved) toast(answer.text, 'info');
+                // ревью M5 — присоединение не удлинило запись (следующая запись / конец приёма) — сказать.
+                if (ev.joined && ev.extended === false && (ev.next || ev.until)) {
+                    toast(joinExtensionNote({ ends: ev.ends, next: ev.next, until: ev.until }, trf), 'warn');
+                }
                 if (ev.booked) forgetSlots();
 
                 if (!ev.booked && emgReason) {
