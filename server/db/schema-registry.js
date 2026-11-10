@@ -289,7 +289,8 @@ export const REGISTRY = {
              'duration_minutes','visit_kind','visit_type','status','referral_source_id','notes',
              'conclusion','conclusion_type','created_by','created_at','updated_at',
              'service_id','room_id',
-             'sync_origin'] },   // service_id/room_id: CALENDAR_BOOKING_V1 (mig 099); sync_origin: BRANCH_ORIGIN_V1 (mig 083) — откуда строка; ставится только приёмом порции, поэтому не writable
+             'sync_origin',
+             'booked_at'] },   // service_id/room_id: CALENDAR_BOOKING_V1 (mig 099); sync_origin: BRANCH_ORIGIN_V1 (mig 083) — откуда строка; ставится только приёмом порции, поэтому не writable; booked_at: CRM_JOIN_NOT_MOVE_V1 (ревью L4) — запись (время ставил calendar_book) или визит дня без времени, только чтение
     write: {
       // VISITS_ONE_DOOR_V1 — визит заводит только RPC (ensure_visit / calendar_book).
       insert: { roles: [], columns: [] },

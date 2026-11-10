@@ -128,13 +128,17 @@ export async function loadPatientBookings(patientId, { now = new Date(), days = 
   if (!isPosInt(patientId)) return [];
   const { from } = localDayBounds(now);
   const end = new Date(now); end.setHours(0, 0, 0, 0); end.setDate(end.getDate() + days);
-  const { data: visits, error } = await supabase.from('visits').select('id, visit_date, doctor_id, status, duration_minutes')
+  const { data: visits, error } = await supabase.from('visits').select('id, visit_date, doctor_id, status, duration_minutes, booked_at')
     .eq('patient_id', Number(patientId)).in('status', ['scheduled', 'confirmed', 'arrived']).is('sync_origin', null)
     .gte('visit_date', from).lt('visit_date', end.toISOString()).order('visit_date').limit(50);
   if (error || !Array.isArray(visits) || !visits.length) return [];
   const out = [];
   for (const v of visits) {
     const when = localSlot(v.visit_date);
+    // CRM_JOIN_NOT_MOVE_V1 (ревью L4) — присоединяют только к НАСТОЯЩЕЙ записи (время ей ставил
+    // calendar_book — booked_at, как у сервера isSameBooking) или к пришедшему пациенту. Визит дня
+    // без времени (ensure_visit без book: 09:00Z и 30 минут по умолчанию) записью не предлагается.
+    if (v.status !== 'arrived' && !String(v.booked_at || '').trim()) continue;
     if (when && isPosInt(v.doctor_id)) {
       out.push({ visitId: Number(v.id), doctorId: Number(v.doctor_id), when, day: when.slice(0, 10),
         durationMin: Math.max(5, Number(v.duration_minutes) || 15), head: true, status: v.status || '' });   // JOIN_EXTENDS_BOOKING_V1 · CRM_JOIN_NOT_MOVE_V1

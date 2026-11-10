@@ -41,8 +41,8 @@ import { pastelAt } from '../pastel.js?v=pastel1';
 // Клиент у этого вопроса ОДИН на весь продукт — service-picker-modal.js, и
 // адрес модуля здесь тот же (?v=aug17e): другой адрес это для браузера другой
 // модуль, то есть второй кэш занятости и второй ответ на один вопрос.
-import { loadSlotDay, freeStartMinutes, forgetSlots, bookErrorText, askEmergencyReason }
-    from './service-picker-modal.js?v=ownrep4';
+import { loadSlotDay, freeStartMinutes, forgetSlots, bookErrorText, askEmergencyReason, startFitsDay }
+    from './service-picker-modal.js?v=ownrep4';   // SLOT_PACK_V1 (ревью L5) — startFitsDay
 // CRM_JOIN_NOT_MOVE_V1 — записи пациента: услуга к врачу, к которому он в этот день
 // уже записан, идёт в эту запись (то же правило, что у мастера визита и калькулятора).
 import { loadPatientBookings, bookedJoinFor, joinExtension, joinExtensionNote } from './booked-rows.js';
@@ -2936,17 +2936,37 @@ async function paint() {
             // перенос только явным выбором. Записи — визиты «Записан»/«Подтверждён»
             // (до прихода): к ним и присоединяет сервер (ensure_visit join).
             let sheetBookings = [];
-            const bookingsReady = linkedPatient
+            // ревью M4 — записи перечитываются, когда сервер сказал «запись изменилась».
+            const loadSheetBookings = () => (linkedPatient
                 ? loadPatientBookings(linkedPatient.id, { days: 120 })
                     .then((b) => { sheetBookings = (b || []).filter((x) => x.head && x.status !== 'arrived'); })
                     .catch(() => {})
-                : Promise.resolve();
+                : Promise.resolve());
+            let bookingsReady = loadSheetBookings();
             const joinOf = (p) => (p && p.doctor_id && p.date ? bookedJoinFor(sheetBookings, Number(p.doctor_id), p.date) : null);
             const sameDocDay = (a, b) => a !== b && !!a.doctor_id && String(a.doctor_id) === String(b.doctor_id) && a.date === b.date;
             const hhmmMin = (t) => { const [hh, mm] = String(t || '').split(':').map(Number); return (hh || 0) * 60 + (mm || 0); };
-            /** JOIN_EXTENDS_BOOKING_V1 — сколько минут добавят записи новые строки, идущие в неё в этот день. */
-            const joinAddMin = (p) => picked.filter((o) => (o === p || sameDocDay(o, p)) && o.join && !keptBooking(o))
+            /**
+             * CRM_JOIN_NOT_MOVE_V1 (ревью H2) — СТРОКИ ОДНОГО ВРАЧА В ОДИН ДЕНЬ — ОДНА ЗАПИСЬ.
+             * «В запись» или «Перенести» решается ОДИН раз — списком первой строки этого
+             * врача и дня (ведущей); остальные строки показывают её выбор и следуют ему.
+             * Прежде каждая строка выбирала сама: вторая строка «Перенести на 09:30» при
+             * первой «в запись» молча терялась.
+             */
+            const groupOf = (p) => picked.filter((o) => o.status !== 'done' && (o === p || sameDocDay(o, p)));
+            const leaderOf = (p) => groupOf(p)[0] || p;
+            /** ревью H2, M3 — полная длина записи этого врача в этот день: все его строки окна. */
+            const groupMinutes = (p) => groupOf(p).reduce((sum, o) => sum + lineDuration(o), 0);
+            /**
+             * JOIN_EXTENDS_BOOKING_V1 — на сколько удлинится запись: новые строки окна, идущие в неё
+             * (строка, уже стоящая в этой записи, её длину не меняет — ревью M2, как у сервера).
+             */
+            const joinAddMin = (p, join) => groupOf(p).filter((o) => o.join && !keptBooking(o)
+                && !(join && o.visit_id != null && String(o.visit_id) === String(join.visitId)))
                 .reduce((sum, o) => sum + lineDuration(o), 0);
+            /** ревью M2 — строка для сервера по коду услуги (повтор не растит запись). */
+            const lineRef = (o) => (o.service_id != null ? { service_id: Number(o.service_id) }
+                : (o.consultation_type_id != null ? { consultation_type_id: Number(o.consultation_type_id) } : null));
 
             const rows = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
             const inputs = new Map();   // service_id -> <input type=date>
@@ -2993,11 +3013,22 @@ async function paint() {
                         }
                         if (!p.date) { timeCell.appendChild(note('сначала дата')); return; }
                         timeCell.appendChild(note('Ищем время…'));
-                        const [day] = await Promise.all([
+                        let [day] = await Promise.all([
                             loadSlotDay(Number(p.doctor_id), p.date, lineDuration(p), linkedPatient ? { patientId: linkedPatient.id } : {}),
                             bookingsReady,   // CRM_JOIN_NOT_MOVE_V1
                         ]);
                         if (mine !== token) return;   // пока ждали, врача или дату сменили
+                        // CRM_JOIN_NOT_MOVE_V1 (ревью H2, M3) — запись пациента к этому врачу в этот день:
+                        // ведущая строка выбирает за всех, и список переноса считается на полную
+                        // длину записи (все строки этого врача, но не короче самой записи).
+                        const joinHere = day ? joinOf(p) : null;
+                        if (joinHere && leaderOf(p) !== p) { clear(timeCell); paintFollower(joinHere); return; }
+                        const fullMin = joinHere ? Math.max(Number(joinHere.durationMin) || 0, groupMinutes(p)) : 0;
+                        if (joinHere && fullMin !== lineDuration(p)) {
+                            const longDay = await loadSlotDay(Number(p.doctor_id), p.date, fullMin, linkedPatient ? { patientId: linkedPatient.id } : {});
+                            if (mine !== token) return;
+                            if (longDay) day = longDay;
+                        }
                         clear(timeCell);
                         if (!day) {
                             // Сервер не ответил. Запрещать запись из-за этого
@@ -3014,11 +3045,10 @@ async function paint() {
                         }
                         // SLOT_PACK_EXTRA_BUSY_V1 — время других строк окна к тому же врачу в тот
                         // же день — занятость (в базе их ещё нет): вторая услуга встаёт сразу за первой.
-                        const extra = picked.filter((o) => sameDocDay(o, p) && o.time && !o.join && !keptBooking(o))
+                        const extra = joinHere ? [] : picked.filter((o) => sameDocDay(o, p) && o.time && !o.join && !keptBooking(o))
                             .map((o) => ({ from: hhmmMin(o.time), to: hhmmMin(o.time) + lineDuration(o) }));
-                        const opts = freeStartMinutes(day, lineDuration(p), extra).map(minToHhmm);
-                        const join = joinOf(p);
-                        if (join) { paintJoinTime(day, join, opts); return; }
+                        const opts = freeStartMinutes(day, joinHere ? fullMin : lineDuration(p), extra).map(minToHhmm);
+                        if (joinHere) { paintJoinTime(day, joinHere, opts, fullMin); return; }
                         p.join = false;
                         // Выбранное время переживает смену дня, только если оно
                         // свободно и в новом дне: молча оставить занятое значило
@@ -3030,7 +3060,10 @@ async function paint() {
                         // не всегда — например, когда врача в строке сменили).
                         // Выбросить его значило бы показать пустое поле там, где
                         // приём в календаре стоит.
-                        const keep = p.time && (opts.includes(p.time) || keptBooking(p)) ? p.time : '';
+                        // ревью L5 — выбранное время остаётся и тогда, когда его нет в новом
+                        // списке, но оно по-прежнему ПОМЕЩАЕТСЯ: соседняя строка сдвинула упаковку.
+                        const keep = p.time && (opts.includes(p.time) || keptBooking(p)
+                            || startFitsDay(day, lineDuration(p), hhmmMin(p.time), extra)) ? p.time : '';
                         if (keep && !opts.includes(keep)) opts.unshift(keep);
                         setLineTime(p, keep);
                         if (!opts.length) { timeCell.appendChild(note('свободного времени нет')); return; }
@@ -3048,20 +3081,25 @@ async function paint() {
                      * «Перенести запись на …» по свободным началам. JOIN_EXTENDS_BOOKING_V1 —
                      * не удлинится запись (следующая запись раньше конца) — пометка под списком.
                      */
-                    const paintJoinTime = (day, join, opts) => {
+                    const paintJoinTime = (day, join, opts, fullMin) => {
                         const jt = String(join.when).slice(11, 16);
                         const moves = opts.filter((t) => t !== jt);
-                        const chosen = p.time && p.time !== jt && p.time_touched && moves.includes(p.time) ? p.time : jt;
+                        const fits = (t) => startFitsDay(day, fullMin, hhmmMin(t));
+                        const chosen = p.time && p.time !== jt && p.time_touched && (moves.includes(p.time) || fits(p.time)) ? p.time : jt;
+                        if (chosen !== jt && !moves.includes(chosen)) moves.unshift(chosen);
                         p.join = chosen === jt;
                         setLineTime(p, chosen);
+                        // ревью M1, L2 — «в запись · 10:10» первым, другие времена — под заголовком
+                        // «Перенести запись на»: подписи короткие и влезают в ячейку.
                         const sel = h('select', { 'aria-label': 'Время приёма', 'data-join-time': jt,
                             style: { width: '100%', boxSizing: 'border-box', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px', background: 'var(--white,#fff)' } },
                             h('option', { value: jt, selected: chosen === jt, 'data-join': '' }, trf('в запись · {time}', { time: jt })),
-                            ...moves.map((t) => h('option', { value: t, selected: t === chosen, 'data-move': '' }, trf('Перенести запись на {time}', { time: t }))));
+                            moves.length ? h('optgroup', { label: tr('Перенести запись на'), 'data-move-group': '' },
+                                ...moves.map((t) => h('option', { value: t, selected: t === chosen, 'data-move': '' }, t))) : null);
                         sel.value = chosen;
                         const extNote = h('div', { class: 'muted', 'data-join-note': '', style: { fontSize: '12.5px' } });
                         const paintNote = () => {
-                            const txt = p.join ? joinExtensionNote(joinExtension(join, day, joinAddMin(p)), trf) : '';
+                            const txt = p.join ? joinExtensionNote(joinExtension(join, day, joinAddMin(p, join)), trf) : '';
                             extNote.textContent = txt;
                             extNote.style.display = txt ? '' : 'none';
                         };
@@ -3072,10 +3110,28 @@ async function paint() {
                         timeCell.appendChild(sel);
                         timeCell.appendChild(extNote);
                         paintNote();
+                        repaintSiblings();   // ревью L3 — строки этого врача и дня видят выбор ведущей
+                    };
+                    /**
+                     * CRM_JOIN_NOT_MOVE_V1 (ревью H2) — строка, которая следует ведущей: время и выбор
+                     * («в запись» или перенос) — её; своего списка нет, только подпись.
+                     */
+                    const paintFollower = (join) => {
+                        const lead = leaderOf(p);
+                        const jt = String(join.when).slice(11, 16);
+                        const decided = lead.join === true || lead.join === false;
+                        const moving = lead.join === false && !!lead.time && lead.time !== jt;
+                        p.join = !moving;
+                        setLineTime(p, moving ? lead.time : jt);
+                        if (lead.time_touched) p.time_touched = true;
+                        timeCell.appendChild(h('div', { 'data-follows': '', style: { fontSize: '12.5px', padding: '7px 0' } },
+                            !decided ? tr('Ищем время…')
+                                : moving ? trf('Перенести запись на {time}', { time: lead.time }) : trf('в запись · {time}', { time: jt })));
                     };
                     // SLOT_PACK_EXTRA_BUSY_V1 · JOIN_EXTENDS_BOOKING_V1 — время одной строки меняет
                     // список и пометку у строк того же врача и дня.
-                    const repaintSiblings = () => { for (const o of picked) if (sameDocDay(o, p) && o.__paintTime) o.__paintTime(); };
+                    // Ведущую строку записи соседи не перерисовывают: она сама зовёт их (без петли).
+                    const repaintSiblings = () => { for (const o of picked) if (sameDocDay(o, p) && o.__paintTime && !(o === leaderOf(o) && joinOf(o))) o.__paintTime(); };
                     p.__paintTime = paintTime;
                     inp.addEventListener('change', () => { p.date = inp.value; setLineTime(p, p.time); paintTime(); });
 
@@ -3148,6 +3204,7 @@ async function paint() {
                 const requestId = row && row.id;
                 const patientId = (linkedPatient && linkedPatient.id) || (row && row.patient_id) || null;
                 failedDays.clear();
+                let staleJoin = false;   // ревью M4
                 const live = picked.filter((p) => p.status !== 'done' && p.date);
                 const days = [...new Set(live.map((p) => p.date))].sort();
                 let booked = 0, touched = 0;
@@ -3172,8 +3229,12 @@ async function paint() {
                     // сначала изменённая, и только если таких нет — любая со
                     // временем (день, где одну строку тронули, а вторую нет).
                     // CLINIC_API_FIX_V1 — у живой очереди — первый врач дня, как dayDoc окна визита.
+                    // CRM_JOIN_NOT_MOVE_V1 (ревью H3) — головной не становится строка «в запись»,
+                    // пока в этом дне есть изменённая строка с ДРУГИМ временем (другой врач или
+                    // явный перенос): иначе присоединение молча съело бы её время.
                     const head = timed.length
-                        ? (timed.find((p) => !keptBooking(p) && p.start_iso) || timed.find((p) => p.start_iso))
+                        ? (timed.find((p) => !keptBooking(p) && p.start_iso && !p.join)
+                            || timed.find((p) => !keptBooking(p) && p.start_iso) || timed.find((p) => p.start_iso))
                         : queued[0];
                     const human = day.split('-').reverse().join('.');
                     if (!head || !patientId || !requestId) { failedDays.add(day); continue; }
@@ -3185,7 +3246,7 @@ async function paint() {
                             doctor_id: Number(head.doctor_id),
                             service_id: head.service_id,
                             start: head.start_iso,
-                            duration_minutes: lineDuration(head),
+                            duration_minutes: joinOf(head) ? Math.max(lineDuration(head), groupMinutes(head)) : lineDuration(head),   // ревью H2, M3 — перенос — на полную длину строк врача
                         },
                     } : {
                         // CLINIC_API_FIX_V1 — живая очередь: тот же вызов окна визита, без book.
@@ -3198,18 +3259,18 @@ async function paint() {
                     // присоединённые услуги удлиняют её, если время за ней свободно
                     // (JOIN_EXTENDS_BOOKING_V1, решает сервер). Явный «Перенести запись на …»
                     // (строка к тому же врачу, не в запись) сильнее: тогда день — обычный book.
-                    const joinLines = timed.filter((p) => p.join && !keptBooking(p) && p.start_iso);
-                    const moving = timed.some((p) => !p.join && !keptBooking(p) && p.start_iso && joinOf(p));
-                    if (joinLines.length && !moving) {
-                        const jh = joinLines[0];
+                    // ревью H3 — присоединение, только когда КАЖДАЯ изменённая строка дня идёт в запись.
+                    // ревью M2 — строки записи по кодам услуг: сервер считает длину из них, повтор не растит.
+                    const changedLines = timed.filter((p) => !keptBooking(p) && p.start_iso);
+                    if (changedLines.length && changedLines.every((p) => p.join)) {
+                        const jh = changedLines[0];
                         delete args.book;
                         args.date = jh.start_iso;
                         args.doctor_id = Number(jh.doctor_id);
                         args.join = {
                             doctor_id: Number(jh.doctor_id),
                             start: jh.start_iso,
-                            duration_minutes: joinLines.filter((p) => String(p.doctor_id) === String(jh.doctor_id) && p.time === jh.time)
-                                .reduce((sum, p) => sum + lineDuration(p), 0),
+                            lines: timed.filter((p) => p.join && String(p.doctor_id) === String(jh.doctor_id)).map(lineRef).filter(Boolean),
                         };
                     }
                     let res = await supabase.rpc('ensure_visit', args);
@@ -3227,6 +3288,8 @@ async function paint() {
                     }
                     const data = res.data || {};
                     const visitId = data.visit && data.visit.id;
+                    // ревью M4 — запись изменилась, пока окно было открыто: записи пациента перечитываются.
+                    if (res.error && res.error.code === 'join_target_gone') staleJoin = true;
                     if (res.error || !visitId) {
                         failedDays.add(day);
                         toast(trf('Запись на {day} не сохранена: {msg}', { day: human, msg: bookErrorText(res.error || {}) }), 'fail');
@@ -3267,6 +3330,10 @@ async function paint() {
                     busyDays.delete(day);
                     forgetSlots();   // время занято — кэш занятости больше не правда
                     booked++; touched++;
+                    // ревью M5 — запись не удлинилась (следующая запись раньше конца / конец приёма) — сказать.
+                    if (data.joined && data.extended === false && (data.next || data.until)) {
+                        toast(joinExtensionNote({ ends: data.ends, next: data.next, until: data.until }, trf), 'warn');
+                    }
                     // ПЕРЕНОС НАЗЫВАЕТСЯ ПЕРЕНОСОМ И НАЗЫВАЕТ, ОТКУДА: «записано»
                     // и «время приёма изменилось» — разные новости, и вторую
                     // оператор обязан сказать пациенту в ту же трубку.
@@ -3298,6 +3365,7 @@ async function paint() {
                     await prefillBookedTimes();   // CLINIC_API_FIX_V1 (ревью 5c03462) — врач и час визита — из нового визита
                 }
                 await offerCancelSuperseded();
+                if (staleJoin) { forgetSlots(); bookingsReady = loadSheetBookings(); await bookingsReady; }   // ревью M4 — список времени заново
                 if (!failedDays.size) return true;
                 toast(trf('Не удалось записать дни: {days}',
                     { days: [...failedDays].map((d) => d.split('-').reverse().join('.')).join(', ') }), 'fail');

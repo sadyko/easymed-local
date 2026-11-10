@@ -13625,6 +13625,8 @@ export const STRINGS = {
   "Перенести запись на {time}": {"en":"Move the booking to {time}","ru":"Перенести запись на {time}","uz":"Yozuvni {time} ga ko‘chirish"},   // CRM_JOIN_NOT_MOVE_V1
   "приём закончится в {end}, следующая запись в {next}": {"en":"the appointment would end at {end}; the next booking is at {next}","ru":"приём закончится в {end}, следующая запись в {next}","uz":"qabul {end} da tugaydi, keyingi yozuv {next} da"},   // JOIN_EXTENDS_BOOKING_V1
   "приём закончится в {end}, а врач принимает до {to}": {"en":"the appointment would end at {end}, but the doctor works until {to}","ru":"приём закончится в {end}, а врач принимает до {to}","uz":"qabul {end} da tugaydi, shifokor esa {to} gacha qabul qiladi"},   // JOIN_EXTENDS_BOOKING_V1
+  "Перенести запись на": {"en":"Move the booking to","ru":"Перенести запись на","uz":"Yozuvni ko‘chirish"},   // CRM_JOIN_NOT_MOVE_V1 (ревью M1) — заголовок группы времени
+  "Запись изменилась, пока окно было открыто — выберите время ещё раз.": {"en":"The booking changed while this window was open — choose the time again.","ru":"Запись изменилась, пока окно было открыто — выберите время ещё раз.","uz":"Oyna ochiq turganda yozuv o‘zgardi — vaqtni qaytadan tanlang."},   // CRM_JOIN_NOT_MOVE_V1 (ревью M4)
   // /A · 3.23.0
   // ── S1 3.22.0 — BOOKED_JOIN_V1 · DISCOUNT_V2 · CASHIER_DISCOUNT_V1 ──
   "в запись · {time}": {"en":"into the booking · {time}","ru":"в запись · {time}","uz":"yozuvga · {time}"},   // BOOKED_JOIN_V1

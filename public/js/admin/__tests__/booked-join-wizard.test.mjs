@@ -160,7 +160,8 @@ function seed() {
 /** Запись колл-центра: визит пациента к врачу 7 на день offset в 23:00 и строка консультации. */
 function bookAt(offset = 0) {
   const d = dayOffset(offset); d.setHours(23, 0, 0, 0);
-  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, created_by) VALUES (3, ?, 7, 'scheduled', 1)").run(d.toISOString()).lastInsertRowid);
+  // ревью L4 — запись колл-центра: время ей ставил calendar_book (booked_at).
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, booked_at, created_by) VALUES (3, ?, 7, 'scheduled', ?, 1)").run(d.toISOString(), new Date().toISOString()).lastInsertRowid);
   DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, scheduled_at, created_by) VALUES (?, 21, 7, 1, 100000, 100000, 'added', ?, 1)").run(vid, d.toISOString());
   return { vid, start: d };
 }

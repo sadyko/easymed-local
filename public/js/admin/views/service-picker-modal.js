@@ -3907,6 +3907,8 @@ const BOOK_ERROR_TEMPLATES = {
     day_visit_other_doctor: 'У пациента в этот день уже есть запись к {doctor} в {start}. Перенесите её или выберите другой день.',
     // REPEAT_VISIT_V1 — повторный визит кабинета: день занят — только отказ, без «добавить в этот визит».
     revisit_day_taken: 'У пациента в этот день уже есть приём в {start} у {doctor} — выберите другой день или время.',
+    // CRM_JOIN_NOT_MOVE_V1 (ревью M4) — присоединяли к записи, которую тем временем отменили или перенесли.
+    join_target_gone: 'Запись изменилась, пока окно было открыто — выберите время ещё раз.',
 };
 export function bookErrorText(error) {
     const tpl = error && error.code ? BOOK_ERROR_TEMPLATES[error.code] : null;

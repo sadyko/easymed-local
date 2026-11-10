@@ -208,7 +208,8 @@ test('BOOKED_JOIN_V1: врач сегодня занят, но пациент к
     try {
         seed();
         const at15 = dayAt(0); at15.setHours(15, 0, 0, 0);
-        DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, created_by) VALUES (3, ?, 5, 'scheduled', 1)").run(at15.toISOString());
+        // ревью L4 — запись колл-центра: время ей ставил calendar_book (booked_at).
+        DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, booked_at, created_by) VALUES (3, ?, 5, 'scheduled', ?, 1)").run(at15.toISOString(), new Date().toISOString());
         forgetSlots();
         BODY.children.length = 0;
         openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
