@@ -265,7 +265,9 @@ async function openWithLab(opts) {
 }
 const LAB_CASES = [
     ['группа «Лаборатория», исполнителя нет', { group: 'lab' }, null],
-    ['группа «Лаборатория», ОДИН лаборант в «Услугах и ставках» — назначен без времени', { group: 'lab', techs: 1 }, 'Лаборантова 0'],
+    // LAB_NO_DOCTOR_V1 (ревью, решение координатора b) — лаборанта анализу сам не ставим (как мастер визита, I-1):
+    // исполнитель по желанию, без времени.
+    ['группа «Лаборатория», ОДИН лаборант в «Услугах и ставках» — не подставлен, времени нет', { group: 'lab', techs: 1 }, null],
     ['группа «Лаборатория», ДВА лаборанта — исполнитель по выбору, смета не стоит', { group: 'lab', techs: 2 }, null],
     ['анализ в группе «Консультации» (умолчание), один врач — врач не подставлен', { group: 'consultation', doctors: 1 }, null],
     ['анализ в группе «Консультации», два врача — смета не стоит', { group: 'consultation', doctors: 2 }, null],
@@ -278,9 +280,37 @@ for (const [label, opts, who] of LAB_CASES) {
         assert.ok(!/\d\d:\d\d/.test(rail), 'анализу поставлено время: ' + rail);
         assert.deepEqual(SLOT_ASKS, [], 'у исполнителя анализа спрошено время: ' + JSON.stringify(SLOT_ASKS));
         if (who) assert.ok(rail.includes(who), 'единственный лаборант не назначен исполнителем: ' + rail);
+        if (opts.techs) assert.ok(!rail.includes('Лаборантова'), 'лаборант подставлен анализу сам: ' + rail);
         if (opts.group === 'consultation') assert.ok(!rail.includes('Врачев'), 'анализу подставлен врач: ' + rail);
     });
 }
+
+// LAB_NO_DOCTOR_V1 (ревью, решение координатора b) — «Диагностика» (УЗИ) с requires_doctor = 0:
+// исполнитель обязателен (D1), время — нет. Двое врачей, никто не отмечен — смета ждёт выбора
+// исполнителя («выберите исполнителя»), времени не спрашивает; выбран — готово, без времени.
+test('LAB_NO_DOCTOR_V1 (ревью b): УЗИ «Диагностика» без «нужен врач» — исполнитель обязателен, время не спрашивается', async () => {
+    seedLab({ group: 'imaging', doctors: 2 });
+    forgetSlots();
+    SLOT_ASKS.length = 0;
+    BODY.children.length = 0;
+    openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
+        patient: { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' } });
+    const top = () => BODY.children[BODY.children.length - 1];
+    const rowOf = (name) => byClass(top(), 'wzc-svc').find((r) => textOf(r).includes(name));
+    await until(() => rowOf('СРБ') && byClass(rowOf('СРБ'), 'wzc-add')[0], 'строка в каталоге');
+    byClass(rowOf('СРБ'), 'wzc-add')[0].click();
+    await until(() => byClass(top(), 'wzc-cta')[0], 'кнопка сметы');
+    await new Promise((r) => setTimeout(r, 120));
+    const rail = () => textOf(byClass(top(), 'wzc-rail')[0]);
+    assert.equal(byClass(top(), 'wzc-cta')[0].disabled, true, 'УЗИ ушло без исполнителя: ' + rail());
+    assert.ok(rail().includes('выберите исполнителя'), 'причина не названа: ' + rail());
+    const doc = walk(rowOf('СРБ')).find((n) => n.tagName === 'BUTTON' && String(n.className).includes('wzc-doc') && textOf(n).includes('Врачев 1'));
+    assert.ok(doc, 'нет выбора исполнителя');
+    doc.click();
+    await until(() => byClass(top(), 'wzc-cta')[0].disabled === false, 'смета готова после выбора исполнителя');
+    assert.ok(rail().includes('Врачев 1') && !/\d\d:\d\d/.test(rail()), 'исполнитель не выбран или ему поставлено время: ' + rail());
+    assert.deepEqual(SLOT_ASKS, [], 'у исполнителя УЗИ без «нужен врач» спрошено время');
+});
 
 // LAB_NO_DOCTOR_V1 — календарь кабинетов, колонка ВРАЧА: каталог заперт на врача
 // (lockedDoctor + время щелчка — ровно так его открывает room-calendar.js). Прежде в нём

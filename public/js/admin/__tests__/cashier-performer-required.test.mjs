@@ -78,3 +78,21 @@ test('анализ — как прежде: «Без врача» есть, са
   walk(document.body).find((n) => n.attrs && n.attrs['data-performer'] === 'none').click();
   assert.equal((await p).id, null);
 });
+
+// LAB_NO_DOCTOR_V1 (ревью, решение координатора b) — анализ, оставленный в группе «Консультации»
+// с requires_doctor = 0, исполнителя не требует и у кассы: «Без врача» есть, сам не выбирается.
+test('LAB_NO_DOCTOR_V1: анализ в группе «Консультации» (requires_doctor = 0) — «Без врача» есть, один исполнитель сам не выбирается', async () => {
+  document.body.children.length = 0;
+  PERFORMERS = [DOC];
+  let settled = false;
+  const p = pickPerformer('Кто оказывает услугу', { service_id: 41, visit_id: 1 }, { allowNone: true, service: { id: 41, type: 'consultation', requires_doctor: 0 } })
+    .then((v) => { settled = true; return v; });
+  await tick(); await tick();
+  assert.equal(settled, false, 'исполнитель выбран сам у анализа без врача');
+  assert.deepEqual(performerButtons(), ['none', '20'], '«Без врача» не предложен');
+  walk(document.body).find((n) => n.attrs && n.attrs['data-performer'] === 'none').click();
+  assert.equal((await p).id, null);
+  const { cashierNeedsPerformer } = await import('../views/cashier-line-fix.js?v=refbill4');
+  assert.equal(cashierNeedsPerformer({ id: 41, type: 'consultation', requires_doctor: 0 }), false);
+  assert.equal(cashierNeedsPerformer({ id: 31, type: 'imaging', requires_doctor: 0 }), true, 'УЗИ — исполнитель нужен (D1)');
+});

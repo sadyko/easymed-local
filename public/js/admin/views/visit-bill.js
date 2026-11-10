@@ -20,7 +20,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
 import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
 import { linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — исполнитель строки
-import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D4) — исполнитель строки «Добавить» — по услуге
+import { doctorPoolFor, performerRequired, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // LAB_NO_DOCTOR_V1 — performerRequired вместо needsPerformer   // DIAG_ROUTE_V1 (D4) — исполнитель строки «Добавить» — по услуге
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 // BRANCH_BILL_GUARD_V1 — тот же предикат, на котором стоят рабочие списки
 // (visits.js:91, procedures.js:50 — там он же, но в SQL: .is('sync_origin', null)).
@@ -260,7 +260,7 @@ export function openVisitBillModal(visit, onChanged) {
     function paintPerformers() {
         clear(perfSelect);
         const svc = serviceById.get(String(addSelect.value)) || null;
-        if (!svc || !needsPerformer(svc)) { perfBox.style.display = 'none'; perfSelect.value = ''; return; }
+        if (!svc || !performerRequired(svc)) { perfBox.style.display = 'none'; perfSelect.value = ''; return; }   // LAB_NO_DOCTOR_V1
         const pool = doctorPoolFor(performers, svc);
         perfSelect.appendChild(h('option', { value: '' }, pool.length ? '— выберите врача —' : 'нет врачей для этой услуги'));
         for (const d of pool) perfSelect.appendChild(h('option', { value: String(d.id) }, (d.full_name || '—') + (d.specialty ? ' · ' + d.specialty : '')));
@@ -277,7 +277,7 @@ export function openVisitBillModal(visit, onChanged) {
         const svc = serviceById.get(String(addSelect.value))
             || { id: Number(addSelect.value), price: Number(opt && opt.dataset.price) || 0, requires_doctor: 0 };
         // DIAG_ROUTE_V1 (D4) — услуге кабинета врача без исполнителя строка не ложится.
-        const perfNeeded = needsPerformer(svc);
+        const perfNeeded = performerRequired(svc);   // LAB_NO_DOCTOR_V1
         if (perfNeeded && !perfSelect.value) {
             toast(trf('Укажите врача для услуги «{name}»', { name: svc.name || '' }), 'fail');
             return;

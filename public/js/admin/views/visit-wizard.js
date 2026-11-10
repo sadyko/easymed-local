@@ -31,8 +31,9 @@ import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDa
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageSplit, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';   // PACKAGES_V1 — «скидка 20 % · до 30.09.2026»
-import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
-import { performerRequired, assignedTo } from './doctor-pool.js?v=dp1';   // LAB_NO_DOCTOR_V1 — анализ в «Консультациях» без врача «Далее» не держит
+import { doctorPoolFor, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
+import { performerRequired, assignedTo } from './doctor-pool.js?v=dp1';
+import { goesToCabinet } from '../../shared/service-route.js';   // LAB_NO_DOCTOR_V1 — выбор исполнителя по желанию только у услуги кабинета   // LAB_NO_DOCTOR_V1 — анализ в «Консультациях» без врача «Далее» не держит
 import { isOn } from '../../shared/flags.js';   // DIAG_ROUTE_V1 (ревью S4 H-1) — флаг is_doctor из базы: 1/«1»/true
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';   // OWN_PRICE_REPEAT_V1 — одно правило с сервером
@@ -881,7 +882,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
      * выбранного запись пишет в строку визита до счёта (createVisit → setLinePerformer).
      */
     function markBookedPerformer(line, bookedDoctorId) {
-        if (!line || !line.booked || Number(bookedDoctorId) > 0 || !needsPerformer(line.svc)) return;
+        if (!line || !line.booked || Number(bookedDoctorId) > 0 || !performerRequired(line.svc)) return;   // LAB_NO_DOCTOR_V1
         line.booked.setDoctor = true;
         if (!line.doctorId) {
             const one = soleCandidate(doctorsForService(line.svc.id));
@@ -1324,7 +1325,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 // без времени: строка без исполнителя не видна ни одному врачу
                 // (SERVICE_SCOPE_V3). Список — отмеченные услуге в «Услугах и ставках»,
                 // иначе все врачи; один кандидат выбирается сам (addToCart).
-                const perf = needsPerformer(line.svc) ? performerSelect(line) : null;
+                // LAB_NO_DOCTOR_V1 — выбор исполнителя у услуги кабинета: обязательный (performerRequired)
+                // или по желанию (анализ, оставленный в «Консультациях», — из отмеченных); у анализа и
+                // процедуры выбора нет (ревью I-1).
+                const perf = (performerRequired(line.svc) || (goesToCabinet(line.svc) && doctorsForService(line.svc.id).length)) ? performerSelect(line) : null;
                 return h('div', {
                     style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed var(--ink-150, var(--ink-200))' },
                 }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Дата'),
@@ -1905,7 +1909,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // не обязателен: сам ставится только отмеченный ему врач (H-1), не «все врачи» запасного списка.
         const optional = !performerRequired(svc);
         const pool = optional ? assignedTo(wiz.doctors, svc.id) : doctorsForService(svc.id);
-        if (pool.length === 1 && ((!optional && needsPerformer(svc)) || isOn(pool[0].is_doctor))) {
+        if (pool.length === 1 && (!optional || isOn(pool[0].is_doctor))) {
             line.doctorId = pool[0].id;
             // DIAG_ROUTE_V1 (D1) — у строки «на дату» день остаётся и у врача живой очереди.
             if (isLiveQueueDoc(line.doctorId)) { if (!line.dateOnly) line.when = null; repaintRail(); }

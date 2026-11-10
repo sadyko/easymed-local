@@ -37,7 +37,7 @@ import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
 import { canWriteServiceTemplates, canAddVisitLines, canNameVisitSource } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы · DIAG_ROUTE_V1 (D8) — шаг «Направление»
 import { precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 — повтор услуги в визите дня — отказ до записи
-import { serviceRoute, ROUTE_SELECT } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — маршрут решает группа, одним правилом · LAB_NO_DOCTOR_V1 — ROUTE_SELECT
+import { serviceRoute, ROUTE_SELECT, performerRequired } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — маршрут решает группа, одним правилом · LAB_NO_DOCTOR_V1 — ROUTE_SELECT
 import { surgeryBedRefusal, linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация, хирургия без койки; BACKLOG_1011_V1 — исполнитель по умолчанию
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
@@ -1820,6 +1820,15 @@ export function openServicePickerModal({
     /** Исполнители услуги без врача — только отмеченные в «Услугах и ставках» (без запасного «все врачи»); выбираются без времени. */
     function noDocPerformers(svc) { return svc && !svc.__consult ? performersOf(svc.id) : []; }
     /**
+     * LAB_NO_DOCTOR_V1 (ревью, решение координатора b) — ИСПОЛНИТЕЛЬ ОБЯЗАТЕЛЕН, НО БЕЗ ВРЕМЕНИ:
+     * услуга кабинета («Диагностика», «Прочее»), которой врач со временем не нужен
+     * (requires_doctor = 0), — правило D1 (shared/service-route.js performerRequired), как у
+     * регистратуры, кассы и мастера визита. Кандидаты — отмеченные, иначе все врачи.
+     */
+    function svcNeedsPerformer(svc) { return !!svc && !svc.__consult && !svcNeedsDoctor(svc) && performerRequired(svc); }
+    /** Кандидаты в исполнители услуги без врача со временем: обязательной — с запасным списком, иначе — только отмеченные. */
+    function noSlotCandidates(svc) { return svcNeedsPerformer(svc) ? svcPerformers(svc) : noDocPerformers(svc); }
+    /**
      * Каталог, запертый на врача (колонка врача в календаре кабинетов): анализы и процедуры,
      * которым врач не нужен, — строкой «на дату», без врача и без времени. Прежде такие
      * услуги в нём не показывались (только услуги врача), а показанные ложились во время врача.
@@ -1909,7 +1918,7 @@ export function openServicePickerModal({
         // и без врача со временем.
         if (!requireSlot) return true;
         if (lockedDoctor) return true;
-        if (!a.__needsDoc) return true;
+        if (!a.__needsDoc) return !a.__needsPerf || !!a.doctor;   // LAB_NO_DOCTOR_V1 (ревью b) — исполнитель обязателен, время — нет
         if (a.doctor && (a.doctor.scheduling_mode || 'schedulable') === 'live_queue') return true;   // SVC_LIVE_QUEUE_V1
         return !!(a.doctor && a.startISO);
     }
@@ -2079,14 +2088,21 @@ export function openServicePickerModal({
         // performers happen to be linked to the service. Consultations always need one.
         // LAB_NO_DOCTOR_V1 — флаг из базы 0/1 читается isOn (svcNeedsDoctor), а не `=== false`.
         const needsDoc = svcNeedsDoctor(svc);
+        const needsPerf = svcNeedsPerformer(svc);   // LAB_NO_DOCTOR_V1 (ревью b)
         const item = { service: svc, doctor: null, dateIso: null, time: null, startISO: null,
-            durationMinutes: dur, __needsDoc: needsDoc, __dayIso: catDays()[0].iso, __auto: false };
+            durationMinutes: dur, __needsDoc: needsDoc, __needsPerf: needsPerf, __dayIso: catDays()[0].iso, __auto: false };
         state.added.push(item);
         paintCatalog();
         refreshTierQuotes();
         if (needsDoc && perf.length === 1) await catPickDoc(item, perf[0], true);
         // LAB_NO_DOCTOR_V1 — единственный отмеченный исполнитель услуги без врача назначается БЕЗ времени.
-        else if (!needsDoc) { const own = noDocPerformers(svc); if (own.length === 1) await catPickDoc(item, own[0], true); }
+        // LAB_NO_DOCTOR_V1 (ревью b) — сам ставится исполнитель только той, кому он обязателен
+        // (единственный кандидат), и единственный отмеченный ВРАЧ (H-1, как в мастере визита);
+        // единственный лаборант анализу сам не ставится — выбор по желанию, без времени.
+        else if (!needsDoc) {
+            const cand = noSlotCandidates(svc);
+            if (cand.length === 1 && (needsPerf || isOn(cand[0].is_doctor))) await catPickDoc(item, cand[0], true);
+        }
     }
     function catRemove(item) {
         const i = state.added.indexOf(item);
@@ -2285,7 +2301,8 @@ export function openServicePickerModal({
         const _docCtx = s.__consult ? (lockedDoctor ? lockedDoctor.id : (item && item.doctor ? item.doctor.id : null)) : null;
         const dispName = _docCtx ? consultNameFor(_docCtx, s.__ct || s) : s.name;
         const subBits = [s.__consultDocName ? s.__consultDocName : groupNameOf(s), trf('{n} мин', { n: dur })];   // CONSULT_PER_DOCTOR_ROWS_V1
-        if (!s.__consult && (lockedDoctor ? dateOnlyInLocked(s) : !svcNeedsDoctor(s))) subBits.push('врач не требуется');   // LAB_NO_DOCTOR_V1
+        if (!s.__consult && (lockedDoctor ? dateOnlyInLocked(s) : (!svcNeedsDoctor(s) && !svcNeedsPerformer(s)))) subBits.push('врач не требуется');   // LAB_NO_DOCTOR_V1
+        else if (!lockedDoctor && svcNeedsPerformer(s)) subBits.push('нужен исполнитель');   // LAB_NO_DOCTOR_V1 (ревью b)
         // ATTACH_CATALOG_V1 — a service already on the visit can't be added again.
         // The columns view has always greyed these out (excludeServiceIds); the
         // catalog didn't, so the row looked addable and only failed on insert.
@@ -2306,7 +2323,7 @@ export function openServicePickerModal({
                          onclick: () => { if (!onVisit) catAdd(s); } }, 'Добавить'))));
         if (item && !lockedDoctor && item.__needsDoc) row.appendChild(catPickerPanel(item, perf));
         // LAB_NO_DOCTOR_V1 — исполнитель (если отмечен) выбирается по желанию и без времени.
-        const own = item && !lockedDoctor && !item.__needsDoc ? noDocPerformers(s) : [];
+        const own = item && !lockedDoctor && !item.__needsDoc ? noSlotCandidates(s) : [];   // LAB_NO_DOCTOR_V1 (ревью b)
         if (own.length) row.appendChild(catPickerPanel(item, own));
         else if (item && (!lockedDoctor ? !item.__needsDoc : item.__dateOnly)) row.appendChild(h('div', { class: 'wzc-picker' },
             h('div', { class: 'wzc-lbl' }, 'Врач не требуется — выполняется в день визита')));
@@ -2433,7 +2450,7 @@ export function openServicePickerModal({
                     onclick: () => { cat2.q = a.service.name; cat2.group = ''; cat2.win = CAT_PAGE;
                         if (catSearchEl) catSearchEl.value = cat2.q; paintCatalog(); } },
                     // PICK_DAY_V1 — причина словами: не «выберите время», а «сегодня времени нет».
-                    catNeedsDay(a) ? noFreeText(catDays()[0].today) : 'выберите врача и время');
+                    catNeedsDay(a) ? noFreeText(catDays()[0].today) : (a.__needsDoc ? 'выберите врача и время' : 'выберите исполнителя'));   // LAB_NO_DOCTOR_V1 (ревью b)
                 else if (a.doctor) who = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     `${a.doctor.full_name || ''}${a.time ? ' · ' + (a.dateIso === localYmd() ? tr('сегодня') : (a.dateIso || '').slice(8) + '.' + (a.dateIso || '').slice(5, 7)) + ' ' + a.time : ''}`);
                 // PICKER_CATALOG_EVERYWHERE_V1 — «процедурный кабинет» это правда

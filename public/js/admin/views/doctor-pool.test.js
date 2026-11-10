@@ -37,9 +37,14 @@ test('анализу и процедуре без исполнителей — �
   assert.deepEqual(doctorPoolFor(DOCS, { id: 999, requires_doctor: 0, type: 'lab' }), []);
   assert.deepEqual(doctorPoolFor(DOCS, { id: 999, requires_doctor: 0, type: 'procedure' }), []);
   assert.deepEqual(doctorPoolFor(DOCS, { id: 999, requires_doctor: 0, type: 'imaging', is_lab: 1 }), [], 'is_lab — группа «Лаборатория»');
-  for (const type of ['imaging', 'consultation', 'other', 'radiology']) {
+  for (const type of ['imaging', 'other', 'radiology']) {
     assert.equal(doctorPoolFor(DOCS, { id: 999, requires_doctor: 0, type }).length, DOCS.length, type);
   }
+  // LAB_NO_DOCTOR_V1 (ревью, решение координатора b) — группа «Консультации» (умолчание колонки,
+  // под ним клиники держат и анализы) с «нужен врач» = 0 исполнителя не требует: запасного
+  // «все врачи» у неё нет; с «нужен врач» = 1 — все врачи, как прежде.
+  assert.deepEqual(doctorPoolFor(DOCS, { id: 999, requires_doctor: 0, type: 'consultation' }), [], 'consultation rd 0');
+  assert.equal(doctorPoolFor(DOCS, { id: 999, requires_doctor: 1, type: 'consultation' }).length, DOCS.length, 'consultation rd 1');
 });
 
 test('needsPerformer: всем, кроме «Лаборатории» и «Процедур»; галочка «нужен врач» — всегда', () => {
@@ -63,7 +68,9 @@ test('needsPerformer / doctorPoolFor: анализ группы «Консуль
   assert.equal(needsPerformer(labByType), false);
   assert.equal(needsPerformer(consult), true);
   assert.deepEqual(doctorPoolFor(docs, labByDept), []);
-  assert.deepEqual(doctorPoolFor(docs, consult).map((d) => d.id), [1]);
+  // LAB_NO_DOCTOR_V1 (ревью, решение координатора b) — «нужен врач» = 0: запасного «все врачи» нет.
+  assert.deepEqual(doctorPoolFor(docs, consult).map((d) => d.id), []);
+  assert.deepEqual(doctorPoolFor(docs, { ...consult, requires_doctor: 1 }).map((d) => d.id), [1]);
   assert.equal(needsPerformer({ type: 'imaging', requires_doctor: 0, departments: { kind: 'laboratory' } }), true, 'УЗИ группы «Диагностика» — врачу всегда');
 });
 

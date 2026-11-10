@@ -31,7 +31,7 @@ import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOI
 import { bookVisit, setVisitStatus as bookStatus } from './visit-booking.js';
 import { lineIdentity, linePerformer, isConsultPick } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога, исполнитель
 import { loadVisitOrders, blockedPickIds, precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 (ревью M3) — повтор услуги в визите — правило сервера
-import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D3) — исполнитель рекомендации — по услуге, не рекомендовавший
+import { doctorPoolFor, performerRequired, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // LAB_NO_DOCTOR_V1 — performerRequired вместо needsPerformer   // DIAG_ROUTE_V1 (D3) — исполнитель рекомендации — по услуге, не рекомендовавший
 import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B5) — «Услуга возвращена» в журнале счёта
 
 // BILLING_AUDIT_FIX_V1 (A1) — 'YYYY-MM-DD' местного дня для visit_date.
@@ -971,7 +971,7 @@ async function openAttachRecommendationModal(state, rec, onReload) {
                     await ready;   // DIAG_ROUTE_V1 (D3) — список и услуга загружены
                     const chosenDoctorId = doctorSelect.value || null;
                     // DIAG_ROUTE_V1 (D3) — услуге кабинета без исполнителя не место: её не увидит ни один врач.
-                    if (!chosenDoctorId && needsPerformer(attachSvc)) { toast(tr('Выберите исполнителя услуги.'), 'fail'); return; }
+                    if (!chosenDoctorId && performerRequired(attachSvc)) { toast(tr('Выберите исполнителя услуги.'), 'fail'); return; }   // LAB_NO_DOCTOR_V1
                     await attachRecommendation(state, rec, chosenDoctorId, onReload);
                     close();
                 } finally {

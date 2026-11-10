@@ -74,7 +74,7 @@ import { registerWalkIn, walkInRoleRefusal, walkInLinesRefusal } from './walk-in
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»
 import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
 import { surgeryBedRefusal, isSurgeryPick, SURGERY_NEEDS_BED_TEXT } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1   // WALK_IN_BOOKING_V1
-import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
+import { doctorPoolFor, performerRequired, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // LAB_NO_DOCTOR_V1 — performerRequired вместо needsPerformer   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    // REFERRAL_SOURCE_CODE_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';                    // WIZ_INVOICE_PRINT_V1 — тот же бланк «Счёт»
@@ -554,7 +554,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     function doctorCell(row) {
         const pool = doctorPoolFor(state.doctors, row.service);
         // DIAG_ROUTE_V1 (D1) — «—» только у анализа и процедуры: услуге кабинета исполнитель нужен всегда.
-        if (!pool.length && !needsPerformer(row.service) && row.doctorId == null) {
+        if (!pool.length && !performerRequired(row.service) && row.doctorId == null) {   // LAB_NO_DOCTOR_V1
             return h('td', { class: 'muted' }, '—');
         }
         const sel = h('select', { style: { width: '100%' } },
@@ -727,7 +727,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             return bookedTwin;
         }
         // DIAG_ROUTE_V1 (D1) — исполнитель сам, только когда кандидат один (как в мастере записи).
-        if (!doctor && needsPerformer(service)) {
+        if (!doctor && performerRequired(service)) {   // LAB_NO_DOCTOR_V1
             const one = soleCandidate(doctorPoolFor(state.doctors, service));
             if (one) doctor = { id: one.id, full_name: one.full_name };
         }
@@ -944,7 +944,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     function markBookedPerformer(row, bookedDoctorId) {
         if (!row || !row.booked || Number(bookedDoctorId) > 0) return;
         const svc = row.service;
-        if (!svc || (!svc.__consult && !Object.prototype.hasOwnProperty.call(svc, 'type')) || !needsPerformer(svc)) return;
+        if (!svc || (!svc.__consult && !Object.prototype.hasOwnProperty.call(svc, 'type')) || !performerRequired(svc)) return;   // LAB_NO_DOCTOR_V1
         row.booked.setDoctor = true;
         if (row.doctorId == null) {
             const one = soleCandidate(doctorPoolFor(state.doctors, svc));
@@ -1071,7 +1071,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         for (const row of state.rows) {
             // DIAG_ROUTE_V1 (ревью M-1) — и строка «из записи» без исполнителя: её исполнителя
             // назначают здесь (markBookedPerformer), с исполнителем — врач записи, проверка проходит.
-            if (!row.doctorId && (row.service.requires_doctor || ((!row.booked || row.booked.setDoctor) && needsPerformer(row.service)))) {
+            if (!row.doctorId && (row.service.requires_doctor || ((!row.booked || row.booked.setDoctor) && performerRequired(row.service)))) {   // LAB_NO_DOCTOR_V1
                 toast(trf('Укажите врача для услуги «{name}»', { name: row.service.name || '' }), 'fail');
                 try { if (row.sel && row.sel.focus) row.sel.focus(); } catch (e) { /* нет фокуса — не беда */ }
                 return false;

@@ -129,3 +129,30 @@ test('LAB_NO_DOCTOR_V1: performerRequired — у группы «Консульт
   assert.equal(performerRequired({ type: 'lab', requires_doctor: 0 }), false);
   assert.equal(performerRequired({ type: 'consultation', requires_doctor: 0, departments: { kind: 'laboratory' } }), false);
 });
+
+// LAB_NO_DOCTOR_V1 (ревью, решение координатора b) — ОДНО ПРАВИЛО ИСПОЛНИТЕЛЯ НА ВСЕ ЭКРАНЫ.
+// Требовать / не пускать дальше / ставить исполнителя самим — только performerRequired;
+// «нужен врач СО ВРЕМЕНЕМ» — только requires_doctor. Запасной список «все врачи» — только
+// услуге, которой исполнитель обязателен: анализу, оставленному в «Консультациях», врача не
+// подставляют; «Диагностике» с requires_doctor = 0 — как прежде (D1, без времени).
+test('LAB_NO_DOCTOR_V1: doctorPoolFor — запасной «все врачи» только услуге, которой исполнитель обязателен', async () => {
+  const { doctorPoolFor } = await import('../admin/views/doctor-pool.js');
+  const docs = [{ id: 7, is_doctor: 1 }, { id: 8, is_doctor: 1 }];
+  assert.deepEqual(doctorPoolFor(docs, { id: 31, type: 'consultation', requires_doctor: 0 }).map((d) => d.id), [], 'анализу в «Консультациях» подставлены все врачи');
+  assert.deepEqual(doctorPoolFor(docs, { id: 31, type: 'imaging', requires_doctor: 0 }).map((d) => d.id), [7, 8], 'УЗИ без исполнителя — выбор из всех врачей (D1)');
+  assert.deepEqual(doctorPoolFor(docs, { id: 31, type: 'consultation', requires_doctor: 1 }).map((d) => d.id), [7, 8]);
+  assert.deepEqual(doctorPoolFor(docs, { id: 31, type: 'lab', requires_doctor: 0 }).map((d) => d.id), []);
+});
+
+test('LAB_NO_DOCTOR_V1: ни один экран не требует исполнителя по needsPerformer мимо performerRequired', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const VIEWS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'admin', 'views');
+  const offences = [];
+  for (const f of fs.readdirSync(VIEWS).filter((x) => x.endsWith('.js') && !x.endsWith('.test.js'))) {
+    const code = fs.readFileSync(path.join(VIEWS, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    code.split(/\r?\n/).forEach((L, i) => { if (/\bneedsPerformer\s*\(/.test(L)) offences.push(`${f}:${i + 1}: ${L.trim()}`); });
+  }
+  assert.deepEqual(offences, [], 'экран решает об исполнителе по needsPerformer:\n' + offences.join('\n'));
+});

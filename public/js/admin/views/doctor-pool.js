@@ -61,11 +61,14 @@ export function performerCandidates(users) {
 }
 
 // doctors — список кандидатов; service — {id, requires_doctor, type, is_lab}.
+// LAB_NO_DOCTOR_V1 (ревью) — запасной «все врачи» только услуге, которой исполнитель
+// ОБЯЗАТЕЛЕН (performerRequired): анализу, оставленному в «Консультациях» с
+// requires_doctor = 0, врача не подставляют; «Диагностике» — как прежде (D1).
 export function doctorPoolFor(doctors, service) {
     if (!service) return [];
     const named = assignedTo(doctors, service.id);
     if (named.length) return named;
-    return needsPerformer(service) ? (doctors || []).filter(isDoctorUser) : [];
+    return performerRequired(service) ? (doctors || []).filter(isDoctorUser) : [];
 }
 
 /** DIAG_ROUTE_V1 — исполнитель по умолчанию: только когда кандидат ровно один. */
