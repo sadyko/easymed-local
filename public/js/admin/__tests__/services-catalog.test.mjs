@@ -106,6 +106,11 @@ globalThis.fetch = async (url, opts) => {
     const desc = opts && opts.body ? JSON.parse(opts.body) : {};
     dbCalls.push(desc);
     if (desc.op === 'select') {
+      // SERVICE_EDITOR_FRESH_ROW_V1 — редактор перечитывает услугу по id (одна строка).
+      if (desc.table === 'services' && desc.single) {
+        const idf = (desc.filters || []).find((f) => f && f.col === 'id');
+        return jsonOk(services.find((s) => idf && s.id === idf.val) || null);
+      }
       if (desc.table === 'services' && holdServices) await holdServices;
       if (desc.table === 'services' && failServicesOnce) {
         failServicesOnce = false;

@@ -74,3 +74,26 @@ test('ревью S1 L-3: группа не известна — выбор по 
   assert.equal(fallbackChoiceKey({ groupPct: 0, groupHasRates: true }), 'group');
   assert.equal(fallbackChoiceKey({ groupPct: 0, groupHasRates: true, groupKnown: false }), 'group');
 });
+
+// DISCOUNT_HINT_TRUE_V1 (3.23.0, снимок 68) — подсказка под полем скидки говорила «Скидка
+// группы «vip» — 20% подставлена; можно изменить.», когда в выборе стояло «Без скидки», в поле
+// 0 и итог без скидки. Подсказка теперь называет то, что с группой СЕЙЧАС, по выбранной скидке.
+test('DISCOUNT_HINT_TRUE_V1: подсказка группы — по выбору: подставлена / не применена («Без скидки», промокод) / пол для «вручную»; врачу — «применится в счёте сама»', async () => {
+  const { groupHint } = await import('../discount-choice.js');
+  const VIP20 = groupOf('vip', 20);
+  const p = { name: 'vip', pct: '20' };
+  assert.deepEqual(groupHint('group', VIP20), { text: 'Скидка группы «{name}» — {pct}% подставлена; можно изменить.', params: p });
+  assert.deepEqual(groupHint('none', VIP20), { text: 'Скидка группы «{name}» ({pct}%) не применена — выбрано «Без скидки».', params: p });
+  assert.deepEqual(groupHint('promo:3', VIP20), { text: 'Скидка группы «{name}» ({pct}%) не применена — выбран промокод, скидки не складываются.', params: p });
+  assert.deepEqual(groupHint('manual', VIP20), { text: 'Скидка группы «{name}» — {pct}%: меньше неё счёт не даст.', params: p });
+  assert.deepEqual(groupHint('none', VIP20, { doctorBill: true }), { text: 'Скидка группы «{name}» — {pct}%: применится в счёте сама.', params: p });
+  assert.equal(groupHint('group', null), null, 'нет группы — нет подсказки');
+  // DISCOUNT_RATES_V1 — группа со ставками по услугам.
+  const RATED = groupOf('Сотрудники', 0, { g: { consultation: 100 } });
+  const rp = { name: 'Сотрудники', pct: '0' };
+  assert.deepEqual(groupHint('group', RATED), { text: 'Скидка группы «{name}» — по услугам (по умолчанию {pct}%) подставлена; можно изменить.', params: rp });
+  assert.deepEqual(groupHint('none', RATED), { text: 'Скидка группы «{name}» (по услугам) не применена — выбрано «Без скидки».', params: rp });
+  assert.deepEqual(groupHint('promo:3', RATED), { text: 'Скидка группы «{name}» (по услугам) не применена — выбран промокод, скидки не складываются.', params: rp });
+  assert.deepEqual(groupHint('manual', RATED), { text: 'Скидка группы «{name}» — по услугам (по умолчанию {pct}%): меньше неё счёт не даст.', params: rp });
+  assert.deepEqual(groupHint('group', RATED, { doctorBill: true }), { text: 'Скидка группы «{name}» — по услугам (по умолчанию {pct}%): применится в счёте сама.', params: rp });
+});

@@ -40,7 +40,7 @@ import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
 // они действуют; одно правило на оба мастера.
 import { eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining, serviceScope } from '../discount-rules.js';
-import { groupOf, discountChoiceOptions, keepChoice, choiceArgs, choiceFloorPct, choiceReason, choiceToSend } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор; choiceToSend — ревью S1 L-3
+import { groupOf, discountChoiceOptions, keepChoice, choiceArgs, choiceFloorPct, choiceReason, choiceToSend, groupHint } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор; choiceToSend — ревью S1 L-3; groupHint — DISCOUNT_HINT_TRUE_V1
 import { ratedOutcome, hasRates } from '../discount-rates.js';   // DISCOUNT_RATES_V1 — скидка по ставкам услуг, как посчитает счёт
 import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
@@ -3050,7 +3050,20 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('span', { class: 'muted', style: { flex: 1, fontSize: '13.5px' } }, tr('Скидка пакета')),
             pkgDiscEl);
         const totEl = h('span', { class: 'num', style: { fontWeight: 800, fontSize: '20px', color: 'var(--ink-900)' } });
+        // DISCOUNT_HINT_TRUE_V1 (3.23.0, снимок 68) — подсказка о скидке группы пациента
+        // называет то, что с ней СЕЙЧАС, по выбранной скидке (groupHint): «подставлена»
+        // только при выборе группы; при «Без скидки» и промокоде — «не применена»; при
+        // своей — пол группы. Прежде текст зависел от одной группы и под «Без скидки»,
+        // нулём в поле и итогом без скидки писал «20% подставлена». Обновляется вместе
+        // с итогом — при выборе в списке и при вводе своего числа.
+        const catNoteEl = h('div', { class: 'muted', 'data-category-note': '', style: { fontSize: '12.5px', marginTop: doctorBill ? '0' : '-4px', display: 'none' } });
+        const paintCategoryNote = () => {
+            const hint = groupHint(wiz.discountChoice, wizGroup(), { doctorBill });
+            catNoteEl.style.display = hint ? '' : 'none';
+            catNoteEl.textContent = hint ? trf(hint.text, hint.params) : '';
+        };
         const refreshTotals = () => {
+            paintCategoryNote();   // DISCOUNT_HINT_TRUE_V1
             const p = Math.round(packageDiscountTotal());
             pkgDiscRow.style.display = p > 0 ? '' : 'none';
             pkgDiscEl.textContent = '−' + fmtPrice(p) + ' ' + tr('сум');
@@ -3198,14 +3211,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // CATEGORY_DISCOUNT_V1 — откуда взялся процент: скидка группы пациента.
             // REFERRAL_BILL_V1 — врачу: её даст сам счёт, менять нечего.
             // Ревью S5 L-3 — группа со ставками: «по услугам (по умолчанию N%)», и при 0 % по умолчанию.
-            wiz.categoryPct > 0 || wiz.categoryRates ? h('div', { class: 'muted', 'data-category-note': '', style: { fontSize: '12.5px', marginTop: doctorBill ? '0' : '-4px' } },
-                wiz.categoryRates
-                    ? (doctorBill
-                        ? trf('Скидка группы «{name}» — по услугам (по умолчанию {pct}%): применится в счёте сама.', { name: wiz.categoryName, pct: wiz.categoryPct })
-                        : trf('Скидка группы «{name}» — по услугам (по умолчанию {pct}%) подставлена; можно изменить.', { name: wiz.categoryName, pct: wiz.categoryPct }))
-                    : doctorBill
-                    ? trf('Скидка группы «{name}» — {pct}%: применится в счёте сама.', { name: wiz.categoryName, pct: wiz.categoryPct })
-                    : trf('Скидка группы «{name}» — {pct}% подставлена; можно изменить.', { name: wiz.categoryName, pct: wiz.categoryPct })) : null,
+            // DISCOUNT_HINT_TRUE_V1 — текст по выбранной скидке (paintCategoryNote в refreshTotals).
+            catNoteEl,
             doctorBill || !choices.length ? null : promoTick,   // REFERRAL_BILL_V1 · DISCOUNT_V2 — только карты
             doctorBill || !choices.length ? null : promoRow,    // REFERRAL_BILL_V1
             balanceRow(),

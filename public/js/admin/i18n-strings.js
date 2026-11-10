@@ -1694,6 +1694,9 @@ export const STRINGS = {
   "Референс (текст)": {"en":"Reference (text)","ru":"Референс (текст)","uz":"Referens (matn)"},
   "Цвет пробирки": {"en":"Tube colour","ru":"Цвет пробирки","uz":"Probirka rangi"},
   "Не удалось загрузить справочники. Обновите страницу.": {"en":"Could not load the reference lists. Refresh the page.","ru":"Не удалось загрузить справочники. Обновите страницу.","uz":"Ma'lumotnomalarni yuklab bo'lmadi. Sahifani yangilang."},
+  // SERVICE_EDITOR_FRESH_ROW_V1 — редактор перечитывает услугу по id перед правкой
+  "Не удалось загрузить услугу. Обновите страницу.": {"en":"Could not load the service. Refresh the page.","ru":"Не удалось загрузить услугу. Обновите страницу.","uz":"Xizmatni yuklab bo'lmadi. Sahifani yangilang."},
+  "Услуга не найдена — обновите список.": {"en":"Service not found — refresh the list.","ru":"Услуга не найдена — обновите список.","uz":"Xizmat topilmadi — ro'yxatni yangilang."},
   // Сообщения rpc service_save — приходят с сервера и попадают в toast(),
   // который переводит централизованно; ключи должны совпадать дословно.
   "Укажите название услуги.": {"en":"Enter the service name.","ru":"Укажите название услуги.","uz":"Xizmat nomini kiriting."},
@@ -9744,6 +9747,13 @@ export const STRINGS = {
   "Подходящих скидок нет": {"en": "No applicable discounts", "ru": "Подходящих скидок нет", "uz": "Mos chegirmalar yo'q"},
   "на выбранные услуги": {"en": "for selected services", "ru": "на выбранные услуги", "uz": "tanlangan xizmatlarga"},
   "Скидка группы «{name}» — {pct}% подставлена; можно изменить.": {"en": "Group discount «{name}» — {pct}% is pre-filled; you can change it.", "ru": "Скидка группы «{name}» — {pct}% подставлена; можно изменить.", "uz": "«{name}» guruh chegirmasi — {pct}% qo'yildi; o'zgartirish mumkin."},
+  // DISCOUNT_HINT_TRUE_V1 — подсказка о скидке группы по выбранной скидке (discount-choice.js groupHint)
+  "Скидка группы «{name}» ({pct}%) не применена — выбрано «Без скидки».": {"en":"Group discount «{name}» ({pct}%) is not applied — «Without discount» is selected.","ru":"Скидка группы «{name}» ({pct}%) не применена — выбрано «Без скидки».","uz":"«{name}» guruh chegirmasi ({pct}%) qo'llanmadi — «Chegirmasiz» tanlangan."},
+  "Скидка группы «{name}» (по услугам) не применена — выбрано «Без скидки».": {"en":"Group discount «{name}» (by service) is not applied — «Without discount» is selected.","ru":"Скидка группы «{name}» (по услугам) не применена — выбрано «Без скидки».","uz":"«{name}» guruh chegirmasi (xizmatlar bo'yicha) qo'llanmadi — «Chegirmasiz» tanlangan."},
+  "Скидка группы «{name}» ({pct}%) не применена — выбран промокод, скидки не складываются.": {"en":"Group discount «{name}» ({pct}%) is not applied — a promo code is selected; discounts do not add up.","ru":"Скидка группы «{name}» ({pct}%) не применена — выбран промокод, скидки не складываются.","uz":"«{name}» guruh chegirmasi ({pct}%) qo'llanmadi — promokod tanlangan, chegirmalar qo'shilmaydi."},
+  "Скидка группы «{name}» (по услугам) не применена — выбран промокод, скидки не складываются.": {"en":"Group discount «{name}» (by service) is not applied — a promo code is selected; discounts do not add up.","ru":"Скидка группы «{name}» (по услугам) не применена — выбран промокод, скидки не складываются.","uz":"«{name}» guruh chegirmasi (xizmatlar bo'yicha) qo'llanmadi — promokod tanlangan, chegirmalar qo'shilmaydi."},
+  "Скидка группы «{name}» — {pct}%: меньше неё счёт не даст.": {"en":"Group discount «{name}» — {pct}%: the invoice will not give less than that.","ru":"Скидка группы «{name}» — {pct}%: меньше неё счёт не даст.","uz":"«{name}» guruh chegirmasi — {pct}%: hisob bundan kam chegirma bermaydi."},
+  "Скидка группы «{name}» — по услугам (по умолчанию {pct}%): меньше неё счёт не даст.": {"en":"Group discount «{name}» — by service (default {pct}%): the invoice will not give less than that.","ru":"Скидка группы «{name}» — по услугам (по умолчанию {pct}%): меньше неё счёт не даст.","uz":"«{name}» guruh chegirmasi — xizmatlar bo'yicha (odatiy {pct}%): hisob bundan kam chegirma bermaydi."},
   "Скидка только для другой группы пациентов.": {"en": "This discount is for another patient group.", "ru": "Скидка только для другой группы пациентов.", "uz": "Bu chegirma boshqa bemor guruhi uchun."},
   "Скидка действует на другие услуги — в смете их нет.": {"en": "This discount covers other services — none of them is in the estimate.", "ru": "Скидка действует на другие услуги — в смете их нет.", "uz": "Bu chegirma boshqa xizmatlarga amal qiladi — smetada ular yo'q."},
   "Здоровье и экстренная связь": {"en": "Health and emergency contact", "ru": "Здоровье и экстренная связь", "uz": "Salomatlik va favqulodda aloqa"},

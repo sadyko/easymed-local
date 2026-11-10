@@ -2215,21 +2215,43 @@ export function openServicePickerModal({
     function paintCatalog() {
         if (!catListEl || !catListEl.isConnected) { if (!catListEl) return; }
         paintCatCtx(); paintCatGroups(); paintCatList(); paintCatRail();
+        refreshTierQuotes();   // VISIT_TIER_ON_JOIN_V1 — день визита мог смениться (время, «Ближайшее»)
     }
 
     // VISIT_TIER_PRICING_V1 — after a patient is attached or a service added:
     // ask the server which tier each catalog service is on for this patient and
     // put the answer on the cart. A newer answer supersedes an older one
     // (_tierSeq); an older server without the RPC leaves catalog prices alone.
+    //
+    // VISIT_TIER_ON_JOIN_V1 (3.23.0) — котировка на ДЕНЬ ВИЗИТА, а не на сегодня.
+    // Цена второго/повторного визита зависит от дней между прошлым визитом и ЭТИМ;
+    // калькулятор спрашивал без дня (сервер брал сегодня), а строку писал на день
+    // записи: прошлый визит 2 дня назад, окно 3–5, запись на завтра — писал
+    // «первичный» (80 000 вместо 20 000); прошлый 5 дней назад — «второй» на визит
+    // после окна (20 000 вместо 80 000). Ярус строки — то, по чему касса выставляет
+    // счёт. Теперь день — cartVisitDateIso (тот же, на который ляжет визит и строки);
+    // окно на существующем визите (attachMode + visitId) — ещё и visit_id: строки
+    // самого визита не «прошлый визит» (как у кассы, billing.js quoteTier, и у
+    // кабинета врача). Спрашивается заново, когда меняется пациент, набор услуг
+    // или день визита; пациента отвязали — ответ забыт (привязали снова — спросим).
     let _tierSeq = 0;
+    let _tierSig = '';
     async function refreshTierQuotes() {
         const p = refs.attachedPatient;
-        if (!p || !p.id) { resetQuotes(state.added); return; }
+        if (!p || !p.id) { _tierSig = ''; resetQuotes(state.added); return; }
         const ids = quotableIds(state.added);
-        if (!ids.length) return;
+        if (!ids.length) { _tierSig = ''; return; }
+        const day = localDayOf(cartVisitDateIso());
+        const onVisit = attachMode && visitId != null && visitId !== '' && Number(visitId) > 0 ? Number(visitId) : null;
+        const sig = [p.id, day, onVisit || '', [...ids].sort((a, b) => a - b).join(',')].join('|');
+        if (sig === _tierSig) return;
+        _tierSig = sig;
         const seq = ++_tierSeq;
+        const args = { patient_id: p.id, service_ids: ids };
+        if (day) args.date = day;
+        if (onVisit) args.visit_id = onVisit;
         let res = null;
-        try { res = await supabase.rpc('service_price_quote', { patient_id: p.id, service_ids: ids }); } catch (_) { return; }
+        try { res = await supabase.rpc('service_price_quote', args); } catch (_) { return; }
         if (seq !== _tierSeq) return;
         if (!res || res.error || !res.data || !res.data.quotes) return;
         applyQuotes(state.added, res.data.quotes);
