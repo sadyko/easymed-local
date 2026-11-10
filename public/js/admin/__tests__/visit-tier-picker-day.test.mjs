@@ -331,4 +331,46 @@ test('окно визита на ЗАВТРА: в визите уже есть �
     assert.deepEqual(smetaLine(), { chip: null, price: 80000 }, 'строка самого визита стала «прошлым визитом»');
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Кабинет врача (ревью потока G): каталог приёма — attachMode без брони времени, день и
+// визит приёма. Приём 3 дня назад: смета — на день приёма, строки самого приёма не в счёт.
+// Строку пишет addOwnService (visit-tier-cabinet.test.mjs) — той же котировкой.
+// ═══════════════════════════════════════════════════════════════════════════
+async function openCabinetPicker(visitDaysAgo) {
+    const at = dayAt(-visitDaysAgo, 10, 0);
+    const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, created_by) VALUES (3, ?, 5, 'arrived', 1)").run(at.toISOString()).lastInsertRowid);
+    forgetSlots();
+    BODY.children.length = 0; TOASTS.length = 0; QUOTES.length = 0;
+    const picks = [];
+    openServicePickerModal({
+        attachMode: true, requireSlot: false, title: 'Добавить услуги к приёму', ctaLabel: 'Добавить к приёму',
+        patient: PATIENT, visitDoctorId: 5, defaultPerformerId: 5, packageDay: at.toISOString(), visitId: vid,
+        onPick: async (p) => { picks.push(p); },
+    });
+    await until(() => addOf('УЗИ брюшной полости'), 'строка УЗИ в каталоге');
+    addOf('УЗИ брюшной полости').click();
+    await until(ctaReady, 'смета готова');
+    await settle(200);
+    return { vid, at, picks };
+}
+
+test('кабинет: приём 3 дня назад, прошлый УЗИ 7 дней назад (к приёму 4 дня) — смета «Второй визит» 20 000, onPick — «второй», 20 000', { skip: TZ_SPLIT }, async () => {
+    seed();
+    pastUzi(7);
+    const { vid, at, picks } = await openCabinetPicker(3);
+    assert.deepEqual(smetaLine(), { chip: 'Второй визит', price: 20000 });
+    const q = QUOTES[QUOTES.length - 1];
+    assert.deepEqual([q.date, Number(q.visit_id)], [ymd(at), vid]);
+    byClass(top(), 'wzc-cta')[0].click();
+    await until(() => picks.length > 0, 'onPick не позван');
+    assert.deepEqual([picks[0].price_tier, picks[0].unit_price], ['secondary', 20000]);
+});
+
+test('кабинет: приём 3 дня назад, прошлый УЗИ 4 дня назад (к приёму 1 день) — смета первичный, 80 000', { skip: TZ_SPLIT }, async () => {
+    seed();
+    pastUzi(4);
+    await openCabinetPicker(3);
+    assert.deepEqual(smetaLine(), { chip: null, price: 80000 });
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });
