@@ -21,86 +21,49 @@
 //
 // Модуль не знает про экраны (нет DOM, нет тостов) — только про базу.
 import { supabase } from '../supabase.js';
-// CRM_LINKS_V1 — ступени берутся ПО ВИДУ из настроенной воронки (миграция 077),
-// а не по сидовым именам: клиника вправе переименовать колонку и завести свою.
-import { crmStageKeys } from './crm-stages.js';
 
 /**
  * ЧТО ЖДЁТ ЭТОГО ПАЦИЕНТА В ЭТОТ ДЕНЬ — одно чтение на оба мастера.
  *
- * Два шага, потому что отбор идёт по РОДИТЕЛЮ (пациент, живая ступень) и по
- * РЕБЁНКУ (дата, 'pending'), а компилятор запроса фильтрует только базовую
- * таблицу. Копия этого чтения стояла и в мастере записи, и в каталоге услуг, и
- * копии уже разошлись: одна молча отдавала пустоту при отказе сервера, вторая
- * нет; у одной в выборке не было doctor_id, из-за чего услуга с requires_doctor
- * не доходила до сметы. Два ответа на один вопрос — это две разные кнопки.
+ * Копия этого чтения стояла и в мастере записи, и в каталоге услуг, и копии уже
+ * разошлись: одна молча отдавала пустоту при отказе сервера, вторая нет; у одной в
+ * выборке не было doctor_id, из-за чего услуга с requires_doctor не доходила до
+ * сметы. Два ответа на один вопрос — это две разные кнопки.
+ *
+ * CRM_DAY_LINES_V1 (3.23.0) — ЧТЕНИЕ СПРАШИВАЕТ СЕРВЕР (RPC crm_day_lines,
+ * server/services/rpc/crm-day-lines.js). Владелец: «the booked patients cannot be
+ * seen in the registrar when adding services». Прежде здесь было два чтения
+ * /api/db — карточки пациента в открытых колонках и «Пришёл», затем их строки
+ * дня, — и на /api/db действует ограничение CRM по хозяину: карточку, взятую
+ * оператором «в работу», и карточку в «Не пришёл» регистратура не видела, а
+ * сервер их строки в визит сажал (crm/visit-link.js шаг A). Теперь правило одно —
+ * сервера: открытые колонки, конверсия и колонка с ролью «не пришёл», без
+ * ограничения по хозяину; в ответе только услуга, врач и дата строки.
+ *
+ * CRM_REAL_BOOKING_V1 — `visitId`: ЧЕЙ ЭТО ВИЗИТ, ЕСЛИ ОН УЖЕ ИЗВЕСТЕН. Окно,
+ * открытое НА КОНКРЕТНОМ визите, подставляет строки ИМЕННО ЭТОГО приёма; ни одна
+ * строка на него не ссылается — весь день. V3120_FIX — одна услуга — одна строка.
+ * Оба правила — у сервера (public/js/shared/crm-day-lines.js pickDayLines).
  *
  * БРОСАЕТ при отказе сервера, а не отдаёт пустой список: пустая смета
- * неотличима от «записей нет», и именно это стоило трёх кругов отладки (сервер
- * не перезапущен после добавления таблицы в реестр — таблица есть, процесс о
- * ней не знает). Что именно отказало, называет `.where`: 'requests' | 'lines'.
+ * неотличима от «записей нет», и именно это стоило трёх кругов отладки. Что
+ * отказало, называет `.where` ('lines').
  *
- * CRM_REAL_BOOKING_V1 — `visitId`: ЧЕЙ ЭТО ВИЗИТ, ЕСЛИ ОН УЖЕ ИЗВЕСТЕН. Запись
- * колл-центра держит настоящий слот, и строка знает свой визит. Окно, открытое
- * НА КОНКРЕТНОМ визите, обязано подставлять в смету строки ИМЕННО ЭТОГО приёма:
- * у пациента, записанного в один день к двум врачам, визит дня один, а строк
- * две, и вторая ждёт своей очереди, а не этой сметы. Визит неизвестен (смета
- * собирается ДО визита — мастер, запись из календаря) или ни одна строка на
- * него не ссылается (её записали не через слот) — отдаём весь день, как
- * раньше: сузить до пустоты хуже, чем предложить лишнее.
- *
- * @returns {Promise<Array<{id, request_id, service_id, scheduled_date, status, doctor_id, visit_id}>>}
+ * @returns {Promise<Array<{id, service_id, consultation_type_id, scheduled_date, doctor_id, visit_id}>>}
  */
 export async function pendingCrmLines(patientId, dayIso, visitId = null) {
     const day = String(dayIso || '').slice(0, 10);
     // Без дня сверять дату строки не с чем — молчим, а не берём что попало.
     if (!patientId || !day) return [];
-    const fail = (where, msg) => { const e = new Error(String(msg)); e.where = where; return e; };
-
-    // CRM_UNIFY_V1 (ревью задачи 3, R3) — живые И закрытые в конверсию
-    // («Пришёл»): первый приход закрывает карточку, а её строка другого дня
-    // остаётся записью и должна дойти до сметы своего дня. Проигрышные — нет.
-    const { open, won } = await crmStageKeys();
-    const live = [...new Set([...open, won].filter(Boolean))];
-    if (!live.length) return [];
-    const { data: reqs, error: reqErr } = await supabase.from('crm_requests')
-        .select('id').eq('patient_id', patientId).in('status', live);
-    if (reqErr) throw fail('requests', reqErr.message || reqErr);
-    if (!reqs || !reqs.length) return [];
-
-    const { data: lines, error: lineErr } = await supabase.from('crm_request_services')
-        .select('id, request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id')
-        .in('request_id', reqs.map((r) => r.id))
-        .eq('scheduled_date', day)
-        .eq('status', 'pending');
-    if (lineErr) throw fail('lines', lineErr.message || lineErr);
-    const all = dedupeCrmLines(lines || [], visitId);
-    if (!visitId) return all;
-    const mine = all.filter((l) => String(l.visit_id || '') === String(visitId));
-    return mine.length ? mine : all;
-}
-
-/**
- * V3120_FIX — ОДНА УСЛУГА — ОДНА СТРОКА В СМЕТЕ. Две карточки одного человека
- * (оператор не заметил первую) дают две ждущие строки «консультация у Иванова
- * на этот день», и мастер подставлял в смету обе — двойной счёт. Ключ — услуга
- * и врач (как у зеркала записи, booking-mirror.js matchKey). Из одинаковых
- * остаётся строка ЭТОГО визита, иначе самая ранняя.
- */
-function dedupeCrmLines(lines, visitId = null) {
-    const byKey = new Map();
-    const mine = (x) => visitId != null && String(x.visit_id || '') === String(visitId);
-    for (const l of lines || []) {
-        // V3120_FINAL — консультация по виду приёма (service_id NULL, миграция
-        // 188) — такая же услуга: две карточки «приём у Иванова» давали две строки.
-        const svcKey = l.service_id != null ? 's:' + l.service_id
-            : (l.consultation_type_id != null ? 'c:' + l.consultation_type_id : null);
-        if (svcKey == null) { byKey.set('#' + l.id, l); continue; }   // без услуги сравнивать нечего
-        const k = svcKey + '|d:' + (l.doctor_id || '');
-        const had = byKey.get(k);
-        if (!had || (mine(l) && !mine(had))) byKey.set(k, l);
+    const { data, error } = await supabase.rpc('crm_day_lines', {
+        patient_id: patientId, day, visit_id: visitId == null || visitId === '' ? null : visitId,
+    });
+    if (error) {
+        const e = new Error(String(error.message || error));
+        e.where = 'lines';
+        throw e;
     }
-    return [...byKey.values()];
+    return Array.isArray(data) ? data : [];
 }
 
 // ЗДЕСЬ БЫЛА closeCrmLinesForPatient(patientId, dayIso) — «закрыть все

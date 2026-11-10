@@ -119,6 +119,8 @@ const READ_ONLY_RPCS = new Set([
   'my_referrals',
   // CRM_LINK_ALL_V1 (редакция 2) — «Записи пациента» карточки (crm_card_bookings) — чтение.
   'crm_card_bookings',
+  // CRM_DAY_LINES_V1 — строки заявок для сметы дня регистратуры — чтение.
+  'crm_day_lines',
   // CUSTDEV_V1 — доска и отчёт по обзвону. Чистое чтение. Клиника с
   // просроченной лицензией читает, но не пишет, и «читает» не должно означать
   // «пустой экран вместо доски». Оценка (custdev_rate/custdev_mark) и

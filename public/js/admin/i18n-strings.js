@@ -404,6 +404,8 @@ export const STRINGS = {
   "Колонка «{label}» — колонка подтверждения: сначала передайте роль другой колонке.": {"en":"Column «{label}» is the confirmation column: first give the role to another column.","ru":"Колонка «{label}» — колонка подтверждения: сначала передайте роль другой колонке.","uz":"«{label}» ustuni — tasdiqlash ustuni: avval rolni boshqa ustunga bering."},   // CRM_STAGE_ROLES_V1
   "Колонка «{label}» — колонка «Не пришёл»: сначала передайте роль другой колонке.": {"en":"Column «{label}» is the «No-show» column: first give the role to another column.","ru":"Колонка «{label}» — колонка «Не пришёл»: сначала передайте роль другой колонке.","uz":"«{label}» ustuni — «Kelmadi» ustuni: avval rolni boshqa ustunga bering."},   // CRM_STAGE_ROLES_V1
   "Неизвестная роль у колонки «{key}».": {"en":"Unknown role on column «{key}».","ru":"Неизвестная роль у колонки «{key}».","uz":"«{key}» ustunida noma'lum rol."},   // CRM_STAGE_ROLES_V1
+  // CRM_DAY_LINES_V1 (3.23.0) — строки заявок для сметы дня (rpc/crm-day-lines.js)
+  "День указан неверно.": {"en":"The day is invalid.","ru":"День указан неверно.","uz":"Kun noto‘g‘ri ko‘rsatilgan."},   // CRM_DAY_LINES_V1
   // CLINIC_API_FIX_V1 (ревью 5) — окно импорта: отдельное предложение в сообщении о полном отказе (views/section-import-export.js)
   "Не импортировано (ошибки в файле): {n}.": {"en":"Not imported (errors in the file): {n}.","ru":"Не импортировано (ошибки в файле): {n}.","uz":"Import qilinmadi (fayldagi xatolar): {n}."},   // CLINIC_API_FIX_V1
   // CLINIC_API_FIX_V1 (ревью 5) — импорт услуг: без колонки цены визита пустые дни ничего не меняют (views/section-import-export.js)
