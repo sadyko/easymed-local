@@ -2970,7 +2970,8 @@ async function paint() {
                     // который разговаривает по телефону. `token` отсекает
                     // опоздавший ответ: врача и дату успевают сменить дважды,
                     // пока едет первый.
-                    const timeCell = h('div', { style: { width: '150px', maxWidth: '100%', flex: '0 0 auto' } });
+                    // CRM_JOIN_NOT_MOVE_V1 — шире прежних 150 px: «Перенести запись на 10:40» и пометка под списком.
+                    const timeCell = h('div', { style: { width: '190px', maxWidth: '100%', flex: '0 0 auto' } });
                     const note = (t) => h('div', { class: 'muted', style: { fontSize: '12.5px' } }, t);
                     let token = 0;
                     const paintTime = async () => {
