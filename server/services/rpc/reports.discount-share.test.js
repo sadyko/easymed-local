@@ -117,10 +117,15 @@ test('DISCOUNT_CHANGE_PAID_V1: скидку подняли после оплат
     assert.deepEqual([r.refunded, r.total_after], [30000, 60000]);
     assert.equal(r.share_after, reduces === false ? 0.25 : 1);
     perform(db, vs);
-    const l = lineOf(db);
+    // День визита и отчёта — по часам базы (SQLite), а не JS: проверка проходит и поздним вечером
+    // (tz-late двигает только часы JS).
+    const day = db.prepare("SELECT date('now', 'localtime') d").get().d;
+    db.prepare("UPDATE visits SET visit_date = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(vid);
+    db.prepare("UPDATE invoices SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(inv.id);
+    const l = performedPayLines(db, { from: day, to: day }).find((x) => x.doctor_id === 20);
     assert.equal(round(l.doctor_fee), fee, 'переключатель: ' + reduces);
     assert.deepEqual([round(l.amount), round(l.discount), round(l.net)], [100000, 40000, 60000], 'деньги отчёта — деньги счёта');
-    const rep = RPC.run_report(db, { kind: 'total_revenue', from: DAY, to: DAY }, admin);
+    const rep = RPC.run_report(db, { kind: 'total_revenue', from: day, to: day }, admin);
     const col = (row, name) => row[rep.columns.indexOf(name)];
     const row = rep.rows.find((x) => col(x, 'Услуга') === 'Консультация');
     assert.equal(col(row, 'Скидка'), 40000);
