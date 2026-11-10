@@ -2086,10 +2086,13 @@ function logActionTag(action) {
         // REFUND_ANY_V1 (ревью B5) — возврат одной услуги (refund_invoice_line):
         // словами экрана («Услуга возвращена»), а не кодом действия.
         refund_line: { kind: 'crit', text: REFUNDED_LINE_MARK },
+        // DISCOUNT_CHANGE_PAID_V1 — «Изменить скидку» после оплаты: словами экрана, а не кодом.
+        discount_change: { kind: 'warn', text: 'Изменение скидки' },
     };
     const m = map[action] || { kind: 'muted', text: action };
     return h('span', { class: 'tag tag-' + m.kind }, m.text);
 }
+export const __test_logActionTag = logActionTag;   // DISCOUNT_CHANGE_PAID_V1 — подпись действия журнала счёта
 
 function formatDateTime(iso) {
     if (!iso) return '—';

@@ -147,7 +147,11 @@ test('«Возвраты и отмены» кассы: возврат разни
   const row = call('cashier_refunds', db, {}).rows.find((x) => x.invoice_id === v.id);
   assert.ok(row, 'счёт с возвратом разницы не в списке');
   assert.deepEqual(row.refunds.map((x) => [x.kind, x.amount]), [['discount', 60000]]);
-  assert.ok(row.events.some((e) => e.action === 'discount_change'), 'нет события «Изменение скидки»');
+  // Ревью R13 — список по деньгам: изменение скидки, которое денег не вернуло (скидку только
+  // снизили), сюда не попадает.
+  const w = paid20(db);
+  change(db, w.id, { mode: 'pct', value: 10 });
+  assert.equal(call('cashier_refunds', db, {}).rows.find((x) => x.invoice_id === w.id), undefined, 'снизили скидку — денег не возвращали, а счёт в «Возвратах и отменах»');
 });
 
 test('«На баланс пациента»: наличные из кассы не выходят, разница — на баланс', () => {

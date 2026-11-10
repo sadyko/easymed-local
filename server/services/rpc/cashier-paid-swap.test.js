@@ -422,7 +422,7 @@ test('DISCOUNT_CHANGE_PAID_V1: замена и изменение скидки �
   const row = call('cashier_refunds', db, { from: today, to: today }, plain).rows.find((r) => r.invoice_id === a.invoiceId);
   assert.deepEqual(row.refunds.map((x) => [x.kind, x.amount]), [['swap', 70000], ['discount', 20000]]);
   assert.match(row.refunds[1].reason, /^Изменение скидки — возврат разницы: жалоба$/);
-  assert.deepEqual(row.events.map((e) => e.action), ['line_swap_paid', 'discount_change']);
+  assert.deepEqual(row.events.map((e) => e.action), ['line_swap_paid'], 'изменение скидки — в списке своим возвратом, а не событием (ревью R13)');
   // Скидка счёта переживает следующую замену в той же доле (ручная часть «как её дали»).
   call('cashier_line_swap_paid', db, { visit_service_id: a.vs, new_service_id: CONS }, cashier);
   assert.deepEqual([inv(db, a.invoiceId).discount_amount, inv(db, a.invoiceId).total_amount], [20000, 130000], 'цена DOC 150 000; скидка — прежние 20 000 (база выросла — не больше данной суммы)');

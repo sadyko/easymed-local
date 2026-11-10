@@ -459,3 +459,12 @@ test('ревью B5, п. 8: счёт чужого здания — касса н
   assert.equal(rpcCalls('cashier_invoice_search').length, 2);
   document.body.children.length = 0;
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (ревью R13) — журнал счёта в окне визита называет «Изменить скидку»
+// словами экрана («Изменение скидки»), а не кодом действия discount_change.
+test('DISCOUNT_CHANGE_PAID_V1: журнал счёта — «Изменение скидки», а не код discount_change', () => {
+  const tag = VM.__test_logActionTag('discount_change');
+  const text = textOf(tag);
+  assert.equal(text, tr('Изменение скидки'));
+  assert.ok(!text.includes('discount_change'));
+});
