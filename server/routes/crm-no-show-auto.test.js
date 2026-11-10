@@ -68,6 +68,68 @@ function hourly(t, day = NEXT) {
   return crmNoShowSweep(t.db, { day });
 }
 
+test('1. сидовая воронка: записан из карточки, день записи прошёл — проход ставит «Не пришёл», ровно один раз', async () => {
+  const t = await startCrmApp();
+  try {
+    const A = await newCard(t);
+    await bookCard(t, A);
+    assert.equal(st(t, A), 'scheduled', 'запись из карточки не перевела её в колонку записи');
+    assert.deepEqual(hourly(t, D), [], 'в сам день записи проход не трогает');
+    assert.equal(st(t, A), 'scheduled');
+    assert.deepEqual(hourly(t), [A]);
+    assert.equal(st(t, A), 'no_show');
+    assert.deepEqual(hourly(t), [], 'второй проход снова «поставил» карточку');
+    assert.equal(st(t, A), 'no_show');
+  } finally { t.close(); }
+});
+
+test('2. настройка владельца (снимок 65): «запись» — «Перезвонить», «подтверждение» — «Записан», «не пришёл» — «Не пришёл»', async () => {
+  const t = await startCrmApp();
+  try {
+    assert.deepEqual(await setRoles(t, { recall: 'booked', scheduled: 'confirmed', approved: null }),
+      { booked: 'recall', confirmed: 'scheduled', no_show: 'no_show' });
+    const A = await newCard(t);
+    const vA = await bookCard(t, A);
+    assert.equal(st(t, A), 'recall', 'запись из карточки — в колонку с ролью «запись»');
+    // Отметка «Подтверждён» в календаре — в колонку с ролью «подтверждение».
+    const c = await t.rpc('calendar_book', 'reg', { visit_id: vA, start: at(D, 11), status: 'confirmed' });
+    assert.equal(c.status, 200, c.text);
+    assert.equal(st(t, A), 'scheduled');
+    assert.deepEqual(hourly(t), [A]);
+    assert.equal(st(t, A), 'no_show', 'подтверждённый и не пришедший — не в «Не пришёл»');
+    assert.deepEqual(hourly(t), []);
+  } finally { t.close(); }
+});
+
+// Вопрос координатора: при «записи» на «Перезвонить» обычная карточка обратного звонка с прошедшей
+// датой и без записи — уходит ли проходом в «Не пришёл»? Ответ теста: ДА, если у карточки есть
+// пациент и дата звонка (карточка «на дату»: проход читает «Перезвонить» как колонку записи, а
+// дату звонка — как день приёма; в этот день пациент не приходил). Карточку без пациента или без
+// даты проход не трогает никогда. При сидовой воронке («запись» — «Записан») такая карточка
+// «Перезвонить» не трогается (no-show.test.js «Перезвонить» и всё до «Колонки записи»).
+test('2б. настройка владельца: карточка «Перезвонить» с прошедшей датой звонка, без записи — уходит в «Не пришёл», если у неё есть пациент', async () => {
+  const t = await startCrmApp();
+  try {
+    await setRoles(t, { recall: 'booked', scheduled: 'confirmed', approved: null });
+    const callBack = addLead(t.db, { status: 'recall', date: localDay(-1), name: 'Пациент Тест' });
+    const noPatient = addLead(t.db, { status: 'recall', date: localDay(-1), patient: null, name: 'Звонивший' });
+    const noDate = addLead(t.db, { status: 'recall', name: 'Пациент Тест' });
+    assert.deepEqual(crmNoShowSweep(t.db), [callBack]);
+    assert.equal(st(t, callBack), 'no_show', 'карточка обратного звонка с пациентом и прошедшей датой');
+    assert.equal(st(t, noPatient), 'recall', 'карточка без пациента');
+    assert.equal(st(t, noDate), 'recall', 'карточка без даты');
+  } finally { t.close(); }
+});
+
+test('2в. сидовая воронка: та же карточка «Перезвонить» с прошедшей датой проходом не трогается', async () => {
+  const t = await startCrmApp();
+  try {
+    const callBack = addLead(t.db, { status: 'recall', date: localDay(-1), name: 'Пациент Тест' });
+    assert.deepEqual(crmNoShowSweep(t.db), []);
+    assert.equal(st(t, callBack), 'recall');
+  } finally { t.close(); }
+});
+
 test('3. CRM_NO_SHOW_ANY_COLUMN_V1: «не пришёл» на открытой колонке — пропущенная запись уходит туда ровно один раз; новая запись возвращает в колонку записи', async () => {
   const t = await startCrmApp();
   try {
