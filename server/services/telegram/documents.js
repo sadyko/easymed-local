@@ -20,6 +20,10 @@ import { digitsOf, uzLocalDigits, phoneLikePattern, MIN_PHONE_DIGITS } from '../
 import { matchResultsToAnalytes, labRefText, namedRangeCell, labFlagCell, labPosFor, ageYears,
          labAccession, labIssueDates, labMaxDate }
     from '../../../public/js/admin/views/lab-doc.js';
+// TG_LAB_MATRIX_V1 (3.23.0) — посев (панель-таблица) уходит в бот таблицей, а
+// значение прибора — с тем же округлением, что на бумаге (LAB_ROUND_V1).
+import { matrixGroupPart } from '../../../public/js/shared/lab-matrix.js';
+import { labShownValue, labRoundOn } from '../../../public/js/shared/lab-round.js';
 
 export { digitsOf };
 
@@ -202,15 +206,24 @@ function buildLab(db, vsid, patient) {
   const age = ageYears(patient.date_of_birth);
   const svcFallback = (head.s_lo != null || head.s_hi != null || head.s_tx)
     ? { ref_low: head.s_lo, ref_high: head.s_hi, ref_text: head.s_tx } : null;
+  // TG_LAB_MATRIX_V1 — значение прибора — по настройке «Округлять результаты
+  // анализаторов до 2 знаков» (doc_settings.lab_round_analyzer), как в
+  // лаборатории, карте пациента и «Документах»; ручной ввод — как набран.
+  let roundOn = true;
+  try {
+    const st = db.prepare('SELECT lab_round_analyzer FROM doc_settings WHERE id = 1').get();
+    roundOn = labRoundOn(st && st.lab_round_analyzer);
+  } catch { roundOn = true; }
 
   const tests = rows.map((r, ri) => {
     const analyte = byOrder[ri] || svcFallback;
     const named = namedRangeCell(analyte, gender, age);
     const manyRanges = named.count >= 2;
+    const shown = labShownValue(r, roundOn);   // TG_LAB_MATRIX_V1
     return {
       name: (r.parameter || '').trim() || '—',
       code: '',
-      value: r.value == null ? '' : String(r.value),
+      value: shown == null ? '' : String(shown),
       unit: r.unit || (analyte && analyte.unit) || '',
       ref: labRefText(analyte, named.marked ? '' : gender, r.reference_range, named.texts),
       // Флаг только у числа; при двух и более диапазонах не ставится вовсе —
@@ -219,6 +232,19 @@ function buildLab(db, vsid, patient) {
       pos: manyRanges ? null : labPosFor(r),
     };
   });
+
+  // TG_LAB_MATRIX_V1 (3.23.0) — панель-таблица (бак. посев) печатается таблицей:
+  // активная панель услуги и та же часть группы, что у печати в браузере
+  // (shared/lab-matrix.js matrixGroupPart). Обычная, снятая с работы или
+  // испорченная панель — {}: бланк списком, как прежде. Сбой чтения документ не
+  // роняет — пациент получит список.
+  let matrixPart = {};
+  if (head.service_id != null) {
+    try {
+      const panel = db.prepare('SELECT kind, matrix_json FROM lab_panels WHERE service_id = ? AND active = 1').get(head.service_id);
+      matrixPart = matrixGroupPart(panel, rows.map((r) => ({ parameter: r.parameter, value: r.value })));
+    } catch { matrixPart = {}; }
+  }
 
   const verifier = db.prepare(
     `SELECT u.full_name FROM lab_results lr LEFT JOIN users u ON u.id = lr.verified_by
@@ -245,7 +271,7 @@ function buildLab(db, vsid, patient) {
       dateOut,
       labChief: (verifier && verifier.full_name) || '',
       labChiefSpec: 'Врач клинической лабораторной диагностики',
-      groups: [{ title: head.service_name + ' · № ' + labAccession(vsid), tests }],
+      groups: [{ title: head.service_name + ' · № ' + labAccession(vsid), tests, ...matrixPart }],   // TG_LAB_MATRIX_V1
     },
   };
 }

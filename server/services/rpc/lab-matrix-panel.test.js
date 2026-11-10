@@ -94,3 +94,19 @@ test('значения ячеек — обычные строки lab_results (s
   assert.equal(matrixAnalytes(matrix).length, 10);
   db.close();
 });
+
+// TG_LAB_MATRIX_V1 (3.23.0) — общая часть группы бланка: одна на лабораторию, карту,
+// «Документы», бот в Telegram и историю болезни.
+test('matrixGroupPart: панель-таблица — { matrix } из результатов; обычная, испорченная, без панели — {}', async () => {
+  const { matrixGroupPart } = await import('../../../public/js/shared/lab-matrix.js');
+  const panel = { kind: 'matrix', matrix_json: JSON.stringify(MATRIX) };
+  const results = [{ parameter: cellName('E. coli', 'Положительный'), value: '+++' }, { parameter: cellName('E. coli', 'Положительный'), value: '' }];
+  const part = matrixGroupPart(panel, results);
+  assert.deepEqual(Object.keys(part), ['matrix']);
+  assert.deepEqual(part.matrix, matrixGrid(panelMatrix(panel), results), 'не та таблица, что у бланка лаборатории');
+  assert.deepEqual(part.matrix.sections[0].rows[0], { name: 'E. coli', cells: ['', ''] }, 'снятая степень (последняя запись) — пустая клетка');
+  assert.deepEqual({ group: 1, ...matrixGroupPart({ kind: '', matrix_json: null }, results) }, { group: 1 });
+  assert.deepEqual(matrixGroupPart({ kind: 'matrix', matrix_json: '{испорчено' }, results), {});
+  assert.deepEqual(matrixGroupPart(null, results), {});
+  assert.deepEqual(matrixGroupPart(undefined, []), {});
+});

@@ -121,3 +121,19 @@ export function matrixGrid(matrix, results) {
     }));
     return { scale: matrix.scale || [...DEFAULT_SCALE], sections, filled };
 }
+
+/**
+ * TG_LAB_MATRIX_V1 (3.23.0) — ЧАСТЬ ГРУППЫ БЛАНКА у панели-таблицы: { matrix } —
+ * таблица посева из результатов; у обычной или испорченной панели (и без панели)
+ * — {}: группа печатается списком, как прежде. Раскладывается в группу:
+ * { title, tests, ...matrixGroupPart(panel, results) }. Одна на все места печати —
+ * лаборатория, карта пациента, «Документы», бот в Telegram, история болезни: бот
+ * собирал группу без таблицы и печатал посев списком «строка · графа ++++».
+ * @param {{kind?:string, matrix_json?:string|object}|null|undefined} panel  строка lab_panels
+ * @param {Array<{parameter:string, value:any}>} results
+ * @returns {{matrix?: ReturnType<typeof matrixGrid>}}
+ */
+export function matrixGroupPart(panel, results) {
+    const matrix = panelMatrix(panel);
+    return matrix ? { matrix: matrixGrid(matrix, results) } : {};
+}
