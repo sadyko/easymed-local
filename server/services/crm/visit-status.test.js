@@ -992,7 +992,8 @@ test('CRM_UNIFY_V1: будущий визит соседнего здания �
 test('F3: приход закрывает карточку без строк, заведённую до визита, и не закрывает заведённую после', () => {
   const db = freshDb();
   const today = db.prepare("SELECT date('now','localtime') AS d").get().d;
-  const vid = Number(addVisit(db, today + 'T05:00:00Z'));
+  // Время визита — 10:00 по местным часам базы: день визита сервер считает SQLite (поздний вечер, tz-late).
+  const vid = Number(addVisit(db, db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?, 'utc') AS t").get(today + ' 10:00:00').t));
   db.prepare("UPDATE visits SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 hour') WHERE id = ?").run(vid);
   const before = Number(addReq(db, { status: 'in_process' }));
   db.prepare("UPDATE crm_requests SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','-2 hours') WHERE id = ?").run(before);
