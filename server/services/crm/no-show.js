@@ -66,7 +66,10 @@
 // над услугой, отметка «Пришёл») когда-то прошло мимо правила прихода.
 //
 // При запуске и раз в час (server/index.js). Не бросает: ошибка — в лог.
-import { openStageKeys, noShowStageKey, scheduledStageKey, wonStageKey, SEED_NO_SHOW_STAGE } from './config.js';   // CRM_UNIFY_V1 (2026-10-10) — wonStageKey
+import { openStageKeys, noShowStageKey, scheduledStageKey, wonStageKey } from './config.js';   // CRM_UNIFY_V1 (2026-10-10) — wonStageKey
+// CRM_STAGE_ROLES_V1 (3.23.0) — «Не пришёл» — колонка с ролью «не пришёл» (отметка в «CRM-канбан»,
+// миграция 284), а не сидовый ключ: проход ставит карточки в неё, догоняющий проход поднимает из
+// неё. Роли нет — проход «Не пришёл» выключен.
 import { arrivedByEvidence } from './booking-mirror.js';
 import { EVIDENCE_SERVICE_STATUSES, crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';   // CRM_UNIFY_V1 (задача 14) — cameSurely; (2026-10-10) — догоняющий проход
 import { localDate, today } from '../domain/day.js';
@@ -196,7 +199,8 @@ function presentOn(db) {
 export function crmNoShowSweep(db, { day = null } = {}) {
   const moved = [];
   try {
-    if (noShowStageKey(db) !== SEED_NO_SHOW_STAGE) return moved;
+    const noShow = noShowStageKey(db);   // CRM_STAGE_ROLES_V1 — роль колонки; нет — проход выключен
+    if (!noShow) return moved;
     const open = openStageKeys(db);
     const booked = scheduledStageKey(db);
     const waiting = booked && open.includes(booked) ? open.slice(open.indexOf(booked)) : [];
@@ -237,7 +241,7 @@ export function crmNoShowSweep(db, { day = null } = {}) {
           const d = String(L.scheduled_date || '').slice(0, 10);
           miss = !!d && d < d0 && !cameOn(L.patient_id, d) && !cancelledOn.get(L.patient_id, d);
         }
-        if (miss && write.run(SEED_NO_SHOW_STAGE, L.id, L.status).changes) moved.push(L.id);
+        if (miss && write.run(noShow, L.id, L.status).changes) moved.push(L.id);
       }
     })();
   } catch (e) {
@@ -281,7 +285,7 @@ export function crmArrivalCatchUp(db) {
   const done = [];
   try {
     const won = wonStageKey(db);
-    const from = [...new Set([...openStageKeys(db), SEED_NO_SHOW_STAGE])].filter((k) => k !== won);
+    const from = [...new Set([...openStageKeys(db), noShowStageKey(db)].filter(Boolean))].filter((k) => k !== won);   // CRM_STAGE_ROLES_V1
     if (!from.length) return done;
     let links = true;
     try { db.prepare('SELECT 1 FROM crm_booking_links LIMIT 1').get(); } catch { links = false; }   // сборка без 187

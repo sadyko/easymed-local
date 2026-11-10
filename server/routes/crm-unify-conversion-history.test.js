@@ -39,12 +39,15 @@ function assertHistory(db, id, won) {
   assert.equal(r.scheduled_date, '2025-05-01', 'дата карточки истории переписана');
   assert.equal(r.updated_at, OLD_UPDATED, 'карточка истории «ожила»: updated_at сдвинут');
 }
+// CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: воронка клиники с ролями, которые ей поставила бы миграция 284
+// (догадка 3.22.0 у этой воронки — колонка записи «Успешно», подтверждения нет). «Записан» с ролью
+// без передачи роли удалить нельзя — поэтому роли едут вместе с колонками.
 const CLINIC = (db) => {
-  const st = (key, label, kind) => ({ key, label, color: '', kind, is_active: 1 });
+  const st = (key, label, kind, role = null) => ({ key, label, color: '', kind, is_active: 1, role });
   saveStages(db, [
     st('in_process', 'Новый лид', 'open'), st('recall', 'Перезвонить', 'open'), st('dozhim', 'Дожим', 'open'),
     st('approved', 'Подтверждён (амбулатор)', 'open'), st('approved_in', 'Подтверждён (стационар)', 'open'),
-    st('no_show', 'Не пришёл', 'lost'), st('uspeshno', 'Успешно', 'open'), st('came', 'Пришёл', 'won'),
+    st('no_show', 'Не пришёл', 'lost', 'no_show'), st('uspeshno', 'Успешно', 'open', 'booked'), st('came', 'Пришёл', 'won'),
     st('stopped', 'Отказ', 'lost'),
   ]);
 };
@@ -99,7 +102,10 @@ test('R3 воронка клиники: без выбора записанные
   // Заметка выката: без явного выбора у клиники записанные по-прежнему уходят в
   // «Успешно» — администратор обязан выбрать «Колонку подтверждения».
   assert.equal(scheduledStageKey(db), 'uspeshno');
-  saveConfig(db, { settings: { won_stage: 'uspeshno' } });
+  // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: колонка записи — роль, конверсия её не пересчитывает; «Успешно»
+  // с ролью «запись» конверсией не станет — роль сначала передают («Подтверждён (стационар)»).
+  assert.throws(() => saveConfig(db, { settings: { won_stage: 'uspeshno' } }), /Колонка записи/);
+  saveConfig(db, { settings: { booked_stage: 'approved_in', won_stage: 'uspeshno' } });
   const cfg = crmConfig(db);
   assert.deepEqual(cfg.stages.filter((s) => s.kind === 'won').map((s) => s.key), ['uspeshno']);
   assert.equal(cfg.stages.find((s) => s.key === 'came').kind, 'open');
@@ -118,6 +124,9 @@ test('R4 отчёт колл-центра не проваливается, ко�
     const a = await rep();
     assert.equal(a.kpi.came, 5);
     assert.deepEqual(a.stale.oldest.map((x) => x.name), ['Живой застрявший']);
+    // CRM_STAGE_ROLES_V1 — роль «запись» сначала у «Подтверждён (стационар)» (R3).
+    const b0 = await t.rpc('crm_config_save', 'boss', { settings: { booked_stage: 'approved_in' } });
+    assert.equal(b0.status, 200, b0.text);
     await moveTo(t, 'uspeshno');
     for (const id of came) assert.equal(t.lead(id).status, 'uspeshno', 'конвертированная карточка не пошла за конверсией');
     const b = await rep();

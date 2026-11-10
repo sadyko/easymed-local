@@ -31,7 +31,9 @@
 // отметке прихода: воронка — это учёт работы колл-центра, а не условие приёма
 // пациента. Любая ошибка попадает в лог и там остаётся.
 
-import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, windowHours, SEED_NO_SHOW_STAGE, confirmedStageKey } from './config.js';   // CRM_UNIFY_V1 — windowHours · CRM_LINK_ALL_V1 — confirmedStageKey
+import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, windowHours, confirmedStageKey } from './config.js';   // CRM_UNIFY_V1 — windowHours · CRM_LINK_ALL_V1 — confirmedStageKey
+// CRM_STAGE_ROLES_V1 (3.23.0) — «Не пришёл», «Колонка записи» и «Колонка подтверждения» — роли
+// колонок (миграция 284): noShowStageKey / scheduledStageKey / confirmedStageKey читают роль.
 // CLINIC_DAY_V1 — «сегодня» и «день визита» — местные дни клиники, теми же
 // словами, какими их считают касса, дневник и документы.
 import { localDate, today } from '../domain/day.js';   // CRM_LINK_ALL_V1 (P-4) — today
@@ -187,6 +189,8 @@ function settleLineless(db, { patientId, day, open, won, write }) {
  */
 function liftMissed(db, { patientId, day, won, write }) {
   if (!patientId) return;
+  const noShow = noShowStageKey(db);   // CRM_STAGE_ROLES_V1 — роли «не пришёл» нет — поднимать неоткуда
+  if (!noShow) return;
   const live = "v.status NOT IN ('cancelled', 'no_show')";
   let links = '';
   try { db.prepare('SELECT 1 FROM crm_booking_links LIMIT 1').get(); links = `
@@ -204,7 +208,7 @@ function liftMissed(db, { patientId, day, won, write }) {
             OR EXISTS (SELECT 1 FROM crm_request_services l JOIN visits v ON v.id = l.visit_id
                         WHERE l.request_id = r.id AND l.status <> 'cancelled' AND ${live}
                           AND ${localDate('v.visit_date')} = date(@day))${links})`)
-    .all({ pid: patientId, missed: SEED_NO_SHOW_STAGE, day, ...missedRecentlyArgs(day, windowHours(db)) });
+    .all({ pid: patientId, missed: noShow, day, ...missedRecentlyArgs(day, windowHours(db), noShow) });
   for (const p of reqs) writeParent(write, p, won, p.scheduled_date);
 }
 
@@ -347,6 +351,7 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false, fromVis
 
     if (ARRIVED_STATUSES.includes(now)) {
       const won = wonStageKey(db);
+      const noShowKey = noShowStageKey(db);   // CRM_STAGE_ROLES_V1 — и из колонки «Не пришёл»
       if (parents.length) {
         // CRM_UNIFY_V1 (проверка ревью задачи 3, N1/P2) — СНАЧАЛА УСЛУГИ:
         // строки, которые визит держит, а в визите их нет (взяли после прихода
@@ -372,7 +377,7 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false, fromVis
         // Р8): строки других дней остаются в карточке и в календаре как записи.
         // Закрываются живые колонки и сидовая «Не пришёл»; «Пришёл», «Отказ» и
         // прочие закрытые не меняются (решение 3).
-        if (!open.includes(p.status) && p.status !== SEED_NO_SHOW_STAGE) continue;
+        if (!open.includes(p.status) && (!noShowKey || p.status !== noShowKey)) continue;   // CRM_STAGE_ROLES_V1
         writeParent(write, p, won, p.scheduled_date);
       }
       // Строго ПОСЛЕ: заявка, у которой строки только что закрылись, уже
@@ -408,8 +413,10 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false, fromVis
       // noShowStageKey() отдаёт первую проигрышную колонку, и у клиники,
       // убравшей сидовую, неявка уносила бы заявку в «Обработка остановлена» —
       // совсем другой факт о ней.
+      // CRM_STAGE_ROLES_V1 — ПЕРЕПИСАНО: колонка с ролью «не пришёл» (отметка в «CRM-канбан»);
+      // запасной догадки больше нет. Роли нет — отметка «Не пришёл» карточку не двигает.
       const noShow = noShowStageKey(db);
-      if (noShow !== SEED_NO_SHOW_STAGE) return;
+      if (!noShow) return;
       // CRM_LINK_ALL_V1 (редакция 2б, P-4) — «НЕ ПРИШЁЛ» ТОЛЬКО БЕЗ ДРУГИХ ЗАПИСЕЙ:
       // карточка уходит в «Не пришёл» по этому визиту, только если у неё нет
       // другой живой записи на сегодня или позже — строкой или привязкой любого

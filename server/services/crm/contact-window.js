@@ -43,7 +43,7 @@
 // deskCloses), ожидание прихода (visit-link.js waitsForDay) и правило прихода
 // (visit-status.js settleLineless). Исходящий звонок — работа оператора, окно
 // его не касается (Р4).
-import { openStageKeys, windowHours, DEFAULT_WINDOW_HOURS, SEED_NO_SHOW_STAGE } from './config.js';
+import { openStageKeys, windowHours, DEFAULT_WINDOW_HOURS, noShowStageKey } from './config.js';   // CRM_STAGE_ROLES_V1 — «Не пришёл» — роль колонки
 import { localDate, today } from '../domain/day.js';   // CRM_UNIFY_V1 (ревью, I-4)
 
 const holes = (a) => a.map(() => '?').join(',');
@@ -80,9 +80,10 @@ export function firstStageKey(db) {
  * CRM_UNIFY_V1 (ревью, I-3) — колонки, в которых карточка ЖИВА для нового
  * обращения: открытые и сидовая «Не пришёл». Закрыты — конверсия и прочие
  * проигрышные («Отказ», «Нецелевой»).
+ * CRM_STAGE_ROLES_V1 — «Не пришёл» — колонка с ролью «не пришёл»; роли нет — только открытые.
  */
 export function liveKeys(db) {
-  return [...new Set([...openStageKeys(db), SEED_NO_SHOW_STAGE])];
+  return [...new Set([...openStageKeys(db), noShowStageKey(db)].filter(Boolean))];
 }
 
 /**
@@ -114,13 +115,17 @@ export function lateDays(hours) {
   const h = Number(hours);
   return Math.max(1, Math.ceil((Number.isFinite(h) && h > 0 ? h : DEFAULT_WINDOW_HOURS) / 24));
 }
-/** SQL: `alias` — сидовая «Не пришёл», пропущенная не раньше окна назад от @lateDay. Параметры — missedRecentlyArgs. */
+/**
+ * SQL: `alias` — в «Не пришёл», пропущенная не раньше окна назад от @lateDay. Параметры — missedRecentlyArgs.
+ * CRM_STAGE_ROLES_V1 — колонка «Не пришёл» — параметр @lateNoShow (колонка с ролью, а не
+ * сидовый ключ); роли нет (NULL) — условие не выполняется никогда.
+ */
 export function missedRecentlySql(alias = 'r') {
-  return `(${alias}.status = '${SEED_NO_SHOW_STAGE}' AND date(${alias}.scheduled_date) BETWEEN date(@lateDay, @lateBack) AND date(@lateDay))`;
+  return `(${alias}.status = @lateNoShow AND date(${alias}.scheduled_date) BETWEEN date(@lateDay, @lateBack) AND date(@lateDay))`;
 }
-/** Параметры missedRecentlySql: день прихода и окно (часы). */
-export function missedRecentlyArgs(day, hours) {
-  return { lateDay: day, lateBack: `-${lateDays(hours)} days` };
+/** Параметры missedRecentlySql: день прихода, окно (часы) и колонка «Не пришёл» (CRM_STAGE_ROLES_V1 — noShowStageKey(db)). */
+export function missedRecentlyArgs(day, hours, noShow = null) {
+  return { lateDay: day, lateBack: `-${lateDays(hours)} days`, lateNoShow: noShow || null };
 }
 
 /**

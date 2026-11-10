@@ -408,9 +408,11 @@ test('CRM_LINKS_V1: своя колонка до «Записан» тоже с�
 // CRM_UNIFY_V1 (задача 5) — граница «зависших» — та же «Колонка записи», что
 // двигает запись и с которой сервер ставит «Не пришёл» (scheduledStageKey;
 // public/js/shared/crm-booked-stage.js), а не зашитый ключ 'scheduled'.
-test('CRM_UNIFY_V1: граница «зависших» — «Колонка записи» из настроек', () => {
+test('CRM_UNIFY_V1: граница «зависших» — «Колонка записи» из настроек (роль колонки)', () => {
   const db = seed();
-  db.prepare("UPDATE crm_settings SET booked_stage = 'approved' WHERE id = 1").run();
+  // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: колонка записи — роль колонки (crm_settings.booked_stage не читается).
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role IN ('booked', 'confirmed')").run();
+  db.prepare("UPDATE crm_stages SET role = 'booked' WHERE key = 'approved'").run();
   const old = (status, name) => {
     const id = addLead(db, { day: '2026-08-17', localHour: 10, status });
     db.prepare("UPDATE crm_requests SET updated_at = datetime('now','localtime','-10 days'), full_name = ? WHERE id = ?").run(name, id);

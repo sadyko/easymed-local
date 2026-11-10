@@ -41,7 +41,7 @@ import {
   visitRow, PRE_ARRIVAL, lineKey, vsFree, visitHasWork, insertBookingLine, bookingLineRefusal,
   relinkHeld, deleteVs, requestOfVisit, sameService, touchRequest, beforeArrival, repriceOwnLine,
 } from './booking-mirror.js';
-import { openStageKeys, SEED_NO_SHOW_STAGE } from './config.js';
+import { openStageKeys, noShowStageKey } from './config.js';   // CRM_STAGE_ROLES_V1 — «Не пришёл» — роль колонки
 import { sameBookedService } from '../../../public/js/shared/same-service.js';
 
 const holes = (a) => a.map(() => '?').join(',');
@@ -355,7 +355,7 @@ export function bookLinesOnCard(db, visitId, vsIds = null, { callcenter = false 
     if (!rid) return 0;
     const card = db.prepare('SELECT id, status, patient_id FROM crm_requests WHERE id = ?').get(rid);
     if (!card || card.patient_id == null || Number(card.patient_id) !== Number(v.patient_id)) return 0;
-    if (![...openStageKeys(db), SEED_NO_SHOW_STAGE].includes(card.status)) return 0;
+    if (![...openStageKeys(db), noShowStageKey(db)].filter(Boolean).includes(card.status)) return 0;   // CRM_STAGE_ROLES_V1
     const pick = vsIds == null ? null : new Set(ids(vsIds));
     const held = db.prepare("SELECT 1 FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled' LIMIT 1");
     const ins = db.prepare(`INSERT INTO crm_request_services

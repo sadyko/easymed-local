@@ -47,7 +47,7 @@
 // Приход в соседнем здании (визит с sync_origin, приехавший порцией обмена)
 // считается тем же правилом cameSurely — по его статусу, строкам, счёту и
 // платежам.
-import { openStageKeys, wonStageKey, SEED_NO_SHOW_STAGE } from './config.js';
+import { openStageKeys, wonStageKey, noShowStageKey } from './config.js';   // CRM_STAGE_ROLES_V1 — «Не пришёл» — роль колонки
 import { cameSurely } from './no-show.js';
 import { moveTasksWithLead } from './tasks-follow.js';
 import { localDate, today } from '../domain/day.js';
@@ -59,7 +59,8 @@ const RACED = Symbol('crm-unify-repair-raced');
 
 function repairCards(db, d0, out, log) {
   const won = wonStageKey(db);
-  const from = [...new Set([...openStageKeys(db), SEED_NO_SHOW_STAGE])].filter((k) => k !== won);
+  const noShow = noShowStageKey(db);   // CRM_STAGE_ROLES_V1
+  const from = [...new Set([...openStageKeys(db), noShow].filter(Boolean))].filter((k) => k !== won);
   if (!from.length) return;
   const cards = db.prepare(`SELECT id, status, patient_id, scheduled_date, ${localDate('created_at')} AS born
                               FROM crm_requests WHERE patient_id IS NOT NULL AND status IN (${holes(from)}) ORDER BY id`).all(...from);
@@ -92,7 +93,7 @@ function repairCards(db, d0, out, log) {
     const hit = [...days].some((d) => isDay(d) && d <= d0 && (!c.born || d >= c.born) && cameOn(c.patient_id, d));
     if (!hit || !setWon.run(won, c.id, c.status).changes) continue;
     log.run('card', c.id, null, c.status, won);
-    if (c.status === SEED_NO_SHOW_STAGE) out.noShows++; else out.cards++;
+    if (noShow && c.status === noShow) out.noShows++; else out.cards++;
   }
 }
 

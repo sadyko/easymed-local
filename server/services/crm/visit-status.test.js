@@ -243,6 +243,27 @@ test('не пришёл: без сидовой колонки заявка не 
   db.close();
 });
 
+// CRM_STAGE_ROLES_V1 (3.23.0) — «Не пришёл» — РОЛЬ КОЛОНКИ, не ключ: отметка «Не пришёл» в
+// календаре ведёт карточку в колонку с ролью; роль снята — карточка остаётся, где была.
+test('не пришёл: карточка идёт в колонку с ролью «не пришёл»; без роли — остаётся', () => {
+  const db = freshDb();
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'no_show'").run();
+  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'stopped'").run();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  addLine(db, rid, { date: '2026-08-09', visit: vid });
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'no_show' });
+  assert.equal(reqRow(db, rid).status, 'stopped', 'неявка не дошла до колонки с ролью');
+
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+  const vid2 = addVisit(db);
+  const rid2 = addReq(db, { date: '2026-08-09' });
+  addLine(db, rid2, { date: '2026-08-09', visit: vid2 });
+  crmVisitStatus(db, { visitId: vid2, from: 'scheduled', to: 'no_show' });
+  assert.equal(reqRow(db, rid2).status, 'scheduled', 'без роли «не пришёл» отметка унесла карточку');
+  db.close();
+});
+
 // ─── ОТМЕНА ────────────────────────────────────────────────────────────────
 
 test('отмена: строки возвращаются к ожиданию, заявка откатывается из «Записан»', () => {

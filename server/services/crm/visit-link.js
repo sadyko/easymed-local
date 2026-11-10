@@ -128,7 +128,9 @@
 //
 // НЕ БРОСАЕТ: заявка не вправе отказать в записи. Ошибка — в лог.
 
-import { openStageKeys, scheduledStageKey, wonStageKey, windowHours, SEED_NO_SHOW_STAGE } from './config.js';
+import { openStageKeys, scheduledStageKey, wonStageKey, windowHours, noShowStageKey } from './config.js';
+// CRM_STAGE_ROLES_V1 (3.23.0) — «Не пришёл» и «Колонка записи» — роли колонок (миграция 284),
+// а не сидовый ключ и не догадка: noShowStageKey / scheduledStageKey читают роль.
 // CRM_UNIFY_V1 (задача 6) — окно повторного обращения: одно правило «двигалась
 // ли карточка в окне» (inWindowSql) и одно решение по новому обращению.
 import { contactDecision, reopenLead, inWindowSql, windowArg, leadInWindow, firstStageKey, liveKeys } from './contact-window.js';   // CRM_LINK_ALL_V1 — liveKeys (шаг C′)
@@ -353,7 +355,7 @@ export function deskCloses(db, requestId, v, hours = windowHours(db)) {
             OR ${inWindowSql('r')}
             OR ${missedRecentlySql('r')})`)   // CRM_UNIFY_V1 (ревью, I-5; финальное ревью) — опоздал на день: одно правило
     .get(requestId, v.day, v.day, v.id, windowArg(hours),   // CRM_UNIFY_V1 (задача 6) — одно правило окна
-      missedRecentlyArgs(v.day, hours));
+      missedRecentlyArgs(v.day, hours, noShowStageKey(db)));   // CRM_STAGE_ROLES_V1 — колонка «Не пришёл» — роль
 }
 
 /**
@@ -478,7 +480,8 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   //    CRM_UNIFY_V1 (ревью задачи 3, R3) — и карточка в конверсии («Пришёл»):
   //    её строка другого дня — запись, которая обязана дойти до визита и кассы.
   //    Ступень её не меняется (G только у живых). Проигрышные — никогда.
-  const lookIn = [...new Set([...open, wonStageKey(db), SEED_NO_SHOW_STAGE])];
+  const noShow = noShowStageKey(db);   // CRM_STAGE_ROLES_V1 — колонка с ролью «не пришёл» (null — роли нет)
+  const lookIn = [...new Set([...open, wonStageKey(db), noShow].filter(Boolean))];
   const mine = db.prepare(`SELECT id, status FROM crm_requests WHERE patient_id = ? AND status IN (${holes(lookIn)})
                             ORDER BY updated_at DESC, id DESC`).all(v.patient_id, ...lookIn);
   // CRM_UNIFY_V1 (финальное ревью, A-C2) — строки «без даты» — только у ЖИВЫХ
@@ -514,7 +517,7 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
      ORDER BY id`);
   const takeDated = takeSql(false);
   const takeAny = undated ? takeSql(true) : takeDated;
-  const live = new Set([...open, SEED_NO_SHOW_STAGE]);
+  const live = new Set([...open, noShow].filter(Boolean));
   // CRM_LINK_ALL_V1 (редакция 2б, P-6) — СТРОКИ КАРТОЧКИ ПО ТЕЛЕФОНУ В ЭТОТ ВИЗИТ НЕ
   //    ИДУТ: карточку, которая держит визит привязкой 'phone' (шаг D), шаг A
   //    пропускает — и на следующей двери (booking_lines_add после calendar_book,
@@ -552,7 +555,7 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   const hours = windowHours(db);
   const closes = (id) => deskCloses(db, id, v, hours);
   const rebook = !desk && v.day >= today(db);
-  const missed = (r) => r.status === SEED_NO_SHOW_STAGE && (desk || rebook);
+  const missed = (r) => !!noShow && r.status === noShow && (desk || rebook);   // CRM_STAGE_ROLES_V1
   for (const r of mine) {
     if (touched.has(r.id) || (!open.includes(r.status) && !missed(r))) continue;
     const take = desk ? closes(r.id)
@@ -690,7 +693,7 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
     // на стойке — в «Пришёл»; записью на сегодня или позже — в «Колонку
     // записи» (запись по такой карточке её и берёт). Запись прошлого дня
     // (правка давнего визита) «Не пришёл» не трогает.
-    const missed = r && r.status === SEED_NO_SHOW_STAGE && (desk || rebook);
+    const missed = r && !!noShow && r.status === noShow && (desk || rebook);   // CRM_STAGE_ROLES_V1
     if (!r || (!open.includes(r.status) && !missed)) continue;
     let status = r.status;
     let when = r.scheduled_date;
