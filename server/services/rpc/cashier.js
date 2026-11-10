@@ -937,7 +937,7 @@ const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 function refundKind(notes) {
   const n = String(notes || '');
   if (/ SWAP#\d+/.test(n)) return 'swap';
-  if (/ DISC#\d+/.test(n)) return 'discount';   // DISCOUNT_CHANGE_PAID_V1
+  if (/^REFUND#\d+ DISC#\d+/.test(n)) return 'discount';   // DISCOUNT_CHANGE_PAID_V1 — пометка сразу за номером платежа (как reports.js DISC_REFUND_SQL)
   if (/ LINE#\d+/.test(n)) return 'line';
   return 'payment';
 }
