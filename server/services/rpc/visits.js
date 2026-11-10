@@ -220,6 +220,10 @@ export async function ensureVisit(db, args, user, internal = {}) {
   // сейчас» (registerWalkIn). Действует только без book; кому и на какой день
   // верить, решает шаг связи (crm/visit-link.js, deskArrival).
   const desk = args.desk === true || args.desk === 'true';
+  // CRM_BOOKING_OWN_CARD_V1 (3.23.0, F1) — карточка, из которой записали («Сохранить и записать»,
+  // views/crm.js bookDays). Своя ли она пациенту и живая ли — проверяет шаг связи
+  // (crm/visit-link.js bookingCardFor); чужой или закрытой — номер не действует, запись идёт.
+  const crmRequestId = args.crm_request_id ?? null;
 
   // CRM_UNIFY_V1 — связь с заявками — crm/visit-link.js (crmLinkVisit), после записи.
 
@@ -301,7 +305,7 @@ export async function ensureVisit(db, args, user, internal = {}) {
   if (!book) {
     // CRM_UNIFY_V1 — строки «без даты» берёт только ensure_visit; desk — только здесь, без записи на время.
     // CRM_ONE_WAY_V1 (O1) — строки заявки, которые визит взял, садятся в него в этом же шаге.
-    crmLinkVisit(db, out.visit.id, user, { undated: true, desk });
+    crmLinkVisit(db, out.visit.id, user, { undated: true, desk, requestId: crmRequestId });   // CRM_BOOKING_OWN_CARD_V1
     return { ...out, booked: false };
   }
 
@@ -343,7 +347,7 @@ export async function ensureVisit(db, args, user, internal = {}) {
     // пациента держит именно он, и в смете регистратуры они нужны. CRM_UNIFY_V1:
     // до прихода — как запись («Записан»); визит уже «Пришёл» — строки берут
     // его и закрываются правилом прихода (crm/visit-link.js).
-    crmLinkVisit(db, out.visit.id, user, { undated: true, desk: deskBooked });   // CRM_UNIFY_V1 · CRM_LINK_ALL_V1 (R3) · CRM_ONE_WAY_V1 (O1)
+    crmLinkVisit(db, out.visit.id, user, { undated: true, desk: deskBooked, requestId: crmRequestId });   // CRM_UNIFY_V1 · CRM_LINK_ALL_V1 (R3) · CRM_ONE_WAY_V1 (O1) · CRM_BOOKING_OWN_CARD_V1
     const doctor = out.visit.doctor_id
       ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(out.visit.doctor_id)
       : null;
@@ -414,7 +418,7 @@ export async function ensureVisit(db, args, user, internal = {}) {
   }
   // CRM_UNIFY_V1 — запись связывается с заявкой пациента (crm/visit-link.js);
   // CRM_ONE_WAY_V1 (O1) — строки заявки этого дня садятся в визит там же.
-  crmLinkVisit(db, out.visit.id, user, { undated: true, desk: deskBooked });   // CRM_UNIFY_V1 · CRM_LINK_ALL_V1 (R3)
+  crmLinkVisit(db, out.visit.id, user, { undated: true, desk: deskBooked, requestId: crmRequestId });   // CRM_UNIFY_V1 · CRM_LINK_ALL_V1 (R3) · CRM_BOOKING_OWN_CARD_V1
   return { ...out, booked: true };
 }
 

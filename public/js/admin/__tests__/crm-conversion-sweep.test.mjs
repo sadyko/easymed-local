@@ -58,12 +58,14 @@ test('сидовая воронка, конверсия — «Подтвержд
 });
 
 test('воронка клиники, конверсия — «Успешно»: история переехала в неё и под обход не попадает', async () => {
-  const st = (key, label, kind) => ({ key, label, color: '', kind, is_active: 1 });
+  // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: роли едут с колонками («Записан» с ролью «запись» без передачи
+  // роли не удалить); колонка записи — «Подтверждён (стационар)», до конверсии «Успешно».
+  const st = (key, label, kind, role = null) => ({ key, label, color: '', kind, is_active: 1, role });
   const s = serverState((db) => {
     saveStages(db, [
       st('in_process', 'Новый лид', 'open'), st('recall', 'Перезвонить', 'open'), st('dozhim', 'Дожим', 'open'),
-      st('approved', 'Подтверждён (амбулатор)', 'open'), st('approved_in', 'Подтверждён (стационар)', 'open'),
-      st('no_show', 'Не пришёл', 'lost'), st('uspeshno', 'Успешно', 'open'), st('came', 'Пришёл', 'won'),
+      st('approved', 'Подтверждён (амбулатор)', 'open'), st('approved_in', 'Подтверждён (стационар)', 'open', 'booked'),
+      st('no_show', 'Не пришёл', 'lost', 'no_show'), st('uspeshno', 'Успешно', 'open'), st('came', 'Пришёл', 'won'),
       st('stopped', 'Отказ', 'lost'),
     ]);
     saveConfig(db, { settings: { won_stage: 'uspeshno' } });

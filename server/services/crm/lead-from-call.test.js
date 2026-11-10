@@ -194,9 +194,10 @@ test('a CLOSED lead does not block a new one after the repeat-contact window (CR
 
 test('a column that gets hidden still de-duplicates its leads', () => {
   const db = fresh();
-  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('В работе','998909610004','call','scheduled')").run();
+  // CRM_STAGE_ROLES_V1 — «Перезвонить», а не «Записан»: колонку с ролью «запись» не скрыть, не передав роль.
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('В работе','998909610004','call','recall')").run();
   const next = listStages(db).map((s) => ({ ...s }));
-  next.find((s) => s.key === 'scheduled').is_active = false;
+  next.find((s) => s.key === 'recall').is_active = false;
   saveStages(db, next);
   recordCall(db, call(), 'poll');
   // Hidden is not closed: the card is still open work, and a second one for

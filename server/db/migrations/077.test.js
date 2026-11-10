@@ -28,7 +28,9 @@ const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
 function dbBefore077() {
   const db = openDb(':memory:');
   const tmp = tmpDir('mig077-');
-  for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && !x.startsWith('077'))) {
+  // CRM_STAGE_ROLES_V1 — ИСПРАВЛЕНО: брались все миграции, кроме 077 (и после неё тоже), вопреки
+  // строке выше; миграция 284 правит crm_stages и без 077 не накатывается. Теперь — только до 077.
+  for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && parseInt(x, 10) < 77)) {
     fs.copyFileSync(path.join(DIR, f), path.join(tmp, f));
   }
   migrate(db, tmp);

@@ -984,3 +984,41 @@ test('CRM_UNIFY_V1: будущий визит соседнего здания �
   assert.equal(reqRow(db, rid2).status, 'scheduled', 'работа по отменённому визиту засчитана приходом');
   db.close();
 });
+
+// ─── CRM_CARD_OWN_BOOKING_V1 (3.23.0) ─────────────────────────────────────
+// F3 — приход не закрывает карточку без строк, заведённую ПОСЛЕ визита (новое обращение,
+// заведённое при пациенте); F4 — неявка уносит в «Не пришёл» только записанную карточку
+// (колонка записи и дальше).
+test('F3: приход закрывает карточку без строк, заведённую до визита, и не закрывает заведённую после', () => {
+  const db = freshDb();
+  const today = db.prepare("SELECT date('now','localtime') AS d").get().d;
+  const vid = Number(addVisit(db, today + 'T05:00:00Z'));
+  db.prepare("UPDATE visits SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 hour') WHERE id = ?").run(vid);
+  const before = Number(addReq(db, { status: 'in_process' }));
+  db.prepare("UPDATE crm_requests SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','-2 hours') WHERE id = ?").run(before);
+  const after = Number(addReq(db, { status: 'in_process' }));   // заведена сейчас — после визита
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
+  assert.equal(reqRow(db, before).status, 'came', 'обращение, ждавшее прихода, не закрыто');
+  assert.equal(reqRow(db, after).status, 'in_process', 'приход закрыл карточку, заведённую после визита');
+  db.close();
+});
+
+test('F4: неявка не уносит карточку, стоящую до колонки записи (её желание без даты село в чужой визит)', () => {
+  const db = freshDb();
+  const vid = addVisit(db);
+  const booked = addReq(db, { status: 'scheduled', date: '2026-08-09' });
+  addLine(db, booked, { date: '2026-08-09', visit: vid });
+  const passenger = addReq(db, { status: 'in_process' });
+  addLine(db, passenger, { date: '2026-08-09', visit: vid });
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'no_show' });
+  assert.equal(reqRow(db, booked).status, 'no_show');
+  assert.equal(reqRow(db, passenger).status, 'in_process', 'неявка по чужой записи унесла незаписанную карточку');
+  // Колонки записи нет (роль снята) — любая открытая, как прежде.
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role IN ('booked', 'confirmed')").run();
+  const vid2 = addVisit(db);
+  const p2 = addReq(db, { status: 'in_process' });
+  addLine(db, p2, { date: '2026-08-09', visit: vid2 });
+  crmVisitStatus(db, { visitId: vid2, from: 'scheduled', to: 'no_show' });
+  assert.equal(reqRow(db, p2).status, 'no_show');
+  db.close();
+});

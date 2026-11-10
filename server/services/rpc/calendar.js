@@ -1176,7 +1176,7 @@ export async function calendarBook(db, args, user, deps = {}) {
         }, user, deps);
         // Как у ensure_visit после записи: связь с заявкой пациента
         // (crm/visit-link.js — одно правило), затем сверка.
-        crmLinkVisit(db, moved.visit.id, user);   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 (O1) — сверки зеркала больше нет
+        crmLinkVisit(db, moved.visit.id, user, { requestId: a.crm_request_id ?? null });   // CRM_UNIFY_V1 · CRM_ONE_WAY_V1 (O1) · CRM_BOOKING_OWN_CARD_V1 (F1)
         return { ...moved, moved: true };
       }
       const doc = dayVisit.doctor_id ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(dayVisit.doctor_id) : null;
@@ -1372,7 +1372,9 @@ export async function calendarBook(db, args, user, deps = {}) {
   // здания; правило — crm/booking-mirror.js. Тоже ЗА транзакцией и тоже молча:
   // заявка не вправе отказать в записи.
   if (!existing) {
-    crmLinkVisit(db, out.visit.id, user);   // CRM_UNIFY_V1
+    // CRM_BOOKING_OWN_CARD_V1 (3.23.0, F1) — запись называет карточку (crm_request_id): своя ли
+    // она пациенту и живая ли — проверяет шаг связи (crm/visit-link.js bookingCardFor).
+    crmLinkVisit(db, out.visit.id, user, { requestId: a.crm_request_id ?? null });   // CRM_UNIFY_V1
     crmVisitStatus(db, { visitId: out.visit.id, from: null, to: status });   // CRM_LINK_ALL_V1 (F-6) — после связи
     // REPEAT_VISIT_V1 — та же сверка карточки, что у новой строки /api/db.
     // REPEAT_VISIT_V1 (ревью, minor-4) — визит и строка уже сохранены: сбой

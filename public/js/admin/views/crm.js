@@ -3127,6 +3127,10 @@ async function paint() {
                         date: liveQueueNowIso(),
                         doctor_id: Number(head.doctor_id),
                     };
+                    // CRM_BOOKING_OWN_CARD_V1 (3.23.0, F1) — запись называет свою карточку: сервер
+                    // сажает, привязывает и двигает только её, а не угадывает по пациенту (владелец:
+                    // новая карточка уезжала в «Пришёл» / «Не пришёл» из-за визита другой карточки).
+                    args.crm_request_id = Number(requestId);
                     let res = await supabase.rpc('ensure_visit', args);
                     // ЗАНЯТО — ЭТО ВОПРОС ЧЕЛОВЕКУ, А НЕ ГАЛОЧКА. Слова отказа
                     // и окно причины — те же, что у календаря и у мастера:

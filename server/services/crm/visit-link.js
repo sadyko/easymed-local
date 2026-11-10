@@ -136,7 +136,7 @@ import { openStageKeys, scheduledStageKey, wonStageKey, windowHours, noShowStage
 import { contactDecision, reopenLead, inWindowSql, windowArg, leadInWindow, firstStageKey, liveKeys } from './contact-window.js';   // CRM_LINK_ALL_V1 — liveKeys (шаг C′)
 import { missedRecentlySql, missedRecentlyArgs } from './contact-window.js';   // CRM_UNIFY_V1 (финальное ревью) — одно правило опоздания
 import { visitRow, requestOfVisit, isCallcenterUser, PRE_ARRIVAL, cardDateOf } from './booking-mirror.js';
-import { crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';
+import { crmVisitStatus, ARRIVED_STATUSES, awaitingVisitSql } from './visit-status.js';   // CRM_CARD_OWN_BOOKING_V1 — awaitingVisitSql (F2)
 import { attachWishes } from './one-way.js';   // CRM_ONE_WAY_V1 — шаг A: желание садится в визит одной строкой (O1)
 import { hasAnyRole } from '../roles.js';   // CRM_UNIFY_V1 — стойка (deskArrival)
 // CRM_UNIFY_V1 (финальное ревью, B) — «может вести карточку»: одно правило
@@ -275,20 +275,71 @@ export function phoneLeadCandidates(db, key, open) {
  * лид» — о другом обращении: запись его не берёт, и оплата потом не закрывает.
  * Заявка с датой или со строками — по-прежнему, любой давности.
  * CRM_UNIFY_V1 (задача 6) — окно — одно правило (contact-window.js inWindowSql).
+ *
+ * CRM_CARD_OWN_BOOKING_V1 (3.23.0, F2) — карточка, у которой СВОЯ живая запись на другой день
+ * (bookedElsewhereSql), чужой приход «по окну» не ждёт: ни без строк и с датой, ни в окне, ни
+ * желанием без даты. Свой день (дата карточки, строка этого дня) — по-прежнему.
  */
-export function waitsForDay(db, requestId, day, { undated = false, hours = windowHours(db) } = {}) {
-  const undatedSql = undated ? "l.scheduled_date IS NULL OR l.scheduled_date = '' OR " : '';
+export function waitsForDay(db, requestId, day, { undated = false, hours = windowHours(db), visitId = null } = {}) {
   return !!db.prepare(`
     SELECT 1 FROM crm_requests r
-     WHERE r.id = ?
-       AND ((NOT EXISTS (SELECT 1 FROM crm_request_services l WHERE l.request_id = r.id AND l.status = 'pending')
-             AND ((r.scheduled_date IS NOT NULL AND r.scheduled_date <> '')
-                  OR ${inWindowSql('r')}))
-            OR date(r.scheduled_date) = date(?)
+     WHERE r.id = @rid
+       AND (date(r.scheduled_date) = date(@day)
             OR EXISTS (SELECT 1 FROM crm_request_services l
-                        WHERE l.request_id = r.id AND l.status = 'pending'
-                          AND (${undatedSql}date(l.scheduled_date) = date(?))))`)
-    .get(requestId, windowArg(hours), day, day);   // CRM_UNIFY_V1 (задача 6) — одно правило окна
+                        WHERE l.request_id = r.id AND l.status = 'pending' AND date(l.scheduled_date) = date(@day))
+            OR (NOT ${bookedElsewhereSql('r')}
+                AND ((NOT EXISTS (SELECT 1 FROM crm_request_services l WHERE l.request_id = r.id AND l.status = 'pending')
+                      AND ((r.scheduled_date IS NOT NULL AND r.scheduled_date <> '')
+                           OR ${inWindowSql('r').replace('?', '@win')}))
+                     ${undated ? `OR EXISTS (SELECT 1 FROM crm_request_services l
+                                  WHERE l.request_id = r.id AND l.status = 'pending'
+                                    AND (l.scheduled_date IS NULL OR l.scheduled_date = ''))` : ''})))`)
+    .get({ rid: requestId, day, win: windowArg(hours), vid: visitId == null ? -1 : Number(visitId) });   // CRM_UNIFY_V1 (задача 6) — одно правило окна
+}
+
+/**
+ * CRM_CARD_OWN_BOOKING_V1 (3.23.0, F2) — SQL: у карточки `alias` СВОЯ ЖИВАЯ ЗАПИСЬ НА ДРУГОЙ
+ * ДЕНЬ — визит её пациента, который ждёт пациента (awaitingVisitSql: «Записан» /
+ * «Подтверждён», сегодня или позже, прихода не видно), не этот (@vid) и не в день @day, и его
+ * держит эта карточка: ждущей строкой или привязкой записи. Такую карточку посторонний визит
+ * не берёт и не закрывает — у неё своя запись (владелец: новая карточка прыгала в «Пришёл»).
+ */
+function bookedElsewhereSql(alias = 'r') {
+  return `EXISTS (SELECT 1 FROM visits ob
+                   WHERE ob.id <> @vid AND ob.patient_id = ${alias}.patient_id
+                     AND ${localDate('ob.visit_date')} <> date(@day)
+                     AND ${awaitingVisitSql('ob')}
+                     AND (ob.id IN (SELECT visit_id FROM crm_request_services
+                                     WHERE request_id = ${alias}.id AND status = 'pending' AND visit_id IS NOT NULL)
+                          OR ob.id IN (SELECT visit_id FROM crm_booking_links WHERE request_id = ${alias}.id)))`;
+}
+
+/**
+ * CRM_DAY_LINES_V1 (3.23.0) — КАРТОЧКИ, ЧЬИ СТРОКИ ЭТОГО ДНЯ БЕРЁТ ВИЗИТ (шаг A): открытые
+ * колонки, конверсия («Пришёл»: строка другого дня — запись, R3) и колонка с ролью «не пришёл».
+ * Проигрышные — никогда. Ограничения CRM по хозяину здесь нет: визит берёт строку и карточки,
+ * взятой оператором «в работу». Одно правило для шага связи и для подстановки в смету
+ * регистратуры (rpc/crm-day-lines.js) — браузер и сервер больше не расходятся.
+ */
+export function dayLineStatuses(db) {
+  return [...new Set([...openStageKeys(db), wonStageKey(db), noShowStageKey(db)].filter(Boolean))];
+}
+
+/**
+ * CRM_BOOKING_OWN_CARD_V1 (3.23.0, F1) — НОМЕР КАРТОЧКИ, ПРИСЛАННЫЙ С ЗАПИСЬЮ (crm_request_id
+ * у ensure_visit и calendar_book; его шлёт «Сохранить и записать» карточки, views/crm.js
+ * bookDays). Действует, только если карточка есть, она ЭТОГО пациента и живая (открытая
+ * колонка или «Не пришёл» — liveKeys). Иначе null: запись не отказывается, связь идёт прежним
+ * правилом. Номер приходит из браузера — поэтому проверка здесь, на сервере.
+ */
+export function bookingCardFor(db, patientId, requestId) {
+  try {
+    const id = Number(requestId);
+    if (!Number.isInteger(id) || id <= 0 || !patientId) return null;
+    const c = db.prepare('SELECT id, status, patient_id FROM crm_requests WHERE id = ?').get(id);
+    if (!c || c.patient_id == null || Number(c.patient_id) !== Number(patientId)) return null;
+    return liveKeys(db).includes(c.status) ? id : null;
+  } catch { return null; }
 }
 
 /**
@@ -343,19 +394,28 @@ export function phoneLeadFor(db, patientId, open, day, { undated = false, accept
  * contact-window.js missedRecentlySql / missedRecentlyArgs (его же зовёт
  * правило прихода, visit-status.js), а не своя копия SQL.
  */
+//
+// CRM_CARD_OWN_BOOKING_V1 (3.23.0, F2) — КАРТОЧКУ СО СВОЕЙ ЖИВОЙ ЗАПИСЬЮ НА ДРУГОЙ ДЕНЬ
+// (bookedElsewhereSql) СТОЙКА НЕ ЗАКРЫВАЕТ: ни окном 72 ч, ни опозданием, ни желанием без даты.
+// Владелец: новая карточка B, записанная на послезавтра, уезжала в «Пришёл», когда пациента
+// сегодня регистрировали по записи старой карточки A. Свой день — строка на день визита, дата
+// карточки, привязка к этому визиту — закрывает, как прежде.
 export function deskCloses(db, requestId, v, hours = windowHours(db)) {
   return !!db.prepare(`
     SELECT 1 FROM crm_requests r
-     WHERE r.id = ?
+     WHERE r.id = @rid
        AND (EXISTS (SELECT 1 FROM crm_request_services l
-                     WHERE l.request_id = r.id AND l.status = 'pending'
-                       AND (l.scheduled_date IS NULL OR l.scheduled_date = '' OR date(l.scheduled_date) = date(?)))
-            OR date(r.scheduled_date) = date(?)
-            OR EXISTS (SELECT 1 FROM crm_booking_links b WHERE b.request_id = r.id AND b.visit_id = ?)
-            OR ${inWindowSql('r')}
-            OR ${missedRecentlySql('r')})`)   // CRM_UNIFY_V1 (ревью, I-5; финальное ревью) — опоздал на день: одно правило
-    .get(requestId, v.day, v.day, v.id, windowArg(hours),   // CRM_UNIFY_V1 (задача 6) — одно правило окна
-      missedRecentlyArgs(v.day, hours, noShowStageKey(db)));   // CRM_STAGE_ROLES_V1 — колонка «Не пришёл» — роль
+                     WHERE l.request_id = r.id AND l.status = 'pending' AND date(l.scheduled_date) = date(@day))
+            OR date(r.scheduled_date) = date(@day)
+            OR EXISTS (SELECT 1 FROM crm_booking_links b WHERE b.request_id = r.id AND b.visit_id = @vid)
+            OR (NOT ${bookedElsewhereSql('r')}
+                AND (EXISTS (SELECT 1 FROM crm_request_services l
+                              WHERE l.request_id = r.id AND l.status = 'pending'
+                                AND (l.scheduled_date IS NULL OR l.scheduled_date = ''))
+                     OR ${inWindowSql('r').replace('?', '@win')}
+                     OR ${missedRecentlySql('r')})))`)   // CRM_UNIFY_V1 (ревью, I-5; финальное ревью) — опоздал на день: одно правило
+    .get({ rid: requestId, day: v.day, vid: v.id, win: windowArg(hours),   // CRM_UNIFY_V1 (задача 6) — одно правило окна
+      ...missedRecentlyArgs(v.day, hours, noShowStageKey(db)) });   // CRM_STAGE_ROLES_V1 — колонка «Не пришёл» — роль
 }
 
 /**
@@ -375,18 +435,21 @@ export function deskArrival(db, v, user, desk) {
  * @param {object} db
  * @param {number} visitId
  * @param {object} user — тот, кто записал (роль решает шаг E и стойку)
- * @param {{undated?: boolean, desk?: boolean}} [opts] — undated: брать строки
+ * @param {{undated?: boolean, desk?: boolean, requestId?: number|null}} [opts] — undated: брать строки
  *        без даты (только ensure_visit); desk: регистрация на стойке (только
- *        ensure_visit без book; верится по deskArrival — CRM_UNIFY_V1)
+ *        ensure_visit без book; верится по deskArrival — CRM_UNIFY_V1);
+ *        requestId — карточка, из которой записали (CRM_BOOKING_OWN_CARD_V1, F1; проверяется
+ *        ещё раз bookingCardFor): только её строки садятся, привязываются и двигают ступень
  */
-export function crmLinkVisit(db, visitId, user, { undated = false, desk = false } = {}) {
+export function crmLinkVisit(db, visitId, user, { undated = false, desk = false, requestId = null } = {}) {
   try {
     const v = visitRow(db, visitId);
     if (!v || v.sync_origin != null || !v.patient_id) return;
     const arrived = ARRIVED_STATUSES.includes(v.status);
     if (!arrived && !PRE_ARRIVAL.includes(v.status)) return;   // отменён / не пришёл
     const atDesk = deskArrival(db, v, user, desk);   // CRM_UNIFY_V1 (Р1)
-    const linked = db.transaction(() => linkTx(db, v, user, { undated: !!undated, arrived, desk: atDesk }))();
+    const ownCard = requestId != null ? bookingCardFor(db, v.patient_id, requestId) : null;   // CRM_BOOKING_OWN_CARD_V1
+    const linked = db.transaction(() => linkTx(db, v, user, { undated: !!undated, arrived, desk: atDesk, ownCard }))();
     // CRM_UNIFY_V1 — стойка: пациент здесь (deskArrive — сначала деньги, потом воронка).
     if (atDesk) deskArrive(db, v, user);
     // Визит уже «Пришёл»: только что взятые строки закрывает правило прихода.
@@ -467,13 +530,28 @@ export function crmBookingMoved(db, visitId) {
 /** CRM_LINK_ALL_V1 — прежнее имя (только привязки «для воронки»); CRM_ONE_WAY_V1 — то же правило для всех. */
 export const crmDisplayLinkMoved = crmBookingMoved;
 
-/** @returns {boolean} взял ли визит хоть одну строку (шаг A) */
-function linkTx(db, v, user, { undated, arrived, desk }) {
+/**
+ * @returns {boolean} взял ли визит хоть одну строку (шаг A)
+ *
+ * CRM_BOOKING_OWN_CARD_V1 (3.23.0, F1) — ownCard: карточка, из которой записали (проверена
+ * bookingCardFor). Тогда шаги A, B, F, G — только для неё: садятся её строки, привязывается и
+ * двигается она; шаги C, C′, D, E пропускаются — угадывать карточку незачем. Чужая карточка,
+ * которая уже держит визит (визит дня), не двигается этой записью.
+ *
+ * CRM_CARD_OWN_BOOKING_V1 (3.23.0, F4) — без номера карточки: желание без даты, севшее в визит,
+ * который уже держит другая карточка (или строка этого дня другой карточки), СВОЮ карточку не
+ * двигает ('wish': услуга в визите — деньги как прежде, ступень и дата карточки — нет); шаг C
+ * вне стойки берёт ОДНУ карточку — двигавшуюся последней (как C′), и только если визит ещё
+ * ничей.
+ */
+function linkTx(db, v, user, { undated, arrived, desk, ownCard = null }) {
   const open = openStageKeys(db);
   if (!open.length) return false;
   const uid = user && Number(user.id) > 0 ? Number(user.id) : null;
   const callcenter = isCallcenterUser(user);
-  const touched = new Map();   // request_id → 'lines' | 'held' | 'patient' | 'phone' | 'callcenter' | 'created'
+  const touched = new Map();   // request_id → 'lines' | 'held' | 'patient' | 'phone' | 'callcenter' | 'created' | 'own' | 'wish'
+  // CRM_CARD_OWN_BOOKING_V1 (F4) — кто держал визит ДО этого шага (строкой или привязкой).
+  const heldBefore = requestOfVisit(db, v.id, { display: true });
 
   // A. Строки этого дня (без даты — только с undated). «Не пришёл» (сидовая)
   //    в выборке: её строки можно записать заново, но ступень меняет только приход.
@@ -481,7 +559,7 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   //    её строка другого дня — запись, которая обязана дойти до визита и кассы.
   //    Ступень её не меняется (G только у живых). Проигрышные — никогда.
   const noShow = noShowStageKey(db);   // CRM_STAGE_ROLES_V1 — колонка с ролью «не пришёл» (null — роли нет)
-  const lookIn = [...new Set([...open, wonStageKey(db), noShow].filter(Boolean))];
+  const lookIn = dayLineStatuses(db);   // CRM_DAY_LINES_V1 — то же правило отдаёт смете регистратуры RPC crm_day_lines
   const mine = db.prepare(`SELECT id, status FROM crm_requests WHERE patient_id = ? AND status IN (${holes(lookIn)})
                             ORDER BY updated_at DESC, id DESC`).all(v.patient_id, ...lookIn);
   // CRM_UNIFY_V1 (финальное ревью, A-C2) — строки «без даты» — только у ЖИВЫХ
@@ -527,10 +605,22 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
     const p = db.prepare("SELECT request_id FROM crm_booking_links WHERE visit_id = ? AND source = 'phone'").get(v.id);
     phoneCard = p ? Number(p.request_id) : null;
   } catch { phoneCard = null; }   // сборка без 189
+  const wishOnly = new Set();   // CRM_CARD_OWN_BOOKING_V1 (F4) — карточки, давшие визиту только желания без даты
   for (const r of mine) {
     if (phoneCard != null && Number(r.id) === phoneCard) continue;   // CRM_LINK_ALL_V1 (P-6)
+    if (ownCard != null && Number(r.id) !== ownCard) continue;   // CRM_BOOKING_OWN_CARD_V1 (F1) — только строки своей карточки
     const lines = (live.has(r.status) ? takeAny : takeDated).all(r.id, v.id, v.day);
-    if (lines.length && attachWishes(db, v, lines, { actorId: uid, holdUnplaced: true })) touched.set(r.id, 'lines');   // CRM_ONE_WAY_V1 (O1)
+    if (lines.length && attachWishes(db, v, lines, { actorId: uid, holdUnplaced: true })) {   // CRM_ONE_WAY_V1 (O1)
+      touched.set(r.id, 'lines');
+      if (lines.every((l) => l.scheduled_date == null || l.scheduled_date === '')) wishOnly.add(r.id);
+    }
+  }
+  // CRM_CARD_OWN_BOOKING_V1 (F4) — визит уже чей-то (держала другая карточка или строка этого
+  // дня другой карточки): желание без даты сажает услугу, но свою карточку не двигает.
+  if (ownCard == null) {
+    const ownerOther = (id) => (heldBefore != null && Number(heldBefore) !== Number(id))
+      || [...touched].some(([rid, via]) => rid !== id && via === 'lines' && !wishOnly.has(rid));
+    for (const id of wishOnly) if (ownerOther(id)) touched.set(id, 'wish');
   }
 
   // Визит уже «Пришёл» — дальше правило прихода (crmVisitStatus в crmLinkVisit),
@@ -540,8 +630,17 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
 
   // B. Заявка, которая уже держит визит. CRM_LINK_ALL_V1 (редакция 2) — и привязкой
   //    «только для воронки» (C′, телефон): ступень и дата идут по ней, услуги — нет.
-  const held = requestOfVisit(db, v.id, { display: true });
-  if (held && !touched.has(held)) touched.set(held, 'held');
+  //    CRM_CARD_OWN_BOOKING_V1 (F4) — держатель — тот, кто держал визит ДО шага A (желание,
+  //    севшее сейчас, держателем не становится); никого не было — как прежде.
+  //    CRM_BOOKING_OWN_CARD_V1 (F1) — с номером карточки двигается только она.
+  const held = heldBefore || requestOfVisit(db, v.id, { display: true });
+  if (held && !touched.has(held) && (ownCard == null || Number(held) === ownCard)) touched.set(held, 'held');
+
+  // CRM_BOOKING_OWN_CARD_V1 (F1) — запись из карточки: дальше угадывать нечего.
+  if (ownCard != null) {
+    if (!touched.has(ownCard)) touched.set(ownCard, 'own');
+    return finishLink(db, v, { touched, held, desk, uid, callcenter, open, prevOf: new Map(), rebook: !desk && v.day >= today(db), noShow });
+  }
 
   // C. Открытые заявки пациента, ждущие этот приход. CRM_UNIFY_V1 (Р8; ревью
   //    задачи 3, R5) — на стойке те, что стойка закрывает (deskCloses): ждут
@@ -556,13 +655,21 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   const closes = (id) => deskCloses(db, id, v, hours);
   const rebook = !desk && v.day >= today(db);
   const missed = (r) => !!noShow && r.status === noShow && (desk || rebook);   // CRM_STAGE_ROLES_V1
+  // CRM_CARD_OWN_BOOKING_V1 (F4) — вне стойки визит уже чей-то (строки этого дня, держатель):
+  // других карточек шаг C не берёт; иначе — одну, двигавшуюся последней.
+  const owned = [...touched.values()].some((via) => via === 'lines' || via === 'held');
+  const waiting = [];
   for (const r of mine) {
     if (touched.has(r.id) || (!open.includes(r.status) && !missed(r))) continue;
+    if (!desk && owned) continue;
     const take = desk ? closes(r.id)
-      : open.includes(r.status) ? waitsForDay(db, r.id, v.day, { undated })
-        : leadInWindow(db, r.id, hours);
-    if (take) touched.set(r.id, 'patient');
+      : open.includes(r.status) ? waitsForDay(db, r.id, v.day, { undated, visitId: v.id })   // CRM_CARD_OWN_BOOKING_V1 (F2)
+        : leadInWindow(db, r.id, hours) && !waitsElsewhere(db, r.id, v);   // CRM_CARD_OWN_BOOKING_V1 (F2)
+    if (!take) continue;
+    if (desk) touched.set(r.id, 'patient');
+    else waiting.push(r.id);
   }
+  if (waiting.length) touched.set(lastMoved(db, waiting), 'patient');   // CRM_CARD_OWN_BOOKING_V1 (F4) — одна карточка
 
   const prevOf = new Map();   // CRM_UNIFY_V1 (задача 6) — ступень до возврата в начало (C′, E)
 
@@ -645,10 +752,41 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
     }
   }
 
+  return finishLink(db, v, { touched, held, desk, uid, callcenter, open, prevOf, rebook, noShow });
+}
+
+/**
+ * CRM_CARD_OWN_BOOKING_V1 (F2) — у карточки своя живая запись на другой день, чем визит `v`
+ * (то же правило, что в waitsForDay и deskCloses).
+ */
+function waitsElsewhere(db, requestId, v) {
+  return !!db.prepare(`SELECT 1 FROM crm_requests r WHERE r.id = @rid AND ${bookedElsewhereSql('r')}`)
+    .get({ rid: requestId, vid: v.id, day: v.day });
+}
+
+/**
+ * CRM_CARD_OWN_BOOKING_V1 (F4) — из нескольких карточек — двигавшаяся последней (updated_at,
+ * иначе created_at; равные — больший id): то же решение, что у шага C′ (contactDecision).
+ */
+function lastMoved(db, ids) {
+  if (ids.length === 1) return ids[0];
+  const r = db.prepare(`SELECT id FROM crm_requests WHERE id IN (${holes(ids)})
+                         ORDER BY julianday(COALESCE(NULLIF(updated_at, ''), created_at)) DESC, id DESC LIMIT 1`).get(...ids);
+  return r ? r.id : ids[0];
+}
+
+/**
+ * Шаги F (привязка) и G (ступень и дата) — общие для угадывания (A–E) и записи из карточки
+ * (CRM_BOOKING_OWN_CARD_V1, F1: touched — только своя карточка, via 'own' / 'lines' / 'held').
+ * CRM_CARD_OWN_BOOKING_V1 (F4) — 'wish' (желание в чужом визите) не привязывается и не двигается.
+ */
+function finishLink(db, v, { touched, held, desk, uid, callcenter, open, prevOf, rebook, noShow }) {
   // F. Привязка записи — для C, C′, D и E (A держит визит строками).
   //    CRM_LINK_ALL_V1 — и C′ (source 'patient'), и телефон D (source 'phone', R5).
+  //    CRM_BOOKING_OWN_CARD_V1 (F1) — и карточка, из которой записали ('own'), если её строки
+  //    визит не взяли; визит держит другая карточка — только строка показа.
   if (!held) {
-    const pick = [...touched].find(([, via]) => ['patient', 'live', 'phone', 'callcenter', 'created'].includes(via));
+    const pick = [...touched].find(([, via]) => ['patient', 'live', 'phone', 'callcenter', 'created', 'own'].includes(via));
     if (pick) {
       const source = pick[1] === 'phone' ? 'phone' : callcenter ? 'callcenter' : pick[1] === 'live' ? 'patient' : 'match';   // CRM_LINK_ALL_V1
       db.prepare(`INSERT OR REPLACE INTO crm_booking_links (visit_id, request_id, source, created_by, created_request)
@@ -667,7 +805,7 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
     //    Поэтому карточке пишется и строка показа (crm_card_visit_views, миграция 247) —
     //    её читает только «Записи пациента» (crm_card_bookings); ступень, дату, строки и
     //    деньги она не двигает.
-    const closed = [...touched].find(([id, via]) => id !== held && ['patient', 'live', 'phone'].includes(via));
+    const closed = [...touched].find(([id, via]) => id !== held && ['patient', 'live', 'phone', 'own'].includes(via));
     if (closed) {
       db.prepare(`INSERT OR IGNORE INTO crm_booking_links (visit_id, request_id, source, created_by, created_request)
                   VALUES (?, ?, 'patient', ?, 0)`).run(v.id, closed[0], uid);
@@ -687,7 +825,7 @@ function linkTx(db, v, user, { undated, arrived, desk }) {
   // CRM_UNIFY_V1 (ревью, I-5) — updated_at двигается: запись и приход на стойке — контакт.
   const write = db.prepare(`UPDATE crm_requests SET status = ?, scheduled_date = ?, updated_at = ${NOW_SQL} WHERE id = ?`);
   for (const [id, via] of touched) {
-    if (via === 'created') continue;
+    if (via === 'created' || via === 'wish') continue;   // CRM_CARD_OWN_BOOKING_V1 (F4) — желание в чужом визите ступень не двигает
     const r = read.get(id);
     // CRM_UNIFY_V1 (задача 6; ревью задач 5–6, I-3) — и сидовая «Не пришёл»:
     // на стойке — в «Пришёл»; записью на сегодня или позже — в «Колонку
