@@ -17,7 +17,9 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // которого его можно стереть.
 import { assertOwnBuilding, PERFORMED_LINE_STATUSES, lineHasWork } from './billing.js';   // REFUND_ANY_V1 (ревью B3) — lineHasWork
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
-import { lineUnitPrice, consultationFor, doctorPriceLookup, legacyPackageOnlyOff, packageLineDiscount } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
+import { lineUnitPrice, consultationFor, doctorPriceLookup, legacyPackageOnlyOff, packageLineDiscount, doctorPriceFor } from '../domain/pricing.js';   // doctorPriceFor: VISIT_TIER_SHOWN_CASHIER_V1
+import { tierUnitPrice } from '../domain/visit-tier.js';   // VISIT_TIER_SHOWN_CASHIER_V1 — цена яруса строки
+import { quoteServicePrices } from './service-price-quote.js';   // VISIT_TIER_SHOWN_CASHIER_V1 — дни от прошлого визита, как у мастера   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
 import { searchArg, pageInt } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере; REFUND_ANY_V1 — pageInt: страницы поиска счёта
 import { moneyDocRefusal } from '../domain/wallet.js';   // REFUND_ANY_V1 (ревью M-1) — «это документ денег» тем же правилом, что оплата и возврат
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
@@ -1215,4 +1217,118 @@ export function cashierUnbilled(db, args, user) {
     || place.get(a.visit_id) - place.get(b.visit_id));
   const sum = round2(waiting.reduce((a, g) => a + g.total, 0));
   return { from, to: q ? null : d, q, rows: waiting.slice(0, UNBILLED_LIMIT), totals: { n: waiting.length, sum } };
+}
+
+// =============================================================================
+// VISIT_TIER_SHOWN_CASHIER_V1 (2026-11-10) — ЯРУС ЦЕНЫ У СТРОК КАССЫ.
+// =============================================================================
+// Владелец: убедиться, что изменение цены по счёту визита (второй / повторный
+// визит, VISIT_TIER_PRICING_V1) видят касса и регистратура. Регистратура видела
+// чип «Второй визит» и зачёркнутую цену первого визита в мастере и смете, а касса
+// — одну сумму: «почему 60 000, а не 200 000?» оставалось без ответа у окна.
+//
+// cashier_line_tiers — по строкам счёта (invoice_id: окно оплаты, «Исправить
+// услуги», «Платежи») или визита (visit_id: «Выставить счёт» из «Ждут счёта»).
+// В ответе — только строки услуг с ярусом 'secondary' / 'repeat'. Строка пакета —
+// нет: её цену задаёт пакет, ярус её не меняет (pricing.js lineUnitPrice).
+//   tier        — слово яруса, записанное в строке (по нему считает счёт);
+//   price       — цена единицы, которую показывает экран: у выставленной строки —
+//                 цена позиции счёта, у невыставленной — цена строки визита;
+//   quantity    — количество (зачёркнутая сумма — цена первого визита × количество);
+//   first_price — цена ПЕРВОГО визита: своя цена врача строки, иначе каталог (то же
+//                 правило lineUnitPrice с ярусом 'primary'). НЕ ДОГАДКА: только если
+//                 (1) сегодняшнее правило даёт ровно записанную цену, (2) услугу в
+//                 каталоге не правили после того, как строку оценили (updated_at), и
+//                 (3) у врача со своей ценой ярус не бесплатный (0 от своей цены не
+//                 зависит — проверить её нечем). Иначе null: экран показывает чип и
+//                 подсказку без зачёркнутой цены;
+//   days_since  — дней от прошлого визита по этой услуге: та же котировка, что у
+//                 мастера (quoteServicePrices, день ЭТОГО визита, сам визит исключён),
+//                 и только если она называет тот же ярус; иначе null.
+// Только чтение (READ_ONLY_RPCS). Роли — те же, что у котировки service_price_quote:
+// цены и ярусы они видят и так.
+const LINE_TIER_ROLES = ['admin', 'registrar', 'doctor', 'nurse', 'cashier', 'callcenter'];
+
+export function cashierLineTiers(db, args, user) {
+  if (!hasAnyRole(user, LINE_TIER_ROLES)) throw new RpcError('Нет доступа к ценам услуг.', 403);
+  const a = args || {};
+  let rows;
+  if (a.invoice_id !== undefined && a.invoice_id !== null) {
+    if (!isPositiveInt(a.invoice_id)) throw new RpcError('Счёт указан неверно.', 400);
+    if (!db.prepare('SELECT 1 FROM invoices WHERE id = ?').get(a.invoice_id)) throw new RpcError('Счёт не найден.', 400);
+    rows = db.prepare(`
+      SELECT vs.*, ii.id AS ii_id, ii.unit_price AS ii_unit, ii.quantity AS ii_qty, ii.created_at AS priced_at
+        FROM invoice_items ii
+        JOIN visit_services vs ON vs.invoice_item_id = ii.id
+       WHERE ii.invoice_id = ?
+       ORDER BY ii.id, vs.id`).all(a.invoice_id);
+  } else {
+    if (!isPositiveInt(a.visit_id)) throw new RpcError('Визит указан неверно.', 400);
+    if (!db.prepare('SELECT 1 FROM visits WHERE id = ?').get(a.visit_id)) throw new RpcError('Визит не найден.', 400);
+    rows = db.prepare(`
+      SELECT vs.*, ii.id AS ii_id, ii.unit_price AS ii_unit, ii.quantity AS ii_qty,
+             COALESCE(ii.created_at, vs.created_at) AS priced_at
+        FROM visit_services vs
+        LEFT JOIN invoice_items ii ON ii.id = vs.invoice_item_id
+       WHERE vs.visit_id = ? AND COALESCE(vs.status, '') <> 'cancelled'
+       ORDER BY vs.id`).all(a.visit_id);
+  }
+  const tiered = rows.filter((r) => r.service_id != null
+    && (r.price_tier === 'secondary' || r.price_tier === 'repeat')
+    && !(r.package_price != null && r.package_full != null));
+  if (!tiered.length) return { lines: [] };
+
+  const getService = db.prepare(`
+    SELECT price, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to,
+           updated_at
+      FROM services WHERE id = ?`);
+  // Услугу не правили после того, как строку оценили: иначе каталог того дня мог быть другим.
+  const untouchedSince = db.prepare('SELECT julianday(?) <= julianday(?) AS ok');
+  const services = new Map();
+  const svcOf = (id) => { if (!services.has(id)) services.set(id, getService.get(id) || null); return services.get(id); };
+
+  // Котировка — один раз на визит: день визита, сам визит исключён (как quoteTier в billing.js).
+  const getVisit = db.prepare(`SELECT patient_id, ${localDate('visit_date')} AS day FROM visits WHERE id = ?`);
+  const byVisit = new Map();
+  for (const r of tiered) {
+    if (!byVisit.has(r.visit_id)) byVisit.set(r.visit_id, new Set());
+    byVisit.get(r.visit_id).add(r.service_id);
+  }
+  const quotes = new Map();
+  for (const [visitId, serviceIds] of byVisit) {
+    const v = getVisit.get(visitId);
+    if (!v || !v.patient_id) continue;
+    try {
+      quotes.set(visitId, quoteServicePrices(db, { patient_id: v.patient_id, service_ids: [...serviceIds], visit_id: visitId, date: v.day }).quotes || {});
+    } catch (_) { /* без дней — чип остаётся */ }
+  }
+
+  const lines = [];
+  const seenItems = new Set();   // на позицию счёта — одна строка (как invoice_line_work)
+  for (const r of tiered) {
+    if (r.ii_id != null) { if (seenItems.has(r.ii_id)) continue; seenItems.add(r.ii_id); }
+    const svc = svcOf(r.service_id);
+    if (!svc) continue;
+    const shown = Number(r.ii_id != null ? r.ii_unit : r.unit_price);
+    const now = round2(Number(lineUnitPrice(db, r, { service: svc })) || 0);
+    const price = Number.isFinite(shown) ? round2(shown) : now;
+    const first = round2(Number(lineUnitPrice(db, { ...r, price_tier: 'primary' }, { service: svc })) || 0);
+    const own = doctorPriceFor(db, r.doctor_id, r.service_id);
+    const tierPrice = Number(tierUnitPrice(svc, r.price_tier, Number(svc.price) || 0)) || 0;
+    const same = Math.abs(now - price) < 0.005;
+    const untouched = !!(svc.updated_at && r.priced_at && untouchedSince.get(svc.updated_at, r.priced_at).ok);
+    const ownCheckable = own === null || tierPrice !== 0;
+    const q = quotes.get(r.visit_id) ? quotes.get(r.visit_id)[r.service_id] : null;
+    const qty = Number(r.ii_id != null ? r.ii_qty : r.quantity);
+    lines.push({
+      visit_service_id: r.id,
+      invoice_item_id: r.ii_id ?? null,
+      tier: r.price_tier,
+      quantity: Number.isFinite(qty) && qty > 0 ? qty : 1,
+      price,
+      first_price: same && untouched && ownCheckable ? first : null,
+      days_since: q && q.tier === r.price_tier && q.days_since != null ? Number(q.days_since) : null,
+    });
+  }
+  return { lines };
 }

@@ -77,6 +77,27 @@ export function priceTierOf(item) {
     return t === 'secondary' || t === 'repeat' ? t : (t === 'primary' ? 'primary' : null);
 }
 
+/**
+ * VISIT_TIER_SHOWN_CASHIER_V1 (2026-11-10) — чип яруса у строки, чья цена УЖЕ
+ * записана: касса (ответ cashier_line_tiers по строке) и быстрая регистрация
+ * после записи (котировка строки). t = { tier, price, first_price, quantity,
+ * days_since }. null — ярусного визита нет (первый визит, нет ответа).
+ * struck — что зачеркнуть рядом с суммой строки: цена первого визита ×
+ * количество, только если она известна и строка ДЕШЕВЛЕ неё (то же правило,
+ * что у сметы — service-picker-modal.js pickerTierNote, ревью a386a07).
+ * Неизвестная цена первого визита (first_price null — сервер не смог её честно
+ * восстановить) — чип без зачёркнутой цены.
+ */
+export function shownTierNote(t) {
+    if (!t || (t.tier !== 'secondary' && t.tier !== 'repeat')) return null;
+    const qty = Number(t.quantity) > 0 ? Number(t.quantity) : 1;
+    const first = t.first_price == null || !Number.isFinite(Number(t.first_price)) ? null : Number(t.first_price);
+    const price = Number(t.price);
+    const struck = first !== null && Number.isFinite(price) && price < first ? Math.round(first * qty * 100) / 100 : null;
+    const days = t.days_since == null || !Number.isFinite(Number(t.days_since)) ? null : Number(t.days_since);
+    return { tier: t.tier, firstPrice: first, struck, daysSince: days };
+}
+
 // SVC_TIER_COLUMN_V1 (2026-09-14) — owner: «add into the settings of the
 // services the secondary visit until (show in the days)» and «repeat days, it
 // should have the range too». The catalogue column needs each window in words;

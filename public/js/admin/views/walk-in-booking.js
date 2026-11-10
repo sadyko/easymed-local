@@ -57,7 +57,8 @@
  *   удаляется из массива — повтор нажатия её не снимает второй раз.
  * bookedVisitId: визит записи, которому принадлежат bookedVsId.
  * → { visit, invoice, items, queue: Map(visit_service_id → row),
- *     lines: [{ visitServiceId, serviceId, doctorId, unitPrice, tier }],
+ *     lines: [{ visitServiceId, serviceId, doctorId, unitPrice, tier,
+ *               tierQuote?: { price, first_price, days_since } }],   // VISIT_TIER_SHOWN_CASHIER_V1 — у строки второго / повторного визита
  *     quoteError?: string, queueError?: string,
  *     appended?: true, appendedDiscount?: number }   // INVOICE_APPEND_V1 — дописано в неоплаченный счёт визита
  * Бросает Error с читаемым message на первом провале ДО счёта (визит остаётся
@@ -376,7 +377,15 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
         const res = await supabase.from('visit_services').insert(row).select().single();
         if (res.error) throw failAfterVisit(trf('Услуга «{name}»: {msg}', { name: svc.name || '', msg: msgOf(res.error) }));
         vsIds.push(res.data.id);
-        saved.push({ visitServiceId: res.data.id, serviceId: ident.service_id, consultationTypeId: ident.consultation_type_id, doctorId, unitPrice, tier: consult ? null : tier });
+        // VISIT_TIER_SHOWN_CASHIER_V1 — строка второго / повторного визита помнит котировку:
+        // цену яруса, цену ПЕРВОГО визита (base_price — своя цена врача или каталог) и дни
+        // от прошлого визита. Быстрая регистрация ставит по ним чип и зачёркнутую цену.
+        // Строка пакета — без неё: её цену задаёт пакет, ярус её не меняет.
+        const tierQuote = !consult && q && tier !== 'primary' && !isPosInt(line.packageId)
+            ? { price: quoted, first_price: q.base_price != null && Number.isFinite(Number(q.base_price)) ? Number(q.base_price) : null, days_since: q.days_since ?? null }
+            : null;
+        saved.push({ visitServiceId: res.data.id, serviceId: ident.service_id, consultationTypeId: ident.consultation_type_id, doctorId, unitPrice, tier: consult ? null : tier,
+            ...(tierQuote ? { tierQuote } : {}) });
         if (isPosInt(line.recommendationId)) recJobs.push({ recommendation_id: Number(line.recommendationId), visit_service_id: Number(res.data.id) });   // DOCTOR_REFERRAL_DESK_V1
     }
 
