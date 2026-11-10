@@ -37,6 +37,7 @@ import { tr, trf } from '../i18n.js';
 import { canFixCashierLines, canSwapPaidLines } from '../permissions.js';
 import { localYmd } from '../discount-rules.js';   // REFERRAL_BILL_V1 — местный день, как у остальной кассы
 import { TUBE_STATUSES } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 (ревью U11, M3/L5) — статусы строк, у которых есть пробирка
+import { tierChipNodes, loadLineTiers } from './tier-chip.js';   // VISIT_TIER_SHOWN_CASHIER_V1 — «Второй визит» / «Повторный визит» у строк
 import { serviceRoute, performerRequired, ROUTE_SELECT } from '../../shared/service-route.js';   // LAB_NO_DOCTOR_V1 — performerRequired вместо needsPerformer   // DIAG_ROUTE_V1 (3.22.0) — анализ ли услуга решает группа (ревью L-5); услуге кабинета нужен исполнитель и у кассы (I-4)
 
 // Работа по строке начата или сделана — сервер её не меняет (PERFORMED_LINE_STATUSES).
@@ -844,6 +845,9 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
             return;
         }
         current = { ...current, ...st.invoice };
+        // VISIT_TIER_SHOWN_CASHIER_V1 — «Второй визит» / «Повторный визит» и цена первого визита у строк.
+        const tierByItem = st.lines.some((l) => l && l.service_id != null)
+            ? (await loadLineTiers({ invoice_id: st.invoice.id })).byItem : new Map();
         const editable = invoiceEditable(st.invoice);
         // CASHIER_PAID_SWAP_V1 — деньги по счёту есть: замена с расчётом разницы.
         const swappable = !editable && invoiceSwappable(st.invoice) && canSwapPaidLines();
@@ -889,6 +893,7 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
             h('div', { style: { flex: '1', minWidth: 0 } },
                 h('div', { class: 'cell-strong' }, item.description || '—'),
                 h('div', { class: 'muted', 'data-line-where': '', style: { fontSize: '12.5px' } }, lineWhere(line, doc))),   // CASHIER_LINE_EDIT_V1 — анализ: «Лаборатория», а не «Без врача»
+            ...tierChipNodes(tierByItem.get(Number(item.id)), fmtSum),   // VISIT_TIER_SHOWN_CASHIER_V1
             h('div', { class: 'num', style: { whiteSpace: 'nowrap', fontWeight: 600 } }, fmtSum(item.total), ' ', tr('сум')),
             actions));
         }
@@ -1070,6 +1075,9 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
         } catch (e) { /* без пометки сервер всё равно не выставит их молча */ }
         if (!seeded) { for (const l of lines) if (preselectRefunded || !refunded.has(Number(l.id))) chosen.add(Number(l.id)); seeded = true; }   // REFERRAL_BILL_V1 — preselectRefunded
         for (const id of [...chosen]) if (!lines.some((l) => Number(l.id) === id)) chosen.delete(id);
+        // VISIT_TIER_SHOWN_CASHIER_V1 — «Второй визит» / «Повторный визит» у строк визита без счёта.
+        const tierByLine = lines.some((l) => l && l.service_id != null)
+            ? (await loadLineTiers({ visit_id: row.visit_id })).byLine : new Map();
         clear(table);
         if (!lines.length) {
             table.appendChild(h('div', { class: 'empty' }, 'Невыставленных строк не осталось — выставлять нечего.'));
@@ -1106,6 +1114,7 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
             h('div', { style: { flex: '1', minWidth: 0 } },
                 h('div', { class: 'cell-strong' }, name, tags.length ? h('span', { class: 'muted', style: { fontWeight: 500 } }, ' · ' + tags.join(', ')) : null),
                 h('div', { class: 'muted', 'data-line-where': '', style: { fontSize: '12.5px' } }, lineWhere(l, doc))),   // CASHIER_LINE_EDIT_V1
+            ...tierChipNodes(tierByLine.get(id), fmtSum),   // VISIT_TIER_SHOWN_CASHIER_V1
             h('div', { class: 'num', style: { whiteSpace: 'nowrap', fontWeight: 600 } }, fmtSum((Number(l.unit_price) || 0) * (Number(l.quantity) || 1)), ' ', tr('сум')),
             actions));
         }

@@ -109,3 +109,19 @@ test('tierWindowParts: «до 6 дн.» for 1–6, a range when the lower bound 
     assert.equal(tierWindowParts({ price: 100 }), null, 'one-price service — nothing to say');
     assert.equal(tierWindowParts({ price: 100, secondary_days_to: 6 }), null, 'a window without a price is not a tier');
 });
+
+// VISIT_TIER_SHOWN_CASHIER_V1 — чип у строки с УЖЕ записанной ценой (касса, быстрая
+// регистрация после записи): ответ сервера по строке → чип и зачёркнутая сумма.
+test('shownTierNote: chip for second/repeat; struck = first-visit price × qty only when the line is cheaper and the first price is known', async () => {
+    const { shownTierNote } = await import('../visit-tier-logic.js');
+    assert.equal(shownTierNote(null), null);
+    assert.equal(shownTierNote({ tier: 'primary', price: 200000, first_price: 200000 }), null, 'first visit — nothing to say');
+    assert.deepEqual(shownTierNote({ tier: 'secondary', price: 60000, first_price: 200000, quantity: 2, days_since: 3 }),
+        { tier: 'secondary', firstPrice: 200000, struck: 400000, daysSince: 3 });
+    assert.deepEqual(shownTierNote({ tier: 'repeat', price: 0, first_price: 200000 }),
+        { tier: 'repeat', firstPrice: 200000, struck: 200000, daysSince: null }, 'free repeat — struck first price, qty defaults to 1');
+    assert.deepEqual(shownTierNote({ tier: 'secondary', price: 60000, first_price: null, days_since: 2 }),
+        { tier: 'secondary', firstPrice: null, struck: null, daysSince: 2 }, 'unknown first price — chip without a struck number');
+    assert.equal(shownTierNote({ tier: 'secondary', price: 250000, first_price: 200000 }).struck, null, 'a dearer tier is not a discount — nothing struck');
+    assert.equal(shownTierNote({ tier: 'secondary', price: 200000, first_price: 200000 }).struck, null, 'same price — nothing struck');
+});

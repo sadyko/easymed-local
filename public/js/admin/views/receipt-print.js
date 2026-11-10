@@ -119,10 +119,11 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
     // очередь: обе подписи живут на visit_services, и второй поход в базу за
     // тем же набором строк был бы лишним.
     const { data: vsRows } = await supabase.from('visit_services')
-        .select('id, invoice_item_id, doctor_id(full_name, specialty, role), service_templates(name, discount_percent, is_package)')   // CLINIC_API_FIX_V1 — скидка: пакет или шаблон
+        .select('id, invoice_item_id, price_tier, package_price, doctor_id(full_name, specialty, role), service_templates(name, discount_percent, is_package)')   // CLINIC_API_FIX_V1 — скидка: пакет или шаблон; price_tier, package_price: VISIT_TIER_SHOWN_CASHIER_V1
         .in('invoice_item_id', items.map((i) => i.id));
     const byItem = performersByItem(vsRows);
     const pkgByItem = packagesByItem(vsRows);   // PACKAGES_V1
+    const tierByItem = tiersByItem(vsRows);     // VISIT_TIER_SHOWN_CASHIER_V1
 
     printableSheet({ type: 'fiscal', idLine: inv.invoice_number || String(inv.id), data: {
         docNo: inv.invoice_number || String(inv.id),
@@ -135,7 +136,7 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
         sex: GENDER_RU[String((pat && pat.gender) || '').toLowerCase()] || '',
         cashier: cashierName,
         items: items.map((it) => ({
-            name: packageItemName(it.description || 'Услуга', pkgByItem[it.id], it.discount_amount), qty: it.quantity, price: it.unit_price,
+            name: packageItemName(tierItemName(it.description || 'Услуга', tierByItem[it.id]), pkgByItem[it.id], it.discount_amount), qty: it.quantity, price: it.unit_price,   // VISIT_TIER_SHOWN_CASHIER_V1 — «(второй визит)»
             ...(byItem[it.id] || {}),   // performer / performerRole, когда исполнитель назначен
         })),
         subtotal: inv.subtotal, discount: inv.discount_amount,
@@ -432,6 +433,30 @@ export function packagesByItem(vsRows) {
         if (name && r.invoice_item_id != null) out[r.invoice_item_id] = name;
     }
     return out;
+}
+
+// VISIT_TIER_SHOWN_CASHIER_V1 (2026-11-10) — «(второй визит)» / «(повторный визит)»
+// после названия услуги на чеке: пациент с чеком видит, почему цена не та, что в
+// прайсе (VISIT_TIER_PRICING_V1). Чек — русский бланк, как «пакет» и «скидка» ниже.
+// Строка пакета — без пометки: её цену задаёт пакет, ярус её не меняет. Нужны
+// price_tier и package_price в выборке строк визита.
+const TIER_ITEM_RU = { secondary: '(второй визит)', repeat: '(повторный визит)' };
+
+/** visit_services → { [invoice_item_id]: 'secondary' | 'repeat' } — только строки с ярусом. */
+export function tiersByItem(vsRows) {
+    const out = {};
+    if (!Array.isArray(vsRows)) return out;
+    for (const r of vsRows) {
+        if (!r || r.invoice_item_id == null || r.package_price != null) continue;
+        if (TIER_ITEM_RU[r.price_tier]) out[r.invoice_item_id] = r.price_tier;
+    }
+    return out;
+}
+
+/** «Приём терапевта (второй визит)»; первый визит — название как есть. */
+export function tierItemName(name, tier) {
+    const base = String(name || 'Услуга');
+    return TIER_ITEM_RU[tier] ? base + ' ' + TIER_ITEM_RU[tier] : base;
 }
 
 // PACKAGES_V1 — подпись позиции на бланке: «УЗИ · пакет «Осень», скидка −20 000».

@@ -24,7 +24,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { printableSheet } from './doc-settings.js?v=noqr1';
 import { moneyDisplay, moneyNumber } from '../../shared/money-input.js?v=mi2';   // MONEY_INPUT_V2
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // DEBT_FLOW_V1 — «пациент ещё на койке» в окне отмены
-import { loadInvoiceLines, performersByItem, packagesByItem, packageItemName, dobAge, paymentLines, printInvoiceCheck, invoiceSheetData, printSlip } from './receipt-print.js?v=rp1';   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы   // V3120_FIX — чек по платежам, счёт и квитанция одной сборкой
+import { loadInvoiceLines, performersByItem, packagesByItem, packageItemName, tiersByItem, tierItemName, dobAge, paymentLines, printInvoiceCheck, invoiceSheetData, printSlip } from './receipt-print.js?v=rp1';   // VISIT_TIER_SHOWN_CASHIER_V1 — tiersByItem, tierItemName: «(второй визит)» на чеке   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы   // V3120_FIX — чек по платежам, счёт и квитанция одной сборкой
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
@@ -35,6 +35,7 @@ import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 �
 import { canCloseOtherShifts, canSwapPaidLines } from '../permissions.js';
 import { canCashierDiscount, canChangePaidDiscount } from '../permissions.js';   // CASHIER_DISCOUNT_V1 — «Кассир может давать скидку»; DISCOUNT_CHANGE_PAID_V1 — и денежная роль   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 import { watchScreen } from '../live.js';   // LIVE_REFRESH_V1 — касса обновляется сама (без ?v=: один клиент потока на вкладку)
+import { tierChipNodes, loadLineTiers } from './tier-chip.js';   // VISIT_TIER_SHOWN_CASHIER_V1 — «Второй визит» / «Повторный визит» у строк кассы
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
 // CARD_BALANCE_V1 — «Подарочная карта»: оплата остатком карты / сертификата.
@@ -128,13 +129,15 @@ async function printFiscalCheck(inv, tenders, legacyMethod, opts = {}) {   // CA
         let queue = [];
         let perfByItem = {};   // RECEIPT_DOB_PERFORMER_V1
         let pkgByItem = {};    // PACKAGES_V1
+        let tierByItem = {};   // VISIT_TIER_SHOWN_CASHIER_V1 — «(второй визит)» на чеке
         if (itemIds.length) {
             const { data: vsRows } = await supabase.from('visit_services')
-                .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role), service_templates(name, discount_percent, is_package)')   // CLINIC_API_FIX_V1; SERVICES_PACKAGES_V1 — «пакет» на чеке только у пакета (is_package, packagesByItem)
+                .select('id, invoice_item_id, queue_key, queue_no, price_tier, package_price, services(name), doctor_id(full_name, specialty, role), service_templates(name, discount_percent, is_package)')   // CLINIC_API_FIX_V1; SERVICES_PACKAGES_V1 — «пакет» на чеке только у пакета (is_package, packagesByItem); price_tier, package_price: VISIT_TIER_SHOWN_CASHIER_V1
                 .in('invoice_item_id', itemIds);
             // RECEIPT_DOB_PERFORMER_V1 — тот же запрос отдаёт и исполнителя.
             perfByItem = performersByItem(vsRows);
             pkgByItem = packagesByItem(vsRows);
+            tierByItem = tiersByItem(vsRows);   // VISIT_TIER_SHOWN_CASHIER_V1
             const ids = (vsRows || []).map(r => r.id);
             if (ids.length) {
                 const { data: tickets, error: qErr } = await supabase.rpc('issue_queue_numbers', { p_ids: ids });
@@ -161,7 +164,7 @@ async function printFiscalCheck(inv, tenders, legacyMethod, opts = {}) {   // CA
             sex: GENDER_RU[String(inv.gender || '').toLowerCase()] || '',
             cashier: u.full_name || u.username || '',
             items: (items || []).map(it => ({
-                name: packageItemName(it.description || 'Услуга', pkgByItem[it.id], it.discount_amount), qty: it.quantity, price: it.unit_price,   // PACKAGES_V1
+                name: packageItemName(tierItemName(it.description || 'Услуга', tierByItem[it.id]), pkgByItem[it.id], it.discount_amount), qty: it.quantity, price: it.unit_price,   // PACKAGES_V1 · VISIT_TIER_SHOWN_CASHIER_V1 — «(второй визит)»
                 ...(perfByItem[it.id] || {}),   // RECEIPT_DOB_PERFORMER_V1
             })),
             subtotal: inv.subtotal, discount: inv.discount_amount,
@@ -2005,6 +2008,9 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
         },
     }, h('span', { style: { flex: 1 } }, label), value);
 
+    // VISIT_TIER_SHOWN_CASHIER_V1 — ярусы строк счёта (cashier_line_tiers): чип «Второй визит» /
+    // «Повторный визит» и зачёркнутая сумма по цене первого визита рядом с суммой строки.
+    let lineTiers = new Map();
     const renderLines = (items) => {
         clear(linesEl);
         if (!items) {   // ещё грузятся
@@ -2043,10 +2049,11 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
             const list = h('div', { style: { maxHeight: '190px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' } });
             for (const it of items) {
                 const qty = Number(it.quantity) || 1;
-                list.appendChild(h('div', { style: { display: 'flex', gap: '10px', alignItems: 'baseline', padding: '3px 0', fontSize: '12.5px' } },
+                list.appendChild(h('div', { 'data-pay-line': String(it.id), style: { display: 'flex', gap: '10px', alignItems: 'baseline', padding: '3px 0', fontSize: '12.5px' } },
                     h('span', { style: { flex: 1, minWidth: 0, color: 'var(--ink-800)' } },
                         it.description || (it.services && it.services.name) || 'Услуга',
                         qty > 1 ? h('span', { class: 'muted', style: { marginLeft: '6px' } }, '×' + qty) : null),
+                    ...tierChipNodes(lineTiers.get(Number(it.id)), fmtPrice),   // VISIT_TIER_SHOWN_CASHIER_V1
                     money(it.total)));
             }
             box.appendChild(list);
@@ -2096,6 +2103,15 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
         .then(({ data, error }) => {
             if (error) console.warn('[cashier] invoice_items:', error.message);
             renderLines(data || []);
+            // VISIT_TIER_SHOWN_CASHIER_V1 — строки показаны сразу; ярусы — вторым шагом: сбой не
+            // прячет состав счёта, а у счёта без услуг каталога спрашивать нечего.
+            if ((data || []).some((it) => it && it.services)) {
+                loadLineTiers({ invoice_id: inv.id }).then((t) => {
+                    if (!t.byItem.size) return;
+                    lineTiers = t.byItem;
+                    renderLines(data || []);
+                });
+            }
         });
 
     const bodyEl = h('div');
@@ -2801,6 +2817,10 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
             lineByItem = new Map((data || []).map((l) => [l.invoice_item_id, l]));
         } catch (e) { /* без строк визита остаётся «Вернуть услугу» */ }
     }
+    // VISIT_TIER_SHOWN_CASHIER_V1 — чип яруса у строки. Здесь сумма строки — за вычетом её
+    // скидки, поэтому зачёркнутой цены нет: цена первого визита — в подсказке чипа.
+    const tierByItem = [...lineByItem.values()].some((l) => l && l.service_id != null)
+        ? (await loadLineTiers({ invoice_id: inv.id })).byItem : new Map();
     const swapBtn = (it) => {
         if (!swapOk) return null;   // LAB_TUBE_LABEL_V1 (ревью U11, M3) — строки теперь читаются и без права замены
         const line = lineByItem.get(it.id);
@@ -2816,6 +2836,7 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
     // под название одной группой, а не сжимаются.
     const itemRows = items.map(it => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center', flexWrap: 'wrap' } },
         h('span', { style: { flex: '1 1 160px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: it.description || '' }, it.description || '—'),
+        ...tierChipNodes(tierByItem.get(Number(it.id)), fmtPrice, { struck: false }),   // VISIT_TIER_SHOWN_CASHIER_V1
         h('span', { class: 'num', style: { fontWeight: 700 } }, fmtPrice(Math.max(0, Number(it.total || 0) - Number(it.discount_amount || 0)))),
         h('div', { style: { display: 'flex', gap: '6px', flexShrink: 0, marginLeft: 'auto' } },
             swapBtn(it),   // REFUND_SWAP_V1
