@@ -2107,6 +2107,42 @@ function methodsWords(plan) {
   return [...byMethod.entries()].map(([k, v]) => (RU[k] || k) + ' ' + moneyWords(v)).join(', ');
 }
 
+// DISCOUNT_CHANGE_PAID_V1 — ВОЗВРАТ ПЕРЕПЛАТЫ ПО ПЛАТЕЖАМ СЧЁТА: общая часть «Заменить
+// услугу» (swapPaidLineTx) и «Изменить скидку» (discountChangeTx), внутри транзакции
+// вызывающего. Сумма счёта стала T, а оплачено P > T: разница P − T возвращается по
+// платежам с последнего, каждый своим способом (issueRefund: с баланса — на баланс, картой —
+// на ту же карту) или вся на баланс пациента по выбору кассира. `tag` — хвост пометки
+// платежа возврата («SWAP#<позиция>», «DISC#<счёт>»): потолки возврата, кэшбэк и смена
+// считают его как любой возврат (REFUND#<платёж>), а список «Возвраты и отмены» по нему
+// называет вид возврата (cashier.js refundKind). Итоги счёта двигает вызывающий.
+function refundOverpaid(db, inv, { P, T, toBalance, cardFallback, reason, tag }, user) {
+  let left = round2(P - T);
+  let paidNow = P;
+  let refunded = 0;
+  let anyBalance = false;
+  const plan = [];
+  const paysDesc = db.prepare('SELECT * FROM payments WHERE invoice_id = ? AND amount > 0 ORDER BY id DESC').all(inv.id);
+  for (const p of paysDesc) {
+    if (left <= 0) break;
+    assertOwnBuilding(db, p, 'Платёж');
+    const refundable = round2(Math.min(p.amount - refundedOfPayment(db, p.id), paidNow));
+    if (refundable <= 0) continue;
+    const take = round2(Math.min(left, refundable));
+    const r = issueRefund(db, {
+      invoice: inv, p, amt: take, refundable,
+      toBalanceRaw: toBalance ? true : undefined, cardFallbackRaw: cardFallback, reason,
+      noteTag: 'REFUND#' + p.id + ' ' + tag,
+    }, user);
+    plan.push({ payment_id: p.id, method: p.method, refund_method: r.method, amount: take, to_balance: !!r.toBalance, to_card: !!r.card });
+    if (r.toBalance) anyBalance = true;
+    left = round2(left - take);
+    paidNow = round2(paidNow - take);
+    refunded = round2(refunded + take);
+  }
+  if (left > 0.005) throw new RpcError('Платежей счёта не хватает на возврат разницы — проверьте платежи счёта.', 400);
+  return { refunded, plan, anyBalance };
+}
+
 // Замена целиком, внутри транзакции вызывающего. `dryRun` — предпросмотр: всё
 // то же самое, но без ключа повтора и без номера очереди (транзакция всё равно
 // откатывается).
@@ -2286,31 +2322,13 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
   // 3. Расчёт с заплаченным.
   let refunded = 0;
   let due = 0;
-  const plan = [];
+  let plan = [];
   let anyBalance = false;
   if (T < P - 0.005) {
-    let left = round2(P - T);
-    let paidNow = P;
-    const reason = SWAP_PAID_REASON + (extraReason ? ': ' + extraReason : '');
-    const paysDesc = db.prepare('SELECT * FROM payments WHERE invoice_id = ? AND amount > 0 ORDER BY id DESC').all(inv.id);
-    for (const p of paysDesc) {
-      if (left <= 0) break;
-      assertOwnBuilding(db, p, 'Платёж');
-      const refundable = round2(Math.min(p.amount - refundedOfPayment(db, p.id), paidNow));
-      if (refundable <= 0) continue;
-      const take = round2(Math.min(left, refundable));
-      const r = issueRefund(db, {
-        invoice: inv, p, amt: take, refundable,
-        toBalanceRaw: toBalance ? true : undefined, cardFallbackRaw: cardFallback, reason,
-        noteTag: 'REFUND#' + p.id + ' SWAP#' + item.id,
-      }, user);
-      plan.push({ payment_id: p.id, method: p.method, refund_method: r.method, amount: take, to_balance: !!r.toBalance, to_card: !!r.card });
-      if (r.toBalance) anyBalance = true;
-      left = round2(left - take);
-      paidNow = round2(paidNow - take);
-      refunded = round2(refunded + take);
-    }
-    if (left > 0.005) throw new RpcError('Платежей счёта не хватает на возврат разницы — проверьте платежи счёта.', 400);
+    // DISCOUNT_CHANGE_PAID_V1 — цикл возврата — общий с «Изменить скидку» (refundOverpaid).
+    ({ refunded, plan, anyBalance } = refundOverpaid(db, inv, {
+      P, T, toBalance, cardFallback, reason: SWAP_PAID_REASON + (extraReason ? ': ' + extraReason : ''), tag: 'SWAP#' + item.id,
+    }, user));
     db.prepare("UPDATE invoices SET paid_amount = ?, status = 'paid', paid_at = COALESCE(paid_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id = ?").run(T, inv.id);
     // Кэшбэк следует за новыми деньгами счёта (новая сумма — потолок базы).
     adjustCashbackAfterRefund(db, db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id));
