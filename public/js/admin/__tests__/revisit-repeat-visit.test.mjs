@@ -81,7 +81,7 @@ const modals = () => document.body.children.filter((c) => c.classList && c.class
 const WS = await import('../views/service-workspace.js');
 
 /** Кабинет пациента `pid` у врача (Петров) → «Повторный визит» → 10-е след. месяца, 10:00 → «Записать». */
-async function bookRevisit(pid, doc = { id: PETROV, name: 'Петров Пётр' }, { beforeBook = null } = {}) {
+async function bookRevisit(pid, doc = { id: PETROV, name: 'Петров Пётр' }, { beforeBook = null, time = '10:00' } = {}) {
     document.body.children = [];
     const container = new El('div');
     const ctx = { container, visitServiceId: 900 + pid, visitId: 1900 + pid, patient: { id: pid, lastName: 'Пациент', firstName: 'Тест', mrn: 'P-' + pid, __service: { id: 900 + pid, name: 'Приём', doctorId: doc.id, doctorName: doc.name } } };
@@ -95,8 +95,8 @@ async function bookRevisit(pid, doc = { id: PETROV, name: 'Петров Пётр
     if (beforeBook) beforeBook(dlg);   // REPEAT_VISIT_V1 (ревью) — что окно предлагает до записи
     dlg.querySelectorAll('button').find((b) => b.textContent.includes('+1 мес')).dispatch('click');
     dlg.querySelectorAll('button').find((b) => b.classList.contains('rv-cell') && b.textContent === '10').dispatch('click');
-    const slot = await until(() => dlg.querySelectorAll('button').find((b) => b.classList.contains('rv-slot') && !b.hasAttribute('disabled') && b.textContent === '10:00'));
-    assert.ok(slot, 'нет свободного 10:00');
+    const slot = await until(() => dlg.querySelectorAll('button').find((b) => b.classList.contains('rv-slot') && !b.hasAttribute('disabled') && b.textContent === time));
+    assert.ok(slot, 'нет свободного ' + time);
     slot.dispatch('click');
     const bookBtn = dlg.querySelectorAll('button').find((b) => /Записать/.test(b.textContent));
     bookBtn.dispatch('click');
@@ -153,6 +153,9 @@ test('REPEAT_VISIT_V1: врач без видов консультаций — �
     try {
         let offered = null;
         await bookRevisit(79, { id: 10, name: 'Иванов Иван' }, {   // у Петрова 10:00 уже занят первым тестом
+            // SLOT_PACK_V1 (3.23.0) — начала вплотную шагом длительности услуги (40 мин) от 09:00:
+            // 09:00, 09:40, 10:20 — шага 20 («Повторный визит») больше нет, и 10:00 не начало.
+            time: '10:20',
             beforeBook: (dlg) => { const sel = dlg.querySelector('select[data-rv-service]'); offered = sel && [sel.value, sel.querySelectorAll('option').map((o) => o.getAttribute('value'))]; },
         });
         assert.deepEqual(offered, ['s:41', ['s:41']], 'окно предлагает не только услугу этого врача');

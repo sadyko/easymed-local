@@ -11,7 +11,7 @@ import { canNameVisitSource } from '../domain/line-referral.js';   // REFERRAL_L
 // обработчиков, что и у календаря. Своей арифметики расписания здесь нет ни
 // строки: calendar_slots — единственный источник занятости на весь продукт,
 // calendar_book — единственный, кто ставит визиту время и врача.
-import { calendarSlots, calendarBook } from './calendar.js';
+import { calendarSlots, calendarBook, isSameBooking, extendBookingForJoin } from './calendar.js';   // CRM_JOIN_NOT_MOVE_V1 — одно правило присоединения
 import { DEFAULT_DURATION_MIN, serviceDurationMinutes, formatHhmm } from './slot-engine.js';
 // BILLING_AUDIT_FIX_V1 (A1) — день визита считается в МЕСТНОМ времени клиники.
 import { localDate } from '../domain/day.js';
@@ -81,6 +81,14 @@ function localDayIso(ms) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 const minutesOfLocal = (ms) => { const d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); };
+/** SLOT_PACK_V1 (ревью H1) — ISO с секундами → целая минута вверх (в пределах того же местного дня); без секунд — как есть. */
+function wholeMinuteIso(iso) {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms) || ms % 60000 === 0) return iso;
+  const up = Math.ceil(ms / 60000) * 60000;
+  const t = new Date(up).getDate() === new Date(ms).getDate() ? up : Math.floor(ms / 60000) * 60000;
+  return new Date(t).toISOString();
+}
 const hhmmToMin = (s) => { const [h, m] = String(s || '0:0').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
 
 /**
@@ -99,8 +107,10 @@ function slotConflict(db, user, { doctorId, startMs, durationMin, excludeVisitId
     step_minutes: durationMin,
     exclude_visit_id: excludeVisitId || null,
   }, user, { excludeHoldId });
+  // SLOT_PACK_V1 (ревью H1) — начало вниз, конец вверх до минуты: та же граница, что у
+  // calendar_book в миллисекундах (конец занятого calendar_slots тоже округлён вверх).
   const from = minutesOfLocal(startMs);
-  const to = from + durationMin;
+  const to = from + durationMin + (startMs % 60000 ? 1 : 0);
   const clash = (res.busy || []).find((b) => from < hhmmToMin(b.to) && hhmmToMin(b.from) < to) || null;
   return clash ? { clash, doctorName: (res.resource && res.resource.name) || '' } : null;
 }
@@ -161,6 +171,70 @@ export function dayVisitOf(db, patientId, day) {
   return db.prepare(DAY_VISIT_SQL).get(patientId, day) || null;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_JOIN_NOT_MOVE_V1 (3.23.0, снимок владельца 2026-11-10) — УСЛУГА В ЗАПИСЬ,
+// А НЕ ПЕРЕНОС ЗАПИСИ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Пациент записан к врачу на 10:10. Оператор в карточке CRM добавлял к тому же
+// врачу ещё услугу — окно о записи не знало, предлагало 09:30, и «Сохранить и
+// записать» слало сюда book на 09:30: визит дня без работы ПЕРЕНОСИЛСЯ
+// (moved, 10:10 → 09:30), а оператор видел только тост «перенесено».
+//
+// Теперь у присоединения своя просьба — args.join { doctor_id, start,
+// duration_minutes } (то же, что мастер визита делает без book, BOOKED_JOIN_V1),
+// и та же просьба узнаётся в book: тот же врач, тот же день, до прихода и ТО
+// ЖЕ НАЧАЛО — это присоединение. calendar_book не зовётся, запись не двигается.
+// Перенос на другое время — только book с другим временем, то есть явный выбор
+// «Перенести запись на …» в окне.
+
+/**
+ * args.join → { doctorId, startMs, lines, explicit } или null (мусор — обычный
+ * ensure_visit без времени). lines — присоединяемые услуги по коду (ревью M2: длина
+ * записи считается из её строк, повтор не растит); duration_minutes без строк —
+ * длительность как есть.
+ */
+function parseJoin(join) {
+  if (!join || typeof join !== 'object') return null;
+  const doctorId = Number(join.doctor_id);
+  const startMs = Date.parse(String(join.start || ''));
+  if (!isPositiveInt(doctorId) || Number.isNaN(startMs)) return null;
+  const lines = (Array.isArray(join.lines) ? join.lines : []).slice(0, 50).map((l) => ({
+    serviceId: l && isPositiveInt(Number(l.service_id)) ? Number(l.service_id) : null,
+    consultationTypeId: l && !(isPositiveInt(Number(l.service_id))) && isPositiveInt(Number(l.consultation_type_id)) ? Number(l.consultation_type_id) : null,
+  })).filter((l) => l.serviceId || l.consultationTypeId);
+  const dur = Math.round(Number(join.duration_minutes));
+  if (!lines.length && Number.isFinite(dur) && dur > 0) lines.push({ minutes: Math.min(dur, 12 * 60) });
+  return { doctorId, startMs, lines, explicit: true };
+}
+
+/** Запись, к которой присоединяют: визит того же врача, на ту же минуту, ещё до прихода (calendar.js). */
+const isJoinTarget = (visit, { doctorId, startMs }) => isSameBooking(visit, doctorId, startMs);
+
+/** Ответ ensure_visit на присоединение: тот же визит, время записи держит она сама. */
+async function finishJoin(db, user, out, join, { desk, requestId = null }) {
+  const ext = await extendBookingForJoin(db, user, out.visit, join.lines);   // JOIN_EXTENDS_BOOKING_V1 · ревью M2
+  const visit = ext.visit || out.visit;
+  // CRM_UNIFY_V1 — как у ensure_visit без book. CRM_BOOKING_OWN_CARD_V1 — присоединение из
+  // карточки CRM называет её (crm_request_id): шаг связи сажает и двигает только её.
+  crmLinkVisit(db, visit.id, user, { undated: true, desk, requestId });
+  return { visit, created: false, booked: true, joined: true, extended: ext.extended, ends: ext.ends, next: ext.next, until: ext.until };
+}
+
+/**
+ * CRM_JOIN_NOT_MOVE_V1 (ревью M4) — ЗАПИСЬ ИЗМЕНИЛАСЬ, ПОКА ОКНО БЫЛО ОТКРЫТО: окно
+ * присоединяло к записи, которой больше нет (отменили) или которая стоит на
+ * другом времени / у другого врача. Новый визит не заводится и чужое время не
+ * занимается — экран просит выбрать время ещё раз. Пришедший пациент (тот же врач
+ * и время) — не «изменилась»: услуга идёт в его визит дня, как прежде.
+ */
+function joinTargetGone(dayVisit, join) {
+  if (!dayVisit) return true;
+  if (Number(dayVisit.doctor_id) !== Number(join.doctorId)) return true;
+  const vMs = Date.parse(dayVisit.visit_date);
+  return !Number.isFinite(vMs) || Math.floor(vMs / 60000) !== Math.floor(join.startMs / 60000);
+}
+
 // args: { patient_id, date (ISO datetime or YYYY-MM-DD), doctor_id?,
 //         visit_type?, referral_source_id? (только стойка и колл-центр), branch_id?, notes?,
 //         desk?: true (CRM_UNIFY_V1 — регистрация на стойке; CRM_LINK_ALL_V1 (R3) — с book
@@ -200,7 +274,11 @@ export async function ensureVisit(db, args, user, internal = {}) {
     if (!local || !local.d) throw new RpcError('Дата визита указана неверно.', 400);
     day = local.d;
   }
-  const whenIso = rawDate.length > 10 ? rawDate : day + 'T09:00:00Z';
+  // SLOT_PACK_V1 (ревью H1) — ВИЗИТ НА ЦЕЛОЙ МИНУТЕ. Приход «сейчас» приезжает до
+  // секунды (10:07:20): занятость врача кончалась в 10:37:20, а экраны предлагали
+  // 10:37, которое calendar_book отказывал. Секунды — вверх до минуты (10:08), но не
+  // через полночь: 23:59:40 остаётся в своём дне (вниз).
+  const whenIso = rawDate.length > 10 ? wholeMinuteIso(rawDate) : day + 'T09:00:00Z';
 
   const optInt = (v, name) => {
     if (v === undefined || v === null || v === '') return null;
@@ -240,7 +318,20 @@ export async function ensureVisit(db, args, user, internal = {}) {
   //     не присылают book: у них нет слота — не «проверка пропущена», а
   //     проверять нечего. Решает это экран (headTimedLine в visit-wizard.js),
   //     и это единственная честная причина сюда не прийти.
-  const book = parseBook(args && args.book);
+  const bookAsked = parseBook(args && args.book);
+  // CRM_JOIN_NOT_MOVE_V1 — присоединение: явная просьба join или book на ТО ЖЕ
+  // время записи того же врача (до прихода). Такой book — не запись и не перенос.
+  const joinAsk = parseJoin(args && args.join)
+    || (bookAsked && isJoinTarget(dayVisitOf(db, patientId, day), bookAsked)
+      ? { doctorId: bookAsked.doctorId, startMs: bookAsked.startMs,
+          lines: bookAsked.serviceId ? [{ serviceId: bookAsked.serviceId }] : [{ minutes: bookAsked.durationMin || bookDuration(db, null) }] }
+      : null);
+  const book = joinAsk ? null : bookAsked;
+  // ревью M4 — явная просьба присоединить, а записи (того врача, на то время) уже нет.
+  if (joinAsk && joinAsk.explicit && joinTargetGone(dayVisitOf(db, patientId, day), joinAsk)) {
+    // i18n-exempt: сообщение сервера; экран переводит его по коду join_target_gone.
+    throw new RpcError('Запись изменилась, пока окно было открыто — выберите время ещё раз.', 409, 'join_target_gone');
+  }
   // CRM_LINK_ALL_V1 (R3; решение D2) — мастер на сегодня «сейчас» шлёт desk и с
   // записью на время: верим, только если слот начинается не позже чем через
   // DESK_NOW_MINUTES минут (то же правило, что у экрана, wizard-desk.js).
@@ -302,6 +393,11 @@ export async function ensureVisit(db, args, user, internal = {}) {
   });
 
   const out = run();
+  // CRM_JOIN_NOT_MOVE_V1 · JOIN_EXTENDS_BOOKING_V1 — услуга в запись: визит тот же,
+  // время записи то же; запись удлиняется, если время за ней свободно. Записи уже
+  // нет (отменили, перенесли) — обычный визит дня без времени ниже.
+  if (joinAsk && !out.created && isJoinTarget(out.visit, joinAsk)) return finishJoin(db, user, out, joinAsk, { desk, requestId: crmRequestId });
+
   if (!book) {
     // CRM_UNIFY_V1 — строки «без даты» берёт только ensure_visit; desk — только здесь, без записи на время.
     // CRM_ONE_WAY_V1 (O1) — строки заявки, которые визит взял, садятся в него в этом же шаге.
@@ -380,13 +476,17 @@ export async function ensureVisit(db, args, user, internal = {}) {
       doctor_name: (wasDoctor && wasDoctor.full_name) || '',
     };
     try {
+      // JOIN_EXTENDS_BOOKING_V1 (ревью M3) — перенос записи сохраняет её полную длину:
+      // удлинённая присоединением запись не обрезается до длительности головной услуги.
+      const askedDur = book.durationMin || (out.created ? undefined : bookDuration(db, book.serviceId));
+      const bookDur = out.created || !askedDur ? askedDur : Math.max(askedDur, Number(out.visit.duration_minutes) || 0);
       const bk = await calendarBook(db, {
         visit_id: out.visit.id,
         doctor_id: book.doctorId,
         service_id: book.serviceId || undefined,
         room_id: book.roomId || undefined,
         start: new Date(book.startMs).toISOString(),
-        duration_minutes: book.durationMin || undefined,
+        duration_minutes: bookDur || undefined,
         emergency: book.emergency || undefined,
         emergency_reason: book.reason || undefined,
       }, user, { excludeHoldId });   // PUBLIC_API_V1

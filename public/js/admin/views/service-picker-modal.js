@@ -37,7 +37,7 @@ import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
 import { canWriteServiceTemplates, canAddVisitLines, canNameVisitSource } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы · DIAG_ROUTE_V1 (D8) — шаг «Направление»
 import { precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 — повтор услуги в визите дня — отказ до записи
-import { serviceRoute } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — маршрут решает группа, одним правилом
+import { serviceRoute, ROUTE_SELECT, performerRequired } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0, ревью L-5) — маршрут решает группа, одним правилом · LAB_NO_DOCTOR_V1 — ROUTE_SELECT
 import { surgeryBedRefusal, linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация, хирургия без койки; BACKLOG_1011_V1 — исполнитель по умолчанию
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
@@ -50,6 +50,7 @@ import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTie
 // OWN_PRICE_TIER_RATIO_V1 — своя цена врача со скидкой яруса: правило одно с сервером.
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
+import { packedDayStarts, dayStartFits } from '../../shared/slot-pack.js';   // SLOT_PACK_V1 — начала вплотную, то же правило, что у сервера
 import { consultPrice, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';   // DISCOUNT_RULES_V1 · CARD_BALANCE_V1
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
@@ -76,7 +77,7 @@ import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 import { listTemplates, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // SERVICES_PACKAGES_V1 — cartPackage: цена услуги в пакете
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';
 import { nearestFree, noFreeText, nearestButtonText, visitDayNote } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
-import { loadPatientBookings, bookedJoinFor, joinMinutes } from './booked-rows.js';   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
+import { loadPatientBookings, bookedJoinFor, joinMinutes, joinExtensionNote } from './booked-rows.js';   // JOIN_EXTENDS_BOOKING_V1 (ревью M5) — joinExtensionNote   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
 import { groupOf, discountChoiceOptions, choiceArgs, choiceFloorPct, choiceReason, fallbackChoiceKey } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор; fallbackChoiceKey — ревью S1 L-3
 import { ratedOutcome } from '../discount-rates.js';   // DISCOUNT_RATES_V1 — скидка по ставкам услуг, как посчитает счёт
 import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
@@ -453,7 +454,8 @@ export function openServicePickerModal({
     (async () => {
         const [types, services, doctors] = await Promise.all([
             safeSelect('service_types', b => b.eq('active', true).order('name')),
-            safeSelect('services',      b => (window.CLINIC?.id ? b.eq('company_id', window.CLINIC.id) : b).eq('active', true).order('name')),       // TENANT_BOOKING_SCOPE_V1 — this clinic's services only (super-admin must not see other clinics')
+            safeSelect('services',      b => (window.CLINIC?.id ? b.eq('company_id', window.CLINIC.id) : b).eq('active', true).order('name'),       // TENANT_BOOKING_SCOPE_V1 — this clinic's services only (super-admin must not see other clinics')
+                '*, ' + ROUTE_SELECT),   // LAB_NO_DOCTOR_V1 — подсказки маршрута (отделение, тип каталога): анализ группы «Консультации» узнаётся
             safeSelect('users',         b => (window.CLINIC?.id ? b.eq('company_id', window.CLINIC.id) : b).eq('active', true).order('full_name')),   // TENANT_BOOKING_SCOPE_V1 — this clinic's doctors only
         ]);
         // WORKING_HOURS_CLINIC_BOUND_V1 — часы клиники здесь больше не грузятся:
@@ -1143,15 +1145,18 @@ export function openServicePickerModal({
     // с сервера (calendar_slots), по одному вызову на день. Экран НЕ считает
     // ни график, ни обед, ни часы клиники: раньше считал, и расходился с
     // календарём (разбор — в шапке WIZARD_ONE_ENGINE_V1 внизу файла).
+    // SLOT_PACK_V1 — полоса больше не шлёт свой шаг 15 (SCHED_SNAP): начала
+    // вплотную от конца записи; щелчок по полосе по-прежнему встаёт в
+    // ближайшее из них (buildTimeline).
     async function loadDoctorVisitsWindow(doctorId) {
         state.schedLoadingFor = doctorId;
         const dur = serviceDurationMin();
         const days = [];
         for (let i = 0; i <= SCHED_WINDOW_DAYS; i++) days.push(schedAddDays(schedTodayIso(), i));
-        await primeSlotDays(doctorId, days, dur, { stepMinutes: SCHED_SNAP, patientId });
+        await primeSlotDays(doctorId, days, dur, { patientId });
         const map = {};
         for (const iso of days) {
-            const day = slotDayCached(doctorId, iso, dur, { stepMinutes: SCHED_SNAP });
+            const day = slotDayCached(doctorId, iso, dur, { patientId });
             if (!day) continue;
             map[iso] = (day.busy || []).map(b => ({
                 startMin: hhmmToMin(b.from), endMin: hhmmToMin(b.to),
@@ -1166,7 +1171,7 @@ export function openServicePickerModal({
     function schedFreeStarts(iso) {
         const doctor = currentDoctor();
         if (!doctor) return [];
-        return freeStartMinutes(slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP }));
+        return freeStartMinutes(slotDayCached(doctor.id, iso, serviceDurationMin(), { patientId }));
     }
 
     // PICK_DAY_V1 — время ставится само только в ПЕРВЫЙ день окна (сегодня или
@@ -1199,10 +1204,10 @@ export function openServicePickerModal({
         state.schedViewIso = iso;
         const doctor = currentDoctor();
         // Шагнули за пределы прогретого окна — спрашиваем сервер про этот день.
-        if (doctor && !slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP })) {
-            await loadSlotDay(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP, patientId });
+        if (doctor && !slotDayCached(doctor.id, iso, serviceDurationMin(), { patientId })) {
+            await loadSlotDay(doctor.id, iso, serviceDurationMin(), { patientId });
             if (state.doctorId !== doctor.id) return;
-            const day = slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP });
+            const day = slotDayCached(doctor.id, iso, serviceDurationMin(), { patientId });
             state.schedVisits[iso] = ((day && day.busy) || []).map(b => ({
                 startMin: hhmmToMin(b.from), endMin: hhmmToMin(b.to), label: b.patient_name || tr('Занято'),
             }));
@@ -1397,7 +1402,7 @@ export function openServicePickerModal({
     // 08:00–18:00, а мастер визита в тот же момент открывал 09:00–18:00.
     function workingRangeFor(doctor, iso) {
         if (!doctor) return null;
-        const day = slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP });
+        const day = slotDayCached(doctor.id, iso, serviceDurationMin(), { patientId });
         const w = day && day.window;
         if (!w) return null;
         const fromMin = hhmmToMin(w.from), toMin = hhmmToMin(w.to);
@@ -1805,11 +1810,48 @@ export function openServicePickerModal({
         const t = state.types.find(x => String(x.id) === gid);
         return t ? t.name : (svc.type || '');
     }
+    // ═══ LAB_NO_DOCTOR_V1 (3.23.0, снимок владельца 62) — АНАЛИЗ НЕ СПРАШИВАЕТ ВРАЧА ═══
+    // «Нужен врач» — консультация или флаг услуги requires_doctor. /api/db отдаёт его
+    // числом 0/1 (isOn), а здесь стояло `requires_doctor === false` — не правда никогда,
+    // и «нужен врач» становилось «есть исполнитель»: один лаборант в «Услугах и ставках»
+    // назначался С ВРЕМЕНЕМ, два — «выберите врача и время», анализ в группе
+    // «Консультации» получал в кандидаты всех врачей. Правило — как у мастера визита.
+    function svcNeedsDoctor(svc) { return !!(svc && (svc.__consult || isOn(svc.requires_doctor))); }
+    /** Исполнители услуги без врача — только отмеченные в «Услугах и ставках» (без запасного «все врачи»); выбираются без времени. */
+    function noDocPerformers(svc) { return svc && !svc.__consult ? performersOf(svc.id) : []; }
+    /**
+     * LAB_NO_DOCTOR_V1 (ревью, решение координатора b) — ИСПОЛНИТЕЛЬ ОБЯЗАТЕЛЕН, НО БЕЗ ВРЕМЕНИ:
+     * услуга кабинета («Диагностика», «Прочее»), которой врач со временем не нужен
+     * (requires_doctor = 0), — правило D1 (shared/service-route.js performerRequired), как у
+     * регистратуры, кассы и мастера визита. Кандидаты — отмеченные, иначе все врачи.
+     */
+    function svcNeedsPerformer(svc) { return !!svc && !svc.__consult && !svcNeedsDoctor(svc) && performerRequired(svc); }
+    /** Кандидаты в исполнители услуги без врача со временем: обязательной — с запасным списком, иначе — только отмеченные. */
+    function noSlotCandidates(svc) { return svcNeedsPerformer(svc) ? svcPerformers(svc) : noDocPerformers(svc); }
+    /**
+     * Каталог, запертый на врача (колонка врача в календаре кабинетов): анализы и процедуры,
+     * которым врач не нужен, — строкой «на дату», без врача и без времени. Прежде такие
+     * услуги в нём не показывались (только услуги врача), а показанные ложились во время врача.
+     */
+    function dateOnlyInLocked(svc) {
+        return !!lockedDoctor && !!svc && !svc.__consult && !isOn(svc.requires_doctor)
+            && ['lab', 'procedure'].includes(serviceRoute(svc));
+    }
+    /**
+     * Время строки в базе: своё; у строки «на дату» каталога врача — полночь её дня (день
+     * щелчка = день визита); иначе, как прежде, время окна. Исполнитель анализа без времени
+     * (__noSlot) дня не назначает: день визита решает смета (cartVisitDateIso).
+     */
+    function lineScheduledAt(a) {
+        if (a.startISO) return a.startISO;
+        if (a.__dateOnly && a.dateIso) return new Date(a.dateIso + 'T00:00').toISOString();
+        return scheduledISO || null;
+    }
     function catEligible() {
         if (!lockedDoctor) return state.services;
         return state.services.filter(s => {
             if (s.__consult) return s.__consultDoctorId === lockedDoctor.id;   // CONSULT_PER_DOCTOR_ROWS_V1 · CLINIC_API_FIX_V1 — врач у строки есть всегда
-            return performersOf(s.id).some(d => d.id === lockedDoctor.id);
+            return performersOf(s.id).some(d => d.id === lockedDoctor.id) || dateOnlyInLocked(s);   // LAB_NO_DOCTOR_V1
         });
     }
     function catFiltered() {
@@ -1827,6 +1869,7 @@ export function openServicePickerModal({
     // вычитался, окно по умолчанию 08:00–18:00) плюс свой перебор с шагом 30.
     // Теперь окно, шаг, обед, часы клиники и занятость считает один движок —
     // server/services/rpc/slot-engine.js, — и календарь берёт ответ оттуда же.
+    // SLOT_PACK_V1 — шага нет: начала вплотную, шагом длительности услуги.
     async function ensureDocSlots(docId, durationMin) {
         await primeSlotDays(docId, catDays().map(d => d.iso), durationMin || 30);
     }
@@ -1854,19 +1897,19 @@ export function openServicePickerModal({
         return jm == null || own.includes(jm) ? own : [...own, jm].sort((a, b) => a - b);
     }
     function freeStartsOwn(docId, dayIso, dur, exceptItem) {
-        const free = freeStartMinutes(slotDayCached(docId, dayIso, dur));
-        if (!free.length) return free;
         // CATALOG_WIZARD_V2 — строки ЭТОЙ ЖЕ сметы, ещё не записанные, тоже
         // держат своё время. Сервер о них знать не может: их пока нет в базе.
-        // Это вычитание уже занятого из списка сервера, а не свой расчёт окна.
+        // SLOT_PACK_EXTRA_BUSY_V1 — их время — занятость, и начала пакуются
+        // заново тем же правилом, что у сервера: вторая услуга к тому же врачу
+        // встаёт сразу за первой (прежде начала только вычитались — и сетка
+        // оставляла дыру за строкой).
         const taken = [];
         for (const o of state.added) {
-            if (o === exceptItem || !o.doctor || o.doctor.id !== docId || o.dateIso !== dayIso || !o.time) continue;
+            if (o === exceptItem || !o.doctor || o.doctor.id !== docId || o.dateIso !== dayIso || !o.time || o.__noSlot) continue;
             const sm = hhmmToMin(o.time);
-            taken.push({ s: sm, e: sm + (o.durationMinutes || 30) });
+            taken.push({ from: sm, to: sm + (o.durationMinutes || 30) });
         }
-        if (!taken.length) return free;
-        return free.filter(m => !taken.some(b => m < b.e && m + dur > b.s));
+        return freeStartMinutes(slotDayCached(docId, dayIso, dur), dur, taken);
     }
 
     function itemComplete(a) {
@@ -1875,7 +1918,7 @@ export function openServicePickerModal({
         // и без врача со временем.
         if (!requireSlot) return true;
         if (lockedDoctor) return true;
-        if (!a.__needsDoc) return true;
+        if (!a.__needsDoc) return !a.__needsPerf || !!a.doctor;   // LAB_NO_DOCTOR_V1 (ревью b) — исполнитель обязателен, время — нет
         if (a.doctor && (a.doctor.scheduling_mode || 'schedulable') === 'live_queue') return true;   // SVC_LIVE_QUEUE_V1
         return !!(a.doctor && a.startISO);
     }
@@ -2015,6 +2058,16 @@ export function openServicePickerModal({
     async function catAdd(svc) {
         if (state.added.some(x => x.service.id === svc.id)) return;
         const dur = Math.max(5, Number(svc.duration_minutes || 30));
+        if (dateOnlyInLocked(svc)) {
+            // LAB_NO_DOCTOR_V1 — анализ или процедура в каталоге врача: «на дату», без врача и времени.
+            const d = scheduledISO ? new Date(scheduledISO) : new Date();
+            state.added.push({ service: svc, doctor: null, startISO: null, time: null, durationMinutes: dur,
+                dateIso: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+                __needsDoc: false, __dateOnly: true });
+            paintCatalog();
+            refreshTierQuotes();
+            return;
+        }
         if (lockedDoctor) {
             const doc = { id: lockedDoctor.id, full_name: lockedDoctor.name || lockedDoctor.full_name || '', specialty: lockedDoctor.spec || '' };
             const d = scheduledISO ? new Date(scheduledISO) : new Date();
@@ -2029,19 +2082,27 @@ export function openServicePickerModal({
             return;
         }
         const perf = svcPerformers(svc);
-        // SVC_NO_DOCTOR_V1 — «Без врача» (services.requires_doctor = false) means the
+        // SVC_NO_DOCTOR_V1 — «Без врача» (services.requires_doctor = 0) means the
         // service is performed without a named doctor (КТ/лаборатория/процедурный
         // кабинет). Never block the wizard on a doctor+time pick for it, even when
         // performers happen to be linked to the service. Consultations always need one.
-        const needsDoc = (svc.requires_doctor === false && !svc.__consult)
-            ? false
-            : (perf.length > 0 || !!svc.__consult);
+        // LAB_NO_DOCTOR_V1 — флаг из базы 0/1 читается isOn (svcNeedsDoctor), а не `=== false`.
+        const needsDoc = svcNeedsDoctor(svc);
+        const needsPerf = svcNeedsPerformer(svc);   // LAB_NO_DOCTOR_V1 (ревью b)
         const item = { service: svc, doctor: null, dateIso: null, time: null, startISO: null,
-            durationMinutes: dur, __needsDoc: needsDoc, __dayIso: catDays()[0].iso, __auto: false };
+            durationMinutes: dur, __needsDoc: needsDoc, __needsPerf: needsPerf, __dayIso: catDays()[0].iso, __auto: false };
         state.added.push(item);
         paintCatalog();
         refreshTierQuotes();
         if (needsDoc && perf.length === 1) await catPickDoc(item, perf[0], true);
+        // LAB_NO_DOCTOR_V1 — единственный отмеченный исполнитель услуги без врача назначается БЕЗ времени.
+        // LAB_NO_DOCTOR_V1 (ревью b) — сам ставится исполнитель только той, кому он обязателен
+        // (единственный кандидат), и единственный отмеченный ВРАЧ (H-1, как в мастере визита);
+        // единственный лаборант анализу сам не ставится — выбор по желанию, без времени.
+        else if (!needsDoc) {
+            const cand = noSlotCandidates(svc);
+            if (cand.length === 1 && (needsPerf || isOn(cand[0].is_doctor))) await catPickDoc(item, cand[0], true);
+        }
     }
     function catRemove(item) {
         const i = state.added.indexOf(item);
@@ -2052,6 +2113,8 @@ export function openServicePickerModal({
         item.doctor = doc;
         if (item.service.__consult) item.service = { ...item.service, price: consultPriceFor(doc.id, item.service.__ct || item.service) };
         item.startISO = null; item.time = null; item.dateIso = null;
+        // LAB_NO_DOCTOR_V1 — исполнитель услуги без врача: без времени, его календарь не занимается.
+        if (!item.__needsDoc) { item.__noSlot = true; paintCatalog(); return; }
         // SVC_LIVE_QUEUE_V1 — live-queue doctors are served without a time; no slot pick.
         if ((doc.scheduling_mode || 'schedulable') === 'live_queue') { paintCatalog(); return; }
         // BACKLOG_1011_V1 — окно без брони (requireSlot: false — кабинет врача,
@@ -2079,7 +2142,11 @@ export function openServicePickerModal({
     /** PICK_DAY_V1 — ближайший свободный слот строки после первого дня окна: { iso, min } или null. */
     function catNearest(item) {
         if (!item || !item.doctor) return null;
-        return nearestFree(catDays().slice(1).map((d) => d.iso), (iso) => freeStarts(item.doctor.id, iso, item.durationMinutes, item));
+        const hit = nearestFree(catDays().slice(1).map((d) => d.iso), (iso) => freeStarts(item.doctor.id, iso, item.durationMinutes, item));
+        // CRM_JOIN_NOT_MOVE_V1 — в ближайший день пациент записан к этому врачу: время записи, а не самое раннее свободное.
+        const join = hit ? calcJoin(item.doctor.id, hit.iso) : null;
+        if (join && joinMinutes(join) != null) hit.min = joinMinutes(join);
+        return hit;
     }
     /** PICK_DAY_V1 — строка врача без времени в первый день окна, и день не выбран. */
     function catNeedsDay(a) {
@@ -2234,7 +2301,8 @@ export function openServicePickerModal({
         const _docCtx = s.__consult ? (lockedDoctor ? lockedDoctor.id : (item && item.doctor ? item.doctor.id : null)) : null;
         const dispName = _docCtx ? consultNameFor(_docCtx, s.__ct || s) : s.name;
         const subBits = [s.__consultDocName ? s.__consultDocName : groupNameOf(s), trf('{n} мин', { n: dur })];   // CONSULT_PER_DOCTOR_ROWS_V1
-        if (!lockedDoctor && !s.__consult && perf.length === 0) subBits.push('врач не требуется');
+        if (!s.__consult && (lockedDoctor ? dateOnlyInLocked(s) : (!svcNeedsDoctor(s) && !svcNeedsPerformer(s)))) subBits.push('врач не требуется');   // LAB_NO_DOCTOR_V1
+        else if (!lockedDoctor && svcNeedsPerformer(s)) subBits.push('нужен исполнитель');   // LAB_NO_DOCTOR_V1 (ревью b)
         // ATTACH_CATALOG_V1 — a service already on the visit can't be added again.
         // The columns view has always greyed these out (excludeServiceIds); the
         // catalog didn't, so the row looked addable and only failed on insert.
@@ -2254,13 +2322,16 @@ export function openServicePickerModal({
                          title: onVisit ? 'Эта услуга уже добавлена в визит' : null,
                          onclick: () => { if (!onVisit) catAdd(s); } }, 'Добавить'))));
         if (item && !lockedDoctor && item.__needsDoc) row.appendChild(catPickerPanel(item, perf));
-        if (item && !lockedDoctor && !item.__needsDoc) row.appendChild(h('div', { class: 'wzc-picker' },
+        // LAB_NO_DOCTOR_V1 — исполнитель (если отмечен) выбирается по желанию и без времени.
+        const own = item && !lockedDoctor && !item.__needsDoc ? noSlotCandidates(s) : [];   // LAB_NO_DOCTOR_V1 (ревью b)
+        if (own.length) row.appendChild(catPickerPanel(item, own));
+        else if (item && (!lockedDoctor ? !item.__needsDoc : item.__dateOnly)) row.appendChild(h('div', { class: 'wzc-picker' },
             h('div', { class: 'wzc-lbl' }, 'Врач не требуется — выполняется в день визита')));
         return row;
     }
     function catPickerPanel(item, perf) {
         const box = h('div', { class: 'wzc-picker' });
-        box.appendChild(h('div', { class: 'wzc-lbl' }, 'Врач'));
+        box.appendChild(h('div', { class: 'wzc-lbl' }, item.__needsDoc ? 'Врач' : 'Исполнитель'));   // LAB_NO_DOCTOR_V1 — у анализа исполнитель, не врач
         // SVC_DOC_DROPDOWN_V1 — searchable dropdown replaces the chip grid.
         if (item.doctor) {
             box.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
@@ -2300,7 +2371,7 @@ export function openServicePickerModal({
             box.appendChild(h('div', { class: 'wzc-tsum', style: { marginTop: '8px' } }, 'Живая очередь — визит без времени (в день визита).'));
             return box;
         }
-        if (item.doctor && requireSlot) {   // BACKLOG_1011_V1 — без брони выбора времени нет
+        if (item.doctor && !item.__noSlot && requireSlot) {   // BACKLOG_1011_V1 — без брони выбора времени нет · LAB_NO_DOCTOR_V1 — исполнитель без времени
             const strip = h('div', { class: 'wzc-days' });
             for (const d of catDays()) {
                 const free = freeStarts(item.doctor.id, d.iso, item.durationMinutes, item).length;
@@ -2317,14 +2388,27 @@ export function openServicePickerModal({
             const selM = (item.time && item.dateIso === item.__dayIso)
                 ? Number(item.time.slice(0, 2)) * 60 + Number(item.time.slice(3, 5)) : null;
             const tg = h('div', { class: 'wzc-tgroups' });
-            for (const [g, f, to] of [['Утро', 0, 720], ['День', 720, 1020], ['Вечер', 1020, 1440]]) {
-                const part = slots.filter(m => m >= f && m < to);
-                if (!part.length) continue;
-                tg.appendChild(h('div', { class: 'wzc-tg' },
-                    h('div', { class: 'glbl' }, g),
-                    h('div', { class: 'slots' }, ...part.map(m =>
-                        h('button', { class: 'wzc-tm' + (selM === m ? ' on' : ''), type: 'button',
-                            onclick: () => catPickTime(item, item.__dayIso, m, false) }, fmtMin(m))))));
+            const tmBtn = (m, label, attrs = {}) => h('button', { class: 'wzc-tm' + (selM === m ? ' on' : ''), type: 'button', ...attrs,
+                onclick: () => catPickTime(item, item.__dayIso, m, false) }, label);
+            // CRM_JOIN_NOT_MOVE_V1 (ревью M1) — в этот день пациент записан к этому врачу:
+            // «в запись · 10:10» первым, другие времена — под «Перенести запись на» (слова CRM).
+            const jHere = calcJoin(item.doctor.id, item.__dayIso);
+            const jm = jHere && jHere.head ? joinMinutes(jHere) : null;
+            if (jm != null) {
+                tg.appendChild(h('div', { class: 'wzc-tg' }, h('div', { class: 'slots' },
+                    tmBtn(jm, trf('в запись · {time}', { time: fmtMin(jm) }), { 'data-join': '' }))));
+                const others = slots.filter((m) => m !== jm);
+                if (others.length) tg.appendChild(h('div', { class: 'wzc-tg', 'data-move-group': '' },
+                    h('div', { class: 'glbl' }, tr('Перенести запись на')),
+                    h('div', { class: 'slots' }, ...others.map((m) => tmBtn(m, fmtMin(m))))));
+            } else {
+                for (const [g, f, to] of [['Утро', 0, 720], ['День', 720, 1020], ['Вечер', 1020, 1440]]) {
+                    const part = slots.filter(m => m >= f && m < to);
+                    if (!part.length) continue;
+                    tg.appendChild(h('div', { class: 'wzc-tg' },
+                        h('div', { class: 'glbl' }, g),
+                        h('div', { class: 'slots' }, ...part.map(m => tmBtn(m, fmtMin(m))))));
+                }
             }
             box.appendChild(tg);
             if (item.time && item.dateIso) {
@@ -2379,7 +2463,7 @@ export function openServicePickerModal({
                     onclick: () => { cat2.q = a.service.name; cat2.group = ''; cat2.win = CAT_PAGE;
                         if (catSearchEl) catSearchEl.value = cat2.q; paintCatalog(); } },
                     // PICK_DAY_V1 — причина словами: не «выберите время», а «сегодня времени нет».
-                    catNeedsDay(a) ? noFreeText(catDays()[0].today) : 'выберите врача и время');
+                    catNeedsDay(a) ? noFreeText(catDays()[0].today) : (a.__needsDoc ? 'выберите врача и время' : 'выберите исполнителя'));   // LAB_NO_DOCTOR_V1 (ревью b)
                 else if (a.doctor) who = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     `${a.doctor.full_name || ''}${a.time ? ' · ' + (a.dateIso === localYmd() ? tr('сегодня') : (a.dateIso || '').slice(8) + '.' + (a.dateIso || '').slice(5, 7)) + ' ' + a.time : ''}`);
                 // PICKER_CATALOG_EVERYWHERE_V1 — «процедурный кабинет» это правда
@@ -3215,7 +3299,7 @@ export function openServicePickerModal({
             const head = timed[0] || state.added[0];
             const visitDate = cartVisitDateIso();
             const totalDur = lockedDoctor
-                ? state.added.reduce((s, a) => s + (a.durationMinutes || 30), 0)
+                ? state.added.filter(a => !a.__dateOnly).reduce((s, a) => s + (a.durationMinutes || 30), 0) || 30   // LAB_NO_DOCTOR_V1 — «на дату» времени врача не занимает
                 : (head.durationMinutes || head.service.duration_minutes || 30);
             // WIZARD_ONE_ENGINE_V1 — ЗАПИСЬ ИДЁТ ЧЕРЕЗ calendar_book, НЕ ЧЕРЕЗ /api/db.
             //
@@ -3256,23 +3340,50 @@ export function openServicePickerModal({
                 if (btn && btn.isConnected) btn.disabled = false;
                 return;
             }
-            const booked = await calendarBookOrAsk({
-                patient_id:       p.id,
-                branch_id:        (p._raw && p._raw.branch_id) || p.branch_id || null,
-                doctor_id:        head.doctor?.id || null,
-                service_id:       head.service.__consult ? null : head.service.id,
-                room_id:          roomId || null,
-                start:            visitDate,
-                duration_minutes: totalDur,
-                status:           'scheduled',
-                referral_source_id: canNameVisitSource() ? visitReferralSourceId() : null,   // LIVE_AUDIT_FIX_V1 (A6) — источник направления — на визите · DIAG_ROUTE_V1 (D8) — только стойка и колл-центр
-            }, { autoTime: !_explicit });
+            // LAB_NO_DOCTOR_V1 (ревью L1) — каталог врача, а в смете только «на дату» (анализы,
+            // процедуры): времени врача нет вовсе. Визит дня берётся или заводится без времени
+            // (ensure_visit по дате) — ни «запись к другому врачу» не в тему, ни безврачебного
+            // получасового визита на время щелчка.
+            const dateOnlyCart = !!lockedDoctor && state.added.length > 0 && state.added.every((a) => a.__dateOnly);
+            let booked;
+            if (dateOnlyCart) {
+                const day = localDayOf(state.added[0].dateIso || visitDate);
+                const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', {
+                    patient_id: p.id, date: day, branch_id: (p._raw && p._raw.branch_id) || p.branch_id || null,
+                    referral_source_id: canNameVisitSource() ? visitReferralSourceId() : null,
+                });
+                if (evErr) throw new Error(bookErrorText(evErr));
+                booked = { visit: ev.visit, created: !!ev.created, emergency: false };
+            } else {
+                booked = await calendarBookOrAsk({
+                    patient_id:       p.id,
+                    branch_id:        (p._raw && p._raw.branch_id) || p.branch_id || null,
+                    doctor_id:        head.__noSlot ? null : (head.doctor?.id || null),   // LAB_NO_DOCTOR_V1 — исполнитель анализа без времени: его календарь не занимаем
+                    service_id:       head.service.__consult ? null : head.service.id,
+                    room_id:          roomId || null,
+                    start:            visitDate,
+                    duration_minutes: totalDur,
+                    status:           'scheduled',
+                    referral_source_id: canNameVisitSource() ? visitReferralSourceId() : null,   // LIVE_AUDIT_FIX_V1 (A6) — источник направления — на визите · DIAG_ROUTE_V1 (D8) — только стойка и колл-центр
+                }, { autoTime: !_explicit });
+            }
             if (!booked) {   // отказались от экстренной записи — не создано НИЧЕГО
                 toast(tr('Запись не сохранена — время занято.'), 'info');
                 if (btn && btn.isConnected) btn.disabled = false;
                 return;
             }
             const visit = booked.visit;
+            // CRM_JOIN_NOT_MOVE_V1 (ревью M1) — запись пациента к этому врачу перенесена на другое
+            // время (выбран не «в запись») — сказать вслух, откуда и куда.
+            if (booked.moved) {
+                const was = head.doctor ? calcJoin(head.doctor.id, localDayOf(visitDate)) : null;
+                const wm = was ? joinMinutes(was) : null;
+                toast(trf('Приём перенесён с {t0}{doc0} на {t1}', { t0: wm != null ? fmtMin(wm) : '—', doc0: '', t1: head.time || '—' }), 'info');
+            }
+            // ревью M5 — присоединение не удлинило запись (следующая запись / конец приёма) — сказать.
+            if (booked.joined && booked.extended === false && (booked.next || booked.until)) {
+                toast(joinExtensionNote({ ends: booked.ends, next: booked.next, until: booked.until }, trf), 'warn');
+            }
 
             // CRM_CALENDAR_MIRROR_V1 (2026-09-27) — КОЛЛ-ЦЕНТР ЗАПИСЫВАЕТ С УСЛУГАМИ.
             //
@@ -3290,8 +3401,8 @@ export function openServicePickerModal({
                 // + consultation_type_id) — её цену по ценам врача считает сервер.
                 const want = state.added.filter((a) => a.service && (a.service.__consult || a.service.id));
                 const lineOf = (a) => a.service.__consult
-                    ? { consultation_type_id: a.service.consultation_type_id || a.service.id, doctor_id: calcLineDoctorId(a, { viaBooking: true }), scheduled_at: a.startISO || scheduledISO || null }   // DUP_STOP_V1 (ревью m6)
-                    : { service_id: a.service.id, doctor_id: calcLineDoctorId(a, { viaBooking: true }), scheduled_at: a.startISO || scheduledISO || null };
+                    ? { consultation_type_id: a.service.consultation_type_id || a.service.id, doctor_id: calcLineDoctorId(a, { viaBooking: true }), scheduled_at: lineScheduledAt(a) }   // DUP_STOP_V1 (ревью m6) · LAB_NO_DOCTOR_V1
+                    : { service_id: a.service.id, doctor_id: calcLineDoctorId(a, { viaBooking: true }), scheduled_at: lineScheduledAt(a) };
                 const res = want.length
                     ? await supabase.rpc('booking_lines_add', { visit_id: visit.id, patient_id: p.id, lines: want.map(lineOf) })
                     : { data: { added: [] } };
@@ -3328,7 +3439,7 @@ export function openServicePickerModal({
                     quantity:     1,
                     unit_price:   unitPrice,
                     total:        unitPrice,
-                    scheduled_at: a.startISO || scheduledISO || null,
+                    scheduled_at: lineScheduledAt(a),   // LAB_NO_DOCTOR_V1 — строка «на дату» — полночь своего дня
                     price_tier:   isConsult ? null : priceTierOf(a),   // VISIT_TIER_PRICING_V1 — the till re-prices by this word
                     // PACKAGES_V1 — скидку пакета считает счёт. Ревью I-3: пакет,
                     // не действующий в местный день визита, не ставится — сервер
@@ -3693,7 +3804,7 @@ function formatMoney(n) {
 const SCHED_GRID_START  = 8;     // visible window start hour
 const SCHED_GRID_END    = 20;    // visible window end hour
 const SCHED_HOUR_W      = 76;    // px per hour on the timeline
-const SCHED_SNAP        = 15;    // slot granularity, minutes
+// SLOT_PACK_V1 — SCHED_SNAP (шаг 15) убран: свободные начала — вплотную, их называет сервер.
 const SCHED_WINDOW_DAYS = 14;    // how far ahead auto-pick / nav may reach
 
 function fmtMin(min) {
@@ -3739,9 +3850,22 @@ function schedDateLabel(iso) {
 // Кэш держится на модуле, а не в состоянии экрана: мастер визита и подбор
 // услуг открываются один поверх другого и обязаны видеть одни и те же окна.
 
-export const SLOT_STEP_MIN = 30;          // шаг сетки мастеров (был таким же в обеих копиях)
-const _slotDays = new Map();              // 'doc|day|dur|step' -> ответ calendar_slots
-const _slotKey = (docId, dayIso, dur, step) => `${docId}|${dayIso}|${dur}|${step}`;
+// SLOT_PACK_V1 (3.23.0) — ШАГА СЕТКИ БОЛЬШЕ НЕТ. Здесь стоял SLOT_STEP_MIN = 30
+// (мастер визита, карточка CRM, калькулятор), полоса расписания слала 15,
+// «Повторный визит» — 20: каждое окно предлагало свою сетку, и минута, в
+// которую кончается запись, не предлагалась никогда (после 10:10–10:40 —
+// 11:00). Теперь calendar_slots зовётся БЕЗ step_minutes и отдаёт начала
+// вплотную: конец записи, дальше шагом длительности услуги
+// (public/js/shared/slot-pack.js). Сетку с явным шагом просит только
+// партнёрский API (crm-api-booking.js, 15 — опубликованный договор).
+//
+// Ключ кэша — с пациентом, чей приём вычтен из занятости (EXCLUDE_OWN_VISIT_V1):
+// мастер и карточка вычитают свой приём пациента, калькулятор и «Повторный
+// визит» — нет, и один день одного врача у них РАЗНЫЙ. Прежде их разводил шаг
+// (30 против 20 и 15); без шага разводит пациент.
+const _slotDays = new Map();              // 'doc|day|dur|пациент' -> ответ calendar_slots
+const _slotKey = (docId, dayIso, dur, opts = {}) =>
+    `${docId}|${dayIso}|${dur}|${opts.excludeVisitId ? 'v' + opts.excludeVisitId : (opts.patientId || '')}`;
 
 export function hhmmToMin(s) {
     const [hh, mm] = String(s || '00:00').split(':').map(Number);
@@ -3750,10 +3874,9 @@ export function hhmmToMin(s) {
 
 /** Спросить сервер про один день врача. Кэшируется; null = не ответил. */
 export async function loadSlotDay(doctorId, dayIso, durationMin, opts = {}) {
-    const step = opts.stepMinutes || SLOT_STEP_MIN;
-    const key = _slotKey(doctorId, dayIso, durationMin, step);
+    const key = _slotKey(doctorId, dayIso, durationMin, opts);
     if (_slotDays.has(key)) return _slotDays.get(key);
-    const args = { doctor_id: doctorId, date: dayIso, duration_minutes: durationMin, step_minutes: step };
+    const args = { doctor_id: doctorId, date: dayIso, duration_minutes: durationMin };   // SLOT_PACK_V1 — без шага: вплотную
     if (opts.excludeVisitId) args.exclude_visit_id = opts.excludeVisitId;
     const first = await supabase.rpc('calendar_slots', args);
     if (first.error) { _slotDays.set(key, null); return null; }
@@ -3772,14 +3895,32 @@ export async function loadSlotDay(doctorId, dayIso, durationMin, opts = {}) {
     return data;
 }
 
-/** То же, но синхронно из кэша — для отрисовки. null = ещё не спрашивали. */
+/** То же, но синхронно из кэша — для отрисовки. null = ещё не спрашивали. opts — те же, что у loadSlotDay. */
 export function slotDayCached(doctorId, dayIso, durationMin, opts = {}) {
-    return _slotDays.get(_slotKey(doctorId, dayIso, durationMin, opts.stepMinutes || SLOT_STEP_MIN)) || null;
+    return _slotDays.get(_slotKey(doctorId, dayIso, durationMin, opts)) || null;
 }
 
-/** Свободные начала дня в минутах от полуночи — ровно те, что назвал сервер. */
-export function freeStartMinutes(day) {
-    return ((day && day.slots) || []).map(s => hhmmToMin(s.start));
+/**
+ * Свободные начала дня в минутах от полуночи — те, что назвал сервер.
+ * SLOT_PACK_EXTRA_BUSY_V1 — extraBusy: время ещё не сохранённых строк той же
+ * сметы ([{from, to}] в минутах дня). Их в базе нет, и сервер о них не знает;
+ * начала тогда упаковываются заново ТЕМ ЖЕ правилом, что у сервера
+ * (shared/slot-pack.js), — вторая новая услуга к тому же врачу встаёт сразу
+ * за первой, а не через дыру.
+ */
+export function freeStartMinutes(day, durationMin = null, extraBusy = []) {
+    if (!extraBusy || !extraBusy.length) return ((day && day.slots) || []).map(s => hhmmToMin(s.start));
+    return packedDayStarts(day, durationMin || (day && day.duration_minutes) || 30, extraBusy);
+}
+
+/**
+ * SLOT_PACK_V1 — помещается ли ВЫБРАННОЕ начало в день ответа: внутри приёма и
+ * ни с чем не пересекается. Не «есть ли оно в списке»: соседняя запись сдвигает
+ * упакованные начала, и время, бывшее в списке, может в нём уже не стоять,
+ * оставаясь свободным.
+ */
+export function startFitsDay(day, durationMin, startMin, extraBusy = []) {
+    return dayStartFits(day, durationMin, startMin, extraBusy);
 }
 
 /** Прогреть пачку дней врача (параллельно, но не залпом на весь месяц). */
@@ -3806,6 +3947,8 @@ const BOOK_ERROR_TEMPLATES = {
     day_visit_other_doctor: 'У пациента в этот день уже есть запись к {doctor} в {start}. Перенесите её или выберите другой день.',
     // REPEAT_VISIT_V1 — повторный визит кабинета: день занят — только отказ, без «добавить в этот визит».
     revisit_day_taken: 'У пациента в этот день уже есть приём в {start} у {doctor} — выберите другой день или время.',
+    // CRM_JOIN_NOT_MOVE_V1 (ревью M4) — присоединяли к записи, которую тем временем отменили или перенесли.
+    join_target_gone: 'Запись изменилась, пока окно было открыто — выберите время ещё раз.',
 };
 export function bookErrorText(error) {
     const tpl = error && error.code ? BOOK_ERROR_TEMPLATES[error.code] : null;
@@ -3957,9 +4100,9 @@ function _startAtSameDay(startIso, hhmm) {
     return next.toISOString();
 }
 
-async function safeSelect(table, q = b => b) {
+async function safeSelect(table, q = b => b, columns = '*') {
     try {
-        const { data, error } = await q(supabase.from(table).select('*'));
+        const { data, error } = await q(supabase.from(table).select(columns));
         if (error) { console.warn('[service-picker]', table, error.message); return null; }
         return data;
     } catch (e) { console.warn('[service-picker]', table, e.message); return null; }

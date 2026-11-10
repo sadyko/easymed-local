@@ -199,27 +199,11 @@ export function clampWindow(win, bound) {
   return { from, to, breaks: (win.breaks || []).filter((b) => b.to > from && b.from < to) };
 }
 
-/** Окно минус обеды → список отрезков, в которых ресурс действительно принимает. */
-export function windowSegments(win) {
-  if (!win) return [];
-  const breaks = [...(win.breaks || [])].sort((a, b) => a.from - b.from);
-  const out = [];
-  let cursor = win.from;
-  for (const b of breaks) {
-    const from = Math.max(b.from, win.from);
-    const to = Math.min(b.to, win.to);
-    if (to <= cursor) continue;
-    if (from > cursor) out.push({ from: cursor, to: Math.min(from, win.to) });
-    cursor = Math.max(cursor, to);
-  }
-  if (cursor < win.to) out.push({ from: cursor, to: win.to });
-  return out.filter((s) => s.to > s.from);
-}
-
-/** Пересекаются ли полуинтервалы [aFrom,aTo) и [bFrom,bTo). Стык (14:00–14:30 и 14:30–15:00) — НЕ пересечение. */
-export function overlaps(aFrom, aTo, bFrom, bTo) {
-  return aFrom < bTo && bFrom < aTo;
-}
+// SLOT_PACK_V1 — «окно минус обеды» и «пересекаются ли» переехали в общий
+// модуль (public/js/shared/slot-pack.js): по ним же экран записи упаковывает
+// ответ сервера вместе с ещё не сохранёнными строками сметы. Реализация одна.
+export { windowSegments, overlaps, packedStarts, startFits, packMinStart, freeGaps, mergeBusy } from '../../../public/js/shared/slot-pack.js';
+import { overlaps } from '../../../public/js/shared/slot-pack.js';
 
 /** То же в абсолютных миллисекундах — здесь часовой пояс не участвует вовсе. */
 export function overlapsMs(aStartMs, aDurMin, bStartMs, bDurMin) {
@@ -227,7 +211,12 @@ export function overlapsMs(aStartMs, aDurMin, bStartMs, bDurMin) {
 }
 
 /**
- * Свободные начала приёма внутри рабочего дня.
+ * Свободные начала приёма внутри рабочего дня — СЕТКОЙ.
+ *
+ * SLOT_PACK_V1 — экраны клиники сеткой больше не пользуются (calendar_slots
+ * без шага отдаёт упакованные начала — packedStarts). Сетка осталась у тех,
+ * кто просит её явно: партнёрский API и онлайн-запись (PUBLIC_SLOT_MIN = 15 —
+ * опубликованный договор), явный step_minutes.
  *
  * @param {object}   o
  * @param {{from:number,to:number}[]} o.segments  отрезки приёма (windowSegments)

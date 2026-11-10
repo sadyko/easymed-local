@@ -1439,3 +1439,15 @@ test('REPEAT_VISIT_V1 (полировка, п. 18): отказ calendar_book «�
   assert.equal(DB.prepare('SELECT status FROM visits WHERE id = 55').get().status, before, 'стенд: отказ — статус прежний');
   assert.equal(slotDayCached(7, dayIso, 30), null, 'после «время занято» каталог показывает прежнее свободное время');
 });
+
+// LAB_NO_DOCTOR_V1 (3.23.0) — щелчок по колонке ВРАЧА открывает каталог, запертый на этого врача,
+// со временем щелчка (lockedDoctor + scheduledISO). Анализ и процедура без врача в таком каталоге —
+// строкой «на дату», без врача и без времени: поведение на настоящих сервере и базе проверяет
+// pick-day-calculator.test.mjs («колонка врача в календаре…») ровно с этими аргументами.
+test('LAB_NO_DOCTOR_V1: колонка врача открывает каталог, запертый на врача, со временем щелчка', () => {
+  const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'views', 'room-calendar.js'), 'utf8');
+  assert.match(src, /lockedDoctor: state\.resType === 'doctor' \? \{ id: res\.id, name: res\.name, spec: res\.spec \} : null/);
+  assert.match(src, /scheduledISO: localIso\(dayIso, min\)/);
+  const spm = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'views', 'service-picker-modal.js'), 'utf8');
+  assert.match(spm, /function dateOnlyInLocked\(svc\)/, 'каталог врача не знает строк «на дату»');
+});

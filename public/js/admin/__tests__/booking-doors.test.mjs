@@ -609,3 +609,26 @@ test('ОДНА реализация «когда врач свободен» н�
   // И «Повторный визит» действительно спрашивает сервер через этот клиент.
   assert.match(read('service-workspace.js'), /loadSlotDay|freeStartMinutes/, 'повторный визит не спрашивает слоты у сервера');
 });
+
+// SLOT_PACK_V1 (3.23.0) — НИ ОДИН ЭКРАН НЕ ШЛЁТ СВОЙ ШАГ СЕТКИ. Шаг 30 (мастер,
+// карточка CRM, калькулятор), 15 (полоса расписания), 20 («Повторный визит»)
+// давали дыры между записями: минута, в которую кончается запись, не
+// предлагалась никогда. Без шага сервер отдаёт начала вплотную. Сетку просит
+// только партнёрский API (crm-api-booking.js, 15 — опубликованный договор).
+test('SLOT_PACK_V1: ни один экран не шлёт calendar_slots свой шаг — кроме партнёрского API', () => {
+  const ADMIN = path.join(VIEWS, '..');
+  const files = [
+    ...fs.readdirSync(VIEWS).filter((f) => f.endsWith('.js')).map((f) => path.join(VIEWS, f)),
+    ...fs.readdirSync(ADMIN).filter((f) => f.endsWith('.js')).map((f) => path.join(ADMIN, f)),
+  ];
+  const offences = [];
+  for (const file of files) {
+    if (path.basename(file) === 'crm-api-booking.js') continue;
+    const code = stripComments(fs.readFileSync(file, 'utf8'));
+    code.split(/\r?\n/).forEach((L, i) => {
+      if (/\bstep_minutes\b|\bstepMinutes\b|\bSLOT_STEP_MIN\b|\bSCHED_SNAP\b/.test(L)) offences.push(`${path.basename(file)}:${i + 1}: ${L.trim()}`);
+    });
+  }
+  assert.deepEqual(offences, [], 'экран снова шлёт свой шаг сетки:\n' + offences.join('\n'));
+  assert.match(read('crm-api-booking.js'), /step_minutes:\s*15/, 'партнёрский API обязан остаться на сетке 15 минут');
+});

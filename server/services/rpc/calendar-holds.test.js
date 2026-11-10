@@ -38,10 +38,19 @@ test('свободные начала: удержанное 10:00–10:30 зан
   assert.ok(!starts.includes('10:00') && !starts.includes('10:15'));
   assert.ok(starts.includes('09:45') && starts.includes('10:30'));
   const held = r.busy.find((b) => b.hold_id === holdId);
-  assert.deepEqual({ ...held }, { visit_id: null, from: '10:00', to: '10:30', duration_minutes: 30, status: 'held',
+  assert.deepEqual({ ...held }, { visit_id: null, from_min: 600, to_min: 630, from: '10:00', to: '10:30', duration_minutes: 30, status: 'held',   // SLOT_PACK_V1 (ревью L6)
     patient_id: null, patient_name: '', hold_id: holdId, held_for: 'med24.uz', held_until: '2030-03-12T00:00:00Z' });
   const other = calendarSlots(db, { doctor_id: 8, date: DAY, duration_minutes: 15, step_minutes: 15 }, REG);
   assert.ok(other.slots.some((s) => s.start === '10:00'), 'у другого врача время свободно');
+});
+
+// SLOT_PACK_V1 (3.23.0) — у начал вплотную удержание — такая же занятость: начало
+// внутри него не предлагается, следующее — сразу за его концом.
+test('SLOT_PACK_V1: без шага удержанное 10:00–10:30 занято, следующее начало — 10:30', () => {
+  const { db } = setup();
+  const r = calendarSlots(db, { doctor_id: 7, date: DAY, duration_minutes: 20 }, REG);
+  assert.equal(r.packed, true);
+  assert.deepEqual(r.slots.slice(0, 5).map((s) => s.start), ['09:00', '09:20', '09:40', '10:30', '10:50']);
 });
 
 test('запись календаря и ensure_visit на удержанное время — отказ «время занято»; визит не заводится', async () => {

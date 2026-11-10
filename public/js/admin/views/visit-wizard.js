@@ -31,7 +31,9 @@ import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDa
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageSplit, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';   // PACKAGES_V1 — «скидка 20 % · до 30.09.2026»
-import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
+import { doctorPoolFor, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
+import { performerRequired, assignedTo } from './doctor-pool.js?v=dp1';
+import { goesToCabinet } from '../../shared/service-route.js';   // LAB_NO_DOCTOR_V1 — выбор исполнителя по желанию только у услуги кабинета   // LAB_NO_DOCTOR_V1 — анализ в «Консультациях» без врача «Далее» не держит
 import { isOn } from '../../shared/flags.js';   // DIAG_ROUTE_V1 (ревью S4 H-1) — флаг is_doctor из базы: 1/«1»/true
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';   // OWN_PRICE_REPEAT_V1 — одно правило с сервером
@@ -44,8 +46,8 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
 // server/services/rpc/slot-engine.js. ?v как у остальных импортёров модуля.
-import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
-         askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=ownrep4';
+import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin, startFitsDay,
+         askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=ownrep4';   // SLOT_PACK_V1 — startFitsDay
 import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ до визита
 import { loadVisitOrders, orderedMatch, orderedLabel, precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 — уже назначено в визите дня
 import { hasActorRole, canWriteServiceTemplates, VISIT_LINE_ROLES, canAddVisitLines, canNameVisitSource } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1 · LIVE_AUDIT_FIX_V1 — шаблоны сметы
@@ -57,7 +59,7 @@ import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../s
 import { pendingCrmLines } from '../crm-lines.js';
 import { isDeskNow } from './wizard-desk.js';   // CRM_LINK_ALL_V1 (R3) — «сейчас» у стойки: одно правило с сервером
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin, localSlot, setLinePerformer } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»; localSlot — DOCTOR_REFERRAL_DESK_V1
-import { loadPatientBookings, bookedJoinFor } from './booked-rows.js';   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
+import { loadPatientBookings, bookedJoinFor, joinExtensionNote } from './booked-rows.js';   // JOIN_EXTENDS_BOOKING_V1 (ревью M5) — joinExtensionNote   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
 import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
 // CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на три двери:
 // у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
@@ -880,7 +882,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
      * выбранного запись пишет в строку визита до счёта (createVisit → setLinePerformer).
      */
     function markBookedPerformer(line, bookedDoctorId) {
-        if (!line || !line.booked || Number(bookedDoctorId) > 0 || !needsPerformer(line.svc)) return;
+        if (!line || !line.booked || Number(bookedDoctorId) > 0 || !performerRequired(line.svc)) return;   // LAB_NO_DOCTOR_V1
         line.booked.setDoctor = true;
         if (!line.doctorId) {
             const one = soleCandidate(doctorsForService(line.svc.id));
@@ -1225,7 +1227,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const headRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px' } },
                     h('div', { style: { minWidth: 0, flex: 1 } },
                         h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: inCart ? 'var(--primary-700)' : 'var(--ink-900)' } },
-                            s.name, inCart ? (needsPerformer(inCart.svc) && !inCart.doctorId ? ' — выберите врача' : ' — добавлено') : '',   // DIAG_ROUTE_V1 (D1)
+                            s.name, inCart ? (performerRequired(inCart.svc) && !inCart.doctorId ? ' — выберите врача' : ' — добавлено') : '',   // DIAG_ROUTE_V1 (D1) · LAB_NO_DOCTOR_V1
                             // CRM_CONVERT_V1 — услуга пришла из заявки колл-центра
                             inCart && inCart.fromCrm
                                 ? h('span', { style: { marginLeft: '8px', padding: '2px 8px', borderRadius: '999px', fontSize: '12.5px', fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', background: 'var(--teal-50, #e0f2f1)', color: 'var(--teal-700, #00796b)', verticalAlign: 'middle' } }, 'из заявки')
@@ -1235,7 +1237,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                                 ? h('span', { dataset: { orderedTag: '' }, style: { marginLeft: '8px', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-500)' } }, ' — ', orderedLabel(onVisit))
                                 : null),
                         h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
-                            [categoryOf(s), trf('{n} мин', { n: s.duration_minutes || 30 }), s.requires_doctor ? tr('нужен врач') : needsPerformer(s) ? tr('нужен исполнитель') : tr('врач не требуется')].join(' · ')),   // DIAG_ROUTE_V1 (D1)
+                            [categoryOf(s), trf('{n} мин', { n: s.duration_minutes || 30 }), s.requires_doctor ? tr('нужен врач') : performerRequired(s) ? tr('нужен исполнитель') : tr('врач не требуется')].join(' · ')),   // DIAG_ROUTE_V1 (D1) · LAB_NO_DOCTOR_V1
                     ),
                     h('span', { class: 'num', style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', whiteSpace: 'nowrap' } },
                         fmtPrice(s.price), ' сум'),
@@ -1323,7 +1325,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 // без времени: строка без исполнителя не видна ни одному врачу
                 // (SERVICE_SCOPE_V3). Список — отмеченные услуге в «Услугах и ставках»,
                 // иначе все врачи; один кандидат выбирается сам (addToCart).
-                const perf = needsPerformer(line.svc) ? performerSelect(line) : null;
+                // LAB_NO_DOCTOR_V1 — выбор исполнителя у услуги кабинета: обязательный (performerRequired)
+                // или по желанию (анализ, оставленный в «Консультациях», — из отмеченных); у анализа и
+                // процедуры выбора нет (ревью I-1).
+                const perf = (performerRequired(line.svc) || (goesToCabinet(line.svc) && doctorsForService(line.svc.id).length)) ? performerSelect(line) : null;
                 return h('div', {
                     style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed var(--ink-150, var(--ink-200))' },
                 }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Дата'),
@@ -1467,7 +1472,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         const ms = new Date(base.getFullYear(), base.getMonth(), dd).getTime();
                         if (ms >= d0.getTime() && ms <= horizon) monthDays.push(ms);
                     }
-                    const unknown = monthDays.filter(ms => !slotDayCached(line.doctorId, isoDay(ms), lineDuration(line)));
+                    const unknown = monthDays.filter(ms => !slotDayCached(line.doctorId, isoDay(ms), lineDuration(line), { patientId: patient.id }));
                     if (line.doctorId && unknown.length) {
                         loadSlots(line, unknown).then(() => { if (calPop.style.display !== 'none') paintCal(); });
                     }
@@ -1483,7 +1488,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                             onclick: () => {
                                 line.ui.day = dayMs;
                                 const fs = slotsForDay(line, dayMs);
-                                line.when = fs.length ? slotToLocalIso(fs[0]) : null;
+                                // CRM_JOIN_NOT_MOVE_V1 — в этот день пациент уже записан к врачу: время записи,
+                                // а не самое раннее свободное (иначе запись молча переехала бы на него).
+                                const jd = joinFor(line.doctorId, isoDay(dayMs));
+                                line.when = jd ? jd.when : (fs.length ? slotToLocalIso(fs[0]) : null);
                                 repaintRail(); repaintCatalog();
                             },
                             title: past || beyond ? '' : (free ? trf('{n} окн.', { n: free }) : tr('нет окон')),
@@ -1523,10 +1531,24 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     for (const t of list) g.appendChild(h('option', { value: String(t), selected: selMs === t }, fmtSlot(t)));
                     return g;
                 };
-                const gs = [grp('Утро', slots.filter(t => new Date(t).getHours() < 12)),
-                            grp('День', slots.filter(t => { const hh = new Date(t).getHours(); return hh >= 12 && hh < 17; })),
-                            grp('Вечер', slots.filter(t => new Date(t).getHours() >= 17))].filter(Boolean);
-                for (const g of gs) timeSel.appendChild(g);
+                // CRM_JOIN_NOT_MOVE_V1 (ревью M1) — в этот день пациент записан к этому врачу:
+                // «в запись · 10:10» первым, другие времена — под «Перенести запись на» (те же
+                // слова, что в карточке CRM). Выбор другого времени — явный перенос записи.
+                const jHere = line.doctorId ? joinFor(line.doctorId, isoDay(line.ui.day)) : null;
+                const jMs = jHere && jHere.head ? new Date(jHere.when).getTime() : null;
+                if (jMs != null && slots.length) {
+                    timeSel.style.maxWidth = '170px';   // ревью L2 — «в запись · 10:10» целиком
+                    timeSel.appendChild(h('option', { value: String(jMs), selected: selMs === jMs, 'data-join': '' },
+                        trf('в запись · {time}', { time: fmtSlot(jMs) })));
+                    const others = slots.filter((t) => t !== jMs);
+                    if (others.length) timeSel.appendChild(h('optgroup', { label: tr('Перенести запись на'), 'data-move-group': '' },
+                        ...others.map((t) => h('option', { value: String(t), selected: selMs === t }, fmtSlot(t)))));
+                } else {
+                    const gs = [grp('Утро', slots.filter(t => new Date(t).getHours() < 12)),
+                                grp('День', slots.filter(t => { const hh = new Date(t).getHours(); return hh >= 12 && hh < 17; })),
+                                grp('Вечер', slots.filter(t => new Date(t).getHours() >= 17))].filter(Boolean);
+                    for (const g of gs) timeSel.appendChild(g);
+                }
                 timeSel.addEventListener('change', () => {
                     if (timeSel.value) { line.when = slotToLocalIso(Number(timeSel.value)); repaintRail(); repaintCatalog(); }
                 });
@@ -1611,24 +1633,25 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     }
 
     /**
-     * Свободные начала дня (ms) — список сервера, минус время, уже занятое
+     * Свободные начала дня (ms) — список сервера, плюс время, уже занятое
      * ДРУГИМИ строками этой же сметы: их в базе ещё нет, поэтому знать о них
-     * сервер не может. Это вычитание уже разобранного, а не свой расчёт окна.
+     * сервер не может.
+     * SLOT_PACK_EXTRA_BUSY_V1 — строки сметы — занятость, и начала пакуются
+     * заново тем же правилом, что у сервера (shared/slot-pack.js): вторая
+     * услуга к тому же врачу встаёт сразу за первой, без дыры.
      */
     function slotsForDay(line, dayStart) {
         if (!line.doctorId) return [];
         const dayIso = isoDay(dayStart);
         const dur = lineDuration(line);
-        const day = slotDayCached(line.doctorId, dayIso, dur);
+        const day = slotDayCached(line.doctorId, dayIso, dur, { patientId: patient.id });
         if (!day) return [];
         const base = new Date(dayStart); base.setHours(0, 0, 0, 0);
         const taken = wiz.cart
-            .filter(c => c !== line && c.doctorId === line.doctorId && c.when && !c.dateOnly)
-            .map(c => { const s = new Date(c.when).getTime(); return { s, e: s + (Number(c.svc.duration_minutes) || 30) * 60000 }; });
-        const durMs = dur * 60000;
-        const free = freeStartMinutes(day)
-            .map(m => base.getTime() + m * 60000)
-            .filter(t => !taken.some(b => t < b.e && b.s < t + durMs));
+            .filter(c => c !== line && c.doctorId === line.doctorId && c.when && !c.dateOnly && isoDay(new Date(c.when).getTime()) === dayIso)
+            .map(c => { const s = Math.round((new Date(c.when).getTime() - base.getTime()) / 60000); return { from: s, to: s + lineDuration(c) }; });
+        const free = freeStartMinutes(day, dur, taken)
+            .map(m => base.getTime() + m * 60000);
         // BOOKED_JOIN_V1 — время записи пациента к этому врачу в этот день — тоже выбор:
         // услуга ложится в запись, своего слота ей не нужно (его держит запись).
         const join = joinFor(line.doctorId, dayIso);
@@ -1691,7 +1714,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // бы причину экстренной записи там, где сервер бы не отказал.
             const data = await loadSlotDay(head.doctorId, dayIso, dur, { patientId: patient.id });
             if (!data) continue;   // сервер не ответил — решать ему же при записи
-            if (freeStartMinutes(data).includes(startMin)) continue;
+            // SLOT_PACK_V1 — «помещается», а не «есть в списке»: соседняя запись
+            // сдвигает упакованные начала, и выбранное время, которого в новом
+            // списке уже нет, может оставаться свободным.
+            if (startFitsDay(data, dur, startMin)) continue;
 
             const doc = wiz.doctors.find(x => x.id === head.doctorId) || {};
             const docName = doc.full_name || doc.username || '—';
@@ -1755,6 +1781,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const hit = nearestFree(days.map(isoDay), (iso) => slotsForDay(line, new Date(iso + 'T00:00:00').getTime())
             .map((ms) => { const d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); }));
         if (!hit) return null;
+        // CRM_JOIN_NOT_MOVE_V1 — в ближайший день пациент записан к этому врачу: «Ближайшее» — время записи.
+        const jn = joinFor(line.doctorId, hit.iso);
+        const jm = jn ? /T(\d{2}):(\d{2})$/.exec(String(jn.when)) : null;
+        if (jm) hit.min = Number(jm[1]) * 60 + Number(jm[2]);
         const day = new Date(hit.iso + 'T00:00:00').getTime();
         return { day, iso: hit.iso, min: hit.min, ms: day + hit.min * 60000 };
     }
@@ -1889,8 +1919,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // (ЛОР «Кукушка»), ставится сам, как во всех релизах до 3.21.1: его своя цена, его дверь
         // (QUEUE_ONE_DOCTOR_LINE_V1), его доля. Выбора исполнителя у такой строки нет — без этого
         // регистратор не смог бы его поставить.
-        const pool = doctorsForService(svc.id);
-        if (pool.length === 1 && (needsPerformer(svc) || isOn(pool[0].is_doctor))) {
+        // LAB_NO_DOCTOR_V1 — анализу, оставленному в «Консультациях» (requires_doctor = 0), исполнитель
+        // не обязателен: сам ставится только отмеченный ему врач (H-1), не «все врачи» запасного списка.
+        const optional = !performerRequired(svc);
+        const pool = optional ? assignedTo(wiz.doctors, svc.id) : doctorsForService(svc.id);
+        if (pool.length === 1 && (!optional || isOn(pool[0].is_doctor))) {
             line.doctorId = pool[0].id;
             // DIAG_ROUTE_V1 (D1) — у строки «на дату» день остаётся и у врача живой очереди.
             if (isLiveQueueDoc(line.doctorId)) { if (!line.dateOnly) line.when = null; repaintRail(); }
@@ -2791,7 +2824,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // без него пациента не увидит ни один врач (needsPerformer).
             // CRM_LINK_ALL_V1 — врач записи не меняется; DIAG_ROUTE_V1 (ревью M-1) — строке записи без
             // исполнителя (booked.setDoctor) его выбирают здесь же.
-            const waitDoc = wiz.cart.filter(x => !x.doctorId && (!x.booked || x.booked.setDoctor) && (x.svc.requires_doctor || needsPerformer(x.svc)));
+            const waitDoc = wiz.cart.filter(x => !x.doctorId && (!x.booked || x.booked.setDoctor) && (x.svc.requires_doctor || performerRequired(x.svc)));   // LAB_NO_DOCTOR_V1
             if (pendingDoc > 0 || waitDoc.length > 0) {
                 const wait = h('div', { 'data-wait-doctor': '', style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px', padding: '9px 10px', background: 'var(--warn-50, #fffbeb)', border: '1px solid var(--warn-200, #fde68a)', borderRadius: '10px' } },
                     h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--warn-700, #a16207)' } },
@@ -3243,7 +3276,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // DIAG_ROUTE_V1 (D1, решение владельца 2026-11-03) — услуга кабинета врача без
             // исполнителя не уходит: строку без исполнителя не увидит ни один врач.
             // DIAG_ROUTE_V1 (ревью M-1) — и строка «из записи» без исполнителя (booked.setDoctor).
-            if (wiz.cart.some(c => (!c.booked || c.booked.setDoctor) && !c.doctorId && needsPerformer(c.svc))) return 'выберите исполнителя услуги — без него пациента не увидит ни один врач';
+            // LAB_NO_DOCTOR_V1 — у анализа, оставленного в группе «Консультации», решает флаг
+            // «нужен врач» (performerRequired): requires_doctor = 0 — «Далее» не держит.
+            if (wiz.cart.some(c => (!c.booked || c.booked.setDoctor) && !c.doctorId && performerRequired(c.svc))) return 'выберите исполнителя услуги — без него пациента не увидит ни один врач';
         }
         if (wiz.step === 2) {
             if (!wiz.when && !wiz.cart.some(c => c.when)) return 'укажите дату и время визита';
@@ -3458,6 +3493,22 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         duration_minutes: lineDuration(timedHead),
                     };
                     if (emgReason) { evArgs.book.emergency = true; evArgs.book.emergency_reason = emgReason; }
+                } else {
+                    // JOIN_EXTENDS_BOOKING_V1 — новые строки дня идут в запись пациента (ridesBooking):
+                    // брони нет, а запись удлиняется на их длительность, если время за ней свободно
+                    // (решает сервер, ensure_visit join; занято — запись остаётся своей длины).
+                    // ревью M2 — строки по кодам услуг (сервер считает длину из строк записи, повтор
+                    // не растит); только к самой записи-визиту (строка второго врача — не запись).
+                    const riders = lines.filter((c) => ridesBooking(c) && (joinFor(c.doctorId, day) || {}).head);
+                    if (riders.length) {
+                        const r0 = riders[0];
+                        evArgs.join = {
+                            doctor_id: Number(r0.doctorId),
+                            start: new Date(r0.when).toISOString(),
+                            lines: riders.filter((c) => c.doctorId === r0.doctorId && c.when === r0.when)
+                                .map((c) => ({ service_id: Number(c.svc.id) })),
+                        };
+                    }
                 }
                 // CRM_LINK_ALL_V1 (R3; решение владельца D2) — регистрация на СЕГОДНЯ «сейчас»
                 // (живая очередь, услуги без времени или слот не позже чем через 30 минут) —
@@ -3470,6 +3521,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 }
                 const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', evArgs);
                 if (evErr) {
+                    // ревью M4 — запись изменилась, пока мастер был открыт: записи пациента и
+                    // свободное время перечитываются, регистратор выбирает время ещё раз.
+                    if (evErr.code === 'join_target_gone') {
+                        forgetSlots();
+                        wiz.bookingsReady = loadPatientBookings(patient && patient.id)
+                            .then((b) => { wiz.bookings = b; }).catch(() => { wiz.bookings = []; });
+                    }
                     // Отказ сервера показывается ЕГО словами (он называет врача
                     // и занятое время), а не «ensure_visit failed».
                     throw new Error(trf('Визит на {day}: {msg}', { day, msg: bookErrorText(evErr) }));
@@ -3497,6 +3555,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const answer = readEnsureVisit(ev, { time: timedHead ? fmtSlot(new Date(timedHead.when).getTime()) : '' });
                 if (answer.busy) toast(answer.text + ' ' + tr('Услуги записаны на существующий приём.'), 'warn');
                 if (answer.moved) toast(answer.text, 'info');
+                // ревью M5 — присоединение не удлинило запись (следующая запись / конец приёма) — сказать.
+                if (ev.joined && ev.extended === false && (ev.next || ev.until)) {
+                    toast(joinExtensionNote({ ends: ev.ends, next: ev.next, until: ev.until }, trf), 'warn');
+                }
                 if (ev.booked) forgetSlots();
 
                 if (!ev.booked && emgReason) {

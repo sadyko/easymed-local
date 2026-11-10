@@ -300,3 +300,26 @@ test('опоздание (ревью, контроль): у визита сво�
     assert.equal(st(t, A).split('@')[0], 'came', 'опоздание на день больше не приход');
   } finally { t.close(); }
 });
+
+// CRM_BOOKING_OWN_CARD_V1 × CRM_JOIN_NOT_MOVE_V1 (слияние потоков A и B, 3.23.0): присоединение к записи
+// из карточки CRM («в запись · ЧЧ:ММ») тоже называет свою карточку. Без номера шаг связи угадывал бы
+// карточку по пациенту — и взял бы самую свежую живую (C), а не ту, из которой присоединяли (B).
+test('присоединение «в запись» из карточки B называет B: свежая карточка C с желанием без даты не трогается', async () => {
+  const t = await startCrmApp();
+  try {
+    const A = await newCard(t, { day: D, lines: [{ service_id: 30, scheduled_date: D, doctor_id: 10 }] });
+    const vA = await bookCard(t, A, D, 11);
+    const B = await newCard(t, { day: D, lines: [{ service_id: 30, scheduled_date: D, doctor_id: 10 }] });
+    const C = await newCard(t, { lines: [{ service_id: 40 }] });
+    const j = await t.rpc('ensure_visit', 'cc', { patient_id: 77, date: at(D, 11), doctor_id: 10, crm_request_id: B,
+      join: { doctor_id: 10, start: at(D, 11), lines: [{ service_id: 30 }] } });
+    assert.equal(j.status, 200, j.text);
+    assert.equal(j.json.data.joined, true, 'это присоединение, не перенос');
+    assert.equal(j.json.data.visit.id, vA, 'та же запись');
+    assert.deepEqual(t.db.prepare('SELECT visit_id, status FROM crm_request_services WHERE request_id = ?').all(C),
+      [{ visit_id: null, status: 'pending' }], 'желание чужой карточки C село в запись');
+    assert.equal(st(t, C), 'in_process@-', 'чужая карточка C сдвинулась');
+    assert.equal(t.db.prepare('SELECT visit_id FROM crm_request_services WHERE request_id = ?').get(B).visit_id, vA,
+      'строка карточки B не села в запись');
+  } finally { t.close(); }
+});

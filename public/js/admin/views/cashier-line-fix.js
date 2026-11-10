@@ -37,7 +37,7 @@ import { tr, trf } from '../i18n.js';
 import { canFixCashierLines, canSwapPaidLines } from '../permissions.js';
 import { localYmd } from '../discount-rules.js';   // REFERRAL_BILL_V1 — местный день, как у остальной кассы
 import { TUBE_STATUSES } from './lab-tube.js';   // LAB_TUBE_LABEL_V1 (ревью U11, M3/L5) — статусы строк, у которых есть пробирка
-import { serviceRoute, needsPerformer, ROUTE_SELECT } from '../../shared/service-route.js';   // DIAG_ROUTE_V1 (3.22.0) — анализ ли услуга решает группа (ревью L-5); услуге кабинета нужен исполнитель и у кассы (I-4)
+import { serviceRoute, performerRequired, ROUTE_SELECT } from '../../shared/service-route.js';   // LAB_NO_DOCTOR_V1 — performerRequired вместо needsPerformer   // DIAG_ROUTE_V1 (3.22.0) — анализ ли услуга решает группа (ревью L-5); услуге кабинета нужен исполнитель и у кассы (I-4)
 
 // Работа по строке начата или сделана — сервер её не меняет (PERFORMED_LINE_STATUSES).
 const PERFORMED = ['collected', 'in_progress', 'resulted', 'completed'];
@@ -190,7 +190,7 @@ export function pickService(title, { visitId = null, exceptLineId = null, doctor
 // (SERVICE_SCOPE_V3), поэтому «Без врача» ей не предлагается и у кассы; единственный
 // исполнитель выбирается сам.
 export function pickPerformer(title, args, { allowNone = false, service = null } = {}) {
-    const mustPick = !!(service && needsPerformer(service));
+    const mustPick = !!(service && performerRequired(service));   // LAB_NO_DOCTOR_V1
     return new Promise((resolve) => {
         let done = false;
         const finish = (v) => { if (done) return; done = true; resolve(v); };
@@ -289,7 +289,7 @@ async function runRpc(name, args, okText) {
 export const cashierIsLabService = (s) => !!s && serviceRoute(s) === 'lab';
 const isLabService = cashierIsLabService;
 /** CASHIER_LINE_EDIT_V1 — нужен ли услуге исполнитель у кассы: анализу — никогда; кабинету и «специалисту» — да. */
-export const cashierNeedsPerformer = (s) => !!s && serviceRoute(s) !== 'lab' && needsPerformer(s);
+export const cashierNeedsPerformer = (s) => !!s && serviceRoute(s) !== 'lab' && performerRequired(s);   // LAB_NO_DOCTOR_V1
 
 // LAB_TUBE_LABEL_V1 (ревью U11, M3) — строка анализа в работе лаборатории (ждёт
 // забора … результаты внесены — статусы пробирки, lab-tube.js): её номер мог уйти

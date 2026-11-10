@@ -268,7 +268,11 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
     // 2. Визит дня. Слота нет: приход «сейчас» ничьё время в календаре не
     //    занимает, поэтому book не отправляется вовсе — проверять нечего.
     const when = now();
-    const iso = new Date(when instanceof Date ? when.getTime() : when).toISOString();
+    // SLOT_PACK_V1 (ревью H1) — «сейчас» на целой минуте (вверх, в пределах дня): с
+    // секундами приход занимал врача до 10:37:20, и 10:37 в списках не записывалось.
+    const whenMs = new Date(when instanceof Date ? when.getTime() : when).getTime();
+    const upMs = Math.ceil(whenMs / 60000) * 60000;
+    const iso = new Date(new Date(upMs).getDate() === new Date(whenMs).getDate() ? upMs : Math.floor(whenMs / 60000) * 60000).toISOString();
     //    ВРАЧ ВИЗИТА — ПЕРВАЯ СТРОКА, У КОТОРОЙ ВРАЧ ЕСТЬ, а не первая строка
     //    вообще. Заказ у стойки обычно начинается с анализа (врач ему не нужен)
     //    и только потом идёт приём: взяв врача у items[0], визит уходил бы в

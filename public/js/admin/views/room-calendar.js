@@ -78,7 +78,7 @@ import { hasActorRole } from '../permissions.js';
 import { pastelFor } from '../pastel.js?v=pastel1';
 import { openServicePickerModal, forgetSlots } from './service-picker-modal.js?v=ownrep4';   // RESCAL_WIRE_V1 — same URL as other importers (one instance) · REPEAT_VISIT_V1 (ревью) — forgetSlots
 import { registrarHeader } from './registrar-header.js?v=aurora5';   // NO_GREETING_V1 — same URL as patients.js (one instance)
-import { doctorPoolFor, needsPerformer, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DIAG_ROUTE_V1 (D1) — исполнитель строки «Добавить»
+import { doctorPoolFor, performerRequired, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // LAB_NO_DOCTOR_V1 — performerRequired вместо needsPerformer   // DIAG_ROUTE_V1 (D1) — исполнитель строки «Добавить»
 // RCAL_REFERENCE_LAYOUT_V1 — счётная часть новой раскладки (мини-месяц, сколько
 // дней помещается, загрузка колонки, рабочий набор оператора). Отдельным
 // файлом: этот в node не загружается, а те правила надо проверять числами.
@@ -1047,7 +1047,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const paintPerf = () => {
             clear(perfSel);
             const svc = addSvcOf();
-            if (!svc || !needsPerformer(svc)) { perfSel.style.display = 'none'; perfSel.value = ''; return; }
+            if (!svc || !performerRequired(svc)) { perfSel.style.display = 'none'; perfSel.value = ''; return; }   // LAB_NO_DOCTOR_V1
             const pool = doctorPoolFor(state.performers || [], svc);
             perfSel.appendChild(h('option', { value: '' }, pool.length ? tr('— выберите врача —') : tr('нет врачей для этой услуги')));
             for (const d of pool) perfSel.appendChild(h('option', { value: String(d.id) }, (d.full_name || '—') + (d.specialty ? ' · ' + d.specialty : '')));
@@ -1071,7 +1071,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 // DIAG_ROUTE_V1 (D1) — у услуги исполнитель — выбранный в perfSel, не врач записи.
                 const svc = (state.servicesList || []).find((x) => String(x.id) === String(id));
                 const consult = v.startsWith('c:');
-                const perfNeeded = !consult && needsPerformer(svc || { id });
+                const perfNeeded = !consult && performerRequired(svc || { id });   // LAB_NO_DOCTOR_V1
                 if (perfNeeded && !perfSel.value) {
                     toast(trf('Укажите врача для услуги «{name}»', { name: (svc && svc.name) || '' }), 'fail');
                     return;

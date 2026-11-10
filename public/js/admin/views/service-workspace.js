@@ -1340,11 +1340,11 @@ function aiSuggestion(kind, iconName, text) {
 const RV_REASONS = ['Контроль после лечения', 'Оценка результатов анализов', 'Продолжение лечения', 'Повторный осмотр', 'Перевязка', 'Другое'];
 const RV_WEEK    = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
-// Шаг и длительность повторного визита. Это НЕ расчёт расписания: сервер
-// принимает их как аргументы и сам решает, что из этого свободно.
+// Длительность повторного визита. Это НЕ расчёт расписания: сервер
+// принимает её как аргумент и сам решает, что из этого свободно.
 // DOCTOR_PROFILE_V1 (ревью шага 5, №1) — длительность визита по виду
-// консультации — длительность вида (consultMinutes); 20 — шаг сетки и
-// длительность визита без вида.
+// консультации — длительность вида (consultMinutes); 20 — длительность визита
+// без вида. SLOT_PACK_V1 — шагом сетки 20 больше не служит: начала вплотную.
 const RV_SLOT_MIN = 20;
 function rvPad(n) { return String(n).padStart(2, '0'); }
 function minToHhmm(m) { return `${rvPad(Math.floor(m / 60))}:${rvPad(m % 60)}`; }
@@ -1620,7 +1620,8 @@ async function openRevisitModal(ctx) {
         const dayIso = rvIso(state.sel.y, state.sel.m, state.sel.d);
         // REPEAT_VISIT_V1 — без patientId: свой приём пациента в этот день не
         // прячется из занятого — повторный визит в такой день сервер не запишет.
-        const day = await loadSlotDay(doctorId, dayIso, rvMinutes(), { stepMinutes: RV_SLOT_MIN });   // DOCTOR_PROFILE_V1 — длительность вида, шаг 20
+        // SLOT_PACK_V1 — без своего шага 20: начала вплотную, шагом длительности вида (сервер).
+        const day = await loadSlotDay(doctorId, dayIso, rvMinutes());   // DOCTOR_PROFILE_V1 — длительность вида
         clear(slotsWrap);
         if (!day || !day.window) {
             slotsWrap.appendChild(h('div', { class: 'rv-pickhint muted' }, Icon('Calendar', { size: 16 }), ' ',

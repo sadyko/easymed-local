@@ -98,9 +98,11 @@ const dayAt = (off) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate
 const USER = { id: 1, role: 'registrar', extra_roles: [] };
 let DB = null;
 let busyToday = false;
+const SLOT_ASKS = [];   // LAB_NO_DOCTOR_V1 — у кого спрошено время
 globalThis.fetch = async (url, opts) => {
     const u = String(url);
     const body = JSON.parse((opts && opts.body) || '{}');
+    if (u === '/api/rpc/calendar_slots') SLOT_ASKS.push(body);
     const ok = (data) => ({ ok: true, status: 200, json: async () => ({ data }), headers: { getSetCookie: () => [] } });
     const fail = (status, message) => ({ ok: false, status, json: async () => ({ error: { code: 'bad_request', message } }), headers: { getSetCookie: () => [] } });
     if (u === '/api/rpc/calendar_slots') {
@@ -206,7 +208,8 @@ test('BOOKED_JOIN_V1: врач сегодня занят, но пациент к
     try {
         seed();
         const at15 = dayAt(0); at15.setHours(15, 0, 0, 0);
-        DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, created_by) VALUES (3, ?, 5, 'scheduled', 1)").run(at15.toISOString());
+        // ревью L4 — запись колл-центра: время ей ставил calendar_book (booked_at).
+        DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, booked_at, created_by) VALUES (3, ?, 5, 'scheduled', ?, 1)").run(at15.toISOString(), new Date().toISOString());
         forgetSlots();
         BODY.children.length = 0;
         openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
@@ -219,6 +222,214 @@ test('BOOKED_JOIN_V1: врач сегодня занят, но пациент к
         assert.ok(!textOf(top()).includes('Сегодня у врача нет свободного времени'), 'пометка «нет времени» при записи к этому врачу');
         assert.match(textOf(top()), /сегодня 15:00/);
     } finally { busyToday = false; }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LAB_NO_DOCTOR_V1 (3.23.0, снимок владельца 62) — АНАЛИЗ НЕ СПРАШИВАЕТ ВРАЧА.
+// Калькулятор читал «нужен врач» как `requires_doctor === false`, а /api/db отдаёт
+// SQLite 0 — и «нужен врач» становилось «есть исполнитель»: один лаборант в «Услугах и
+// ставках» — назначался С ВРЕМЕНЕМ (его календарь занимался); два лаборанта — «выберите
+// врача и время», смета не уходила; анализ в группе «Консультации» по умолчанию —
+// кандидатами становились все врачи. Теперь решает только флаг: requires_doctor = 0 —
+// врач и время не нужны; исполнитель (если отмечен один) — без времени.
+// ═══════════════════════════════════════════════════════════════════════════
+function seedLab({ group = 'lab', techs = 0, doctors = 1 }) {
+    const db = openDb(':memory:');
+    migrate(db);
+    db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (1,'reg','x','Регистратор','registrar')").run();
+    db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (3,'P-3','Иванов Иван')").run();
+    db.prepare("INSERT INTO services (id, name, price, type, active, requires_doctor, duration_minutes, code) VALUES (31,'СРБ',35000,?,1,0,30,'S-31')").run(group);
+    for (let i = 0; i < doctors; i++) {
+        db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, service_rates) VALUES (?,?,'x',?,'doctor',1,'[]')").run(40 + i, 'doc' + i, 'Врачев ' + i);
+    }
+    for (let i = 0; i < techs; i++) {
+        db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, service_rates) VALUES (?,?,'x',?,'lab','[{"service_id":31,"pct":5}]')`).run(50 + i, 'lab' + i, 'Лаборантова ' + i);
+    }
+    if (DB) DB.close();
+    DB = db;
+}
+async function openWithLab(opts) {
+    seedLab(opts);
+    forgetSlots();
+    SLOT_ASKS.length = 0;
+    BODY.children.length = 0;
+    openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
+        patient: { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' } });
+    const top = () => BODY.children[BODY.children.length - 1];
+    const addOf = (name) => byClass(top(), 'wzc-svc').filter((r) => textOf(r).includes(name)).map((r) => byClass(r, 'wzc-add')[0]).find(Boolean);
+    await until(() => addOf('СРБ'), 'строка СРБ в каталоге');
+    addOf('СРБ').click();
+    await until(() => byClass(top(), 'wzc-cta')[0], 'кнопка сметы');
+    await new Promise((r) => setTimeout(r, 120));
+    const rail = byClass(top(), 'wzc-rail')[0];
+    return { top, rail: rail ? textOf(rail) : '', cta: byClass(top(), 'wzc-cta')[0] };
+}
+const LAB_CASES = [
+    ['группа «Лаборатория», исполнителя нет', { group: 'lab' }, null],
+    // LAB_NO_DOCTOR_V1 (ревью, решение координатора b) — лаборанта анализу сам не ставим (как мастер визита, I-1):
+    // исполнитель по желанию, без времени.
+    ['группа «Лаборатория», ОДИН лаборант в «Услугах и ставках» — не подставлен, времени нет', { group: 'lab', techs: 1 }, null],
+    ['группа «Лаборатория», ДВА лаборанта — исполнитель по выбору, смета не стоит', { group: 'lab', techs: 2 }, null],
+    ['анализ в группе «Консультации» (умолчание), один врач — врач не подставлен', { group: 'consultation', doctors: 1 }, null],
+    ['анализ в группе «Консультации», два врача — смета не стоит', { group: 'consultation', doctors: 2 }, null],
+];
+for (const [label, opts, who] of LAB_CASES) {
+    test('LAB_NO_DOCTOR_V1: ' + label, async () => {
+        const { rail, cta } = await openWithLab(opts);
+        assert.equal(cta.disabled, false, 'смета с анализом не уходит дальше: ' + rail);
+        assert.ok(!rail.includes('выберите врача и время'), 'анализ просит врача и время: ' + rail);
+        assert.ok(!/\d\d:\d\d/.test(rail), 'анализу поставлено время: ' + rail);
+        assert.deepEqual(SLOT_ASKS, [], 'у исполнителя анализа спрошено время: ' + JSON.stringify(SLOT_ASKS));
+        if (who) assert.ok(rail.includes(who), 'единственный лаборант не назначен исполнителем: ' + rail);
+        if (opts.techs) assert.ok(!rail.includes('Лаборантова'), 'лаборант подставлен анализу сам: ' + rail);
+        if (opts.group === 'consultation') assert.ok(!rail.includes('Врачев'), 'анализу подставлен врач: ' + rail);
+    });
+}
+
+// LAB_NO_DOCTOR_V1 (ревью, решение координатора b) — «Диагностика» (УЗИ) с requires_doctor = 0:
+// исполнитель обязателен (D1), время — нет. Двое врачей, никто не отмечен — смета ждёт выбора
+// исполнителя («выберите исполнителя»), времени не спрашивает; выбран — готово, без времени.
+test('LAB_NO_DOCTOR_V1 (ревью b): УЗИ «Диагностика» без «нужен врач» — исполнитель обязателен, время не спрашивается', async () => {
+    seedLab({ group: 'imaging', doctors: 2 });
+    forgetSlots();
+    SLOT_ASKS.length = 0;
+    BODY.children.length = 0;
+    openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
+        patient: { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' } });
+    const top = () => BODY.children[BODY.children.length - 1];
+    const rowOf = (name) => byClass(top(), 'wzc-svc').find((r) => textOf(r).includes(name));
+    await until(() => rowOf('СРБ') && byClass(rowOf('СРБ'), 'wzc-add')[0], 'строка в каталоге');
+    byClass(rowOf('СРБ'), 'wzc-add')[0].click();
+    await until(() => byClass(top(), 'wzc-cta')[0], 'кнопка сметы');
+    await new Promise((r) => setTimeout(r, 120));
+    const rail = () => textOf(byClass(top(), 'wzc-rail')[0]);
+    assert.equal(byClass(top(), 'wzc-cta')[0].disabled, true, 'УЗИ ушло без исполнителя: ' + rail());
+    assert.ok(rail().includes('выберите исполнителя'), 'причина не названа: ' + rail());
+    const doc = walk(rowOf('СРБ')).find((n) => n.tagName === 'BUTTON' && String(n.className).includes('wzc-doc') && textOf(n).includes('Врачев 1'));
+    assert.ok(doc, 'нет выбора исполнителя');
+    doc.click();
+    await until(() => byClass(top(), 'wzc-cta')[0].disabled === false, 'смета готова после выбора исполнителя');
+    assert.ok(rail().includes('Врачев 1') && !/\d\d:\d\d/.test(rail()), 'исполнитель не выбран или ему поставлено время: ' + rail());
+    assert.deepEqual(SLOT_ASKS, [], 'у исполнителя УЗИ без «нужен врач» спрошено время');
+});
+
+// LAB_NO_DOCTOR_V1 — календарь кабинетов, колонка ВРАЧА: каталог заперт на врача
+// (lockedDoctor + время щелчка — ровно так его открывает room-calendar.js). Прежде в нём
+// были только услуги врача, а показанный анализ ложился во время врача (запись врача
+// удлинялась на анализ). Теперь анализ без врача — строкой «на дату»: без врача, без
+// времени, запись врача — только на его услугу.
+test('LAB_NO_DOCTOR_V1: колонка врача в календаре — анализ «на дату», без врача и времени; запись врача — только на его услугу', async () => {
+    seedLab({ group: 'lab', doctors: 1 });
+    DB.prepare("INSERT INTO services (id, name, price, type, active, requires_doctor, duration_minutes, code) VALUES (32,'Приём кардиолога',90000,'consultation',1,1,20,'S-32')").run();
+    DB.prepare(`UPDATE users SET service_rates = '[{"service_id":32,"pct":10}]' WHERE id = 40`).run();
+    const day = dayAt(1); day.setHours(11, 0, 0, 0);
+    forgetSlots();
+    BODY.children.length = 0;
+    openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
+        lockedDoctor: { id: 40, name: 'Врачев 0', spec: '' }, scheduledISO: day.toISOString(), initialDateIso: ymd(day),
+        patient: { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' } });
+    const top = () => BODY.children[BODY.children.length - 1];
+    const rowOf = (name) => byClass(top(), 'wzc-svc').find((r) => textOf(r).includes(name));
+    const addOf = (name) => { const r = rowOf(name); return r && byClass(r, 'wzc-add')[0]; };
+    await until(() => addOf('СРБ'), 'анализа нет в каталоге врача');
+    assert.ok(textOf(rowOf('СРБ')).includes('врач не требуется'), 'анализ в каталоге врача — не «врач не требуется»: ' + textOf(rowOf('СРБ')));
+    addOf('Приём кардиолога').click();
+    addOf('СРБ').click();
+    await until(() => byClass(top(), 'wzc-cta')[0] && byClass(top(), 'wzc-cta')[0].disabled === false, 'смета готова');
+    const btn = (text) => walk(top()).find((n) => n.tagName === 'BUTTON' && n.style.display !== 'none' && textOf(n).includes(text));
+    byClass(top(), 'wzc-cta')[0].click();
+    await until(() => btn('Далее →'), 'шаг «Направление»');
+    btn('Далее →').click();
+    await until(() => btn('Создать визит'), 'шаг «Подтверждение»');
+    btn('Создать визит').click();
+    await until(() => DB.prepare('SELECT COUNT(*) n FROM visit_services').get().n === 2, 'строки сметы не легли');
+    const v = DB.prepare('SELECT doctor_id, visit_date, duration_minutes FROM visits').all();
+    assert.equal(v.length, 1);
+    assert.equal(v[0].doctor_id, 40);
+    assert.equal(Date.parse(v[0].visit_date), day.getTime(), 'запись врача — не на время щелчка');
+    assert.equal(v[0].duration_minutes, 20, 'анализ удлинил запись врача (время врача заняла лаборатория)');
+    const lab = DB.prepare('SELECT doctor_id, scheduled_at FROM visit_services WHERE service_id = 31').get();
+    assert.equal(lab.doctor_id, null, 'анализу записан врач колонки');
+    const at = new Date(lab.scheduled_at);
+    assert.deepEqual([ymd(at), at.getHours(), at.getMinutes()], [ymd(day), 0, 0], 'анализ — не «на дату» (полночь своего дня)');
+});
+
+// ═══ ревью M1, L1 — калькулятор на дне с записью пациента ═══════════════════════════
+// Визит дня сервер ищет по местному дню SQLite (localtime), а день записи считает часами
+// JS. Предзагрузка tz-late двигает только пояс JS — визит дня не находится (так же падают
+// прежние тесты визита дня на 3.22.0). В таком прогоне оба теста пропускаются.
+const TZ_SPLIT = (() => {
+    const db = openDb(':memory:');
+    const iso = '2030-01-07T00:30:00Z';
+    const sql = db.prepare("SELECT strftime('%Y-%m-%d %H:%M', ?, 'localtime') AS v").get(iso).v;
+    db.close();
+    const d = new Date(iso);
+    const js = `${ymd(d)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return sql === js ? false : 'пояс JS не совпадает с поясом SQLite (предзагрузка tz-late) — визит дня по местному дню не найти';
+})();
+const TOASTS_C = [];
+Object.defineProperty(TOAST_EL, 'textContent', { get() { return ''; }, set(v) { TOASTS_C.push(String(v)); }, configurable: true });
+const btnText = (root, text) => walk(root).find((n) => n.tagName === 'BUTTON' && n.style.display !== 'none' && textOf(n).includes(text));
+async function saveCalcFlow(top) {
+    await until(() => byClass(top(), 'wzc-cta')[0] && byClass(top(), 'wzc-cta')[0].disabled === false, 'смета готова');
+    byClass(top(), 'wzc-cta')[0].click();
+    await until(() => btnText(top(), 'Далее →'), 'шаг «Направление»');
+    btnText(top(), 'Далее →').click();
+    await until(() => btnText(top(), 'Создать визит'), 'шаг «Подтверждение»');
+    btnText(top(), 'Создать визит').click();
+}
+
+test('ревью M1: калькулятор — «в запись · 15:00» первым, другие времена под «Перенести запись на»; выбран перенос — запись перенесена с прежней длиной, сказано вслух', { skip: TZ_SPLIT }, async () => {
+    seed();
+    const at15 = dayAt(0); at15.setHours(15, 0, 0, 0);
+    const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, booked_at, created_by) VALUES (3, ?, 5, 'scheduled', 45, ?, 1)").run(at15.toISOString(), new Date().toISOString()).lastInsertRowid);
+    forgetSlots();
+    BODY.children.length = 0; TOASTS_C.length = 0;
+    openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
+        patient: { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' } });
+    const top = () => BODY.children[BODY.children.length - 1];
+    const addOf = (name) => byClass(top(), 'wzc-svc').filter((r) => textOf(r).includes(name)).map((r) => byClass(r, 'wzc-add')[0]).find(Boolean);
+    await until(() => addOf('УЗИ'), 'строка УЗИ в каталоге');
+    addOf('УЗИ').click();
+    await until(() => byAttr(top(), 'data-join'), 'кнопка «в запись»');
+    const join = byAttr(top(), 'data-join');
+    assert.match(textOf(join), /в запись · 15:00/);
+    const grp = byAttr(top(), 'data-move-group');
+    assert.ok(grp && textOf(grp).includes('Перенести запись на'), 'другие времена не под «Перенести запись на»');
+    const ten = walk(grp).find((n) => n.tagName === 'BUTTON' && textOf(n).trim() === '10:00');
+    assert.ok(ten, 'нет времени для переноса');
+    ten.click();
+    await saveCalcFlow(top);
+    await until(() => DB.prepare('SELECT COUNT(*) n FROM visit_services').get().n > 0, 'строка не легла');
+    const v = DB.prepare('SELECT visit_date, duration_minutes FROM visits WHERE id = ?').get(vid);
+    const t = new Date(v.visit_date);
+    assert.deepEqual([t.getHours(), t.getMinutes()], [10, 0], 'запись не перенесена');
+    assert.equal(v.duration_minutes, 45, 'перенос обрезал запись (ревью M3)');
+    assert.ok(TOASTS_C.some((x) => /Приём перенесён с 15:00 на 10:00/.test(x)), 'перенос не назван: ' + JSON.stringify(TOASTS_C));
+});
+
+test('ревью L1: колонка врача, в смете только анализ «на дату», пациент записан к этому врачу — визит дня, без «записи к другому врачу» и без нового визита', { skip: TZ_SPLIT }, async () => {
+    seedLab({ group: 'lab', doctors: 1 });
+    const at10 = dayAt(0); at10.setHours(10, 0, 0, 0);
+    const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, booked_at, created_by) VALUES (3, ?, 40, 'scheduled', 30, ?, 1)").run(at10.toISOString(), new Date().toISOString()).lastInsertRowid);
+    const click = dayAt(0); click.setHours(15, 0, 0, 0);
+    forgetSlots();
+    BODY.children.length = 0; TOASTS_C.length = 0;
+    openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
+        lockedDoctor: { id: 40, name: 'Врачев 0', spec: '' }, scheduledISO: click.toISOString(), initialDateIso: ymd(click),
+        patient: { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' } });
+    const top = () => BODY.children[BODY.children.length - 1];
+    const addOf = (name) => byClass(top(), 'wzc-svc').filter((r) => textOf(r).includes(name)).map((r) => byClass(r, 'wzc-add')[0]).find(Boolean);
+    await until(() => addOf('СРБ'), 'анализа нет в каталоге врача');
+    addOf('СРБ').click();
+    await saveCalcFlow(top);
+    await until(() => DB.prepare('SELECT COUNT(*) n FROM visit_services WHERE service_id = 31').get().n === 1, 'строка анализа не легла: ' + JSON.stringify(TOASTS_C));
+    assert.ok(!TOASTS_C.some((x) => /запись к/.test(x)), 'отказ «запись к другому врачу»: ' + JSON.stringify(TOASTS_C));
+    assert.equal(DB.prepare('SELECT COUNT(*) n FROM visits').get().n, 1, 'заведён второй визит');
+    assert.equal(DB.prepare('SELECT visit_id FROM visit_services WHERE service_id = 31').get().visit_id, vid, 'анализ не в визите дня');
+    const v = DB.prepare('SELECT visit_date, duration_minutes FROM visits WHERE id = ?').get(vid);
+    assert.equal(Date.parse(v.visit_date), at10.getTime(), 'запись к врачу сдвинута');
+    assert.equal(v.duration_minutes, 30);
 });
 
 test.after(() => { if (DB) DB.close(); DB = null; });

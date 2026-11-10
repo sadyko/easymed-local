@@ -21,6 +21,7 @@ import {
   DEFAULT_DURATION_MIN, DEFAULT_FROM_MIN, DEFAULT_TO_MIN,
   clampWindow, clinicWindow, dayWindow, formatHhmm, overlaps, overlapsMs,
   parseHhmm, parseWorkingHours, serviceDurationMinutes, slotStarts, windowSegments,
+  packedStarts, startFits, packMinStart,   // SLOT_PACK_V1
 } from './slot-engine.js';
 
 const MON = 1, TUE = 2, SUN = 0;
@@ -186,4 +187,84 @@ test('разбор и печать часов', () => {
   assert.equal(parseHhmm(''), null);
   assert.equal(formatHhmm(570), '09:30');
   assert.equal(formatHhmm(0), '00:00');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SLOT_PACK_V1 (3.23.0) — ЗАПИСИ ВСТАЮТ ВПЛОТНУЮ: следующее свободное начало —
+// конец предыдущей записи, дальше шагом ДЛИТЕЛЬНОСТИ услуги. Снимок владельца:
+// врач 09:00–18:00, записи 09:00–09:30 и 10:10–10:40 — сетка в 30 минут
+// предлагала 09:30, 11:00, 11:30…, и 10:40 не предлагалось никогда.
+// ═══════════════════════════════════════════════════════════════════════════
+const DAY_9_18 = windowSegments({ from: hm('09:00'), to: hm('18:00'), breaks: [] });
+const OWNER_BUSY = [{ from: hm('09:00'), to: hm('09:30') }, { from: hm('10:10'), to: hm('10:40') }];
+
+test('SLOT_PACK_V1: после записи — её конец, дальше шагом длительности (снимок владельца)', () => {
+  assert.deepEqual(packedStarts({ segments: DAY_9_18, busy: OWNER_BUSY, durationMin: 30 }).slice(0, 4).map(formatHhmm),
+    ['09:30', '10:40', '11:10', '11:40'], '10:40 — конец записи 10:10–10:40 — обязано предлагаться');
+  assert.deepEqual(packedStarts({ segments: DAY_9_18, busy: OWNER_BUSY, durationMin: 15 }).slice(0, 4).map(formatHhmm),
+    ['09:30', '09:45', '10:40', '10:55']);
+  // Конец дня: последняя тридцатиминутка начинается не позже 17:30 (от 10:40 шагом 30 — 17:10).
+  const all = packedStarts({ segments: DAY_9_18, busy: OWNER_BUSY, durationMin: 30 });
+  assert.equal(formatHhmm(all[all.length - 1]), '17:10');
+  assert.ok(all.every((t) => t + 30 <= hm('18:00')));
+});
+
+test('SLOT_PACK_V1: после обеда — с конца обеда; до обеда — пока помещается', () => {
+  const win = { from: hm('09:00'), to: hm('15:00'), breaks: [{ from: hm('12:20'), to: hm('13:00') }] };
+  const starts = packedStarts({ segments: windowSegments(win), durationMin: 30 }).map(formatHhmm);
+  assert.ok(starts.includes('11:30') && !starts.includes('12:00'), '12:00–12:30 залезает в обед');
+  assert.deepEqual(starts.filter((s) => s >= '12:00'), ['13:00', '13:30', '14:00', '14:30']);
+});
+
+test('SLOT_PACK_V1: сегодня — «сейчас», округлённое ВВЕРХ до 5 минут (не «10:07»)', () => {
+  const d = (h, m, s = 0) => new Date(2030, 0, 7, h, m, s, 0);
+  assert.equal(packMinStart(d(10, 7)), hm('10:10'));
+  assert.equal(packMinStart(d(10, 5)), hm('10:05'), 'ровно 10:05 — уже кратно пяти');
+  assert.equal(packMinStart(d(10, 5, 30)), hm('10:10'), 'начатая минута — прошла');
+  assert.equal(packMinStart(d(23, 58, 10)), 24 * 60, 'поздно вечером — ни одного начала сегодня');
+  assert.deepEqual(packedStarts({ segments: DAY_9_18, busy: OWNER_BUSY, durationMin: 30, minStartMin: packMinStart(d(10, 7)) })
+    .slice(0, 3).map(formatHhmm), ['10:40', '11:10', '11:40'], '10:10 занято записью — первое начало — её конец');
+  assert.deepEqual(packedStarts({ segments: DAY_9_18, busy: [], durationMin: 30, minStartMin: packMinStart(d(10, 7)) })
+    .slice(0, 3).map(formatHhmm), ['10:10', '10:40', '11:10']);
+  assert.deepEqual(packedStarts({ segments: DAY_9_18, busy: [], durationMin: 30, minStartMin: packMinStart(d(23, 35)) }), []);
+});
+
+test('SLOT_PACK_V1: промежуток короче услуги не предлагается; внахлёст занятое — один блок', () => {
+  const busy = [{ from: hm('09:00'), to: hm('09:30') }, { from: hm('09:50'), to: hm('18:00') }];
+  assert.deepEqual(packedStarts({ segments: DAY_9_18, busy, durationMin: 30 }), [], '20 минут для получасовой услуги — не окно');
+  assert.deepEqual(packedStarts({ segments: DAY_9_18, busy, durationMin: 15 }).map(formatHhmm), ['09:30']);
+  const lap = [{ from: hm('10:15'), to: hm('11:00') }, { from: hm('10:00'), to: hm('10:30') }];
+  const win = windowSegments({ from: hm('10:00'), to: hm('12:00'), breaks: [] });
+  assert.deepEqual(packedStarts({ segments: win, busy: lap, durationMin: 20 }).map(formatHhmm), ['11:00', '11:20', '11:40']);
+});
+
+test('SLOT_PACK_V1: разные длительности — у каждой услуги свой шаг от того же конца записи', () => {
+  const busy = [{ from: hm('09:00'), to: hm('09:45') }];
+  const win = windowSegments({ from: hm('09:00'), to: hm('11:00'), breaks: [] });
+  assert.deepEqual(packedStarts({ segments: win, busy, durationMin: 45 }).map(formatHhmm), ['09:45'], '10:30–11:15 не помещается до 11:00');
+  assert.deepEqual(packedStarts({ segments: win, busy, durationMin: 20 }).map(formatHhmm), ['09:45', '10:05', '10:25']);
+  // Две несохранённые строки одной сметы: вторая встаёт сразу за первой.
+  const withFirst = busy.concat([{ from: hm('09:45'), to: hm('10:05') }]);
+  assert.equal(formatHhmm(packedStarts({ segments: win, busy: withFirst, durationMin: 20 })[0]), '10:05');
+});
+
+test('SLOT_PACK_V1: startFits — выбранное время помещается, даже если его нет в упакованном списке', () => {
+  assert.equal(startFits({ segments: DAY_9_18, busy: OWNER_BUSY, durationMin: 30, startMin: hm('10:40') }), true);
+  assert.equal(startFits({ segments: DAY_9_18, busy: OWNER_BUSY, durationMin: 30, startMin: hm('12:05') }), true,
+    'не на упакованном шаге, но свободно — помещается');
+  assert.equal(startFits({ segments: DAY_9_18, busy: OWNER_BUSY, durationMin: 30, startMin: hm('09:45') }), false, 'задевает 10:10');
+  assert.equal(startFits({ segments: DAY_9_18, busy: OWNER_BUSY, durationMin: 30, startMin: hm('17:45') }), false, 'вылезает за 18:00');
+  assert.equal(startFits({ segments: DAY_9_18, busy: OWNER_BUSY, durationMin: 30, startMin: hm('08:30') }), false, 'до начала приёма');
+  assert.equal(startFits({ segments: DAY_9_18, busy: [], durationMin: 30, startMin: hm('10:00'), minStartMin: hm('10:10') }), false);
+});
+
+test('SLOT_PACK_V1 (ревью L6): busyMinutes экрана берёт минуты дня (from_min/to_min), если сервер их прислал', async () => {
+  const { busyMinutes, packedDayStarts } = await import('../../../public/js/shared/slot-pack.js');
+  assert.deepEqual(busyMinutes([{ from: '23:40', to: '00:10', from_min: 0, to_min: 10 }]), [{ from: 0, to: 10 }]);
+  assert.deepEqual(busyMinutes([{ from: '10:00', to: '10:30' }]), [{ from: 600, to: 630 }]);
+  const day = { window: { from: '00:00', to: '23:59', breaks: [] }, busy: [{ from: '23:40', to: '00:10', from_min: 0, to_min: 10 }],
+    slots: [{ start: '00:10' }], min_start: null };
+  const starts = packedDayStarts(day, 10, [{ from: 100, to: 110 }]);
+  assert.equal(starts[0], 10, 'приём через полночь закрыл не начало суток');
+  assert.ok(starts.includes(23 * 60 + 40), 'конец суток закрыт приёмом, который был вчера');
 });

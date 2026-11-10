@@ -26,10 +26,10 @@
 // по-прежнему правильный ответ («врач не требуется»).
 // ROUTE_SELECT — колонки услуги, по которым needsPerformer узнаёт маршрут: у группы
 // «Консультации» в лабораторию ведут отделение и тип каталога (DIAG_ROUTE_V1, поправка ревью).
-import { needsPerformer, ROUTE_SELECT } from '../../shared/service-route.js';
+import { needsPerformer, performerRequired, ROUTE_SELECT } from '../../shared/service-route.js';
 import { isOn } from '../../shared/flags.js';
 
-export { needsPerformer, ROUTE_SELECT };
+export { needsPerformer, performerRequired, ROUTE_SELECT };   // LAB_NO_DOCTOR_V1 — performerRequired
 
 export function ratesOf(user) {
     // service_rates приходит из БД как JSON-колонка; у части сотрудников она
@@ -61,11 +61,14 @@ export function performerCandidates(users) {
 }
 
 // doctors — список кандидатов; service — {id, requires_doctor, type, is_lab}.
+// LAB_NO_DOCTOR_V1 (ревью) — запасной «все врачи» только услуге, которой исполнитель
+// ОБЯЗАТЕЛЕН (performerRequired): анализу, оставленному в «Консультациях» с
+// requires_doctor = 0, врача не подставляют; «Диагностике» — как прежде (D1).
 export function doctorPoolFor(doctors, service) {
     if (!service) return [];
     const named = assignedTo(doctors, service.id);
     if (named.length) return named;
-    return needsPerformer(service) ? (doctors || []).filter(isDoctorUser) : [];
+    return performerRequired(service) ? (doctors || []).filter(isDoctorUser) : [];
 }
 
 /** DIAG_ROUTE_V1 — исполнитель по умолчанию: только когда кандидат ровно один. */

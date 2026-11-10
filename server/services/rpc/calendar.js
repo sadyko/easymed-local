@@ -137,6 +137,7 @@ import {
   BUSY_STATUSES, DEFAULT_DURATION_MIN,
   clampWindow, clinicWindow, dayWindow, formatHhmm,
   overlapsMs, serviceDurationMinutes, slotStarts, windowSegments,
+  packedStarts, packMinStart, parseHhmm,   // SLOT_PACK_V1
 } from './slot-engine.js';
 import { consultMinutes } from '../../../public/js/shared/consultation-price.js';   // DOCTOR_PROFILE_V1 — длительность вида консультации
 import { WEEKDAY_KEYS } from './slot-engine.js';   // DOCTOR_PROFILE_V1
@@ -168,6 +169,7 @@ import { localDate } from '../domain/day.js';
 // PUBLIC_API_V1 — время, удержанное онлайн-записью без карты, занимает врача
 // там же, где визиты (loadBusy): одно правило занятости на весь продукт.
 import { liveHolds } from '../api/holds.js';
+import { dayStartFits, dayFrame } from '../../../public/js/shared/slot-pack.js';   // JOIN_EXTENDS_BOOKING_V1 — помещается ли продолжение записи
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -813,10 +815,20 @@ function crossContext(db, { fromMs, toMs }) {
 /**
  * args: { doctor_id? , room_id?, date:'YYYY-MM-DD', service_id?,
  *         duration_minutes?, step_minutes?, exclude_visit_id?,
- *         consultation_type_id? }   // DOCTOR_PROFILE_V1
+ *         consultation_type_id?,   // DOCTOR_PROFILE_V1
+ *         extra_busy?: [{from:'ЧЧ:ММ', to:'ЧЧ:ММ'}] }   // SLOT_PACK_EXTRA_BUSY_V1
  *
  * Возвращает окно дня, свободные начала и занятое — всё в местном настенном
  * времени ('09:30') плюс ISO для тех, кто будет записывать.
+ *
+ * SLOT_PACK_V1 (3.23.0) — БЕЗ step_minutes начала ВПЛОТНУЮ (packedStarts):
+ * конец записи, дальше шагом длительности услуги; сегодня первое — «сейчас»
+ * вверх до 5 минут (min_start в ответе — экран упаковывает по нему же).
+ * С явным step_minutes — прежняя сетка от начала приёма: её просит партнёрский
+ * API (шаг 15, crm-api-booking.js) — опубликованный договор не меняется.
+ * extra_busy — время ещё не сохранённых строк той же сметы: в базе их нет, а
+ * вторая новая услуга к тому же врачу обязана встать сразу за первой. В
+ * список чужих записей (busy) они не попадают — это не записи.
  */
 // PUBLIC_API_V1 — internal.excludeHoldId: только для вызова изнутри сервера
 // (ensure_visit при подтверждении онлайн-записи). Маршрут /api/rpc зовёт
@@ -846,7 +858,9 @@ export function calendarSlots(db, args, user, internal = {}) {
   const serviceId = optId(a.service_id, 'service_id');
   const consultationTypeId = optId(a.consultation_type_id, 'consultation_type_id');   // DOCTOR_PROFILE_V1
   const durationMin = resolveDuration(db, { serviceId, consultationTypeId, explicit: a.duration_minutes });
-  const stepMin = a.step_minutes ? Math.max(5, Math.round(Number(a.step_minutes))) : durationMin;
+  // SLOT_PACK_V1 — явный шаг = сетка; без шага — вплотную.
+  const gridStep = a.step_minutes ? Math.max(5, Math.round(Number(a.step_minutes))) : null;
+  const stepMin = gridStep || durationMin;
   const excludeVisitId = optId(a.exclude_visit_id, 'exclude_visit_id');
 
   const win = resourceWindow(db, { doctor, room, dayIso });
@@ -856,17 +870,32 @@ export function calendarSlots(db, args, user, internal = {}) {
   // Занятое переводится в минуты дня СМЕЩЕНИЕМ ОТ ПОЛУНОЧИ, а не часами начала:
   // приём, начавшийся вчера в 23:40 и кончающийся сегодня в 00:10, обязан
   // занять первые десять минут суток, а не 1420-ю минуту.
-  const clampMin = (ms) => Math.max(0, Math.min(24 * 60, Math.round((ms - dayStartMs) / 60000)));
-  const busyMinutes = busy.map((b) => ({ from: clampMin(b.startMs), to: clampMin(b.endMs) }))
+  // SLOT_PACK_V1 (ревью H1) — начало занятого ВНИЗ до минуты, конец ВВЕРХ: приход
+  // «сейчас» в 10:07:20 занимает врача до 10:37:20, и 10:37 предлагать нельзя —
+  // calendar_book (в миллисекундах) его откажет. Прежнее округление отдавало 10:37.
+  const clampMin = (ms, up = false) => Math.max(0, Math.min(24 * 60, (up ? Math.ceil : Math.floor)((ms - dayStartMs) / 60000)));
+  const busyMinutes = busy.map((b) => ({ from: clampMin(b.startMs), to: clampMin(b.endMs, true) }))
     .filter((b) => b.to > b.from);
 
   // «Сейчас» отсекает прошедшие слоты только СЕГОДНЯ: вчерашний день читают,
   // чтобы посмотреть, что было, а не чтобы записать.
   const now = Date.now();
-  const minStartMin = (now >= dayStartMs && now < dayEndMs) ? minutesOfLocal(now) : null;
+  const isToday = now >= dayStartMs && now < dayEndMs;
+  const minStartMin = isToday ? minutesOfLocal(now) : null;
+  // SLOT_PACK_V1 — у упаковки первое начало сегодня — «сейчас» ВВЕРХ до 5 минут.
+  const packMin = isToday ? packMinStart(now) : null;
+
+  // SLOT_PACK_EXTRA_BUSY_V1 — несохранённые строки той же сметы. Мусор не
+  // ломает ответ и ничего не занимает (экран шлёт только то, что сам поставил).
+  const extraBusy = (Array.isArray(a.extra_busy) ? a.extra_busy : []).slice(0, 100)
+    .map((b) => ({ from: parseHhmm(b && b.from), to: b && b.to === '24:00' ? 24 * 60 : parseHhmm(b && b.to) }))
+    .filter((b) => b.from != null && b.to != null && b.to > b.from);
+  const taken = extraBusy.length ? busyMinutes.concat(extraBusy) : busyMinutes;
 
   const segments = windowSegments(win);
-  const starts = slotStarts({ segments, busy: busyMinutes, durationMin, stepMin, minStartMin });
+  const starts = gridStep
+    ? slotStarts({ segments, busy: taken, durationMin, stepMin, minStartMin })
+    : packedStarts({ segments, busy: taken, durationMin, minStartMin: packMin });
 
   // ВРЕМЯ ПОД ВОПРОСОМ (UNASSIGNED_FOREIGN). Слоты остаются свободными — в том
   // здании это, скорее всего, другой врач, — но названы: спрашивающий обязан
@@ -884,6 +913,9 @@ export function calendarSlots(db, args, user, internal = {}) {
       : { kind: 'room', id: room.id, name: room.name || '', code: room.code || '' },
     duration_minutes: durationMin,
     step_minutes: stepMin,
+    packed: !gridStep,   // SLOT_PACK_V1 — начала вплотную (false — сетка по явному шагу)
+    // SLOT_PACK_V1 — первое допустимое начало сегодня ('24:00' — сегодня уже ничего), null — не сегодня.
+    min_start: packMin == null ? null : (packMin >= 24 * 60 ? '24:00' : formatHhmm(packMin)),
     window: win ? { from: formatHhmm(win.from), to: formatHhmm(win.to), breaks: (win.breaks || []).map((b) => ({ from: formatHhmm(b.from), to: formatHhmm(b.to) })) } : null,
     slots: starts.map((t) => ({
       start: formatHhmm(t),
@@ -892,8 +924,13 @@ export function calendarSlots(db, args, user, internal = {}) {
     })),
     busy: busy.map((b) => ({
       visit_id: b.visit_id,
+      // SLOT_PACK_V1 (ревью L6) — минуты ЭТОГО дня (вниз/вверх, зажатые сутками): по
+      // ним экран пакует заново; ЧЧ:ММ приёма через полночь читалось бы «23:40–00:10».
+      from_min: clampMin(b.startMs),
+      to_min: clampMin(b.endMs, true),
       from: formatHhmm(minutesOfLocal(b.startMs)),
-      to: formatHhmm(minutesOfLocal(b.startMs) + b.durationMin),
+      // SLOT_PACK_V1 (ревью H1) — конец вверх до минуты (начало с секундами кончается с ними же).
+      to: formatHhmm(minutesOfLocal(b.startMs) + b.durationMin + (b.startMs % 60000 ? 1 : 0)),
       duration_minutes: b.durationMin,
       status: b.status,
       patient_id: b.patient_id,
@@ -1019,6 +1056,99 @@ function revisitDayTaken(db, dayVisit) {
     'У пациента в этот день уже есть приём в {start} у {doctor} — выберите другой день или время.', params, 409);
   err.code = 'revisit_day_taken';
   return err;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_JOIN_NOT_MOVE_V1 · JOIN_EXTENDS_BOOKING_V1 (3.23.0) — УСЛУГА В ЗАПИСЬ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Новая услуга к врачу, к которому пациент уже записан, на ТО ЖЕ время записи —
+// это присоединение к записи, а не перенос: запись не двигается (решение
+// владельца 2026-11-10). Узнают его обе двери — ensure_visit (rpc/visits.js:
+// карточка CRM, мастер визита) и calendar_book (калькулятор, «Записать» в
+// календаре), — одним правилом отсюда.
+
+/**
+ * Та же запись: визит того же врача на ту же минуту, ещё до прихода, и это
+ * ЗАПИСЬ — время ему ставил calendar_book (booked_at, CROSS_BRANCH_CALENDAR_V1:
+ * его пишет только запись). Визит дня без времени (ensure_visit без book: «на
+ * дату», 09:00Z и 30 минут по умолчанию таблицы) записью не считается — запись
+ * на его час остаётся обычным переносом.
+ */
+export function isSameBooking(visit, doctorId, startMs) {
+  if (!visit || !['scheduled', 'confirmed'].includes(visit.status)) return false;
+  if (!String(visit.booked_at || '').trim()) return false;
+  if (!doctorId || Number(visit.doctor_id) !== Number(doctorId)) return false;
+  const vMs = Date.parse(visit.visit_date);
+  return Number.isFinite(vMs) && Math.floor(vMs / 60000) === Math.floor(Number(startMs) / 60000);
+}
+
+/**
+ * JOIN_EXTENDS_BOOKING_V1 (ревью M2) — ДЛИНА ЗАПИСИ ПОСЛЕ ПРИСОЕДИНЕНИЯ — ИЗ ЕЁ СТРОК.
+ *
+ * Цель — сумма длительностей услуг этого врача в записи (строки визита того же
+ * врача на время записи или без своего времени) вместе с присоединяемыми; те, что
+ * уже в записи, второй раз не считаются. Так повтор, сбой сети, перещёлкнутый
+ * выбор или замена услуги в карточке запись не растят (прежде каждый вызов
+ * прибавлял свою длительность: 30 → 60 → 90). Запись короче цели удлиняется, если
+ * время за ней свободно (внутри приёма врача, ни с кем не пересекается — правило
+ * экрана, shared/slot-pack.js dayStartFits); длиннее — не укорачивается.
+ * Не помещается — запись своей длины, а ответ называет ends (когда закончился бы
+ * приём), next (следующая запись) или until (конец приёма врача). Удлиняет
+ * calendarBook — та же дверь, что растягивает запись в календаре.
+ *
+ * @param {Array<{serviceId?:number|null, consultationTypeId?:number|null, minutes?:number}>} requested
+ *   присоединяемые услуги; { minutes } — услуга без кода (длительность как есть)
+ * @returns {Promise<{extended:boolean, ends:string, next:string|null, until:string|null, visit?:object}>}
+ */
+export async function extendBookingForJoin(db, user, visit, requested = [], deps = {}) {
+  const startMs = Date.parse(visit.visit_date);
+  const curMin = Math.max(5, Number(visit.duration_minutes) || DEFAULT_DURATION_MIN);
+  const startMin = minutesOfLocal(startMs);
+  const endMin = startMin + curMin;
+  const keyOf = (x) => (x.serviceId ? 's' + x.serviceId : x.consultationTypeId ? 'c' + x.consultationTypeId : null);
+  const minutesOf = (x) => (x.minutes ? Math.max(1, Math.round(x.minutes))
+    : resolveDuration(db, { serviceId: x.serviceId || null, consultationTypeId: x.consultationTypeId || null }));
+  const startMinute = Math.floor(startMs / 60000);
+  let lines = [];
+  try {
+    lines = db.prepare(`SELECT service_id, consultation_type_id, scheduled_at FROM visit_services
+                         WHERE visit_id = ? AND doctor_id = ? AND status <> 'cancelled' AND clinic_item_id IS NULL`)
+      .all(visit.id, visit.doctor_id)
+      .filter((l) => !l.scheduled_at || Math.floor(Date.parse(l.scheduled_at) / 60000) === startMinute)
+      .map((l) => ({ serviceId: l.service_id || null, consultationTypeId: l.service_id ? null : (l.consultation_type_id || null) }));
+  } catch { lines = []; }
+  const seen = new Set();
+  let target = 0;
+  for (const x of [...lines, ...(requested || [])]) {
+    const k = keyOf(x);
+    if (k && seen.has(k)) continue;
+    if (k) seen.add(k);
+    if (!k && !x.minutes) continue;
+    target += minutesOf(x);
+  }
+  const want = Math.max(curMin, target);
+  const add = want - curMin;
+  const out = { extended: false, ends: formatHhmm(startMin + want), next: null, until: null };
+  if (!add || !visit.doctor_id) return out;
+  const day = calendarSlots(db, {
+    doctor_id: visit.doctor_id, date: localDayIso(startMs), duration_minutes: add, exclude_visit_id: visit.id,
+  }, user);
+  if (endMin + add <= 24 * 60 && dayStartFits(day, add, endMin)) {
+    try {
+      const bk = await calendarBook(db, { visit_id: visit.id, start: visit.visit_date, duration_minutes: want }, user, deps);
+      return { ...out, extended: true, visit: bk.visit };
+    } catch {
+      return out;   // время заняли в ту же секунду — запись остаётся своей длины
+    }
+  }
+  const next = (day.busy || []).map((x) => (Number.isFinite(x.from_min) ? x.from_min : parseHhmm(x.from)))
+    .filter((m) => m != null && m >= endMin && m < endMin + add).sort((x, y) => x - y)[0];
+  if (next != null) return { ...out, next: formatHhmm(next) };
+  // Конец приёма (или начало перерыва), в который упёрлось продолжение записи.
+  const frame = dayFrame(day);
+  const seg = ((frame && frame.segments) || []).find((g) => g.from <= endMin && endMin < g.to);
+  return { ...out, until: formatHhmm(seg ? seg.to : endMin) };
 }
 
 /**
@@ -1167,12 +1297,27 @@ export async function calendarBook(db, args, user, deps = {}) {
       }
       // V3120_FINAL (G3) — строки чужого врача в смете — это чужая запись, не «пустая».
       const bare = dayVisitMovableFor(db, dayVisit.id, a.doctor_id);
+      // CRM_JOIN_NOT_MOVE_V1 — та же запись (тот же врач, то же время, до прихода):
+      // калькулятор и «Записать» в календаре на время записи пациента. Не перенос —
+      // визит дня как есть, а запись удлиняется на услугу (JOIN_EXTENDS_BOOKING_V1).
+      if (bare && isSameBooking(dayVisit, doctorId, startMs)) {
+        // ревью M2 — присоединяемая услуга по коду (повтор её не считает дважды); без кода — длительностью.
+        const asked = serviceId || consultationTypeId ? [{ serviceId: serviceId || null, consultationTypeId: serviceId ? null : consultationTypeId }] : [{ minutes: durationMin }];
+        const ext = await extendBookingForJoin(db, user, dayVisit, asked, deps);
+        const visit = ext.visit || dayVisit;
+        crmLinkVisit(db, visit.id, user, { requestId: a.crm_request_id ?? null });   // CRM_UNIFY_V1 — как у переноса ниже · CRM_BOOKING_OWN_CARD_V1
+        return { visit, created: false, added_to_day_visit: true, joined: true, extended: ext.extended,
+          ends: ext.ends, next: ext.next, until: ext.until, emergency: false, day: dayIso };
+      }
       if (bare) {
         // Длительность — новой записи (из её услуги), а не прежней: иначе
         // пятиминутный забор, перенесённый под консультацию, так и остался бы
         // пятиминутным.
+        // JOIN_EXTENDS_BOOKING_V1 (ревью M3) — перенос сохраняет полную длину записи:
+        // запись, удлинённая присоединёнными услугами, при переносе не обрезается.
         const moved = await calendarBook(db, {
-          ...a, visit_id: dayVisit.id, patient_id: undefined, duration_minutes: durationMin,
+          ...a, visit_id: dayVisit.id, patient_id: undefined,
+          duration_minutes: Math.max(durationMin, Number(dayVisit.duration_minutes) || 0),
         }, user, deps);
         // Как у ensure_visit после записи: связь с заявкой пациента
         // (crm/visit-link.js — одно правило), затем сверка.

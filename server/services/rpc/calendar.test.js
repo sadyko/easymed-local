@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';
+import { doctorDayWindows, slotIsFree } from './calendar.js';   // SLOT_PACK_V1 — сетка партнёров не тронута
 // CROSS_BRANCH_CALENDAR_V1 — квитанция соседа приходит НАСТОЯЩИМ механизмом.
 import { markConfirmed } from '../branch-sync/journal.js';
 // СЕТЬ СТРОИТСЯ НАСТОЯЩИМ СПРАВОЧНИКОМ — см. crossDb ниже.
@@ -308,7 +309,8 @@ test('calendar_slots отдаёт окно дня, свободные начал
   assert.equal(Date.parse(out.slots.find((s) => s.start === '10:30').start_iso), Date.parse(at(10, 30)));
 
   assert.deepEqual(out.busy, [{
-    visit_id: 1, from: '10:00', to: '10:30', duration_minutes: 30,
+    visit_id: 1, from_min: 600, to_min: 630,   // SLOT_PACK_V1 (ревью L6) — минуты этого дня
+    from: '10:00', to: '10:30', duration_minutes: 30,
     status: 'scheduled', patient_id: 3, patient_name: 'Иванов Иван',
   }]);
   db.close();
@@ -655,4 +657,177 @@ test('DOCTOR_PROFILE_V1: длительность консультации — �
   assert.equal(calendarSlots(db, { doctor_id: 7, date: DAY, consultation_type_id: 5, duration_minutes: 20 }, registrar).duration_minutes, 20);
   const out = await calendarBook(db, { patient_id: 3, doctor_id: 7, start: at(10), consultation_type_id: 5 }, registrar);
   assert.equal(out.visit.duration_minutes, 45);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SLOT_PACK_V1 (3.23.0) — calendar_slots БЕЗ ШАГА отдаёт начала вплотную:
+// конец записи, дальше шагом длительности. Явный шаг (партнёрский API — 15)
+// оставляет прежнюю сетку. Несохранённые строки сметы — extra_busy.
+// ═══════════════════════════════════════════════════════════════════════════
+async function ownerDay() {
+  const db = freshDb();
+  await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(9) });        // 09:00–09:30
+  await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(10, 10) });   // 10:10–10:40
+  return db;
+}
+const startsOf = (out, n = 4) => out.slots.slice(0, n).map((s) => s.start);
+
+test('SLOT_PACK_V1: без шага — 10:40 сразу за записью 10:10–10:40, дальше шагом услуги', async () => {
+  const db = await ownerDay();
+  const out = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21 }, registrar);
+  assert.deepEqual(startsOf(out), ['09:30', '10:40', '11:10', '11:40']);
+  assert.equal(out.packed, true);
+  assert.equal(out.min_start, null, 'день в будущем — «сейчас» его не режет');
+  assert.equal(out.slots[1].end, '11:10');
+  const short = calendarSlots(db, { doctor_id: 7, date: DAY, duration_minutes: 15 }, registrar);
+  assert.deepEqual(startsOf(short), ['09:30', '09:45', '10:40', '10:55']);
+  db.close();
+});
+
+test('SLOT_PACK_V1: явный шаг — прежняя сетка (партнёрский API шлёт 15)', async () => {
+  const db = await ownerDay();
+  const grid = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21, step_minutes: 30 }, registrar);
+  assert.deepEqual(startsOf(grid), ['09:30', '11:00', '11:30', '12:00']);
+  assert.equal(grid.packed, false);
+  const api = calendarSlots(db, { doctor_id: 7, date: DAY, duration_minutes: 30, step_minutes: 15 }, registrar);
+  assert.deepEqual(startsOf(api), ['09:30', '10:45', '11:00', '11:15']);
+  db.close();
+});
+
+test('SLOT_PACK_EXTRA_BUSY_V1: несохранённая строка сметы занимает время — вторая встаёт сразу за ней', async () => {
+  const db = await ownerDay();
+  const out = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21, extra_busy: [{ from: '09:30', to: '09:40' }] }, registrar);
+  assert.deepEqual(startsOf(out, 3), ['09:40', '10:40', '11:10']);
+  // Мусор в extra_busy не ломает ответ и ничего не занимает.
+  const junk = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21, extra_busy: [{ from: 'x', to: '09:40' }, null, 5] }, registrar);
+  assert.deepEqual(startsOf(junk, 2), ['09:30', '10:40']);
+  assert.deepEqual(junk.busy.length, 2, 'extra_busy не попадает в список чужих записей');
+  db.close();
+});
+
+test('SLOT_PACK_V1: сегодня — первое начало «сейчас», округлённое вверх до 5 минут', async () => {
+  const db = freshDb({ workingHours: '' });
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  db.prepare('UPDATE users SET working_hours = ? WHERE id = 7').run(JSON.stringify({
+    [['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][now.getDay()]]: { enabled: true, from: '00:00', to: '23:59' },
+  }));
+  const before = Date.now();
+  const out = calendarSlots(db, { doctor_id: 7, date: today, duration_minutes: 5 }, registrar);
+  const after = Date.now();
+  const expect = new Set([before, after].map((ms) => {
+    const d = new Date(ms);
+    const exact = d.getSeconds() === 0 && d.getMilliseconds() === 0;
+    const m = Math.ceil((d.getHours() * 60 + d.getMinutes() + (exact ? 0 : 1)) / 5) * 5;
+    return m >= 24 * 60 ? '24:00' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  }));
+  assert.ok(expect.has(out.min_start), `min_start ${out.min_start}, ждали ${[...expect]}`);
+  assert.match(out.min_start, /^\d\d:\d[05]$/, 'min_start не кратно пяти');
+  assert.ok(out.slots.every((s) => s.start >= out.min_start), 'прошедшее время предложено');
+  if (out.min_start && out.min_start <= '23:50') assert.equal(out.slots[0].start, out.min_start, 'первое начало сегодня — не «сейчас»');
+  db.close();
+});
+
+// CRM_JOIN_NOT_MOVE_V1 · JOIN_EXTENDS_BOOKING_V1 (3.23.0) — калькулятор и «Записать» в
+// календаре на ВРЕМЯ ЗАПИСИ пациента к тому же врачу: прежде пустой визит дня
+// «переносился» на то же время с длительностью новой услуги (запись 30 мин становилась
+// пятиминутной). Теперь это присоединение: визит тот же, время то же, запись
+// удлиняется на услугу, если время за ней свободно.
+// Визит дня calendar_book ищет по МЕСТНОМУ дню SQLite (localtime), а день записи
+// считает часами JS. В клинике пояс у них один; предзагрузка tz-late (вечерний прогон)
+// двигает только пояс JS — тогда визит дня не находится вовсе (так же падают и прежние
+// тесты визита дня: wizard-booking «пустая запись к другому врачу», crm-doors). Тест
+// присоединения в таком прогоне пропускается и говорит почему.
+/** Строка записи (её пишет калькулятор / CRM следом за calendar_book). */
+const bookedLine = (db, visitId, serviceId, startIso) => db.prepare(
+  "INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, scheduled_at) VALUES (?, ?, 7, 1, 0, 0, 'added', ?)",
+).run(visitId, serviceId, startIso);
+
+const TZ_SPLIT = (() => {
+  const db = openDb(':memory:');
+  const iso = '2030-01-07T00:30:00Z';
+  const sql = db.prepare("SELECT strftime('%Y-%m-%d %H:%M', ?, 'localtime') AS v").get(iso).v;
+  db.close();
+  const d = new Date(iso);
+  const js = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return sql === js ? false : 'пояс JS не совпадает с поясом SQLite (предзагрузка tz-late) — визит дня по местному дню не найти';
+})();
+
+test('CRM_JOIN_NOT_MOVE_V1: calendar_book на время записи того же врача — присоединение, запись удлинилась, не «перенос»', { skip: TZ_SPLIT }, async () => {
+  const db = freshDb();
+  const first = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });   // 10:00–10:30
+  bookedLine(db, first.visit.id, 21, at(10));   // калькулятор пишет строку записи следом за calendar_book
+  const out = await book(db, { patient_id: 3, doctor_id: 7, service_id: 22, start: at(10) });     // забор крови, 5 мин
+  assert.equal(out.visit.id, first.visit.id);
+  assert.equal(out.joined, true);
+  assert.ok(!out.moved, 'запись «перенесена» на своё же время');
+  assert.equal(out.extended, true);
+  const v = db.prepare('SELECT visit_date, duration_minutes FROM visits WHERE id = ?').get(first.visit.id);
+  assert.equal(Date.parse(v.visit_date), Date.parse(at(10)));
+  assert.equal(v.duration_minutes, 35, 'запись не удлинилась на пять минут (или стала пятиминутной)');
+  db.close();
+});
+
+test('JOIN_EXTENDS_BOOKING_V1: calendar_book на время записи, следующая запись вплотную — запись своей длины, назван next', { skip: TZ_SPLIT }, async () => {
+  const db = freshDb();
+  const first = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });   // 10:00–10:30
+  bookedLine(db, first.visit.id, 21, at(10));
+  await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(10, 30) });              // 10:30–11:00
+  const out = await book(db, { patient_id: 3, doctor_id: 7, service_id: 22, start: at(10) });
+  assert.equal(out.joined, true);
+  assert.equal(out.extended, false);
+  assert.equal(out.next, '10:30');
+  assert.equal(out.ends, '10:35');
+  assert.equal(db.prepare('SELECT duration_minutes d FROM visits WHERE id = ?').get(first.visit.id).d, 30);
+  db.close();
+});
+
+// SLOT_PACK_V1 — ПАРТНЁРСКИЙ API И ОНЛАЙН-ЗАПИСЬ ОСТАЮТСЯ НА СЕТКЕ 15 МИНУТ (опубликованный
+// договор, PUBLIC_SLOT_MIN): после записи 10:10–10:40 окно для партнёров — 10:45, а не 10:40;
+// начало вне сетки онлайн-записи не свободно. Упаковка — только у экранов клиники.
+test('SLOT_PACK_V1: окна для партнёров и проверка онлайн-записи — прежняя сетка 15 минут', async () => {
+  const db = await ownerDay();
+  const before = new Date(MON.getFullYear(), MON.getMonth(), MON.getDate(), 7, 0).getTime();
+  const w = doctorDayWindows(db, { doctorId: 7, dayIso: DAY, durationMin: 15, now: before });
+  const starts = w.windows.map((x) => x.start);
+  assert.ok(starts.includes('10:45') && !starts.includes('10:40'), 'сетка партнёров сдвинулась на упаковку: ' + starts.slice(0, 12).join(', '));
+  assert.equal(w.windows.find((x) => x.start === '10:30').free, false);
+  assert.equal(w.windows.find((x) => x.start === '10:45').free, true);
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: Date.parse(at(10, 40)), durationMin: 15, now: before }), false, 'онлайн-запись приняла начало вне сетки');
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: Date.parse(at(10, 45)), durationMin: 15, now: before }), true);
+  db.close();
+});
+
+// ревью M2 — повтор того же calendar_book на время записи (калькулятор открыт дважды) не растит запись.
+test('JOIN_EXTENDS_BOOKING_V1 (ревью M2): calendar_book той же услугой на время записи, трижды — длина записи не растёт', { skip: TZ_SPLIT }, async () => {
+  const db = freshDb();
+  const first = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
+  bookedLine(db, first.visit.id, 21, at(10));
+  for (let i = 0; i < 3; i++) await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
+  assert.equal(db.prepare('SELECT duration_minutes d FROM visits WHERE id = ?').get(first.visit.id).d, 30);
+  db.close();
+});
+
+// ревью M3 — перенос пустого визита дня записью калькулятора сохраняет его длину, если она больше.
+test('JOIN_EXTENDS_BOOKING_V1 (ревью M3): calendar_book в другое время (перенос записи) пятиминутной услугой — запись остаётся 30 минут', { skip: TZ_SPLIT }, async () => {
+  const db = freshDb();
+  const first = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
+  const out = await book(db, { patient_id: 3, doctor_id: 7, service_id: 22, start: at(14) });
+  assert.equal(out.moved, true);
+  assert.equal(db.prepare('SELECT duration_minutes d FROM visits WHERE id = ?').get(first.visit.id).d, 30, 'перенос обрезал запись');
+  db.close();
+});
+
+// ревью L6 — занятость несёт и минуты дня (from_min/to_min): приём, начавшийся вчера в
+// 23:40, занимает сегодня 00:00–00:10, а не «23:40–00:10».
+test('SLOT_PACK_V1 (ревью L6): busy несёт минуты дня — приём через полночь занимает начало суток', async () => {
+  const db = freshDb({ workingHours: JSON.stringify({ mon: { enabled: true, from: '00:00', to: '23:59' }, sun: { enabled: true, from: '00:00', to: '23:59' } }) });
+  const prev = new Date(MON.getFullYear(), MON.getMonth(), MON.getDate() - 1, 23, 40).toISOString();
+  db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status) VALUES (3, 7, ?, 30, 'scheduled')").run(prev);
+  const out = calendarSlots(db, { doctor_id: 7, date: DAY, duration_minutes: 10 }, registrar);
+  const b = out.busy.find((x) => x.from === '23:40');
+  assert.ok(b, JSON.stringify(out.busy));
+  assert.deepEqual([b.from_min, b.to_min], [0, 10]);
+  assert.equal(out.slots[0].start, '00:10');
+  db.close();
 });

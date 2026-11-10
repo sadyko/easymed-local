@@ -160,7 +160,8 @@ function seed() {
 /** Запись колл-центра: визит пациента к врачу 7 на день offset в 23:00 и строка консультации. */
 function bookAt(offset = 0) {
   const d = dayOffset(offset); d.setHours(23, 0, 0, 0);
-  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, created_by) VALUES (3, ?, 7, 'scheduled', 1)").run(d.toISOString()).lastInsertRowid);
+  // ревью L4 — запись колл-центра: время ей ставил calendar_book (booked_at).
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, booked_at, created_by) VALUES (3, ?, 7, 'scheduled', ?, 1)").run(d.toISOString(), new Date().toISOString()).lastInsertRowid);
   DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, scheduled_at, created_by) VALUES (?, 21, 7, 1, 100000, 100000, 'added', ?, 1)").run(vid, d.toISOString());
   return { vid, start: d };
 }
@@ -237,6 +238,106 @@ test('запись на послезавтра к врачу 7: в календ�
   assert.equal(j.when, isoOf(dayOffset(2)) + 'T23:00');
   assert.equal(bookedJoinFor(list, 7, isoOf(dayOffset(0))), null, 'сегодня записи нет');
   assert.equal(bookedJoinFor(list, 8, isoOf(dayOffset(2))), null, 'запись к другому врачу');
+});
+
+// CRM_JOIN_NOT_MOVE_V1 · JOIN_EXTENDS_BOOKING_V1 (3.23.0) — сегодня врач не работает, завтра
+// пациент записан к нему на 10:10. «Ближайшее» прежде ставило самое раннее свободное
+// завтра (09:00) — и запись молча переехала бы на 09:00. Теперь — время записи; строка
+// уходит в запись без брони (join), запись удлиняется на услугу (время за ней свободно).
+test('CRM_JOIN_NOT_MOVE_V1: «Ближайшее» — время записи пациента завтра (10:10), а не самое раннее свободное; запись удлинилась', async () => {
+  seed();
+  const wh = {};
+  const today = dayOffset(0).getDay();
+  WD.forEach((k, i) => { if (i !== today) wh[k] = { enabled: true, from: '09:00', to: '18:00' }; });
+  DB.prepare('UPDATE users SET working_hours = ? WHERE id = 7').run(JSON.stringify(wh));
+  const d = dayOffset(1); d.setHours(10, 10, 0, 0);
+  // booked_at — время поставила запись (calendar_book), как у записи колл-центра.
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, booked_at, created_by) VALUES (3, ?, 7, 'scheduled', 30, ?, 1)").run(d.toISOString(), new Date().toISOString()).lastInsertRowid);
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, scheduled_at, created_by) VALUES (?, 21, 7, 1, 100000, 100000, 'added', ?, 1)").run(vid, d.toISOString());
+  await openWizard([24]);
+  const btn = byAttr(overlay(), 'data-pick-nearest', 24);
+  assert.ok(btn, 'нет «Ближайшее»: ' + textOf(overlay()).slice(0, 300));
+  assert.equal(textOf(btn).trim(), nearestButtonText(isoOf(dayOffset(1)), 10 * 60 + 10), '«Ближайшее» — не время записи пациента');
+  btn.click();
+  await flush(20);
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev, 'мастер не дошёл до записи: ' + JSON.stringify(TOASTS));
+  assert.equal(ev.body.book, undefined, 'строка в запись бронирует слот — запись переехала бы');
+  assert.ok(ev.body.join, 'строка в запись ушла без просьбы присоединить');
+  const v = DB.prepare('SELECT visit_date, duration_minutes FROM visits WHERE id = ?').get(vid);
+  const vs = new Date(v.visit_date);
+  assert.deepEqual([vs.getHours(), vs.getMinutes()], [10, 10], 'запись перенесена');
+  assert.equal(v.duration_minutes, 60, 'запись не удлинилась на ЭКГ (30 мин)');
+  assert.equal(DB.prepare("SELECT COUNT(*) n FROM visits WHERE status NOT IN ('cancelled','no_show')").get().n, 1, 'второй визит');
+});
+
+// ═══ ревью M1, M3, M4, M5 — мастер визита на дне с записью пациента ═══════════════════
+/** Сегодня врач 7 не работает, завтра 09:00–18:00; запись пациента 3 завтра в 10:10 (30 мин, booked_at). */
+function seedTomorrowBooking({ nextAt = null } = {}) {
+  seed();
+  const wh = {};
+  const today = dayOffset(0).getDay();
+  WD.forEach((k, i) => { if (i !== today) wh[k] = { enabled: true, from: '09:00', to: '18:00' }; });
+  DB.prepare('UPDATE users SET working_hours = ? WHERE id = 7').run(JSON.stringify(wh));
+  const d = dayOffset(1); d.setHours(10, 10, 0, 0);
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, booked_at, created_by) VALUES (3, ?, 7, 'scheduled', 30, ?, 1)").run(d.toISOString(), new Date().toISOString()).lastInsertRowid);
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, scheduled_at, created_by) VALUES (?, 21, 7, 1, 100000, 100000, 'added', ?, 1)").run(vid, d.toISOString());
+  if (nextAt) {
+    DB.prepare("INSERT INTO patients (id, full_name) VALUES (4,'Другой Пациент')").run();
+    const n = dayOffset(1); n.setHours(nextAt[0], nextAt[1], 0, 0);
+    DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, booked_at, created_by) VALUES (4, ?, 7, 'scheduled', 30, ?, 1)").run(n.toISOString(), new Date().toISOString());
+  }
+  return { vid, start: d };
+}
+const timeSelectOf = () => walk(overlay()).find((n) => n.tagName === 'SELECT' && walk(n).some((o) => o.attrs && 'data-join' in o.attrs));
+
+test('ревью M1: день с записью пациента — «в запись · 10:10» первым, другие времена под «Перенести запись на»; выбран перенос — запись перенесена, длина сохранена', async () => {
+  const { vid } = seedTomorrowBooking();
+  await openWizard([24]);
+  byAttr(overlay(), 'data-pick-nearest', 24).click();
+  await flush(20);
+  const sel = timeSelectOf();
+  assert.ok(sel, 'нет списка времени с записью пациента');
+  const first = sel.children.find((n) => n.tagName === 'OPTION');
+  assert.ok(first && textOf(first).includes('в запись · 10:10'), 'первым — не запись пациента: ' + (first && textOf(first)));
+  const grp = sel.children.find((n) => n.tagName === 'OPTGROUP');
+  assert.ok(grp && grp.attrs.label === 'Перенести запись на', 'другие времена — не под «Перенести запись на»');
+  const other = grp.children.find((o) => textOf(o).trim() === '11:00') || grp.children[0];
+  sel.value = other.attrs.value; sel.dispatchEvent({ type: 'change' });
+  await flush(20);
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev && ev.body.book && !ev.body.join, 'перенос ушёл не бронью');
+  const v = DB.prepare('SELECT visit_date, duration_minutes FROM visits WHERE id = ?').get(vid);
+  const t = new Date(v.visit_date);
+  assert.notDeepEqual([t.getHours(), t.getMinutes()], [10, 10], 'запись не перенесена');
+  assert.equal(v.duration_minutes, 30, 'перенос обрезал или растянул запись');
+  assert.ok(TOASTS.some((x) => /перенес/i.test(x)), 'перенос не назван переносом: ' + JSON.stringify(TOASTS));
+});
+
+test('ревью M5: присоединение, а следующая запись в 10:40 — запись своей длины, после записи тост «приём закончится в 11:10, следующая запись в 10:40»', async () => {
+  const { vid } = seedTomorrowBooking({ nextAt: [10, 40] });
+  await openWizard([24]);
+  byAttr(overlay(), 'data-pick-nearest', 24).click();
+  await flush(20);
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev && ev.body.join, 'мастер не присоединил');
+  assert.deepEqual(ev.body.join.lines, [{ service_id: 24 }], 'строки присоединения не по кодам услуг');
+  assert.equal(DB.prepare('SELECT duration_minutes d FROM visits WHERE id = ?').get(vid).d, 30);
+  assert.ok(TOASTS.some((x) => /приём закончится в 11:10, следующая запись в 10:40/.test(x)), JSON.stringify(TOASTS));
+});
+
+test('ревью M4: запись отменили, пока мастер был открыт — отказ «Запись изменилась…», новый визит не заведён', async () => {
+  const { vid } = seedTomorrowBooking();
+  await openWizard([24]);
+  byAttr(overlay(), 'data-pick-nearest', 24).click();
+  await flush(20);
+  DB.prepare("UPDATE visits SET status = 'cancelled' WHERE id = ?").run(vid);
+  await pressUntilCreate();
+  assert.ok(TOASTS.some((x) => /Запись изменилась, пока окно было открыто — выберите время ещё раз/.test(x)), JSON.stringify(TOASTS));
+  assert.equal(DB.prepare("SELECT COUNT(*) n FROM visits WHERE status NOT IN ('cancelled','no_show')").get().n, 0, 'заведён новый визит');
 });
 
 test.after(() => { if (DB) DB.close(); DB = null; });

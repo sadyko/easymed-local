@@ -100,7 +100,7 @@ const VB = await import('../views/visit-booking.js');
 test('кэш времени один: forgetSlots записи (visit-booking.js) и запись bookVisit сбрасывают кэш, из которого читает loadSlotDay', async () => {
     assert.equal(STAMP, '?v=ownrep4', 'кабинет врача грузит каталог не по тому адресу, что этот тест');
     assert.equal(VB.forgetSlots, SPM.forgetSlots, 'запись сбрасывает другой экземпляр кэша');
-    const ask = () => SPM.loadSlotDay(11, '2026-12-10', 30, { stepMinutes: 20 });
+    const ask = () => SPM.loadSlotDay(11, '2026-12-10', 30);   // SLOT_PACK_V1 — без своего шага
     SPM.forgetSlots();
     slotCalls = 0;
     await ask(); await ask();
