@@ -1689,6 +1689,9 @@ export const STRINGS = {
   "Референс (текст)": {"en":"Reference (text)","ru":"Референс (текст)","uz":"Referens (matn)"},
   "Цвет пробирки": {"en":"Tube colour","ru":"Цвет пробирки","uz":"Probirka rangi"},
   "Не удалось загрузить справочники. Обновите страницу.": {"en":"Could not load the reference lists. Refresh the page.","ru":"Не удалось загрузить справочники. Обновите страницу.","uz":"Ma'lumotnomalarni yuklab bo'lmadi. Sahifani yangilang."},
+  // SERVICE_EDITOR_FRESH_ROW_V1 — редактор перечитывает услугу по id перед правкой
+  "Не удалось загрузить услугу. Обновите страницу.": {"en":"Could not load the service. Refresh the page.","ru":"Не удалось загрузить услугу. Обновите страницу.","uz":"Xizmatni yuklab bo'lmadi. Sahifani yangilang."},
+  "Услуга не найдена — обновите список.": {"en":"Service not found — refresh the list.","ru":"Услуга не найдена — обновите список.","uz":"Xizmat topilmadi — ro'yxatni yangilang."},
   // Сообщения rpc service_save — приходят с сервера и попадают в toast(),
   // который переводит централизованно; ключи должны совпадать дословно.
   "Укажите название услуги.": {"en":"Enter the service name.","ru":"Укажите название услуги.","uz":"Xizmat nomini kiriting."},

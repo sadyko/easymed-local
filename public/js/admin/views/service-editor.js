@@ -71,15 +71,27 @@ const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
 /**
  * Открыть редактор услуги.
  * @param {object} opts
- * @param {object|null} opts.row      строка services (редактирование) или null (создание)
+ * @param {object|null} opts.row      строка services (редактирование) или null (создание);
+ *                                    нужен только её id — поля читаются из базы заново
+ *                                    (SERVICE_EDITOR_FRESH_ROW_V1)
  * @param {boolean}     opts.readOnly без права записи — всё выключено, кнопки «Сохранить» нет
  * @param {function}    opts.onSaved  вызывается после успешного сохранения
  */
 export async function openServiceEditor({ row = null, readOnly = false, onSaved = null } = {}) {
     // ---- данные -----------------------------------------------------------
-    let types, cats, deps, rooms, users;
+    // SERVICE_EDITOR_FRESH_ROW_V1 (3.23.0) — существующую услугу редактор
+    // читает САМ, по id, свежей строкой из базы. Прежде поля строились из
+    // переданной строки, а сохранение шлёт ВСЕ поля (цены второго и
+    // повторного визита, пустое — null), и service_save пишет их как прислано:
+    // строка без этих колонок открывала блок «Цена по счёту визита» пустым и
+    // сохранением любого другого поля стирала цены визита; устаревшая строка
+    // (список открыт до правки в другой вкладке, тихая перезагрузка после
+    // сохранения не прошла) возвращала старые. Строку не прочитать — окно на
+    // правку не открывается: править вслепую — значит затереть невидимое.
+    const editId = row && row.id != null ? row.id : null;
+    let types, cats, deps, rooms, users, freshRow = null;
     try {
-        const [t, c, d, r, u] = await Promise.all([
+        const [t, c, d, r, u, s] = await Promise.all([
             supabase.from('service_types').select('id, name, active').order('name'),
             supabase.from('service_categories').select('id, name, active').order('name'),
             supabase.from('departments').select('id, name, active').order('name'),
@@ -89,14 +101,28 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             // приехать в performers, иначе сохранение сняло бы его членство
             // молча (performers — авторитетный список).
             supabase.from('users').select('id, full_name, specialty, role, is_doctor, is_active, service_rates').order('full_name'),
+            editId != null   // SERVICE_EDITOR_FRESH_ROW_V1 — свежая строка услуги
+                ? supabase.from('services').select('*').eq('id', editId).maybeSingle()
+                : Promise.resolve({ data: null, error: null }),
         ]);
+        if (s.error) {
+            console.warn('[service-editor] service row:', s.error.message);
+            toast('Не удалось загрузить услугу. Обновите страницу.', 'fail');
+            return;
+        }
         for (const res of [t, c, d, r, u]) if (res.error) throw new Error(res.error.message);
         types = t.data || []; cats = c.data || []; deps = d.data || [];
         rooms = r.data || []; users = u.data || [];
+        freshRow = s.data || null;
     } catch (e) {
         console.warn('[service-editor] lookups:', e && e.message);
         toast('Не удалось загрузить справочники. Обновите страницу.', 'fail');
         return;
+    }
+    if (editId != null) {
+        // SERVICE_EDITOR_FRESH_ROW_V1 — услуги нет (удалили, пока открыт список).
+        if (!freshRow) { toast('Услуга не найдена — обновите список.', 'fail'); return; }
+        row = freshRow;
     }
 
     const picked = new Set(row && row.id ? currentPerformerIds(users, row.id) : []);
