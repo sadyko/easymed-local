@@ -227,7 +227,8 @@ export function noShowAllowed(stages, key, opts = {}) {
 
 /**
  * CRM_STAGE_ROLES_V1 — КОЛОНКА С РОЛЬЮ УХОДИТ: её удаляют, а роль не передана другой, или
- * её скрывают с ролью. Первое такое — { role, key, label, why: 'deleted' | 'hidden' }; null —
+ * её скрывают с ролью, или (ревью F5) ей отмечают другую роль, а прежнюю никому не передали. Первое
+ * такое — { role, key, label, why: 'deleted' | 'hidden' | 'replaced' }; null —
  * нет. Отказ сервера: «сначала передайте роль другой колонке».
  * CRM_STAGE_ROLES_V1 (ревью) — deletions: false — правка несёт роли (экран с галочками): удалённая
  * колонка, чью роль никому не передали, — роль снята вместе с ней (как «снять галочку и
@@ -243,6 +244,10 @@ export function roleLeaving(prev, next, { deletions = true } = {}) {
       if (deletions && !roleKey(now, r)) return { role: r, key: p.key, label: p.label || p.key, why: 'deleted' };
     } else if (roleOf(n) === r && isActive(p) && !isActive(n)) {
       return { role: r, key: p.key, label: n.label || p.key, why: 'hidden' };
+    } else if (roleOf(n) && roleOf(n) !== r && !roleKey(now, r)) {
+      // CRM_STAGE_ROLES_V1 (ревью потока E, F5) — у колонки одна роль: вторая (галочка «не пришёл» у
+      // колонки подтверждения) прежнюю молча не вытесняет — сначала прежнюю передают другой колонке.
+      return { role: r, key: p.key, label: n.label || p.key, why: 'replaced' };
     }
   }
   return null;

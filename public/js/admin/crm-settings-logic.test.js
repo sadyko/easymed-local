@@ -439,6 +439,10 @@ test('CRM_STAGE_ROLES_V1: validateStages — те же отказы ролей, 
     assert.match(ve.error, /^Открытая колонка «Не пришёл» должна стоять после колонки записи и перед колонкой-конверсией\.$/);
     bad(setRole(ROLED, 'stopped', 'no_show').map((s) => (s.key === 'stopped' ? { ...s, is_active: 0 } : s)),
         /^Колонкой «Не пришёл» может быть только видимая колонка, кроме колонки-конверсии\.$/);
+    // Ревью F5 — подтверждение на колонке записи: понятный отказ (прежде — «колонка подтверждения должна
+    // быть после колонки записи»), вторая роль не вытесняет первую молча.
+    bad(setRole(ROLED, 'scheduled', 'confirmed'), /^Колонка «Записан» — колонка записи: сначала передайте роль другой колонке\.$/);
+    bad(setRole(ROLED, 'approved', 'no_show'), /^Колонка «Подтверждён» — колонка подтверждения: сначала передайте роль другой колонке\.$/);
     bad(ROLED.map((s) => (s.key === 'scheduled' ? { ...s, is_active: 0 } : s)), /^Колонка «Записан» — колонка записи: сначала передайте роль другой колонке\.$/);
     // Ревью: снять галочку и удалить колонку одной правкой можно (как снять и скрыть).
     assert.deepEqual(validateStages(ROLED.filter((s) => s.key !== 'approved'), t, ROLED), { ok: true });
@@ -460,6 +464,10 @@ test('CRM_STAGE_ROLES_V1: отметки ролей — какие роли пр
     assert.deepEqual(roleOptionsFor({ key: 'x', kind: 'open' }), ['booked', 'confirmed'], 'без воронки «не пришёл» не предлагается');
     assert.deepEqual(roleOptionsFor({ kind: 'lost' }), ['no_show']);
     assert.deepEqual(roleOptionsFor({ kind: 'won' }), []);
+    // Ревью F5 — у колонки с ролью — только её галочка (снять); вторую роль не предложить.
+    assert.deepEqual(roleOptionsFor({ key: 'scheduled', kind: 'open', role: 'booked' }, { stages: withLater }), ['booked']);
+    assert.deepEqual(roleOptionsFor({ key: 'approved', kind: 'open', role: 'confirmed' }, { stages: withLater }), ['confirmed']);
+    assert.deepEqual(roleOptionsFor({ key: 'no_show', kind: 'lost', role: 'no_show' }), ['no_show']);
     assert.deepEqual(Object.fromEntries(Object.entries(ROLE_BADGES).map(([k, v]) => [k, v.label])),
         { booked: 'запись', confirmed: 'подтверждение', no_show: 'не пришёл' });
 });

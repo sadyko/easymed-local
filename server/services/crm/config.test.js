@@ -584,6 +584,22 @@ test('CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F2): перенос «не приш�
   db.close();
 });
 
+// CRM_STAGE_ROLES_V1 (ревью потока E, F5; проба probe-noshow-open D) — галочка «не пришёл» у колонки
+// подтверждения молча снимала подтверждение (у колонки одна роль): теперь отказ 409, роли не тронуты.
+test('CRM_STAGE_ROLES_V1 (ревью F5): вторая роль у колонки с ролью — отказ «сначала передайте роль», ничего не снято', () => {
+  const db = fresh();
+  withMissed(db);
+  const before = rolesOf(db);
+  const e = refused(() => saveStages(db, withRoles(db, { approved: 'no_show', no_show: null })));
+  assert.equal(e.status, 409);
+  assert.equal(e.message, 'Колонка «Подтверждён» — колонка подтверждения: сначала передайте роль другой колонке.');
+  const b = refused(() => saveStages(db, withRoles(db, { scheduled: 'confirmed', approved: null })));
+  assert.equal(b.message, 'Колонка «Записан» — колонка записи: сначала передайте роль другой колонке.', 'подтверждение на колонке записи — непонятный отказ');
+  assert.deepEqual(rolesOf(db), before);
+  assert.equal(confirmedStageKey(db), 'approved');
+  db.close();
+});
+
 test('crm_settings.booked_stage больше не читается', () => {
   const db = fresh();
   db.prepare("UPDATE crm_settings SET booked_stage = 'recall' WHERE id = 1").run();

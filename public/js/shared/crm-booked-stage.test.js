@@ -193,3 +193,13 @@ test('effectiveKind: колонка с ролью «не пришёл» — lost
   assert.equal(effectiveKind({ key: 'recall', kind: 'open' }, null), 'open');
   assert.equal(effectiveKind(null, 'missed'), null);
 });
+
+// CRM_STAGE_ROLES_V1 (ревью потока E, F5) — у колонки одна роль, и вторая её не вытесняет молча: отметить
+// у колонки с ролью другую роль, не передав прежнюю, — «сначала передайте роль другой колонке».
+test('roleLeaving: роль колонки заменили другой, не передав, — уход (replaced); переданную — нет', () => {
+  assert.deepEqual(roleLeaving(ROLED, withRole(ROLED, 'approved', 'no_show')), { role: 'confirmed', key: 'approved', label: 'approved', why: 'replaced' });
+  assert.deepEqual(roleLeaving(ROLED, withRole(ROLED, 'scheduled', 'confirmed'), { deletions: false }), { role: 'booked', key: 'scheduled', label: 'scheduled', why: 'replaced' });
+  const swap = ROLED.map((s) => (s.key === 'scheduled' ? { ...s, role: 'confirmed' } : s.key === 'approved' ? { ...s, role: 'booked' } : s));
+  assert.equal(roleLeaving(ROLED, swap), null, 'обмен ролями — обе переданы');
+  assert.equal(roleLeaving(ROLED, withRole(ROLED, 'approved', 'confirmed', false)), null, 'роль сняли — не уход');
+});

@@ -474,6 +474,10 @@ test('CRM_STAGE_ROLES_V1: галочки ролей у колонок и зна�
   // с ролью); «В обработке» и колонке до записи — нет; конверсии — ничего.
   for (const key of ['no_show', 'not_qualified']) assert.ok(roleBox(root, key, 'no_show'), 'нет галочки «не пришёл» у ' + key);
   for (const key of ['in_process', 'came']) assert.ok(!roleBox(root, key, 'no_show'), 'галочка «не пришёл» у ' + key);
+  // Ревью F5 — у колонки с ролью — только её галочка: «В обработке» 2, «Перезвонить» 1, «Подтверждён» 1,
+  // «Пришёл» 0, «Не пришёл» 1, «Нецелевой» 1.
+  assert.deepStrictEqual(roleBoxes(root).map((n) => [n.attrs['data-crm-role-of'], n.attrs['data-crm-role']]),
+    [['in_process', 'booked'], ['in_process', 'confirmed'], ['recall', 'booked'], ['approved', 'confirmed'], ['no_show', 'no_show'], ['not_qualified', 'no_show']]);
   assert.ok(textOf(root).includes('открытой — только после колонки записи'), 'подсказка не говорит, где можно отметить «Не пришёл»');
   assert.deepStrictEqual(roleBoxes(root).filter((n) => 'checked' in n.attrs).map((n) => [n.attrs['data-crm-role-of'], n.attrs['data-crm-role']]),
     [['recall', 'booked'], ['approved', 'confirmed'], ['no_show', 'no_show']]);

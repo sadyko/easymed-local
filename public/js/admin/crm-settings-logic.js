@@ -170,6 +170,9 @@ export const ROLE_BADGES = Object.freeze({
  */
 export function roleOptionsFor(stage, { stages = null, routed = [] } = {}) {
     const kind = stage && stage.kind;
+    // CRM_STAGE_ROLES_V1 (ревью потока E, F5) — у колонки одна роль: у колонки с ролью — только её галочка
+    // (снять); вторую не предложить (прежде она молча вытесняла первую).
+    if (stage && STAGE_ROLES.includes(stage.role)) return [stage.role];
     if (kind === 'open') {
         // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — «не пришёл» у открытой — только там, где его можно сохранить
         // (после колонки записи, не начальная, без правила звонков); воронки нет — не предлагается.
