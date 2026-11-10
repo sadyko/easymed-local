@@ -169,6 +169,7 @@ import { localDate } from '../domain/day.js';
 // PUBLIC_API_V1 — время, удержанное онлайн-записью без карты, занимает врача
 // там же, где визиты (loadBusy): одно правило занятости на весь продукт.
 import { liveHolds } from '../api/holds.js';
+import { dayStartFits } from '../../../public/js/shared/slot-pack.js';   // JOIN_EXTENDS_BOOKING_V1 — помещается ли продолжение записи
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -1075,6 +1076,55 @@ function revisitDayTaken(db, dayVisit) {
  * (REPEAT_VISIT_V1, ревью). В бою всё берётся само (index.js зовёт вызов тремя
  * аргументами).
  */
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_JOIN_NOT_MOVE_V1 · JOIN_EXTENDS_BOOKING_V1 (3.23.0) — УСЛУГА В ЗАПИСЬ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Новая услуга к врачу, к которому пациент уже записан, на ТО ЖЕ время записи —
+// это присоединение к записи, а не перенос: запись не двигается (решение
+// владельца 2026-11-10). Узнают его обе двери — ensure_visit (rpc/visits.js:
+// карточка CRM, мастер визита) и calendar_book (калькулятор, «Записать» в
+// календаре), — одним правилом отсюда.
+
+/** Та же запись: визит того же врача на ту же минуту, ещё до прихода. */
+export function isSameBooking(visit, doctorId, startMs) {
+  if (!visit || !['scheduled', 'confirmed'].includes(visit.status)) return false;
+  if (!doctorId || Number(visit.doctor_id) !== Number(doctorId)) return false;
+  const vMs = Date.parse(visit.visit_date);
+  return Number.isFinite(vMs) && Math.floor(vMs / 60000) === Math.floor(Number(startMs) / 60000);
+}
+
+/**
+ * JOIN_EXTENDS_BOOKING_V1 — присоединённая услуга удлиняет запись на addMin, если
+ * время за ней свободно (внутри приёма врача, ни с кем не пересекается — то же
+ * правило, что у экрана: shared/slot-pack.js dayStartFits). Иначе запись своей
+ * длины, а ответ называет ends (когда закончился бы приём) и next (следующая
+ * запись). Удлиняет calendarBook — та же дверь, что растягивает запись в
+ * календаре (запрет двойной записи и выгрузка филиалам — там).
+ * @returns {Promise<{extended:boolean, ends:string, next:string|null, visit?:object}>}
+ */
+export async function extendBookingForJoin(db, user, visit, addMin, deps = {}) {
+  const startMs = Date.parse(visit.visit_date);
+  const curMin = Math.max(5, Number(visit.duration_minutes) || DEFAULT_DURATION_MIN);
+  const add = Math.max(0, Math.round(Number(addMin) || 0));
+  const endMin = minutesOfLocal(startMs) + curMin;
+  const out = { extended: false, ends: formatHhmm(endMin + add), next: null };
+  if (!add || !visit.doctor_id || endMin + add > 24 * 60) return out;
+  const day = calendarSlots(db, {
+    doctor_id: visit.doctor_id, date: localDayIso(startMs), duration_minutes: add, exclude_visit_id: visit.id,
+  }, user);
+  if (dayStartFits(day, add, endMin)) {
+    try {
+      const bk = await calendarBook(db, { visit_id: visit.id, start: visit.visit_date, duration_minutes: curMin + add }, user, deps);
+      return { ...out, extended: true, visit: bk.visit };
+    } catch {
+      return out;   // время заняли в ту же секунду — запись остаётся своей длины
+    }
+  }
+  const next = (day.busy || []).map((b) => parseHhmm(b.from)).filter((m) => m != null && m >= endMin && m < endMin + add).sort((a, b) => a - b)[0];
+  return { ...out, next: next == null ? null : formatHhmm(next) };
+}
+
 export async function calendarBook(db, args, user, deps = {}) {
   requireRole(user, BOOK_ROLES);
   const a = args || {};
@@ -1195,6 +1245,16 @@ export async function calendarBook(db, args, user, deps = {}) {
       }
       // V3120_FINAL (G3) — строки чужого врача в смете — это чужая запись, не «пустая».
       const bare = dayVisitMovableFor(db, dayVisit.id, a.doctor_id);
+      // CRM_JOIN_NOT_MOVE_V1 — та же запись (тот же врач, то же время, до прихода):
+      // калькулятор и «Записать» в календаре на время записи пациента. Не перенос —
+      // визит дня как есть, а запись удлиняется на услугу (JOIN_EXTENDS_BOOKING_V1).
+      if (bare && isSameBooking(dayVisit, doctorId, startMs)) {
+        const ext = await extendBookingForJoin(db, user, dayVisit, durationMin, deps);
+        const visit = ext.visit || dayVisit;
+        crmLinkVisit(db, visit.id, user);   // CRM_UNIFY_V1 — как у переноса ниже
+        return { visit, created: false, added_to_day_visit: true, joined: true, extended: ext.extended,
+          ends: ext.ends, next: ext.next, emergency: false, day: dayIso };
+      }
       if (bare) {
         // Длительность — новой записи (из её услуги), а не прежней: иначе
         // пятиминутный забор, перенесённый под консультацию, так и остался бы

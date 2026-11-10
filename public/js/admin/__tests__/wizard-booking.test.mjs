@@ -278,9 +278,13 @@ test('ЭКСТРЕННАЯ ЗАПИСЬ: причина обязательна �
   assert.match(row.notes, /11:00–11:30/, 'в записи не названо время, поверх которого записали: ' + row.notes);
 
   // Галочка без причины — это отсутствие проверки. Сервер её и не принимает.
+  // CRM_JOIN_NOT_MOVE_V1 (3.23.0) — третий пациент: у пациентов 3 и 4 на 11:00 к этому врачу
+  // уже стоят СВОИ записи, и calendar_book на ту же минуту для них — присоединение к записи,
+  // а не новая запись поверх занятого.
+  DB.prepare("INSERT INTO patients (id, full_name) VALUES (6,'Третий Пациент')").run();
   const { supabase } = await import('../../supabase.js');
   const bad = await supabase.rpc('calendar_book',
-    { patient_id: 3, doctor_id: 7, service_id: 21, start: at(day, 11, 0), emergency: true, emergency_reason: 'x' });
+    { patient_id: 6, doctor_id: 7, service_id: 21, start: at(day, 11, 0), emergency: true, emergency_reason: 'x' });
   assert.equal(bad.error && bad.error.code, 'emergency_reason_required');
 });
 

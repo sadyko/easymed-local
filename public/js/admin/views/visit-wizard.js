@@ -1483,7 +1483,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                             onclick: () => {
                                 line.ui.day = dayMs;
                                 const fs = slotsForDay(line, dayMs);
-                                line.when = fs.length ? slotToLocalIso(fs[0]) : null;
+                                // CRM_JOIN_NOT_MOVE_V1 — в этот день пациент уже записан к врачу: время записи,
+                                // а не самое раннее свободное (иначе запись молча переехала бы на него).
+                                const jd = joinFor(line.doctorId, isoDay(dayMs));
+                                line.when = jd ? jd.when : (fs.length ? slotToLocalIso(fs[0]) : null);
                                 repaintRail(); repaintCatalog();
                             },
                             title: past || beyond ? '' : (free ? trf('{n} окн.', { n: free }) : tr('нет окон')),
@@ -1759,6 +1762,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const hit = nearestFree(days.map(isoDay), (iso) => slotsForDay(line, new Date(iso + 'T00:00:00').getTime())
             .map((ms) => { const d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); }));
         if (!hit) return null;
+        // CRM_JOIN_NOT_MOVE_V1 — в ближайший день пациент записан к этому врачу: «Ближайшее» — время записи.
+        const jn = joinFor(line.doctorId, hit.iso);
+        const jm = jn ? /T(\d{2}):(\d{2})$/.exec(String(jn.when)) : null;
+        if (jm) hit.min = Number(jm[1]) * 60 + Number(jm[2]);
         const day = new Date(hit.iso + 'T00:00:00').getTime();
         return { day, iso: hit.iso, min: hit.min, ms: day + hit.min * 60000 };
     }
@@ -3462,6 +3469,20 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         duration_minutes: lineDuration(timedHead),
                     };
                     if (emgReason) { evArgs.book.emergency = true; evArgs.book.emergency_reason = emgReason; }
+                } else {
+                    // JOIN_EXTENDS_BOOKING_V1 — новые строки дня идут в запись пациента (ridesBooking):
+                    // брони нет, а запись удлиняется на их длительность, если время за ней свободно
+                    // (решает сервер, ensure_visit join; занято — запись остаётся своей длины).
+                    const riders = lines.filter(ridesBooking);
+                    if (riders.length) {
+                        const r0 = riders[0];
+                        evArgs.join = {
+                            doctor_id: Number(r0.doctorId),
+                            start: new Date(r0.when).toISOString(),
+                            duration_minutes: riders.filter((c) => c.doctorId === r0.doctorId && c.when === r0.when)
+                                .reduce((sum, c) => sum + lineDuration(c), 0),
+                        };
+                    }
                 }
                 // CRM_LINK_ALL_V1 (R3; решение владельца D2) — регистрация на СЕГОДНЯ «сейчас»
                 // (живая очередь, услуги без времени или слот не позже чем через 30 минут) —

@@ -725,3 +725,35 @@ test('SLOT_PACK_V1: сегодня — первое начало «сейчас�
   if (out.min_start && out.min_start <= '23:50') assert.equal(out.slots[0].start, out.min_start, 'первое начало сегодня — не «сейчас»');
   db.close();
 });
+
+// CRM_JOIN_NOT_MOVE_V1 · JOIN_EXTENDS_BOOKING_V1 (3.23.0) — калькулятор и «Записать» в
+// календаре на ВРЕМЯ ЗАПИСИ пациента к тому же врачу: прежде пустой визит дня
+// «переносился» на то же время с длительностью новой услуги (запись 30 мин становилась
+// пятиминутной). Теперь это присоединение: визит тот же, время то же, запись
+// удлиняется на услугу, если время за ней свободно.
+test('CRM_JOIN_NOT_MOVE_V1: calendar_book на время записи того же врача — присоединение, запись удлинилась, не «перенос»', async () => {
+  const db = freshDb();
+  const first = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });   // 10:00–10:30
+  const out = await book(db, { patient_id: 3, doctor_id: 7, service_id: 22, start: at(10) });     // забор крови, 5 мин
+  assert.equal(out.visit.id, first.visit.id);
+  assert.equal(out.joined, true);
+  assert.ok(!out.moved, 'запись «перенесена» на своё же время');
+  assert.equal(out.extended, true);
+  const v = db.prepare('SELECT visit_date, duration_minutes FROM visits WHERE id = ?').get(first.visit.id);
+  assert.equal(Date.parse(v.visit_date), Date.parse(at(10)));
+  assert.equal(v.duration_minutes, 35, 'запись не удлинилась на пять минут (или стала пятиминутной)');
+  db.close();
+});
+
+test('JOIN_EXTENDS_BOOKING_V1: calendar_book на время записи, следующая запись вплотную — запись своей длины, назван next', async () => {
+  const db = freshDb();
+  const first = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });   // 10:00–10:30
+  await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(10, 30) });              // 10:30–11:00
+  const out = await book(db, { patient_id: 3, doctor_id: 7, service_id: 22, start: at(10) });
+  assert.equal(out.joined, true);
+  assert.equal(out.extended, false);
+  assert.equal(out.next, '10:30');
+  assert.equal(out.ends, '10:35');
+  assert.equal(db.prepare('SELECT duration_minutes d FROM visits WHERE id = ?').get(first.visit.id).d, 30);
+  db.close();
+});

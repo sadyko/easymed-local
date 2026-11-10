@@ -11,9 +11,8 @@ import { canNameVisitSource } from '../domain/line-referral.js';   // REFERRAL_L
 // обработчиков, что и у календаря. Своей арифметики расписания здесь нет ни
 // строки: calendar_slots — единственный источник занятости на весь продукт,
 // calendar_book — единственный, кто ставит визиту время и врача.
-import { calendarSlots, calendarBook } from './calendar.js';
+import { calendarSlots, calendarBook, isSameBooking, extendBookingForJoin } from './calendar.js';   // CRM_JOIN_NOT_MOVE_V1 — одно правило присоединения
 import { DEFAULT_DURATION_MIN, serviceDurationMinutes, formatHhmm } from './slot-engine.js';
-import { dayStartFits } from '../../../public/js/shared/slot-pack.js';   // JOIN_EXTENDS_BOOKING_V1 — помещается ли продолжение записи
 // BILLING_AUDIT_FIX_V1 (A1) — день визита считается в МЕСТНОМ времени клиники.
 import { localDate } from '../domain/day.js';
 // CRM_CALENDAR_MIRROR_V1 · CRM_ONE_WAY_V1 — строки заявки садятся в визит в шаге связи
@@ -189,47 +188,12 @@ function parseJoin(join) {
   return { doctorId, startMs, addMin: Number.isFinite(dur) && dur > 0 ? Math.min(dur, 12 * 60) : 0 };
 }
 
-/** Запись, к которой присоединяют: визит того же врача, на ту же минуту, ещё до прихода. */
-function isJoinTarget(visit, { doctorId, startMs }) {
-  if (!visit || !['scheduled', 'confirmed'].includes(visit.status)) return false;
-  if (Number(visit.doctor_id) !== Number(doctorId)) return false;
-  const vMs = Date.parse(visit.visit_date);
-  return Number.isFinite(vMs) && Math.floor(vMs / 60000) === Math.floor(startMs / 60000);
-}
-
-/**
- * JOIN_EXTENDS_BOOKING_V1 — присоединённая услуга удлиняет запись на свою
- * длительность, если время за записью свободно (внутри приёма врача, ни с кем
- * не пересекается). Иначе запись остаётся своей длины, а ответ называет, когда
- * приём закончился бы (ends) и когда следующая запись (next) — экран говорит это
- * оператору. Удлиняет calendar_book — та же дверь, что растягивает запись в
- * календаре (запрет двойной записи и выгрузка филиалам — там).
- * @returns {Promise<{extended:boolean, ends:string, next:string|null, visit?:object}>}
- */
-async function extendJoined(db, user, visit, addMin) {
-  const startMs = Date.parse(visit.visit_date);
-  const curMin = Math.max(5, Number(visit.duration_minutes) || DEFAULT_DURATION_MIN);
-  const endMin = minutesOfLocal(startMs) + curMin;
-  const out = { extended: false, ends: formatHhmm(endMin + addMin), next: null };
-  if (!addMin || endMin + addMin > 24 * 60) return out;
-  const day = calendarSlots(db, {
-    doctor_id: visit.doctor_id, date: localDayIso(startMs), duration_minutes: addMin, exclude_visit_id: visit.id,
-  }, user);
-  if (dayStartFits(day, addMin, endMin)) {
-    try {
-      const bk = await calendarBook(db, { visit_id: visit.id, start: visit.visit_date, duration_minutes: curMin + addMin }, user);
-      return { ...out, extended: true, visit: bk.visit };
-    } catch {
-      return out;   // время заняли в ту же секунду — запись остаётся своей длины
-    }
-  }
-  const next = (day.busy || []).map((b) => hhmmToMin(b.from)).filter((m) => m >= endMin && m < endMin + addMin).sort((a, b) => a - b)[0];
-  return { ...out, next: next == null ? null : formatHhmm(next) };
-}
+/** Запись, к которой присоединяют: визит того же врача, на ту же минуту, ещё до прихода (calendar.js). */
+const isJoinTarget = (visit, { doctorId, startMs }) => isSameBooking(visit, doctorId, startMs);
 
 /** Ответ ensure_visit на присоединение: тот же визит, время записи держит она сама. */
 async function finishJoin(db, user, out, join, { desk }) {
-  const ext = await extendJoined(db, user, out.visit, join.addMin);
+  const ext = await extendBookingForJoin(db, user, out.visit, join.addMin);   // JOIN_EXTENDS_BOOKING_V1
   const visit = ext.visit || out.visit;
   crmLinkVisit(db, visit.id, user, { undated: true, desk });   // CRM_UNIFY_V1 — как у ensure_visit без book
   return { visit, created: false, booked: true, joined: true, extended: ext.extended, ends: ext.ends, next: ext.next };

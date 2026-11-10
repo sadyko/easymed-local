@@ -2084,7 +2084,11 @@ export function openServicePickerModal({
     /** PICK_DAY_V1 — ближайший свободный слот строки после первого дня окна: { iso, min } или null. */
     function catNearest(item) {
         if (!item || !item.doctor) return null;
-        return nearestFree(catDays().slice(1).map((d) => d.iso), (iso) => freeStarts(item.doctor.id, iso, item.durationMinutes, item));
+        const hit = nearestFree(catDays().slice(1).map((d) => d.iso), (iso) => freeStarts(item.doctor.id, iso, item.durationMinutes, item));
+        // CRM_JOIN_NOT_MOVE_V1 — в ближайший день пациент записан к этому врачу: время записи, а не самое раннее свободное.
+        const join = hit ? calcJoin(item.doctor.id, hit.iso) : null;
+        if (join && joinMinutes(join) != null) hit.min = joinMinutes(join);
+        return hit;
     }
     /** PICK_DAY_V1 — строка врача без времени в первый день окна, и день не выбран. */
     function catNeedsDay(a) {
