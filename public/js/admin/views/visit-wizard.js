@@ -44,8 +44,8 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
 // server/services/rpc/slot-engine.js. ?v как у остальных импортёров модуля.
-import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
-         askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=ownrep4';
+import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin, startFitsDay,
+         askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=ownrep4';   // SLOT_PACK_V1 — startFitsDay
 import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ до визита
 import { loadVisitOrders, orderedMatch, orderedLabel, precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 — уже назначено в визите дня
 import { hasActorRole, canWriteServiceTemplates, VISIT_LINE_ROLES, canAddVisitLines, canNameVisitSource } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1 · LIVE_AUDIT_FIX_V1 — шаблоны сметы
@@ -1467,7 +1467,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         const ms = new Date(base.getFullYear(), base.getMonth(), dd).getTime();
                         if (ms >= d0.getTime() && ms <= horizon) monthDays.push(ms);
                     }
-                    const unknown = monthDays.filter(ms => !slotDayCached(line.doctorId, isoDay(ms), lineDuration(line)));
+                    const unknown = monthDays.filter(ms => !slotDayCached(line.doctorId, isoDay(ms), lineDuration(line), { patientId: patient.id }));
                     if (line.doctorId && unknown.length) {
                         loadSlots(line, unknown).then(() => { if (calPop.style.display !== 'none') paintCal(); });
                     }
@@ -1611,24 +1611,25 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     }
 
     /**
-     * Свободные начала дня (ms) — список сервера, минус время, уже занятое
+     * Свободные начала дня (ms) — список сервера, плюс время, уже занятое
      * ДРУГИМИ строками этой же сметы: их в базе ещё нет, поэтому знать о них
-     * сервер не может. Это вычитание уже разобранного, а не свой расчёт окна.
+     * сервер не может.
+     * SLOT_PACK_EXTRA_BUSY_V1 — строки сметы — занятость, и начала пакуются
+     * заново тем же правилом, что у сервера (shared/slot-pack.js): вторая
+     * услуга к тому же врачу встаёт сразу за первой, без дыры.
      */
     function slotsForDay(line, dayStart) {
         if (!line.doctorId) return [];
         const dayIso = isoDay(dayStart);
         const dur = lineDuration(line);
-        const day = slotDayCached(line.doctorId, dayIso, dur);
+        const day = slotDayCached(line.doctorId, dayIso, dur, { patientId: patient.id });
         if (!day) return [];
         const base = new Date(dayStart); base.setHours(0, 0, 0, 0);
         const taken = wiz.cart
-            .filter(c => c !== line && c.doctorId === line.doctorId && c.when && !c.dateOnly)
-            .map(c => { const s = new Date(c.when).getTime(); return { s, e: s + (Number(c.svc.duration_minutes) || 30) * 60000 }; });
-        const durMs = dur * 60000;
-        const free = freeStartMinutes(day)
-            .map(m => base.getTime() + m * 60000)
-            .filter(t => !taken.some(b => t < b.e && b.s < t + durMs));
+            .filter(c => c !== line && c.doctorId === line.doctorId && c.when && !c.dateOnly && isoDay(new Date(c.when).getTime()) === dayIso)
+            .map(c => { const s = Math.round((new Date(c.when).getTime() - base.getTime()) / 60000); return { from: s, to: s + lineDuration(c) }; });
+        const free = freeStartMinutes(day, dur, taken)
+            .map(m => base.getTime() + m * 60000);
         // BOOKED_JOIN_V1 — время записи пациента к этому врачу в этот день — тоже выбор:
         // услуга ложится в запись, своего слота ей не нужно (его держит запись).
         const join = joinFor(line.doctorId, dayIso);
@@ -1691,7 +1692,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // бы причину экстренной записи там, где сервер бы не отказал.
             const data = await loadSlotDay(head.doctorId, dayIso, dur, { patientId: patient.id });
             if (!data) continue;   // сервер не ответил — решать ему же при записи
-            if (freeStartMinutes(data).includes(startMin)) continue;
+            // SLOT_PACK_V1 — «помещается», а не «есть в списке»: соседняя запись
+            // сдвигает упакованные начала, и выбранное время, которого в новом
+            // списке уже нет, может оставаться свободным.
+            if (startFitsDay(data, dur, startMin)) continue;
 
             const doc = wiz.doctors.find(x => x.id === head.doctorId) || {};
             const docName = doc.full_name || doc.username || '—';

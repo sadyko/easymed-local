@@ -482,8 +482,9 @@ test('DOCTOR_PROFILE_V1: «Повторный визит» — слоты и з�
         dlg.querySelectorAll('button').find((b) => b.classList.contains('rv-cell') && b.textContent === '10').dispatch('click');
         const slotsAsked = () => seen.filter((c) => c.name === 'calendar_slots');
         await until(() => slotsAsked().length);
-        assert.deepEqual([slotsAsked().at(-1).body.duration_minutes, slotsAsked().at(-1).body.step_minutes], [45, 20],
-            'вид на 45 минут: слоты спрошены не на его длительность (шаг — 20)');
+        // SLOT_PACK_V1 — шага 20 больше нет: начала вплотную, шагом длительности вида.
+        assert.deepEqual([slotsAsked().at(-1).body.duration_minutes, slotsAsked().at(-1).body.step_minutes], [45, undefined],
+            'вид на 45 минут: слоты спрошены не на его длительность (или со своим шагом)');
         svcSel.value = String(NOT_LED);   // вид без своей длительности — 30
         svcSel.dispatch('change');
         await until(() => slotsAsked().at(-1).body.duration_minutes === 30);

@@ -50,6 +50,7 @@ import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTie
 // OWN_PRICE_TIER_RATIO_V1 — своя цена врача со скидкой яруса: правило одно с сервером.
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';
 import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — флаги 0/1 из базы
+import { packedDayStarts, dayStartFits } from '../../shared/slot-pack.js';   // SLOT_PACK_V1 — начала вплотную, то же правило, что у сервера
 import { consultPrice, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';   // DISCOUNT_RULES_V1 · CARD_BALANCE_V1
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
@@ -1143,15 +1144,18 @@ export function openServicePickerModal({
     // с сервера (calendar_slots), по одному вызову на день. Экран НЕ считает
     // ни график, ни обед, ни часы клиники: раньше считал, и расходился с
     // календарём (разбор — в шапке WIZARD_ONE_ENGINE_V1 внизу файла).
+    // SLOT_PACK_V1 — полоса больше не шлёт свой шаг 15 (SCHED_SNAP): начала
+    // вплотную от конца записи; щелчок по полосе по-прежнему встаёт в
+    // ближайшее из них (buildTimeline).
     async function loadDoctorVisitsWindow(doctorId) {
         state.schedLoadingFor = doctorId;
         const dur = serviceDurationMin();
         const days = [];
         for (let i = 0; i <= SCHED_WINDOW_DAYS; i++) days.push(schedAddDays(schedTodayIso(), i));
-        await primeSlotDays(doctorId, days, dur, { stepMinutes: SCHED_SNAP, patientId });
+        await primeSlotDays(doctorId, days, dur, { patientId });
         const map = {};
         for (const iso of days) {
-            const day = slotDayCached(doctorId, iso, dur, { stepMinutes: SCHED_SNAP });
+            const day = slotDayCached(doctorId, iso, dur, { patientId });
             if (!day) continue;
             map[iso] = (day.busy || []).map(b => ({
                 startMin: hhmmToMin(b.from), endMin: hhmmToMin(b.to),
@@ -1166,7 +1170,7 @@ export function openServicePickerModal({
     function schedFreeStarts(iso) {
         const doctor = currentDoctor();
         if (!doctor) return [];
-        return freeStartMinutes(slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP }));
+        return freeStartMinutes(slotDayCached(doctor.id, iso, serviceDurationMin(), { patientId }));
     }
 
     // PICK_DAY_V1 — время ставится само только в ПЕРВЫЙ день окна (сегодня или
@@ -1199,10 +1203,10 @@ export function openServicePickerModal({
         state.schedViewIso = iso;
         const doctor = currentDoctor();
         // Шагнули за пределы прогретого окна — спрашиваем сервер про этот день.
-        if (doctor && !slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP })) {
-            await loadSlotDay(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP, patientId });
+        if (doctor && !slotDayCached(doctor.id, iso, serviceDurationMin(), { patientId })) {
+            await loadSlotDay(doctor.id, iso, serviceDurationMin(), { patientId });
             if (state.doctorId !== doctor.id) return;
-            const day = slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP });
+            const day = slotDayCached(doctor.id, iso, serviceDurationMin(), { patientId });
             state.schedVisits[iso] = ((day && day.busy) || []).map(b => ({
                 startMin: hhmmToMin(b.from), endMin: hhmmToMin(b.to), label: b.patient_name || tr('Занято'),
             }));
@@ -1397,7 +1401,7 @@ export function openServicePickerModal({
     // 08:00–18:00, а мастер визита в тот же момент открывал 09:00–18:00.
     function workingRangeFor(doctor, iso) {
         if (!doctor) return null;
-        const day = slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP });
+        const day = slotDayCached(doctor.id, iso, serviceDurationMin(), { patientId });
         const w = day && day.window;
         if (!w) return null;
         const fromMin = hhmmToMin(w.from), toMin = hhmmToMin(w.to);
@@ -1827,6 +1831,7 @@ export function openServicePickerModal({
     // вычитался, окно по умолчанию 08:00–18:00) плюс свой перебор с шагом 30.
     // Теперь окно, шаг, обед, часы клиники и занятость считает один движок —
     // server/services/rpc/slot-engine.js, — и календарь берёт ответ оттуда же.
+    // SLOT_PACK_V1 — шага нет: начала вплотную, шагом длительности услуги.
     async function ensureDocSlots(docId, durationMin) {
         await primeSlotDays(docId, catDays().map(d => d.iso), durationMin || 30);
     }
@@ -1854,19 +1859,19 @@ export function openServicePickerModal({
         return jm == null || own.includes(jm) ? own : [...own, jm].sort((a, b) => a - b);
     }
     function freeStartsOwn(docId, dayIso, dur, exceptItem) {
-        const free = freeStartMinutes(slotDayCached(docId, dayIso, dur));
-        if (!free.length) return free;
         // CATALOG_WIZARD_V2 — строки ЭТОЙ ЖЕ сметы, ещё не записанные, тоже
         // держат своё время. Сервер о них знать не может: их пока нет в базе.
-        // Это вычитание уже занятого из списка сервера, а не свой расчёт окна.
+        // SLOT_PACK_EXTRA_BUSY_V1 — их время — занятость, и начала пакуются
+        // заново тем же правилом, что у сервера: вторая услуга к тому же врачу
+        // встаёт сразу за первой (прежде начала только вычитались — и сетка
+        // оставляла дыру за строкой).
         const taken = [];
         for (const o of state.added) {
-            if (o === exceptItem || !o.doctor || o.doctor.id !== docId || o.dateIso !== dayIso || !o.time) continue;
+            if (o === exceptItem || !o.doctor || o.doctor.id !== docId || o.dateIso !== dayIso || !o.time || o.__noSlot) continue;
             const sm = hhmmToMin(o.time);
-            taken.push({ s: sm, e: sm + (o.durationMinutes || 30) });
+            taken.push({ from: sm, to: sm + (o.durationMinutes || 30) });
         }
-        if (!taken.length) return free;
-        return free.filter(m => !taken.some(b => m < b.e && m + dur > b.s));
+        return freeStartMinutes(slotDayCached(docId, dayIso, dur), dur, taken);
     }
 
     function itemComplete(a) {
@@ -3693,7 +3698,7 @@ function formatMoney(n) {
 const SCHED_GRID_START  = 8;     // visible window start hour
 const SCHED_GRID_END    = 20;    // visible window end hour
 const SCHED_HOUR_W      = 76;    // px per hour on the timeline
-const SCHED_SNAP        = 15;    // slot granularity, minutes
+// SLOT_PACK_V1 — SCHED_SNAP (шаг 15) убран: свободные начала — вплотную, их называет сервер.
 const SCHED_WINDOW_DAYS = 14;    // how far ahead auto-pick / nav may reach
 
 function fmtMin(min) {
@@ -3739,9 +3744,22 @@ function schedDateLabel(iso) {
 // Кэш держится на модуле, а не в состоянии экрана: мастер визита и подбор
 // услуг открываются один поверх другого и обязаны видеть одни и те же окна.
 
-export const SLOT_STEP_MIN = 30;          // шаг сетки мастеров (был таким же в обеих копиях)
-const _slotDays = new Map();              // 'doc|day|dur|step' -> ответ calendar_slots
-const _slotKey = (docId, dayIso, dur, step) => `${docId}|${dayIso}|${dur}|${step}`;
+// SLOT_PACK_V1 (3.23.0) — ШАГА СЕТКИ БОЛЬШЕ НЕТ. Здесь стоял SLOT_STEP_MIN = 30
+// (мастер визита, карточка CRM, калькулятор), полоса расписания слала 15,
+// «Повторный визит» — 20: каждое окно предлагало свою сетку, и минута, в
+// которую кончается запись, не предлагалась никогда (после 10:10–10:40 —
+// 11:00). Теперь calendar_slots зовётся БЕЗ step_minutes и отдаёт начала
+// вплотную: конец записи, дальше шагом длительности услуги
+// (public/js/shared/slot-pack.js). Сетку с явным шагом просит только
+// партнёрский API (crm-api-booking.js, 15 — опубликованный договор).
+//
+// Ключ кэша — с пациентом, чей приём вычтен из занятости (EXCLUDE_OWN_VISIT_V1):
+// мастер и карточка вычитают свой приём пациента, калькулятор и «Повторный
+// визит» — нет, и один день одного врача у них РАЗНЫЙ. Прежде их разводил шаг
+// (30 против 20 и 15); без шага разводит пациент.
+const _slotDays = new Map();              // 'doc|day|dur|пациент' -> ответ calendar_slots
+const _slotKey = (docId, dayIso, dur, opts = {}) =>
+    `${docId}|${dayIso}|${dur}|${opts.excludeVisitId ? 'v' + opts.excludeVisitId : (opts.patientId || '')}`;
 
 export function hhmmToMin(s) {
     const [hh, mm] = String(s || '00:00').split(':').map(Number);
@@ -3750,10 +3768,9 @@ export function hhmmToMin(s) {
 
 /** Спросить сервер про один день врача. Кэшируется; null = не ответил. */
 export async function loadSlotDay(doctorId, dayIso, durationMin, opts = {}) {
-    const step = opts.stepMinutes || SLOT_STEP_MIN;
-    const key = _slotKey(doctorId, dayIso, durationMin, step);
+    const key = _slotKey(doctorId, dayIso, durationMin, opts);
     if (_slotDays.has(key)) return _slotDays.get(key);
-    const args = { doctor_id: doctorId, date: dayIso, duration_minutes: durationMin, step_minutes: step };
+    const args = { doctor_id: doctorId, date: dayIso, duration_minutes: durationMin };   // SLOT_PACK_V1 — без шага: вплотную
     if (opts.excludeVisitId) args.exclude_visit_id = opts.excludeVisitId;
     const first = await supabase.rpc('calendar_slots', args);
     if (first.error) { _slotDays.set(key, null); return null; }
@@ -3772,14 +3789,32 @@ export async function loadSlotDay(doctorId, dayIso, durationMin, opts = {}) {
     return data;
 }
 
-/** То же, но синхронно из кэша — для отрисовки. null = ещё не спрашивали. */
+/** То же, но синхронно из кэша — для отрисовки. null = ещё не спрашивали. opts — те же, что у loadSlotDay. */
 export function slotDayCached(doctorId, dayIso, durationMin, opts = {}) {
-    return _slotDays.get(_slotKey(doctorId, dayIso, durationMin, opts.stepMinutes || SLOT_STEP_MIN)) || null;
+    return _slotDays.get(_slotKey(doctorId, dayIso, durationMin, opts)) || null;
 }
 
-/** Свободные начала дня в минутах от полуночи — ровно те, что назвал сервер. */
-export function freeStartMinutes(day) {
-    return ((day && day.slots) || []).map(s => hhmmToMin(s.start));
+/**
+ * Свободные начала дня в минутах от полуночи — те, что назвал сервер.
+ * SLOT_PACK_EXTRA_BUSY_V1 — extraBusy: время ещё не сохранённых строк той же
+ * сметы ([{from, to}] в минутах дня). Их в базе нет, и сервер о них не знает;
+ * начала тогда упаковываются заново ТЕМ ЖЕ правилом, что у сервера
+ * (shared/slot-pack.js), — вторая новая услуга к тому же врачу встаёт сразу
+ * за первой, а не через дыру.
+ */
+export function freeStartMinutes(day, durationMin = null, extraBusy = []) {
+    if (!extraBusy || !extraBusy.length) return ((day && day.slots) || []).map(s => hhmmToMin(s.start));
+    return packedDayStarts(day, durationMin || (day && day.duration_minutes) || 30, extraBusy);
+}
+
+/**
+ * SLOT_PACK_V1 — помещается ли ВЫБРАННОЕ начало в день ответа: внутри приёма и
+ * ни с чем не пересекается. Не «есть ли оно в списке»: соседняя запись сдвигает
+ * упакованные начала, и время, бывшее в списке, может в нём уже не стоять,
+ * оставаясь свободным.
+ */
+export function startFitsDay(day, durationMin, startMin, extraBusy = []) {
+    return dayStartFits(day, durationMin, startMin, extraBusy);
 }
 
 /** Прогреть пачку дней врача (параллельно, но не залпом на весь месяц). */

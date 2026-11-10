@@ -398,7 +398,8 @@ test('МАСТЕР И КАЛЕНДАРЬ ПРЕДЛАГАЮТ ОДИН И ТОТ
 
   // Календарь: тот же обработчик, теми же аргументами, вызванный напрямую —
   // ровно так его зовёт room-calendar.js.
-  const calendar = calendarSlots(DB, { doctor_id: 7, date: dayIso, service_id: 21, step_minutes: 30 }, USER)
+  // SLOT_PACK_V1 — и мастер, и календарь спрашивают БЕЗ шага: начала вплотную.
+  const calendar = calendarSlots(DB, { doctor_id: 7, date: dayIso, service_id: 21 }, USER)
     .slots.map((s) => hhmmToMin(s.start));
 
   assert.ok(wizard.length > 0, 'список свободного пуст — сравнивать нечего');
@@ -1375,4 +1376,34 @@ test('REPEAT_VISIT_V1 (поправка 2): пустая запись к дру�
   assert.deepEqual([row.doctor_id, Date.parse(row.visit_date)], [8, Date.parse(at(day, 11, 0))], 'чужая запись сдвинута');
   const out = await calendarBookOrAsk(args, { askAddToDayVisit: async () => true });
   assert.deepEqual([out.added_to_day_visit, out.visit.id], [true, vid], '«Добавить в этот визит» не дало визит дня');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SLOT_PACK_V1 (3.23.0) — ЗАПИСИ ВСТАЮТ ВПЛОТНУЮ (снимок владельца: после записи
+// 10:10–10:40 мастер предлагал 11:00 — минута её конца не предлагалась никогда)
+// ═══════════════════════════════════════════════════════════════════════════
+test('SLOT_PACK_V1: клиент слотов спрашивает БЕЗ шага — после записи 10:10–10:40 предлагается 10:40', async () => {
+  const { day, dayIso } = seed({ shape: 'card', from: '09:00', to: '18:00' });
+  DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status) VALUES (4,7,?,30,'scheduled')").run(at(day, 9, 0));
+  DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status) VALUES (4,7,?,30,'scheduled')").run(at(day, 10, 10));
+  RPC.length = 0;
+  const data = await loadSlotDay(7, dayIso, 30, { patientId: 3 });
+  const asked = RPC.filter((c) => c.name === 'calendar_slots');
+  assert.ok(asked.length, 'слоты не спрошены');
+  assert.ok(asked.every((c) => c.body.step_minutes === undefined), 'экран снова шлёт свой шаг: ' + JSON.stringify(asked.map((c) => c.body)));
+  assert.deepEqual(freeStartMinutes(data).slice(0, 4), [570, 640, 670, 700], '09:30, 10:40, 11:10, 11:40');
+  const short = await loadSlotDay(7, dayIso, 15, { patientId: 3 });
+  assert.deepEqual(freeStartMinutes(short).slice(0, 4), [570, 585, 640, 655], '09:30, 09:45, 10:40, 10:55');
+});
+
+test('SLOT_PACK_EXTRA_BUSY_V1: несохранённая строка сметы — занятость; следующая услуга встаёт сразу за ней, как посчитал бы сервер', async () => {
+  const { day, dayIso } = seed({ shape: 'card', from: '09:00', to: '18:00' });
+  DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status) VALUES (4,7,?,30,'scheduled')").run(at(day, 10, 10));
+  const data = await loadSlotDay(7, dayIso, 30);
+  const extra = [{ from: 9 * 60, to: 9 * 60 + 20 }];   // строка сметы 09:00–09:20 (ещё не в базе)
+  const mine = freeStartMinutes(data, 30, extra);
+  const server = calendarSlots(DB, { doctor_id: 7, date: dayIso, duration_minutes: 30, extra_busy: [{ from: '09:00', to: '09:20' }] }, USER)
+    .slots.map((s) => hhmmToMin(s.start));
+  assert.deepEqual(mine, server, 'экран и сервер упаковали несохранённую строку по-разному');
+  assert.deepEqual(mine.slice(0, 3), [9 * 60 + 20, 10 * 60 + 40, 11 * 60 + 10], '09:20 — сразу за строкой сметы; 10:40 — за записью');
 });
