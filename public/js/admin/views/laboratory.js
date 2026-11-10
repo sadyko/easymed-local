@@ -40,7 +40,7 @@ import { dayLabels } from './lab-tube.js';   // LAB_ONE_BARCODE_V1 — один 
 import { dayLabelLine } from '../../shared/lab-day-label.js';   // LAB_ONE_BARCODE_V1 — скан этикетки дня в поиске
 import { labShownValue } from '../../shared/lab-round.js';   // LAB_ROUND_V1 — значение прибора до 2 знаков
 import { loadRoundSetting as loadLabRound } from './lab-round-card.js';
-import { panelMatrix, matrixGrid, cellName } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 — панель-таблица: лист ввода и бланк
+import { panelMatrix, matrixGroupPart, cellName } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 — панель-таблица: лист ввода и бланк; TG_LAB_MATRIX_V1 — matrixGroupPart
 import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1 — подпись бланка — подтвердивший   // LAB_ROUND_V1 — настройка клиники (не прочиталась — включена)
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels, hasActorRole } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
@@ -2631,8 +2631,8 @@ async function labGroupFor(r, patient, allResults) {
     // Номер образца в заголовке панели: у каждого анализа своя пробирка со
     // своим штрих-кодом, и на бланке он должен стоять рядом со своей таблицей.
     // LAB_MATRIX_PANEL_V1 — панель-таблица печатается таблицей (doc-variants.js matrixHtml).
-    const matrix = panelMatrix(state.panelByService[r.service_id]);
-    return { title: `${svc.name || 'Анализ'} · № ${accession(r)}`, tests, ...(matrix ? { matrix: matrixGrid(matrix, results) } : {}) };   // i18n-exempt: заголовок печатного бланка анализа
+    // TG_LAB_MATRIX_V1 — та же часть группы, что у карты, «Документов», бота и истории болезни.
+    return { title: `${svc.name || 'Анализ'} · № ${accession(r)}`, tests, ...matrixGroupPart(state.panelByService[r.service_id], results) };   // i18n-exempt: заголовок печатного бланка анализа
 }
 
 async function buildLabDoc(rows, patient, opts = {}) {

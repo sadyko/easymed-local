@@ -212,3 +212,25 @@ test('окно выбора: снятая галочка документа сн
   assert.deepEqual(got, [3]);
   assert.equal(openLabPrintPick({ docs: [] }), null, 'печатать нечего — окна нет');
 });
+
+// TG_LAB_MATRIX_V1 (3.23.0) — «Документы» печатают посев таблицей через общую часть
+// группы (shared/lab-matrix.js matrixGroupPart) — тот же вывод, что до неё.
+test('TG_LAB_MATRIX_V1: «Документы» — панель-таблица печатается таблицей посева, обычная — списком', async () => {
+  const { printLabReport } = await import('../views/patient-documents.js');
+  const matrix = { scale: ['−', '+', '++'], sections: [{ title: 'Посев', columns: ['Рост', 'Нет роста'], rows: ['E. coli', 'S. aureus'] }] };
+  const r = (id, testName, value) => ({ id, vsId: 29, serviceId: 41, panelName: 'Бак. посев', testName, value, unit: '', reference_range: '',
+    verifiedAt: TODAY_NOON, enteredAt: TODAY_NOON, verifiedBy: null });
+  const cells = [r(1, 'E. coli · Рост', '++'), r(2, 'S. aureus · Нет роста', '+')];
+  const print = async (panels) => {
+    LAB_PANELS = panels; printed = [];
+    try { await printLabReport({ id: 20, visit_date: TODAY_NOON }, cells, {}, PATIENT); await tick(); } finally { LAB_PANELS = []; }
+    assert.equal(printed.length, 1, 'бланк не напечатан');
+    return printed[0].replace(/<style[\s\S]*?<\/style>/g, '');
+  };
+  const html = await print([{ service_id: 41, kind: 'matrix', matrix_json: JSON.stringify(matrix) }]);
+  assert.match(html, /<table class="res mx">/, 'посев напечатан не таблицей');
+  assert.match(html, /<td class="pname">E\. coli<\/td><td class="c mx-v">\+\+<\/td><td class="c mx-v"><\/td>/);
+  assert.ok(!html.includes('E. coli · Рост'), 'строки списка «строка · графа» на бланке');
+  const plain = await print([{ service_id: 41, kind: '', matrix_json: null }]);
+  assert.ok(!plain.includes('class="res mx"') && plain.includes('E. coli · Рост'), 'обычная панель — не списком');
+});

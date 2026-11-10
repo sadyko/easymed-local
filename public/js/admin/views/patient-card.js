@@ -18,7 +18,7 @@
 import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1 — подпись бланка анализов — подтвердивший
 import { labDocBatches } from '../../shared/lab-doc-batches.js';   // LAB_DOC_SPLIT_V1 — подтверждённые вместе — один документ
 import { openLabPrintPick } from './lab-print-pick.js';   // LAB_PRINT_PICK_V1 — «Печать…» с выбором документов
-import { panelMatrix, matrixGrid } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 — таблица посева на бланке
+import { matrixGroupPart } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 — таблица посева на бланке; TG_LAB_MATRIX_V1 — общая часть группы
 import { labShownValue, labRoundOn } from '../../shared/lab-round.js';   // LAB_ROUND_V1 (ревью S3, L-3) — значение прибора по настройке клиники
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, StatusTag, fmtDate, fmtDateTime, field, Avatar, avColor, initials } from '../ui.js';
@@ -1854,10 +1854,12 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             } catch (e) { roundOn = true; }
             const shownOf = (r) => labShownValue({ value: r.value, raw_value: r.rawValue, source: r.source }, roundOn);
             // LAB_MATRIX_PANEL_V1 — панель-таблица печатается таблицей посева.
-            const matrices = new Map();
+            // TG_LAB_MATRIX_V1 — услуга → её активная панель; таблицу из неё собирает
+            // общая часть группы (shared/lab-matrix.js matrixGroupPart), как у бота.
+            const panelsBySvc = new Map();
             try {
                 const { data } = await supabase.from('lab_panels').select('service_id, kind, matrix_json').eq('active', true).limit(5000);
-                for (const pp of data || []) { const m = panelMatrix(pp); if (m && pp.service_id != null) matrices.set(pp.service_id, m); }
+                for (const pp of data || []) { if (pp && pp.service_id != null) panelsBySvc.set(pp.service_id, pp); }
             } catch (e) { /* бланк — списком */ }
             const groups = [...byPanel.values()].map(({ panel, list }) => {
                 const vsId = list.length ? list[0].vsId : null;
@@ -1867,7 +1869,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 // LAB_SHEET_HEAD_V1 — «· № LAB-…» как на бланке лаборатории:
                 // номер образца стоит у своей таблицы, где бы бланк ни печатали.
                 title: (panel || 'Анализ') + (vsId != null ? ' · № ' + labAccession(vsId) : ''),
-                ...(matrices.has(svcByVs.get(vsId)) ? { matrix: matrixGrid(matrices.get(svcByVs.get(vsId)), list.map((r) => ({ parameter: r.name, value: r.value }))) } : {}),   // LAB_MATRIX_PANEL_V1
+                ...matrixGroupPart(panelsBySvc.get(svcByVs.get(vsId)), list.map((r) => ({ parameter: r.name, value: r.value }))),   // LAB_MATRIX_PANEL_V1 · TG_LAB_MATRIX_V1
                 tests: list.map((r, ri) => {
                     const analyte = byOrder[ri] || resolveAnalyte(idx, r.name, null);
                     const named = namedRangeCell(analyte, gender, age);

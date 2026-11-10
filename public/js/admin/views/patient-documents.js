@@ -44,7 +44,7 @@ import { labShownValue, labRoundOn } from '../../shared/lab-round.js';   // LAB_
 import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1
 import { labDocBatches } from '../../shared/lab-doc-batches.js';   // LAB_DOC_SPLIT_V1
 import { openLabPrintPick } from './lab-print-pick.js';   // LAB_PRINT_PICK_V1
-import { panelMatrix, matrixGrid } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1
+import { matrixGroupPart } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 · TG_LAB_MATRIX_V1 — общая часть группы
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_PANEL_DEDUP_V1 — одно правило «лабораторная услуга» с очередью лаборатории
 
 const refs = { container: null, onNavigate: null, bodyEl: null, docsWrap: null };
@@ -709,19 +709,21 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ 
 // шаблон, который клиника выбрала в «Настройки → Документы».
 // LAB_MATRIX_PANEL_V1 — устройство панелей-таблиц: услуга → таблица (бланк печатает
 // таблицу посева). Не прочиталось — бланк печатает список, как прежде.
+// TG_LAB_MATRIX_V1 — услуга → её активная панель; таблицу собирает общая часть
+// группы (shared/lab-matrix.js matrixGroupPart), как у карты и бота.
 async function matrixPanelsByService() {
     const out = new Map();
     try {
         const { data } = await supabase.from('lab_panels').select('service_id, kind, matrix_json').eq('active', true).limit(5000);
         for (const p of data || []) {
-            const m = panelMatrix(p);
-            if (m && p.service_id != null) out.set(p.service_id, m);
+            if (p && p.service_id != null) out.set(p.service_id, p);
         }
     } catch (e) { /* бланк — списком */ }
     return out;
 }
 
-async function printLabReport(visit, results, brand, patient) {
+// TG_LAB_MATRIX_V1 — экспорт для теста бланка (lab-doc-split.test.mjs): посев таблицей.
+export async function printLabReport(visit, results, brand, patient) {
     // LAB_SHEET_HEAD_V1 + LAB_PANEL_IS_TRUTH_V1 — тот же чертёж, что у
     // лаборатории, карты пациента и бота. Раньше этот раздел собирал шапку
     // по-своему: «Выдан» получал СЕГОДНЯШНЮЮ дату (перепечатка назавтра меняла
@@ -747,7 +749,7 @@ async function printLabReport(visit, results, brand, patient) {
         return {
             title: (list[0].panelName || 'Анализ') + (vsId != null ? ' · № ' + labAccession(vsId) : ''),
             // LAB_MATRIX_PANEL_V1 — панель-таблица печатается таблицей посева.
-            ...(matrices.has(list[0].serviceId) ? { matrix: matrixGrid(matrices.get(list[0].serviceId), list.map((r) => ({ parameter: r.testName, value: r.value }))) } : {}),
+            ...matrixGroupPart(matrices.get(list[0].serviceId), list.map((r) => ({ parameter: r.testName, value: r.value }))),   // TG_LAB_MATRIX_V1
             tests: list.map((r, ri) => {
                 const analyte = byPos[ri]
                     || resolveAnalyte(idx, r.testName, null)

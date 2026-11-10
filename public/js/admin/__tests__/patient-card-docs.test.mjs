@@ -465,7 +465,7 @@ test('ревью M-1: результаты анализа без флага «л
 // записано: строки до 3.22 — полными (7.2549), хотя лаборатория и раздел
 // «Документы» показывают 7.25; при выключенной настройке строки, записанные при
 // включённой, — округлёнными. Теперь — то же правило (shared/lab-round.js labShownValue).
-async function printCardLab(lab_results, round) {
+async function printCardLab(lab_results, round, lab_panels = []) {   // TG_LAB_MATRIX_V1 — lab_panels: панели услуг
   const lines = [labLine(101, 'ОАК', 'completed', T1)];
   calls = []; opened = [];
   payload = { ...payloadWith([]), services: lines, lab_orders: lines, lab_results };
@@ -478,7 +478,7 @@ async function printCardLab(lab_results, round) {
   globalThis.fetch = async (url, opts) => {
     if (!String(url).startsWith('/api/db')) return prevFetch(url, opts);
     const b = JSON.parse(opts.body);
-    return { ok: true, status: 200, json: async () => ({ data: b.table === 'doc_settings' ? { lab_round_analyzer: round } : [] }) };
+    return { ok: true, status: 200, json: async () => ({ data: b.table === 'doc_settings' ? { lab_round_analyzer: round } : b.table === 'lab_panels' ? lab_panels : [] }) };
   };
   try {
     const box = mk('div');
@@ -507,4 +507,19 @@ test('ревью L-3: бланк из карты — значение прибо
   assert.ok(on.includes('12.345'), 'ручной ввод — как набран');
   const off = await printCardLab([anRes(1, 'Лейкоциты', '7.25', '7.2549')], 0);
   assert.ok(off.includes('7.2549'), 'выключено — полное значение прибора');
+});
+
+// TG_LAB_MATRIX_V1 (3.23.0) — бланк из карты печатает посев таблицей через общую
+// часть группы (shared/lab-matrix.js matrixGroupPart) — тот же вывод, что до неё.
+test('TG_LAB_MATRIX_V1: бланк из карты — панель-таблица печатается таблицей посева, обычная — списком', async () => {
+  const matrix = { scale: ['−', '+', '++'], sections: [{ title: 'Посев', columns: ['Рост', 'Нет роста'], rows: ['E. coli', 'S. aureus'] }] };
+  const panels = [{ service_id: 101, kind: 'matrix', matrix_json: JSON.stringify(matrix) }];
+  const cells = [labRes(1, 101, 'E. coli · Рост', '++'), labRes(2, 101, 'S. aureus · Нет роста', '+')];
+  const html = await printCardLab(cells, 1, panels);
+  assert.match(html, /<table class="res mx">/, 'посев напечатан не таблицей');
+  assert.match(html, /<td class="pname">E\. coli<\/td><td class="c mx-v">\+\+<\/td><td class="c mx-v"><\/td>/);
+  assert.match(html, /<td class="pname">S\. aureus<\/td><td class="c mx-v"><\/td><td class="c mx-v">\+<\/td>/);
+  assert.ok(!html.includes('E. coli · Рост'), 'строки списка «строка · графа» на бланке');
+  const plain = await printCardLab(cells, 1, [{ service_id: 101, kind: '', matrix_json: null }]);
+  assert.ok(!plain.includes('class="res mx"') && plain.includes('E. coli · Рост'), 'обычная панель — не списком');
 });
