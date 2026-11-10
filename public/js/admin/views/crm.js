@@ -227,9 +227,10 @@ function ymdLocal(d) {
 // services/crm/contact-window.js liveKeys = открытые + 'no_show'). На доске
 // она как открытая: видна всегда, без периода и без 300 на колонку, число
 // полное — и в «Списке», и в Excel (всё это идёт отсюда).
-const SEED_NO_SHOW_STAGE = 'no_show';   // тот же ключ, что SEED_NO_SHOW_STAGE сервера
+// CRM_STAGE_ROLES_V1 (3.23.0) — «Не пришёл» — колонка с ролью «не пришёл» (STAGE_KEYS.noShow,
+// тот же ключ, что noShowStageKey сервера), а не ключ 'no_show'. Роли нет — все проигрышные закрытые.
 function closedKeys() {
-    return [STAGE_KEYS.won, ...STAGE_KEYS.lost].filter((k) => k && k !== SEED_NO_SHOW_STAGE);
+    return [STAGE_KEYS.won, ...STAGE_KEYS.lost].filter((k) => k && k !== STAGE_KEYS.noShow);
 }
 function inPeriod(r) {
     // CRM_UNIFY_V1 (итоговое ревью) — «Период» НИКОГДА не прячет открытые

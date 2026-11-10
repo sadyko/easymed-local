@@ -14,6 +14,7 @@ import {
     validateStages, validateSources, validateRouting,
     dispositionRu, ROUTING_ACTIONS,
     shapeConfig, boardConfig, isNotImplemented,
+    ROLE_BADGES, roleOptionsFor,   // CRM_STAGE_ROLES_V1
 } from './crm-settings-logic.js';
 
 // --- colour vocabulary -------------------------------------------------------
@@ -383,6 +384,64 @@ test('CRM_UNIFY_V1: settings в ответе; bookedStatus — выбор, ин�
     assert.equal(boardConfig({ stages }).bookedStatus, 'approved', 'без «Записан» — последняя открытая видимая до «Пришёл»');
     assert.equal(boardConfig({ stages, settings: { booked_stage: 'came' } }).bookedStatus, 'approved', 'недопустимый выбор не действует');
     assert.equal(boardConfig(null).bookedStatus, 'scheduled', 'запасная воронка — «Записан»');
+});
+
+// CRM_STAGE_ROLES_V1 (3.23.0) — роли колонок: «запись», «подтверждение», «не пришёл».
+const ROLED = [
+    { key: 'in_process', label: 'Новый', kind: 'open', position: 1, is_active: 1, color: '', role: null },
+    { key: 'scheduled', label: 'Записан', kind: 'open', position: 2, is_active: 1, color: '', role: 'booked' },
+    { key: 'approved', label: 'Подтверждён', kind: 'open', position: 3, is_active: 1, color: '', role: 'confirmed' },
+    { key: 'came', label: 'Пришёл', kind: 'won', position: 4, is_active: 1, color: 'ok', role: null },
+    { key: 'no_show', label: 'Не пришёл', kind: 'lost', position: 5, is_active: 1, color: 'crit', role: 'no_show' },
+    { key: 'stopped', label: 'Отказ', kind: 'lost', position: 6, is_active: 1, color: '', role: null },
+];
+const setRole = (list, key, role) => list.map((s) => (s.key === key ? { ...s, role } : (s.role === role ? { ...s, role: null } : s)));
+
+test('CRM_STAGE_ROLES_V1: роль едет в shapeConfig; неизвестная — без роли; запасная воронка — с ролями миграции 284', () => {
+    const cfg = shapeConfig({ stages: [...ROLED, { key: 'x', label: 'X', kind: 'open', position: 7, role: 'boss' }] });
+    assert.deepEqual(cfg.stages.map((s) => s.role), [null, 'booked', 'confirmed', null, 'no_show', null, null]);
+    assert.equal(cfg.hasRoles, true);
+    assert.equal(shapeConfig({ stages: ROLED.map(({ role, ...s }) => s) }).hasRoles, false, 'сервер старше экрана — ролей нет');
+    const fb = shapeConfig(null);
+    assert.equal(fb.hasRoles, true);
+    assert.deepEqual(fb.stages.filter((s) => s.role).map((s) => [s.key, s.role]),
+        [['scheduled', 'booked'], ['approved', 'confirmed'], ['no_show', 'no_show']]);
+});
+
+test('CRM_STAGE_ROLES_V1: bookedStatus доски — колонка с ролью «запись»; без роли — null; сервер без ролей — прежняя догадка', () => {
+    assert.equal(boardConfig({ stages: ROLED }).bookedStatus, 'scheduled');
+    assert.equal(boardConfig({ stages: setRole(ROLED, 'in_process', 'booked') }).bookedStatus, 'in_process');
+    assert.equal(boardConfig({ stages: ROLED.map((s) => ({ ...s, role: s.role === 'booked' ? null : s.role })) }).bookedStatus, null);
+    assert.equal(boardConfig({ stages: ROLED.map(({ role, ...s }) => s), settings: { booked_stage: 'in_process' } }).bookedStatus, 'in_process');
+});
+
+test('CRM_STAGE_ROLES_V1: validateStages — те же отказы ролей, что у сервера', () => {
+    const t = (s) => s;
+    assert.deepEqual(validateStages(ROLED, t, ROLED), { ok: true });
+    const bad = (stages, re) => {
+        const v = validateStages(stages, t, ROLED);
+        assert.equal(v.ok, false, JSON.stringify(stages.map((s) => [s.key, s.role, s.is_active])));
+        assert.match(v.error, re);
+    };
+    bad(setRole(ROLED, 'came', 'booked'), /^Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией\.$/);
+    bad(setRole(ROLED, 'in_process', 'confirmed'), /^Колонка подтверждения должна быть/);
+    bad(setRole(ROLED, 'stopped', 'booked'), /^Колонка записи/);
+    bad(setRole(ROLED, 'in_process', 'no_show'), /^Колонкой «Не пришёл» может быть только видимая проигрышная колонка\.$/);
+    bad(ROLED.map((s) => (s.key === 'scheduled' ? { ...s, is_active: 0 } : s)), /^Колонка «Записан» — колонка записи: сначала передайте роль другой колонке\.$/);
+    bad(ROLED.filter((s) => s.key !== 'approved'), /^Колонка «Подтверждён» — колонка подтверждения: сначала передайте роль другой колонке\.$/);
+    bad(ROLED.map((s) => (s.key === 'no_show' ? { ...s, is_active: 0 } : s)), /^Колонка «Не пришёл» — колонка «Не пришёл»: сначала передайте роль другой колонке\.$/);
+    // Роль снята — скрыть можно; передана — удалить можно.
+    assert.deepEqual(validateStages(ROLED.map((s) => (s.key === 'no_show' ? { ...s, role: null, is_active: 0 } : s)), t, ROLED), { ok: true });
+    assert.deepEqual(validateStages(setRole(ROLED, 'in_process', 'booked').filter((s) => s.key !== 'scheduled')
+        .map((s) => (s.key === 'approved' ? { ...s, role: null } : s)), t, ROLED), { ok: true });
+});
+
+test('CRM_STAGE_ROLES_V1: отметки ролей — какие роли предлагает строка; бейджи «запись», «подтверждение», «не пришёл»', () => {
+    assert.deepEqual(roleOptionsFor({ kind: 'open' }), ['booked', 'confirmed']);
+    assert.deepEqual(roleOptionsFor({ kind: 'lost' }), ['no_show']);
+    assert.deepEqual(roleOptionsFor({ kind: 'won' }), []);
+    assert.deepEqual(Object.fromEntries(Object.entries(ROLE_BADGES).map(([k, v]) => [k, v.label])),
+        { booked: 'запись', confirmed: 'подтверждение', no_show: 'не пришёл' });
 });
 
 // CLINIC_API_STEP7_V1 — источник подключения API доезжает до экрана с пометкой.

@@ -3,8 +3,10 @@
 //
 // Two jobs on one screen, in the order the owner described them:
 //   1. «Колонки канбана» — the funnel itself: name, colour, order, visible.
-//      1б. «Запись и повторные обращения» (CRM_UNIFY_V1) — the booking column
-//      and the conversion column, chosen explicitly.
+//      CRM_STAGE_ROLES_V1 — and the ROLE ticks: «запись», «подтверждение»,
+//      «не пришёл» (crm_stages.role, migration 284), badged like «конверсия».
+//      1б. «Запись и повторные обращения» (CRM_UNIFY_V1) — the conversion
+//      column and the repeat-contact window.
 //   2. «Источники» — where a lead came from.
 //
 // TELEPHONY_ROUTING_V1 (docs/plans/2026-08-24-telephony-owns-its-routing.md)
@@ -52,10 +54,11 @@ import {
     deriveKey, moveItem, withPositions,
     validateStages, validateSources, validateTags,
     shapeConfig, isNotImplemented,
+    ROLE_BADGES, roleOptionsFor,   // CRM_STAGE_ROLES_V1
 } from '../crm-settings-logic.js';
-// CRM_UNIFY_V1 — «Колонка записи» и «Колонка конверсии»: то же правило, что
-// проверяет сервер (services/crm/config.js saveCrmSettings).
-import { bookedStageCandidates, bookedStageKey, conversionCandidates, withConversion } from '../../shared/crm-booked-stage.js';
+// CRM_UNIFY_V1 — «Колонка конверсии»: то же правило, что проверяет сервер
+// (services/crm/config.js saveCrmSettings). CRM_STAGE_ROLES_V1 — роли колонок (withRole).
+import { conversionCandidates, withRole } from '../../shared/crm-booked-stage.js';
 
 // The signature of a section as the SERVER last gave it. Dirtiness is then a
 // comparison, not a flag every edit path has to remember to set — and the
@@ -64,7 +67,7 @@ import { bookedStageCandidates, bookedStageKey, conversionCandidates, withConver
 function sig(rows, keys) {
     return JSON.stringify((rows || []).map((r) => keys.map((k) => r[k])));
 }
-const STAGE_SIG_KEYS = ['key', 'label', 'color', 'kind', 'is_active'];
+const STAGE_SIG_KEYS = ['key', 'label', 'color', 'kind', 'is_active', 'role'];   // CRM_STAGE_ROLES_V1 — и роль
 
 // Take a config from the server AND record what it looked like. One function,
 // because there are two paths here (first load, and the reload after a save)
@@ -75,6 +78,9 @@ const STAGE_SIG_KEYS = ['key', 'label', 'color', 'kind', 'is_active'];
 function adoptConfig(raw) {
     state.cfg = shapeConfig(raw);
     state.baseStages = sig(state.cfg.stages, STAGE_SIG_KEYS);
+    // CRM_STAGE_ROLES_V1 — воронка, как её последним отдал сервер: проверка ролей сравнивает с
+    // ней (колонку с ролью не скрыть и не удалить, не передав роль).
+    state.baseStageRows = state.cfg.stages.map((s) => ({ ...s }));
     // CLINIC_API_STEP7_V1 — свои источники подключений API — отдельным закрытым
     // списком: экран их не правит и не присылает (сервер их не удаляет).
     state.apiSources = state.cfg.sources.filter((s) => s.api && s.api.owned);
@@ -247,12 +253,33 @@ function removeButton(label, onRemove) {
 // nothing up between rows and re-shuffled itself at every window width. Cells
 // are always emitted, even when empty, or the columns stop aligning the moment
 // one row lacks a delete button.
-const rowBox = ({ move, name, colors, visible, actions }) => h('div', { class: 'crm-set-row' },
+// CRM_STAGE_ROLES_V1 — у колонок ещё и ячейка ролей (roles); у источников и меток её нет.
+const rowBox = ({ move, name, colors, roles, visible, actions }) => h('div', { class: 'crm-set-row' + (roles !== undefined ? ' crm-set-row-roles' : '') },
     h('div', { class: 'crm-set-move' }, move || null),
     h('div', { class: 'crm-set-name' }, name || null),
     h('div', { class: 'crm-set-colors' }, colors || null),
+    roles !== undefined ? h('div', { class: 'crm-set-roles' }, roles || null) : null,
     h('div', { class: 'crm-set-visible' }, visible || null),
     h('div', { class: 'crm-set-actions' }, actions || null));
+
+// CRM_STAGE_ROLES_V1 — ОТМЕТКИ РОЛЕЙ. Владелец: «we need to add a booking tick (like
+// conversion) so the system won't break». Галочка у строки: открытой колонке — «запись» и
+// «подтверждение», проигрышной — «не пришёл». Отмеченная роль рисуется значком, как
+// «конверсия» (Tag того же вида); роль одна на воронку — галочка у другой колонки снимает её
+// с прежней (withRole). Уходит на сервер вместе с колонками («Сохранить колонки»).
+const ROLE_ARIA = { booked: 'Колонка записи', confirmed: 'Колонка подтверждения', no_show: 'Колонка «Не пришёл»' };
+function roleTicks(row, onPick) {
+    const opts = roleOptionsFor(row);
+    if (!opts.length) return null;
+    return h('div', { class: 'crm-set-role-list' }, ...opts.map((role) => {
+        const on = row.role === role;
+        const cb = h('input', { type: 'checkbox', checked: on, 'aria-label': ROLE_ARIA[role], 'data-crm-role': role, 'data-crm-role-of': row.key });
+        cb.addEventListener('change', () => onPick(role, !!cb.checked));
+        const badge = ROLE_BADGES[role];
+        return h('label', { class: 'crm-set-role' + (on ? ' on' : '') }, cb,
+            on ? Tag(badge.label, { kind: badge.kind }) : h('span', { class: 'crm-set-role-off' }, badge.label));
+    }));
+}
 
 // ---------------------------------------------------------------------------
 // 1. Колонки канбана
@@ -278,22 +305,33 @@ function paintStages() {
     const listBox = h('div', { class: 'crm-set-list' });
     let hasWon = false;
     let hasUndeletable = false;
+    // CRM_STAGE_ROLES_V1 — ролей нет только у ответа сервера старше экрана: тогда и галочек нет.
+    const withRoles = state.cfg.hasRoles !== false;
+    let hasRole = false;
 
     list.forEach((row, i) => {
         const isWon = row.kind === 'won';
-        const protectedRow = isWon || UNDELETABLE_STAGE_KEYS.includes(row.key);
+        // CRM_STAGE_ROLES_V1 — колонку с ролью нельзя ни удалить, ни скрыть, пока роль не
+        // передана другой (сервер: «сначала передайте роль другой колонке»). Скрытую с ролью
+        // (так её могла оставить миграция 284) показать можно.
+        const roleHeld = withRoles && !!row.role;
+        if (roleHeld) hasRole = true;
+        const protectedRow = isWon || UNDELETABLE_STAGE_KEYS.includes(row.key) || roleHeld;
         if (isWon) hasWon = true;
         if (!isWon && UNDELETABLE_STAGE_KEYS.includes(row.key)) hasUndeletable = true;
+        const roleLocked = roleHeld && !!row.is_active;
         listBox.appendChild(rowBox({
             move: moveButtons(list, i, onChange),
             name: [labelInput(row), keyChip(row.key)],
             colors: colorPicker(row),
+            roles: withRoles ? roleTicks(row, (role, on) => onChange(withRole(list, row.key, role, on))) : undefined,
             // The conversion column is a BEHAVIOUR, not a label: it is the only
             // status that opens the patient-registration popup. Badge it, and
             // take away the two controls that could break that path.
             visible: [
                 isWon ? Tag('конверсия', { kind: 'ok' }) : null,
-                activeToggle(row, { locked: isWon, lockedTitle: 'Колонку конверсии нельзя скрыть' }),
+                activeToggle(row, isWon ? { locked: true, lockedTitle: 'Колонку конверсии нельзя скрыть' }
+                    : roleLocked ? { locked: true, lockedTitle: 'Сначала передайте роль другой колонке' } : undefined),
             ],
             actions: protectedRow
                 ? null
@@ -301,6 +339,12 @@ function paintStages() {
         }));
     });
     box.appendChild(listBox);
+    // CRM_STAGE_ROLES_V1 — что значит каждая галочка, коротко, под списком.
+    if (withRoles) {
+        box.appendChild(hint('«Запись» — сюда переходит карточка, когда пациента записали на приём. «Подтверждение» — сюда её переводит отметка «Подтверждён» в календаре. «Не пришёл» — сюда её уводит неявка; без этой галочки неявку не отмечает никто.',
+            { marginTop: '10px' }));
+        if (hasRole) box.appendChild(hint('Колонку с ролью нельзя скрыть или удалить — сначала отметьте роль у другой колонки.', { marginTop: '4px' }));
+    }
     // The SAME sentences that used to sit between the rows, now collected
     // under the list: a row explains itself by having no delete button, and
     // the reason belongs where it can be read once instead of three times.
@@ -330,8 +374,10 @@ function paintStages() {
     }, () => list.map((s) => s.key)));
 
     box.appendChild(saveRow('Сохранить колонки', async () => {
-        const stages = withPositions(state.cfg.stages).map((s) => ({ ...s, label: String(s.label || '').trim() }));
-        const v = validateStages(stages, tr);
+        // CRM_STAGE_ROLES_V1 — роли уходят с колонками; сервер без ролей их не получает.
+        const stages = withPositions(state.cfg.stages).map(({ role, ...s }) => ({
+            ...s, label: String(s.label || '').trim(), ...(state.cfg.hasRoles !== false ? { role: role || null } : {}) }));
+        const v = validateStages(stages, tr, state.cfg.hasRoles !== false ? state.baseStageRows : null);
         if (!v.ok) { toast(v.error, 'warn'); return; }
         const fresh = await rpc('crm_config_save', { stages });
         toast('Колонки сохранены.', 'success');
@@ -371,18 +417,19 @@ function colorPicker(row) {
 // ---------------------------------------------------------------------------
 // 1б. Запись и повторные обращения — CRM_UNIFY_V1 (2026-10-09)
 // ---------------------------------------------------------------------------
-// Два выбора рядом (дополнение владельца):
-//   «Колонка подтверждения (запись)» — куда переходит карточка, когда пациента
-//     записали (crm_settings.booked_stage; пусто — правило по умолчанию);
+// CRM_STAGE_ROLES_V1 (3.23.0) — здесь был выбор «Колонка подтверждения (запись)»:
+// подписан неверно (это колонка ЗАПИСИ) и хранился в crm_settings.booked_stage. Теперь
+// колонки записи, подтверждения и «Не пришёл» — галочки в «Колонки канбана»; здесь —
+// «Колонка конверсии (пришёл)» и окно повторного обращения.
 //   «Колонка конверсии (пришёл)» — какая колонка вида won. Сервер переносит вид
 //     одной транзакцией; новая колонка обязана быть пустой, карточки прежней
 //     конверсии переезжают в неё (ревью задачи 4). Число карточек в колонке
 //     экран не знает — занятую колонку отказывает сервер, фраза с числом
 //     показывается при сохранении.
 // Варианты считает то же правило, что проверяет сервер
-// (public/js/shared/crm-booked-stage.js): браузер предлагает только допустимые.
-// Колонка записи считается от ВЫБРАННОЙ конверсии: смена конверсии пересобирает
-// её список, и ставший недопустимым выбор сбрасывается на правило по умолчанию.
+// (public/js/shared/crm-booked-stage.js): браузер предлагает только допустимые —
+// CRM_STAGE_ROLES_V1 — и не колонку записи или подтверждения: роли с конверсией не
+// переезжают, их сначала передают другой колонке.
 // Воронка — снимок того, что последним отдал сервер: несохранённые правки
 // карточки колонок сюда не попадают (их сервер ещё не знает).
 // CRM_UNIFY_V1 (задача 6) — «Окно повторного обращения, часов»
@@ -405,34 +452,10 @@ function bookingCard() {
         ...wonKeys.map((k) => h('option', { value: k }, label(k))));
     wonSel.value = savedWon;
 
-    // Выбор держится в переменной, а не в select.value: браузер обнуляет value,
-    // когда список пересобирается, и выбор потерялся бы на каждой смене конверсии.
-    // CRM_UNIFY_V1 (итоговое ревью, S3) — ВЫБОР ЧЕЛОВЕКА ПОМНИТСЯ. bookedPick —
-    // что выбрал человек; bookedWant — что действует при нынешней конверсии
-    // (выбор, если он допустим, иначе «по умолчанию»). Раньше недопустимый на миг
-    // выбор затирался насовсем: конверсию сменили и вернули — колонка записи уже
-    // «по умолчанию», и сохранение молча её сбрасывало.
-    let bookedPick = state.cfg.settings.booked_stage || '';
-    let bookedWant = bookedPick;
-    const bookedSel = h('select', { 'aria-label': 'Колонка подтверждения (запись)', 'data-crm-booked-stage': '' });
-    const bookedHint = h('div', { class: 'hint' });
-    const fillBooked = () => {
-        const next = withConversion(stages, wonSel.value);
-        const cand = bookedStageCandidates(next);
-        const def = bookedStageKey(next, null);
-        clear(bookedSel);
-        bookedSel.appendChild(h('option', { value: '' }, trf('По умолчанию — «{label}»', { label: def ? tr(label(def)) : '—' })));
-        for (const k of cand) bookedSel.appendChild(h('option', { value: k }, label(k)));
-        bookedWant = cand.includes(bookedPick) ? bookedPick : '';   // CRM_UNIFY_V1 — выбор не затирается
-        bookedSel.value = bookedWant;
-        bookedHint.textContent = trf('Сюда переходит карточка, когда пациента записали на приём. Только открытая видимая колонка до «{won}».',
-            { won: tr(label(wonSel.value)) });
-    };
-    fillBooked();
     // CRM_UNIFY_V1 (задача 6) — окно повторного обращения.
     const hours = h('input', { type: 'number', min: '1', max: '720', step: '1', inputmode: 'numeric',
         value: String(state.cfg.settings.window_hours), 'aria-label': 'Окно повторного обращения, часов', 'data-crm-window-hours': '' });
-    const base = { booked: bookedWant, won: wonSel.value, hours: String(state.cfg.settings.window_hours) };   // CRM_UNIFY_V1 — hours
+    const base = { won: wonSel.value, hours: String(state.cfg.settings.window_hours) };   // CRM_UNIFY_V1 — hours
 
     const saveBox = h('div');
     const repaintSave = () => {
@@ -445,22 +468,17 @@ function bookingCard() {
                 toast('Окно повторного обращения — целое число часов от 1 до 720.', 'warn');
                 return;
             }
-            // CRM_UNIFY_V1 (итоговое ревью, S3) — колонку записи шлём, только если
-            // она действительно сменилась: человек выбрал другую или «по
-            // умолчанию», либо прежняя стала недопустимой при новой конверсии.
-            // Иначе сохранение одного окна не трогает её вовсе.
+            // CRM_STAGE_ROLES_V1 — колонка записи отсюда больше не уходит: это галочка колонки.
             const settings = { window_hours: windowHours };
-            if (bookedWant !== base.booked) settings.booked_stage = bookedWant || null;
             // Конверсию шлём, только если её сменили: перенос вида — отдельное
             // решение, и сохранение одной колонки записи его не повторяет.
             if (wonSel.value && wonSel.value !== savedWon) settings.won_stage = wonSel.value;
             const fresh = await rpc('crm_config_save', { settings });
             toast('Настройки сохранены.', 'success');
             await reload(fresh);
-        }, bookedWant !== base.booked || wonSel.value !== base.won || String(hours.value ?? '').trim() !== base.hours));   // CRM_UNIFY_V1 — и окно
+        }, wonSel.value !== base.won || String(hours.value ?? '').trim() !== base.hours));   // CRM_UNIFY_V1 — и окно
     };
-    bookedSel.addEventListener('change', () => { bookedPick = bookedSel.value || ''; bookedWant = bookedPick; repaintSave(); });   // CRM_UNIFY_V1 — помнить выбор
-    wonSel.addEventListener('change', () => { fillBooked(); repaintSave(); });
+    wonSel.addEventListener('change', () => { repaintSave(); });
     hours.addEventListener('input', repaintSave);   // CRM_UNIFY_V1 — правка окна видна сразу
     repaintSave();
 
@@ -468,11 +486,12 @@ function bookingCard() {
     return cardShell('Calendar', 'Запись и повторные обращения',
         h('div', { style: { padding: '18px' } },
             h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' } },
-                withHint(field('Колонка подтверждения (запись)', bookedSel), bookedHint),
                 withHint(field('Колонка конверсии (пришёл)', wonSel),
                     h('div', { class: 'hint' }, 'Сюда переходит карточка, когда пациент пришёл. Выбрать можно только пустую колонку — карточки прежней конверсии переедут в неё.')),
                 withHint(field('Окно повторного обращения, часов', hours),   // CRM_UNIFY_V1 (задача 6)
                     h('div', { class: 'hint' }, 'Звонок или запись в пределах окна — та же карточка. Позже открытая карточка возвращается в начало воронки, закрытая — заводится новая.'))),
+            // CRM_STAGE_ROLES_V1 — куда делась «Колонка записи».
+            hint('Колонки записи, подтверждения и «Не пришёл» отмечаются галочками в «Колонки канбана».', { marginTop: '12px' }),
             saveBox));
 }
 

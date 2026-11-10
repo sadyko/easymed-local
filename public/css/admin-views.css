@@ -5293,6 +5293,13 @@ body.has-act-as-banner .main { min-height: calc(100vh - var(--act-as-h, 0px) - v
 .crm-set-colors { display: flex; gap: 4px; }
 .crm-set-actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; min-width: 34px; }
 .crm-set-note { font-size: 12.5px; line-height: 1.6; }
+/* CRM_STAGE_ROLES_V1 — колонки: ещё ячейка ролей («запись», «подтверждение», «не пришёл»)
+   между цветом и «Видна». Отмеченная роль — значок (как «конверсия»), неотмеченная — серая. */
+.crm-set-row.crm-set-row-roles { grid-template-columns: auto minmax(160px, 1fr) auto minmax(0, auto) auto auto; }
+.crm-set-roles { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.crm-set-role-list { display: flex; gap: 10px; flex-wrap: wrap; }
+.crm-set-role { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; font-size: 12.5px; white-space: nowrap; }
+.crm-set-role-off { color: var(--ink-500); }
 
 /* THE bug behind "the fields and dropdowns are not fixed": admin.html has no
    base styling for <input>/<select> at all (local.css's input rule belongs to
@@ -5335,8 +5342,8 @@ body.has-act-as-banner .main { min-height: calc(100vh - var(--act-as-h, 0px) - v
 /* Below ~720px the five columns cannot hold their shape: the row becomes two
    lines — reorder + name, then the controls — instead of wrapping mid-row. */
 @media (max-width: 720px) {
-    .crm-set-row { grid-template-columns: auto 1fr; row-gap: 8px; }
-    .crm-set-colors, .crm-set-visible, .crm-set-actions { grid-column: 2; justify-content: flex-start; }
+    .crm-set-row, .crm-set-row.crm-set-row-roles { grid-template-columns: auto 1fr; row-gap: 8px; }
+    .crm-set-colors, .crm-set-roles, .crm-set-visible, .crm-set-actions { grid-column: 2; justify-content: flex-start; }
 }
 
 /* ---------------------------------------------------------------------------
