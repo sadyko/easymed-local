@@ -18,7 +18,8 @@ import { phoneKey, phoneLikePattern, digitsOf, MIN_PHONE_DIGITS }
   from '../../../public/js/admin/views/crm-phone-match.js';
 // CRM_UNIFY_V1 — окно повторного обращения (решение владельца 4): одно правило
 // со входящим звонком и записью колл-центра.
-import { contactDecision, reopenLead } from './contact-window.js';
+import { contactDecision, reopenLead, firstStageKey } from './contact-window.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — firstStageKey
+import { noShowStageKey } from './config.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1)
 
 // The source key every call-born lead carries. config.js refuses to delete it
 // for exactly this reason.
@@ -126,6 +127,10 @@ export function leadFromCall(db, call) {
   // be reached — but a lead dropped into a column nobody can see would look
   // exactly like a lost lead, and that is not a failure worth risking.
   if (!stage || !stage.is_active) return null;
+  // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — звонок не рождает неявку: правило в колонку «Не пришёл»
+  // (ручная правка или проигрышная «Не пришёл») — карточка встаёт в начало воронки (firstStageKey).
+  const target = stage.key === noShowStageKey(db) ? firstStageKey(db) : stage.key;
+  if (!target) return null;
 
   const phone = String(call.external_number ?? '').trim();
   // No number = nothing to call back and nothing to de-duplicate on. An
@@ -172,7 +177,7 @@ export function leadFromCall(db, call) {
     full_name: fullName,
     phone,
     source: TELEPHONY_SOURCE,
-    status: stage.key,
+    status: target,   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1)
     patient_id: call.patient_id || null,
     // The link the card reads to say «звонок в 14:32»; created_by stays NULL
     // because no person created this one, and pretending otherwise would put

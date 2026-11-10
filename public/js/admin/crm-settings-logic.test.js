@@ -426,10 +426,19 @@ test('CRM_STAGE_ROLES_V1: validateStages — те же отказы ролей, 
     bad(setRole(ROLED, 'came', 'booked'), /^Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией\.$/);
     bad(setRole(ROLED, 'in_process', 'confirmed'), /^Колонка подтверждения должна быть/);
     bad(setRole(ROLED, 'stopped', 'booked'), /^Колонка записи/);
-    // CRM_NO_SHOW_ANY_COLUMN_V1 — ПЕРЕПИСАНО НАМЕРЕННО: открытая колонка — можно; скрытая — нельзя.
-    assert.deepEqual(validateStages(setRole(ROLED, 'in_process', 'no_show'), t, ROLED), { ok: true }, '«не пришёл» на открытой колонке отвергнут');
+    // CRM_NO_SHOW_ANY_COLUMN_V1 — ПЕРЕПИСАНО НАМЕРЕННО (ревью F1): открытая колонка — только после колонки
+    // записи, не начальная и не колонка звонков; скрытая — нельзя.
+    const withLater = [...ROLED, { key: 'later', label: 'Не дошли', kind: 'open', position: 3.5, is_active: 1, color: '', role: null }];
+    assert.deepEqual(validateStages(setRole(withLater, 'later', 'no_show'), t, withLater), { ok: true }, '«не пришёл» на открытой колонке после записи отвергнут');
+    bad(setRole(ROLED, 'in_process', 'no_show'), /^Начальная колонка \(в неё попадают новые заявки\) не может быть колонкой «Не пришёл»\.$/);
+    const v = validateStages(setRole(withLater, 'later', 'no_show'), t, withLater, { routed: ['later'] });
+    assert.equal(v.ok, false);
+    assert.match(v.error, /^В эту колонку звонки заводят новые заявки — колонкой «Не пришёл» она быть не может\./);
+    const early = [...ROLED, { key: 'early', label: 'Уточняем', kind: 'open', position: 1.5, is_active: 1, color: '', role: null }];
+    const ve = validateStages(setRole(early, 'early', 'no_show'), t, early);
+    assert.match(ve.error, /^Открытая колонка «Не пришёл» должна стоять после колонки записи и перед колонкой-конверсией\.$/);
     bad(setRole(ROLED, 'stopped', 'no_show').map((s) => (s.key === 'stopped' ? { ...s, is_active: 0 } : s)),
-        /^Колонкой «Не пришёл» может быть любая видимая колонка, кроме колонки-конверсии\.$/);
+        /^Колонкой «Не пришёл» может быть только видимая колонка, кроме колонки-конверсии\.$/);
     bad(ROLED.map((s) => (s.key === 'scheduled' ? { ...s, is_active: 0 } : s)), /^Колонка «Записан» — колонка записи: сначала передайте роль другой колонке\.$/);
     // Ревью: снять галочку и удалить колонку одной правкой можно (как снять и скрыть).
     assert.deepEqual(validateStages(ROLED.filter((s) => s.key !== 'approved'), t, ROLED), { ok: true });
@@ -441,8 +450,14 @@ test('CRM_STAGE_ROLES_V1: validateStages — те же отказы ролей, 
 });
 
 test('CRM_STAGE_ROLES_V1: отметки ролей — какие роли предлагает строка; бейджи «запись», «подтверждение», «не пришёл»', () => {
-    // CRM_NO_SHOW_ANY_COLUMN_V1 — «не пришёл» и у открытых колонок; у конверсии — ничего.
-    assert.deepEqual(roleOptionsFor({ kind: 'open' }), ['booked', 'confirmed', 'no_show']);
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — «не пришёл» у открытой колонки — только там, где его можно
+    // сохранить (после колонки записи, не начальная, без правила звонков); без воронки — не предлагается.
+    const withLater = [...ROLED, { key: 'later', label: 'Не дошли', kind: 'open', position: 3.5, is_active: 1, color: '', role: null }];
+    const opt = (key, routed = []) => roleOptionsFor(withLater.find((s) => s.key === key), { stages: withLater, routed });
+    assert.deepEqual(opt('later'), ['booked', 'confirmed', 'no_show']);
+    assert.deepEqual(opt('later', ['later']), ['booked', 'confirmed'], 'колонка звонков');
+    assert.deepEqual(opt('in_process'), ['booked', 'confirmed'], 'начальная');
+    assert.deepEqual(roleOptionsFor({ key: 'x', kind: 'open' }), ['booked', 'confirmed'], 'без воронки «не пришёл» не предлагается');
     assert.deepEqual(roleOptionsFor({ kind: 'lost' }), ['no_show']);
     assert.deepEqual(roleOptionsFor({ kind: 'won' }), []);
     assert.deepEqual(Object.fromEntries(Object.entries(ROLE_BADGES).map(([k, v]) => [k, v.label])),
@@ -453,9 +468,10 @@ test('CRM_STAGE_ROLES_V1: отметки ролей — какие роли пр
 // «Записан»: отчёт доски считает её потерей (как сервер, config.js lostStageKeys), среди
 // активных её нет.
 test('CRM_NO_SHOW_ANY_COLUMN_V1: boardConfig — колонка «Не пришёл» на открытой колонке среди потерянных, не среди активных', () => {
-    const b = boardConfig({ stages: setRole(ROLED, 'in_process', 'no_show') });
-    assert.deepEqual(b.activeStatuses, ['scheduled', 'approved']);
-    assert.deepEqual(b.lostStatuses, ['no_show', 'stopped', 'in_process']);
+    const withLater = [...ROLED, { key: 'later', label: 'Не дошли', kind: 'open', position: 3.5, is_active: 1, color: '', role: null }];
+    const b = boardConfig({ stages: setRole(withLater, 'later', 'no_show') });
+    assert.deepEqual(b.activeStatuses, ['in_process', 'scheduled', 'approved']);
+    assert.deepEqual(b.lostStatuses, ['no_show', 'stopped', 'later']);
     const seed = boardConfig({ stages: ROLED });
     assert.deepEqual(seed.activeStatuses, ['in_process', 'scheduled', 'approved']);
     assert.deepEqual(seed.lostStatuses, ['no_show', 'stopped']);

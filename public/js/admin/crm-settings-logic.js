@@ -40,6 +40,7 @@ import { isNotImplemented } from './telephony-logic.js';
 import { bookedStageKey } from '../shared/crm-booked-stage.js';
 // CRM_STAGE_ROLES_V1 — роли колонок: та же проверка, что у сервера (services/crm/config.js saveStages).
 import { STAGE_ROLES, roleKey, hasStageRoles, roleRefusal, roleLeaving } from '../shared/crm-booked-stage.js';
+import { noShowAllowed } from '../shared/crm-booked-stage.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1)
 
 export { isNotImplemented };
 
@@ -167,9 +168,14 @@ export const ROLE_BADGES = Object.freeze({
  * «не пришёл», конверсии — никакие. CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — «не пришёл» и у открытой
  * (владелец: «we also need to add the "unarrived" status tick»).
  */
-export function roleOptionsFor(stage) {
+export function roleOptionsFor(stage, { stages = null, routed = [] } = {}) {
     const kind = stage && stage.kind;
-    if (kind === 'open') return ['booked', 'confirmed', 'no_show'];   // CRM_NO_SHOW_ANY_COLUMN_V1
+    if (kind === 'open') {
+        // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — «не пришёл» у открытой — только там, где его можно сохранить
+        // (после колонки записи, не начальная, без правила звонков); воронки нет — не предлагается.
+        const ok = Array.isArray(stages) && noShowAllowed(stages, stage.key, { routed });
+        return ok ? ['booked', 'confirmed', 'no_show'] : ['booked', 'confirmed'];
+    }
     if (kind === 'lost') return ['no_show'];
     return [];
 }
@@ -179,7 +185,11 @@ const ROLE_REFUSALS = {
     role_twice: 'Каждую роль можно отметить только у одной колонки.',
     booked_order: 'Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией.',
     confirmed_order: 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.',
-    no_show_kind: 'Колонкой «Не пришёл» может быть любая видимая колонка, кроме колонки-конверсии.',   // CRM_NO_SHOW_ANY_COLUMN_V1
+    no_show_kind: 'Колонкой «Не пришёл» может быть только видимая колонка, кроме колонки-конверсии.',   // CRM_NO_SHOW_ANY_COLUMN_V1
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — открытая колонка «Не пришёл».
+    no_show_order: 'Открытая колонка «Не пришёл» должна стоять после колонки записи и перед колонкой-конверсией.',
+    no_show_default: 'Начальная колонка (в неё попадают новые заявки) не может быть колонкой «Не пришёл».',
+    no_show_routed: 'В эту колонку звонки заводят новые заявки — колонкой «Не пришёл» она быть не может. Сначала поменяйте правило звонков в разделе «Телефония».',
 };
 const ROLE_LEAVING = {
     booked: 'Колонка «{label}» — колонка записи: сначала передайте роль другой колонке.',
@@ -325,7 +335,7 @@ const KIND_VALUES = ['open', 'won', 'lost'];
  * CRM_STAGE_ROLES_V1 — `prev` (то, что последним отдал сервер): с ним проверяются и роли —
  * колонку с ролью не скрыть и не удалить, не передав роль; правила ролей по воронке.
  */
-export function validateStages(stages, t = (s) => s, prev = null) {
+export function validateStages(stages, t = (s) => s, prev = null, opts = {}) {
     const arr = Array.isArray(stages) ? stages : [];
     if (!arr.length) return { ok: false, error: 'Нужна хотя бы одна колонка канбана.' };
 
@@ -359,7 +369,7 @@ export function validateStages(stages, t = (s) => s, prev = null) {
         const leaving = roleLeaving(prev, arr, { deletions: false });
         if (leaving) return { ok: false, error: fill(t(ROLE_LEAVING[leaving.role]), { label: leaving.label }) };
     }
-    const why = roleRefusal(arr, prev);
+    const why = roleRefusal(arr, prev, { routed: (opts && opts.routed) || [] });   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — и колонки звонков
     if (why) return { ok: false, error: t(ROLE_REFUSALS[why]) };
     return { ok: true };
 }
@@ -531,6 +541,9 @@ export function shapeConfig(data) {
             kind: KIND_VALUES.includes(r.kind) ? r.kind : 'open',
             role: STAGE_ROLES.includes(r.role) ? r.role : null,   // CRM_STAGE_ROLES_V1
         })))),
+        // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — колонки, в которые звонки заводят заявки (любая АТС):
+        // открытой колонкой «Не пришёл» им не быть. Сервер старше экрана — пусто (откажет сервер).
+        routed: (Array.isArray(raw.routed_stages) ? raw.routed_stages : []).filter((k) => typeof k === 'string' && k),
         // CRM_STAGE_ROLES_V1 — прислал ли сервер роли (запасная воронка — с ролями миграции 284).
         // Нет — сервер старше экрана: доска угадывает колонку записи по-старому.
         hasRoles: Array.isArray(raw.stages) && raw.stages.filter(usableRow).length ? hasStageRoles(raw.stages) : true,

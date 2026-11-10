@@ -130,7 +130,13 @@ export function withConversion(stages, key) {
  *   confirmed_order — колонка подтверждения не открытая, не видимая, не ПОСЛЕ колонки
  *                     записи (или колонки записи нет) или не ДО конверсии;
  *   no_show_kind    — колонка «Не пришёл» — конверсия или скрыта (CRM_NO_SHOW_ANY_COLUMN_V1:
- *                     открытая теперь допустима; прежде — только проигрышная).
+ *                     открытая теперь допустима; прежде — только проигрышная);
+ *   no_show_order   — открытая колонка «Не пришёл» не ПОСЛЕ колонки записи (или колонки записи
+ *                     нет) или не ДО конверсии (ревью F1);
+ *   no_show_default — открытая колонка «Не пришёл» — начальная «В обработке» (in_process: туда
+ *                     рождаются новые заявки, умолчание crm_requests.status);
+ *   no_show_routed  — открытая колонка «Не пришёл», в которую правило звонков заводит заявки
+ *                     (opts.routed — ключи колонок с правилом «создать»).
  * Роли может не быть ни у одной колонки: без «записи» запись не двигает карточку, без
  * «подтверждения» отметка «Подтверждён» её не двигает, без «Не пришёл» автоматика неявки
  * выключена.
@@ -141,14 +147,14 @@ export function withConversion(stages, key) {
  * плохая строка запрещала бы любые правки. Роль, которую правка сделала недопустимой
  * (перенесла, скрыла, переставила за конверсию), — отказ, как прежде.
  */
-export function roleRefusal(stages, prev = null) {
+export function roleRefusal(stages, prev = null, opts = {}) {
   const list = ordered(stages);
   for (const r of STAGE_ROLES) if (list.filter((s) => roleOf(s) === r).length > 1) return 'role_twice';
   const before = prev ? ordered(prev) : null;
   for (const r of STAGE_ROLES) {
-    const why = roleProblem(list, r);
+    const why = roleProblem(list, r, opts);
     if (!why) continue;
-    if (before && roleKey(before, r) === roleKey(list, r) && roleProblem(before, r)) continue;   // была такой и до правки
+    if (before && roleKey(before, r) === roleKey(list, r) && roleProblem(before, r, opts)) continue;   // была такой и до правки
     return why;
   }
   return null;
@@ -159,7 +165,15 @@ export function roleRefusal(stages, prev = null) {
  * null — всё в порядке или роли нет). Одно правило для сохранения и для чтения роли сервером
  * (config.js: недопустимая роль читается как неотмеченная).
  */
-export function roleProblem(stages, role) {
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — начальная колонка: умолчание crm_requests.status, её не удалить
+// (config.js UNDELETABLE_STAGE_KEYS); в неё рождаются новые заявки (доска, /api/db, звонки).
+export const START_STAGE_KEY = 'in_process';
+
+/**
+ * opts.routed — ключи колонок, в которые правило звонков заводит заявки (crm_call_routing, «создать»):
+ * открытой колонкой «Не пришёл» такая быть не может (CRM_NO_SHOW_ANY_COLUMN_V1, ревью F1).
+ */
+export function roleProblem(stages, role, opts = {}) {
   const list = ordered(stages);
   const wonAt = list.findIndex((s) => s.kind === 'won');
   const at = (r) => list.findIndex((s) => roleOf(s) === r);
@@ -173,11 +187,31 @@ export function roleProblem(stages, role) {
   }
   if (role === 'no_show') {
     const n = at('no_show');
-    // CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — любая видимая колонка, кроме конверсии (прежде — только
+    if (n < 0) return null;
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — видимая колонка, кроме конверсии (прежде — только
     // проигрышная). Владелец: «we also need to add the "unarrived" status tick».
-    return n >= 0 && (list[n].kind === 'won' || !isActive(list[n])) ? 'no_show_kind' : null;
+    if (list[n].kind === 'won' || !isActive(list[n])) return 'no_show_kind';
+    if (list[n].kind !== 'open') return null;   // проигрышная — как прежде
+    // Ревью F1 (решение координатора) — ОТКРЫТАЯ — только ПОСЛЕ колонки записи и ДО конверсии, не
+    // начальная и не та, куда звонки заводят заявки: иначе новые заявки и обратные звонки рождались
+    // бы неявками (отчёты, «Не пришёл» без прихода, привязка к новой карте пациента их не видит).
+    if (list[n].key === START_STAGE_KEY) return 'no_show_default';
+    const routed = Array.isArray(opts && opts.routed) ? opts.routed : [];
+    if (routed.includes(list[n].key)) return 'no_show_routed';
+    if (b < 0 || n < b || (wonAt >= 0 && n > wonAt)) return 'no_show_order';
+    return null;
   }
   return null;
+}
+
+/**
+ * CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — можно ли отметить «не пришёл» у колонки `key` (роль переедет
+ * с прежней колонки). Экран предлагает галочку только там, где сервер её сохранит.
+ */
+export function noShowAllowed(stages, key, opts = {}) {
+  const list = ordered(stages);
+  if (!list.some((s) => s.key === key)) return false;
+  return roleProblem(withRole(list, key, 'no_show'), 'no_show', opts) === null;
 }
 
 /**

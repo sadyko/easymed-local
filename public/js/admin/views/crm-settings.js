@@ -268,8 +268,9 @@ const rowBox = ({ move, name, colors, roles, visible, actions }) => h('div', { c
 // «конверсия» (Tag того же вида); роль одна на воронку — галочка у другой колонки снимает её
 // с прежней (withRole). Уходит на сервер вместе с колонками («Сохранить колонки»).
 const ROLE_ARIA = { booked: 'Колонка записи', confirmed: 'Колонка подтверждения', no_show: 'Колонка «Не пришёл»' };
-function roleTicks(row, onPick) {
-    const opts = roleOptionsFor(row);
+function roleTicks(row, onPick, stages) {
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — «не пришёл» только там, где сервер его сохранит.
+    const opts = roleOptionsFor(row, { stages, routed: state.cfg.routed || [] });
     if (!opts.length) return null;
     return h('div', { class: 'crm-set-role-list' }, ...opts.map((role) => {
         const on = row.role === role;
@@ -327,7 +328,7 @@ function paintStages() {
             move: moveButtons(list, i, onChange),
             name: [labelInput(row), keyChip(row.key)],
             colors: colorPicker(row),
-            roles: withRoles ? roleTicks(row, (role, on) => onChange(withRole(list, row.key, role, on))) : undefined,
+            roles: withRoles ? roleTicks(row, (role, on) => onChange(withRole(list, row.key, role, on)), list) : undefined,
             // The conversion column is a BEHAVIOUR, not a label: it is the only
             // status that opens the patient-registration popup. Badge it, and
             // take away the two controls that could break that path.
@@ -345,7 +346,7 @@ function paintStages() {
     // CRM_STAGE_ROLES_V1 — что значит каждая галочка, коротко, под списком.
     if (withRoles) {
         // CRM_NO_SHOW_ANY_COLUMN_V1 — и где можно отметить «Не пришёл».
-        box.appendChild(hint('«Запись» — сюда переходит карточка, когда пациента записали на приём. «Подтверждение» — сюда её переводит отметка «Подтверждён» в календаре. «Не пришёл» — сюда её уводит неявка; эту галочку можно поставить любой колонке, кроме конверсии; без неё неявку не отмечает никто.',
+        box.appendChild(hint('«Запись» — сюда переходит карточка, когда пациента записали на приём. «Подтверждение» — сюда её переводит отметка «Подтверждён» в календаре. «Не пришёл» — сюда её уводит неявка; эту галочку ставят проигрышной колонке или открытой — только после колонки записи, не начальной и не той, куда звонки заводят заявки; без неё неявку не отмечает никто.',
             { marginTop: '10px' }));
         if (hasRole) box.appendChild(hint('Колонку с ролью нельзя скрыть или удалить — сначала отметьте роль у другой колонки.', { marginTop: '4px' }));
     }
@@ -381,7 +382,7 @@ function paintStages() {
         // CRM_STAGE_ROLES_V1 — роли уходят с колонками; сервер без ролей их не получает.
         const stages = withPositions(state.cfg.stages).map(({ role, ...s }) => ({
             ...s, label: String(s.label || '').trim(), ...(state.cfg.hasRoles !== false ? { role: role || null } : {}) }));
-        const v = validateStages(stages, tr, state.cfg.hasRoles !== false ? state.baseStageRows : null);
+        const v = validateStages(stages, tr, state.cfg.hasRoles !== false ? state.baseStageRows : null, { routed: state.cfg.routed || [] });   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1)
         if (!v.ok) { toast(v.error, 'warn'); return; }
         const fresh = await rpc('crm_config_save', { stages });
         toast('Колонки сохранены.', 'success');

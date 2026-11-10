@@ -131,8 +131,15 @@ async function loadBoardConfig() {
 // объяснения. Поэтому каждый такой ключ проверяется по ЖИВОЙ конфигурации, а
 // запасной вариант — первая видимая колонка (начало воронки).
 function stageKey(preferred) {
-    if (STATUSES.some(([k]) => k === preferred)) return preferred;
-    return STATUSES.length ? STATUSES[0][0] : CONVERT_STATUS;
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — новая карточка не рождается в колонке «Не пришёл»: то же
+    // правило, что начало воронки у сервера (contact-window.js firstStageKey) — видимая открытая колонка,
+    // кроме «Не пришёл».
+    const noShow = STAGE_KEYS.noShow;
+    if (preferred !== noShow && STATUSES.some(([k]) => k === preferred)) return preferred;
+    const open = STATUSES.find(([k]) => k !== noShow && STAGE_KEYS.open.includes(k));
+    if (open) return open[0];
+    const any = STATUSES.find(([k]) => k !== noShow);
+    return any ? any[0] : CONVERT_STATUS;
 }
 // CRM_UNIFY_V1 — hasStage('scheduled') ушёл: есть ли «Колонка записи», решает
 // BOOKED_STATUS (null — некуда); другой автоматике проверка не нужна.

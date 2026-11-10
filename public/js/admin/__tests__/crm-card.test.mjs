@@ -1194,6 +1194,34 @@ test('CRM_UNIFY_V1: доска при загрузке «Не пришёл» н�
   BOARD_CFG = null;
 });
 
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — новая карточка доски («+» у колонки) не рождается в колонке
+// «Не пришёл»: «В обработке» скрыта, первой видимой стоит колонка «Не пришёл» — «+» у первой открытой
+// видимой колонки (то же правило, что начало воронки у сервера, contact-window.js firstStageKey).
+test('CRM_NO_SHOW_ANY_COLUMN_V1: «+ Новая заявка» не у колонки «Не пришёл», даже если она первая видимая', async () => {
+  BOARD_CFG = { stages: [
+    { key: 'no_show',    label: 'Не пришёл',   color: 'crit',   position: 0, is_active: 1, kind: 'lost', role: 'no_show' },
+    { key: 'in_process', label: 'В обработке', color: 'info',   position: 1, is_active: 0, kind: 'open', role: null },
+    { key: 'recall',     label: 'Перезвонить', color: 'warn',   position: 2, is_active: 1, kind: 'open', role: null },
+    { key: 'scheduled',  label: 'Записан',     color: 'purple', position: 3, is_active: 1, kind: 'open', role: 'booked' },
+    { key: 'came',       label: 'Пришёл',      color: 'ok',     position: 5, is_active: 1, kind: 'won',  role: null },
+  ], sources: [], routing: [] };
+  try {
+    window.easymed.state.user = { id: 7, full_name: 'Админ', role: 'admin', is_admin: true };
+    const root = await board([]);
+    const plus = walk(root).filter((n) => n.tagName === 'BUTTON' && n.getAttribute('title') === 'Новая заявка');
+    assert.equal(plus.length, 1, '«Новая заявка» не одна');
+    let col = plus[0];
+    while (col && !(col.attrs && col.attrs['data-col'])) col = col.parentNode;
+    assert.ok(col, 'кнопка не в колонке');
+    assert.equal(col.attrs['data-col'], 'recall', 'новая карточка рождалась бы не в первой открытой колонке');
+  } finally {
+    BOARD_CFG = { stages: UNIFY_STAGES, sources: [], routing: [] };
+    await board([]);
+    BOARD_CFG = null;
+    window.easymed.state.user = null;
+  }
+});
+
 // ═══ 10. ОКНО ЗАЯВКИ НЕ СТИРАЕТ ТО, ЧЕГО НЕ ВИДЕЛО ══════════════════════════
 //
 // CRM_LINKS_V1 (2026-09-20). saveLines() — «полная замена набора»: pending-строки

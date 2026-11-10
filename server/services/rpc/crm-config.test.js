@@ -29,7 +29,8 @@ test('crm_config_get answers stages, sources and routing in one call', () => {
   const db = fresh();
   const out = crmConfigGet(db, {}, registrar);
   // CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО: и настройки «CRM-канбан» (crm_settings, мигр. 237).
-  assert.deepEqual(Object.keys(out).sort(), ['routing', 'settings', 'sources', 'stages', 'tags']);   // CRM_HEAD_MERGE_TAGS_V1
+  // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — ОБНОВЛЕНО НАМЕРЕННО: и колонки, куда звонки заводят заявки.
+  assert.deepEqual(Object.keys(out).sort(), ['routed_stages', 'routing', 'settings', 'sources', 'stages', 'tags']);   // CRM_HEAD_MERGE_TAGS_V1
   assert.equal(out.stages.length, 8);
   assert.equal(out.sources.length, 8);
   assert.equal(out.routing.length, 15);

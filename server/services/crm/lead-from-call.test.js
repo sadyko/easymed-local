@@ -526,3 +526,14 @@ test('MOIZVONKI_V2: повторный звонок того же человек
   recordCall(db, MZ({ db_call_id: 777, start_time: 1755950900, answer_time: 0, answered: 0, duration: 0 }), 'poll', { id: null, kind: 'moizvonki' });
   assert.equal(leads(db).length, 1);
 });
+
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — звонок не рождает неявку: правило, направленное в колонку
+// «Не пришёл» (ручная правка — экран такого не даёт), заводит карточку в начале воронки.
+test('CRM_NO_SHOW_ANY_COLUMN_V1: правило звонка в колонку «Не пришёл» — карточка встаёт в начало воронки', () => {
+  const db = fresh();
+  db.prepare("UPDATE crm_call_routing SET action = 'create', stage_key = 'no_show' WHERE provider = 'binotel' AND disposition = 'ANSWER'").run();
+  assert.equal(recordCall(db, call(), 'poll'), true);
+  const rows = leads(db);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'in_process', 'карточка звонка родилась в «Не пришёл»');
+});

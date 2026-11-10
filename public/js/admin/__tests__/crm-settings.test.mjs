@@ -469,12 +469,12 @@ test('CRM_STAGE_ROLES_V1: галочки ролей у колонок и зна�
   const root = await render();
   assert.ok(!bookedSel(root), 'осталось прежнее поле колонки записи');
   assert.ok(!textOf(root).includes('Колонка подтверждения (запись)'), 'неверная подпись осталась');
-  // CRM_NO_SHOW_ANY_COLUMN_V1 — ПЕРЕПИСАНО НАМЕРЕННО: открытым — «запись», «подтверждение» и
-  // «не пришёл», проигрышным — «не пришёл», конверсии — ничего.
-  assert.strictEqual(roleBoxes(root).length, 3 * 3 + 2);
-  for (const key of ['in_process', 'recall', 'approved', 'no_show', 'not_qualified']) assert.ok(roleBox(root, key, 'no_show'), 'нет галочки «не пришёл» у ' + key);
-  assert.ok(!roleBox(root, 'came', 'no_show'), 'у конверсии галочка «не пришёл»');
-  assert.ok(textOf(root).includes('галочку можно поставить любой колонке, кроме конверсии'), 'подсказка не говорит, где можно отметить «Не пришёл»');
+  // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — ПЕРЕПИСАНО НАМЕРЕННО: «не пришёл» предлагается проигрышным и
+  // открытым колонкам ПОСЛЕ колонки записи (здесь таких нет: после «Перезвонить» — только «Подтверждён»
+  // с ролью); «В обработке» и колонке до записи — нет; конверсии — ничего.
+  for (const key of ['no_show', 'not_qualified']) assert.ok(roleBox(root, key, 'no_show'), 'нет галочки «не пришёл» у ' + key);
+  for (const key of ['in_process', 'came']) assert.ok(!roleBox(root, key, 'no_show'), 'галочка «не пришёл» у ' + key);
+  assert.ok(textOf(root).includes('открытой — только после колонки записи'), 'подсказка не говорит, где можно отметить «Не пришёл»');
   assert.deepStrictEqual(roleBoxes(root).filter((n) => 'checked' in n.attrs).map((n) => [n.attrs['data-crm-role-of'], n.attrs['data-crm-role']]),
     [['recall', 'booked'], ['approved', 'confirmed'], ['no_show', 'no_show']]);
   // Ревью: имя галочки называет и колонку — читалка экрана различает строки.
@@ -511,18 +511,27 @@ test('CRM_STAGE_ROLES_V1: галочка «запись» у другой кол
 
 // CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — владелец: «we also need to add the "unarrived" status tick».
 // Галочка «не пришёл» у открытой колонки переносит роль; сохранение проходит без отказа.
-test('CRM_NO_SHOW_ANY_COLUMN_V1: галочка «не пришёл» у открытой колонки переносит роль и уходит на сервер', async () => {
+// Ревью F1 — только открытой колонке после колонки записи и без правила звонков (routed_stages ответа).
+const LATER_CONFIG = () => {
+  const cfg = JSON.parse(JSON.stringify(ROLED_CONFIG));
+  cfg.stages.splice(3, 0, { key: 'missed', label: 'Не дошли', color: 'crit', position: 3.5, is_active: 1, kind: 'open', role: null },
+    { key: 'callback2', label: 'Перезвон 2', color: 'warn', position: 3.6, is_active: 1, kind: 'open', role: null });
+  cfg.routed_stages = ['in_process', 'callback2'];
+  return cfg;
+};
+test('CRM_NO_SHOW_ANY_COLUMN_V1: галочка «не пришёл» у открытой колонки после записи переносит роль и уходит на сервер', async () => {
   resetServer();
-  getRespond = () => jsonOk(JSON.parse(JSON.stringify(ROLED_CONFIG)));
-  saveRespond = () => jsonOk(JSON.parse(JSON.stringify(ROLED_CONFIG)));
+  getRespond = () => jsonOk(LATER_CONFIG());
+  saveRespond = () => jsonOk(LATER_CONFIG());
   const root = await render();
-  tickRole(root, 'in_process', 'no_show');
-  assert.ok('checked' in roleBox(root, 'in_process', 'no_show').attrs);
+  assert.ok(!roleBox(root, 'callback2', 'no_show'), 'галочка «не пришёл» у колонки, куда звонки заводят заявки');
+  tickRole(root, 'missed', 'no_show');
+  assert.ok('checked' in roleBox(root, 'missed', 'no_show').attrs);
   assert.ok(!('checked' in roleBox(root, 'no_show', 'no_show').attrs), 'роль у двух колонок');
   saveStagesBtn(root).click();
   await tick();
   assert.strictEqual(saveCalls, 1, 'экран отказал до сервера: ' + lastToast());
-  assert.deepStrictEqual(rolesSent(lastSaveBody), { booked: 'recall', confirmed: 'approved', no_show: 'in_process' });
+  assert.deepStrictEqual(rolesSent(lastSaveBody), { booked: 'recall', confirmed: 'approved', no_show: 'missed' });
 });
 
 test('CRM_STAGE_ROLES_V1: отказ ролей — до сервера, той же фразой, что у сервера', async () => {

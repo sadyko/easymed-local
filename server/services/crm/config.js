@@ -180,6 +180,18 @@ export function tagInsertRefusal(db, rows) {
   return null;
 }
 
+/**
+ * CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — КОЛОНКИ, В КОТОРЫЕ ЗВОНКИ ЗАВОДЯТ ЗАЯВКИ: правило «создать»
+ * любой АТС (binotel, «Мои Звонки», …). Открытой колонкой «Не пришёл» такая быть не может — иначе
+ * обратный звонок рождался бы неявкой. Не бросает: таблицы нет — пусто.
+ */
+export function routedStageKeys(db) {
+  try {
+    return db.prepare(`SELECT DISTINCT stage_key FROM crm_call_routing
+                        WHERE action = 'create' AND stage_key IS NOT NULL AND stage_key <> '' ORDER BY stage_key`).all().map((r) => r.stage_key);
+  } catch { return []; }
+}
+
 export function listRouting(db, provider = DEFAULT_PROVIDER) {
   return db.prepare('SELECT provider, disposition, action, stage_key FROM crm_call_routing WHERE provider = ? ORDER BY disposition')
     .all(String(provider || DEFAULT_PROVIDER));
@@ -189,6 +201,7 @@ export function listRouting(db, provider = DEFAULT_PROVIDER) {
 export function crmConfig(db) {
   return {
     stages: listStages(db), sources: listSources(db), routing: listRouting(db), tags: listTags(db),
+    routed_stages: routedStageKeys(db),   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — экран не предлагает на них «не пришёл»
     // CRM_UNIFY_V1 · CRM_STAGE_ROLES_V1 — booked_stage — колонка с ролью «запись» (экран
     // старше сервера читает её здесь); выбор crm_settings.booked_stage больше не читается.
     settings: { booked_stage: scheduledStageKey(db), ...readCrmSettings(db), booked_effective: scheduledStageKey(db) },
@@ -309,7 +322,14 @@ export function noShowStageKey(db) {
   const k = roleStage(db, 'no_show', ['lost', 'open']);
   // База до 284 — сидовая проигрышная; виды читаются напрямую (lostStageKeys зовёт эту функцию).
   if (k === LEGACY) return stageKeysOfKind(db, 'lost', SEED_LOST).includes('no_show') ? 'no_show' : null;
-  return k === EMPTY ? null : k;
+  if (k === EMPTY || k == null) return null;
+  // Ревью F1 — открытая колонка «Не пришёл» действует, только если её можно сохранить (после колонки
+  // записи, не начальная, без правила звонков); ручная правка базы мимо экрана — как неотмеченная.
+  try {
+    const kind = db.prepare('SELECT kind FROM crm_stages WHERE key = ?').get(k);
+    if (kind && kind.kind === 'open' && roleProblem(listStages(db), 'no_show', { routed: routedStageKeys(db) })) return null;
+  } catch { return null; }
+  return k;
 }
 
 /**
@@ -403,7 +423,11 @@ const ROLE_REFUSALS = {
   role_twice: 'Каждую роль можно отметить только у одной колонки.',
   booked_order: BOOKED_REFUSAL,
   confirmed_order: 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.',
-  no_show_kind: 'Колонкой «Не пришёл» может быть любая видимая колонка, кроме колонки-конверсии.',   // CRM_NO_SHOW_ANY_COLUMN_V1
+  no_show_kind: 'Колонкой «Не пришёл» может быть только видимая колонка, кроме колонки-конверсии.',   // CRM_NO_SHOW_ANY_COLUMN_V1
+  // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — открытая колонка «Не пришёл».
+  no_show_order: 'Открытая колонка «Не пришёл» должна стоять после колонки записи и перед колонкой-конверсией.',
+  no_show_default: 'Начальная колонка (в неё попадают новые заявки) не может быть колонкой «Не пришёл».',
+  no_show_routed: 'В эту колонку звонки заводят новые заявки — колонкой «Не пришёл» она быть не может. Сначала поменяйте правило звонков в разделе «Телефония».',
 };
 /** CRM_STAGE_ROLES_V1 — колонку с ролью скрывают или удаляют: по шаблону на роль (подстановка — только название колонки). */
 const ROLE_LEAVING = {
@@ -492,7 +516,7 @@ export function saveCrmSettings(db, s = {}, actorId = null) {
     if (target.role && target.role !== 'booked') throw roleHeldError(stages, key);
     if (roleKey(stages, 'booked') !== key) {
       const moved = withRole(stages, key, 'booked');
-      const why = roleRefusal(moved, stages);
+      const why = roleRefusal(moved, stages, { routed: routedStageKeys(db) });   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1)
       if (why) throw roleRefusalError(why);
       writeRoles(db, moved);
       stages = listStages(db);
@@ -690,7 +714,7 @@ export function saveStages(db, stages) {
   // «снять галочку и скрыть»); без ролей в правке (экран старше сервера) — отказ.
   const leaving = roleLeaving(prevStages, wanted, { deletions: !sentRoles });
   if (leaving) throw rpcT(CrmConfigError, ROLE_LEAVING[leaving.role], { label: leaving.label }, 409);
-  const why = roleRefusal(wanted, prevStages);
+  const why = roleRefusal(wanted, prevStages, { routed: routedStageKeys(db) });   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — и правила звонков
   if (why) throw roleRefusalError(why);
 
   // CRM_UNIFY_V1 — kind пишется только у НОВОЙ строки; у существующей его не
@@ -900,6 +924,9 @@ export function saveRouting(db, rows) {
   }
 
   const stage = db.prepare('SELECT key, is_active FROM crm_stages WHERE key = ?');
+  // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — колонка «Не пришёл», если она открытая.
+  const ns = noShowStageKey(db);
+  const openNoShow = ns && (db.prepare('SELECT kind FROM crm_stages WHERE key = ?').get(ns) || {}).kind === 'open' ? ns : null;
   for (const r of wanted) {
     if (r.action !== 'create') continue;
     const s = stage.get(r.stage_key);
@@ -907,6 +934,8 @@ export function saveRouting(db, rows) {
     // A rule may not aim at a hidden column: the lead would be created into a
     // column nobody sees, which reads to the clinic exactly like a lost lead.
     if (!s.is_active) throw new CrmConfigError(`Колонка «${r.stage_key}» скрыта — в неё нельзя направлять звонки.`);
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — открытая колонка «Не пришёл»: звонок рождал бы неявку.
+    if (r.stage_key === openNoShow) throw rpcT(CrmConfigError, 'Колонка «{key}» — колонка «Не пришёл»: в неё нельзя направлять звонки.', { key: r.stage_key });
   }
 
   const upsert = db.prepare(`INSERT INTO crm_call_routing (provider, disposition, action, stage_key)

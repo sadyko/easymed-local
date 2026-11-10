@@ -23,6 +23,9 @@
 //   NOANSWER → «Перезвонить» (recall), если колонка жива, иначе первая открытая.
 
 export const MZ_PROVIDER = 'moizvonki';
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — начало воронки и колонка «Не пришёл» — по правилам CRM.
+import { firstStageKey } from '../crm/contact-window.js';
+import { noShowStageKey } from '../crm/config.js';
 
 /**
  * Завести правила вендора, если их ещё нет. Возвращает число добавленных строк.
@@ -36,14 +39,17 @@ export const MZ_PROVIDER = 'moizvonki';
  */
 export function ensureMoizvonkiRouting(db) {
   try {
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — «первая открытая» — то же правило, что начало воронки
+    // (contact-window.js firstStageKey): видимая открытая, кроме колонки «Не пришёл»; «Перезвонить» —
+    // только если она не колонка «Не пришёл». Звонок не рождает неявку.
+    const first = firstStageKey(db);
+    const recall = db.prepare("SELECT key FROM crm_stages WHERE key = 'recall' AND is_active = 1").get();
+    const noAnswer = recall && recall.key !== noShowStageKey(db) ? recall.key : first;
     const info = db.prepare(`
       INSERT OR IGNORE INTO crm_call_routing (provider, disposition, action, stage_key) VALUES
-        (@p, 'ANSWER', 'create',
-           (SELECT key FROM crm_stages WHERE kind IN ('open') AND is_active = 1 ORDER BY position, key LIMIT 1)),
-        (@p, 'NOANSWER', 'create',
-           COALESCE((SELECT key FROM crm_stages WHERE key = 'recall' AND is_active = 1),
-                    (SELECT key FROM crm_stages WHERE kind IN ('open') AND is_active = 1 ORDER BY position, key LIMIT 1)))`)
-      .run({ p: MZ_PROVIDER });
+        (@p, 'ANSWER', 'create', @first),
+        (@p, 'NOANSWER', 'create', @noAnswer)`)
+      .run({ p: MZ_PROVIDER, first, noAnswer });
     return Number(info.changes) || 0;
   } catch (e) {
     // База до мигр. 077 или без открытых колонок — правил не будет, и

@@ -318,9 +318,11 @@ test('CRM_LINKS_V1: своя проигрышная колонка считае�
 // карточки неявкой (а не потерей и не зависшей работой оператора), как у проигрышной.
 test('CRM_NO_SHOW_ANY_COLUMN_V1: «не пришёл» на открытой колонке — показатель «не пришёл», не потеря и не «зависшие»', () => {
   const db = seed();
+  // Ревью F1 — открытая колонка «Не пришёл» — после колонки записи («Не дошли» между «Подтверждён» и «Пришёл»).
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('missed','Не дошли','crit',4,1,'open')").run();
   db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
-  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'in_process'").run();
-  const a = addLead(db, { day: '2026-08-12', localHour: 10, status: 'in_process' });
+  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'missed'").run();
+  const a = addLead(db, { day: '2026-08-12', localHour: 10, status: 'missed' });
   const b = addLead(db, { day: '2026-08-12', localHour: 11, status: 'recall' });
   addLead(db, { day: '2026-08-17', localHour: 12, status: 'no_show' });
   addLead(db, { day: '2026-08-17', localHour: 13, status: 'stopped' });

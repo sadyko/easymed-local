@@ -46,3 +46,18 @@ test('база без таблицы правил — ноль и предупр
   finally { console.warn = warn; }
   assert.ok(seen.some((s) => s.includes('moizvonki routing not seeded')));
 });
+
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — «Перезвонить» стала колонкой «Не пришёл» (стоит после колонки
+// записи, правил Binotel в неё нет): пропущенный «Моих Звонков» туда не направляется — в начало воронки.
+test('CRM_NO_SHOW_ANY_COLUMN_V1: «Перезвонить» — колонка «Не пришёл» — пропущенный идёт в первую открытую, а не в неявку', () => {
+  const db = fresh();
+  db.prepare("UPDATE crm_call_routing SET action = 'ignore', stage_key = NULL WHERE stage_key = 'recall'").run();
+  db.prepare("UPDATE crm_stages SET position = 4 WHERE key = 'recall'").run();   // после «Записан» и «Подтверждён», до «Пришёл»
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'recall'").run();
+  assert.equal(ensureMoizvonkiRouting(db), 2);
+  assert.deepEqual(rules(db), [
+    { disposition: 'ANSWER', action: 'create', stage_key: 'in_process' },
+    { disposition: 'NOANSWER', action: 'create', stage_key: 'in_process' },
+  ]);
+});

@@ -325,20 +325,17 @@ test('CRM_NO_SHOW_ANY_COLUMN_V1: «не пришёл» на открытой к�
   assert.equal(st(db, rid), 'came');
 });
 
-test('CRM_NO_SHOW_ANY_COLUMN_V1: «не пришёл» на открытой колонке ДО «Колонки записи» («Перезвонить») — туда, один раз', () => {
+// Ревью F1 (решение координатора) — ПЕРЕПИСАНО НАМЕРЕННО: открытая колонка «Не пришёл» — только после
+// колонки записи, не начальная и не колонка звонков. Роль на «Перезвонить» (до записи, туда звонки
+// заводят заявки), поставленная мимо экрана, не действует: проход «Не пришёл» выключен, карточки стоят.
+test('CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1): «не пришёл» на «Перезвонить» мимо экрана не действует — проход ничего не ставит', () => {
   const db = freshDb();
   noShowOn(db, 'recall');
   const y = dbDay(db, -1);
   const vid = visitDb(db, y); const rid = lead(db, { date: y }); line(db, rid, vid, y);
-  const dated = lead(db, { date: y });
-  assert.deepEqual(sorted(crmNoShowSweep(db)), sorted([rid, dated]));
-  assert.deepEqual([st(db, rid), st(db, dated)], ['recall', 'recall']);
+  const callBack = lead(db, { status: 'recall', date: y });
   assert.deepEqual(crmNoShowSweep(db), []);
-  // Догоняющий проход поднимает из неё по отметке «Пришёл».
-  db.prepare("UPDATE visits SET status = 'arrived' WHERE id = ?").run(vid);
-  crmArrivalCatchUp(db);
-  assert.equal(st(db, rid), 'came');
-  assert.equal(st(db, dated), 'recall');
+  assert.deepEqual([st(db, rid), st(db, callBack)], ['scheduled', 'recall']);
 });
 
 // ─── САМОИСПРАВЛЕНИЕ: ДОКАЗАТЕЛЬСТВО, ПРИШЕДШЕЕ ПОЗЖЕ ─────────────────────

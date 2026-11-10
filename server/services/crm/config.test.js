@@ -44,7 +44,8 @@ test('crmConfig answers the board and the settings screen in one call', () => {
   const cfg = crmConfig(db);
   // CRM_HEAD_MERGE_TAGS_V1 — и метки карточек (миграция 150); у свежей базы их нет.
   // CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО: и настройки «CRM-канбан» (crm_settings, мигр. 237).
-  assert.deepEqual(Object.keys(cfg).sort(), ['routing', 'settings', 'sources', 'stages', 'tags']);
+  // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — ОБНОВЛЕНО НАМЕРЕННО: и колонки, куда звонки заводят заявки.
+  assert.deepEqual(Object.keys(cfg).sort(), ['routed_stages', 'routing', 'settings', 'sources', 'stages', 'tags']);
   // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО НАМЕРЕННО: booked_stage — колонка с ролью «запись», не выбор crm_settings.
   assert.deepEqual(cfg.settings, { booked_stage: 'scheduled', window_hours: 72, booked_effective: 'scheduled' });
   assert.deepEqual(cfg.tags, []);
@@ -475,11 +476,16 @@ test('«Не пришёл» — только роль: без неё автом�
   assert.equal(noShowStageKey(db), null, 'без роли «Не пришёл» — колонки нет (первая проигрышная больше не угадывается)');
   saveStages(db, withRoles(db, { stopped: 'no_show' }));
   assert.equal(noShowStageKey(db), 'stopped');
-  // CRM_NO_SHOW_ANY_COLUMN_V1 — ПЕРЕПИСАНО НАМЕРЕННО: роль на открытой колонке действует;
-  // ручная правка базы мимо экрана — роль на конверсии — нет.
+  // CRM_NO_SHOW_ANY_COLUMN_V1 — ПЕРЕПИСАНО НАМЕРЕННО: роль на открытой колонке после колонки записи
+  // действует; ручная правка базы мимо экрана — роль на открытой ДО записи (ревью F1) или на
+  // конверсии — нет.
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('missed','Не дошли','crit',4,1,'open')").run();
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'missed'").run();
+  assert.equal(noShowStageKey(db), 'missed');
   db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
   db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'recall'").run();
-  assert.equal(noShowStageKey(db), 'recall');
+  assert.equal(noShowStageKey(db), null, 'роль «не пришёл» на открытой колонке до записи (и с правилом звонков) не действует');
   db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
   db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'came'").run();
   assert.equal(noShowStageKey(db), null, 'роль «не пришёл» на конверсии не действует');
@@ -487,29 +493,64 @@ test('«Не пришёл» — только роль: без неё автом�
 });
 
 // CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — владелец: «we also need to add the "unarrived" status tick».
-// Роль «не пришёл» ставится на любую видимую колонку, кроме конверсии. Колонка с этой ролью для
+// Роль «не пришёл» — у проигрышной колонки или у ОТКРЫТОЙ после колонки записи и до конверсии (ревью
+// F1): не у начальной «В обработке» и не у колонки, куда звонки заводят заявки. Колонка с этой ролью для
 // автоматики — колонка «Не пришёл», какого бы вида она ни была: среди живых (openStageKeys) её нет,
-// среди потерянных (lostStageKeys) она есть, начало воронки (firstStageKey) — не она. Иначе
-// обход наутро считал бы её карточки ждущими приёма, а возврат в начало воронки уносил бы
-// карточку в «Не пришёл».
-test('CRM_NO_SHOW_ANY_COLUMN_V1: «не пришёл» на открытой колонке — сохраняется; для автоматики она «Не пришёл», а не живая', () => {
+// среди потерянных (lostStageKeys) она есть, начало воронки (firstStageKey) — не она.
+const withMissed = (db) => db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('missed','Не дошли','crit',4,1,'open')").run();
+test('CRM_NO_SHOW_ANY_COLUMN_V1: «не пришёл» на открытой колонке после записи — сохраняется; для автоматики она «Не пришёл», а не живая', () => {
   const db = fresh();
-  saveStages(db, withRoles(db, { recall: 'no_show', no_show: null }));
-  assert.deepEqual(rolesOf(db), { booked: 'scheduled', confirmed: 'approved', no_show: 'recall' });
-  assert.equal(noShowStageKey(db), 'recall');
-  assert.equal(listStages(db).find((s) => s.key === 'recall').kind, 'open', 'вид колонки не меняется');
-  assert.deepEqual(openStageKeys(db), ['in_process', 'scheduled', 'approved'], 'колонка «Не пришёл» осталась среди ждущих');
-  assert.deepEqual(lostStageKeys(db), ['no_show', 'stopped', 'not_qualified', 'recall'], 'колонка «Не пришёл» выпала из потерянных');
-  // Первая открытая колонка с ролью «не пришёл» — не начало воронки.
-  saveStages(db, withRoles(db, { in_process: 'no_show', recall: null }));
-  assert.equal(noShowStageKey(db), 'in_process');
-  assert.equal(firstStageKey(db), 'recall', 'возврат в начало воронки унёс бы карточку в «Не пришёл»');
-  assert.deepEqual(openStageKeys(db), ['recall', 'scheduled', 'approved']);
-  // Роль у проигрышной — как прежде.
-  saveStages(db, withRoles(db, { in_process: null, no_show: 'no_show' }));
-  assert.deepEqual(openStageKeys(db), ['in_process', 'recall', 'scheduled', 'approved']);
-  assert.deepEqual(lostStageKeys(db), ['no_show', 'stopped', 'not_qualified']);
+  withMissed(db);   // открытая между «Подтверждён» и «Пришёл»
+  saveStages(db, withRoles(db, { missed: 'no_show', no_show: null }));
+  assert.deepEqual(rolesOf(db), { booked: 'scheduled', confirmed: 'approved', no_show: 'missed' });
+  assert.equal(noShowStageKey(db), 'missed');
+  assert.equal(listStages(db).find((s) => s.key === 'missed').kind, 'open', 'вид колонки не меняется');
+  assert.deepEqual(openStageKeys(db), ['in_process', 'recall', 'scheduled', 'approved'], 'колонка «Не пришёл» осталась среди ждущих');
+  assert.deepEqual(lostStageKeys(db), ['no_show', 'stopped', 'not_qualified', 'missed'], 'колонка «Не пришёл» выпала из потерянных');
   assert.equal(firstStageKey(db), 'in_process');
+  // Роль у проигрышной — как прежде; снятая роль — обычная открытая колонка.
+  saveStages(db, withRoles(db, { missed: null, no_show: 'no_show' }));
+  assert.ok(openStageKeys(db).includes('missed'));
+  assert.deepEqual(lostStageKeys(db), ['no_show', 'stopped', 'not_qualified']);
+  db.close();
+});
+
+// Ревью F1 (решение координатора): открытая колонка «Не пришёл» — только после колонки записи, не
+// «В обработке» (туда рождаются новые заявки) и не колонка, куда звонки заводят заявки.
+test('CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1): «не пришёл» на «В обработке», до колонки записи, на колонке звонков — отказ 409 понятной фразой', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('early','Уточняем','info',2,1,'open')").run();
+  withMissed(db);
+  const before = JSON.stringify(listStages(db));
+  for (const [map, msg] of [
+    [{ in_process: 'no_show', no_show: null }, 'Начальная колонка (в неё попадают новые заявки) не может быть колонкой «Не пришёл».'],
+    [{ recall: 'no_show', no_show: null }, 'В эту колонку звонки заводят новые заявки — колонкой «Не пришёл» она быть не может. Сначала поменяйте правило звонков в разделе «Телефония».'],
+    [{ early: 'no_show', no_show: null }, 'Открытая колонка «Не пришёл» должна стоять после колонки записи и перед колонкой-конверсией.'],
+  ]) {
+    const e = refused(() => saveStages(db, withRoles(db, map)));
+    assert.equal(e.status, 409, msg);
+    assert.equal(e.message, msg);
+  }
+  // Правило звонков на колонку после записи — тоже отказ.
+  db.prepare("INSERT INTO crm_call_routing (provider, disposition, action, stage_key) VALUES ('binotel', 'ZZ_TEST', 'create', 'missed')").run();
+  assert.equal(refused(() => saveStages(db, withRoles(db, { missed: 'no_show', no_show: null }))).message,
+    'В эту колонку звонки заводят новые заявки — колонкой «Не пришёл» она быть не может. Сначала поменяйте правило звонков в разделе «Телефония».');
+  assert.equal(JSON.stringify(listStages(db)), before, 'отказ что-то записал');
+  // Экран узнаёт такие колонки из ответа: routed_stages — колонки с правилом «создать» любой АТС.
+  assert.deepEqual(crmConfig(db).routed_stages, ['in_process', 'missed', 'recall']);
+  db.close();
+});
+
+test('CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1): в открытую колонку «Не пришёл» правило звонков не направить', () => {
+  const db = fresh();
+  withMissed(db);
+  saveStages(db, withRoles(db, { missed: 'no_show', no_show: null }));
+  const e = refused(() => saveRouting(db, [{ disposition: 'ZZ_TEST', action: 'create', stage_key: 'missed' }]));
+  assert.equal(e.status, 400);
+  assert.equal(e.message, 'Колонка «missed» — колонка «Не пришёл»: в неё нельзя направлять звонки.');
+  // Проигрышная «Не пришёл» — как прежде (такое правило не запрещалось).
+  saveStages(db, withRoles(db, { missed: null, no_show: 'no_show' }));
+  saveRouting(db, [{ disposition: 'ZZ_TEST', action: 'create', stage_key: 'missed' }]);
   db.close();
 });
 
@@ -542,11 +583,9 @@ test('сохранение колонок: отказы ролей — 409 по�
       .map((s, i) => ({ ...s, position: i + 1 })), 'Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией.'],
     [withRoles(db, { recall: 'confirmed', approved: null }), 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.'],
     [withRoles(db, { scheduled: null }), 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.'],
-    // CRM_NO_SHOW_ANY_COLUMN_V1 — открытая колонка теперь допустима; скрытая — нет (новая фраза).
-    [withRoles(db, { recall: 'no_show', no_show: null }, (s) => (s.key === 'recall' ? { ...s, is_active: false } : s)),
-      'Колонкой «Не пришёл» может быть любая видимая колонка, кроме колонки-конверсии.'],
+    // CRM_NO_SHOW_ANY_COLUMN_V1 — скрытая колонка «Не пришёл» — отказ (новая фраза).
     [withRoles(db, { stopped: 'no_show', no_show: null }, (s) => (s.key === 'stopped' ? { ...s, is_active: false } : s)),
-      'Колонкой «Не пришёл» может быть любая видимая колонка, кроме колонки-конверсии.'],
+      'Колонкой «Не пришёл» может быть только видимая колонка, кроме колонки-конверсии.'],
   ];
   for (const [stages, msg] of cases) {
     const e = refused(() => saveStages(db, stages));
