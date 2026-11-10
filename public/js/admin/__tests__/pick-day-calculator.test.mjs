@@ -354,4 +354,70 @@ test('LAB_NO_DOCTOR_V1: колонка врача в календаре — ан
     assert.deepEqual([ymd(at), at.getHours(), at.getMinutes()], [ymd(day), 0, 0], 'анализ — не «на дату» (полночь своего дня)');
 });
 
+// ═══ ревью M1, L1 — калькулятор на дне с записью пациента ═══════════════════════════
+const TOASTS_C = [];
+Object.defineProperty(TOAST_EL, 'textContent', { get() { return ''; }, set(v) { TOASTS_C.push(String(v)); }, configurable: true });
+const btnText = (root, text) => walk(root).find((n) => n.tagName === 'BUTTON' && n.style.display !== 'none' && textOf(n).includes(text));
+async function saveCalcFlow(top) {
+    await until(() => byClass(top(), 'wzc-cta')[0] && byClass(top(), 'wzc-cta')[0].disabled === false, 'смета готова');
+    byClass(top(), 'wzc-cta')[0].click();
+    await until(() => btnText(top(), 'Далее →'), 'шаг «Направление»');
+    btnText(top(), 'Далее →').click();
+    await until(() => btnText(top(), 'Создать визит'), 'шаг «Подтверждение»');
+    btnText(top(), 'Создать визит').click();
+}
+
+test('ревью M1: калькулятор — «в запись · 15:00» первым, другие времена под «Перенести запись на»; выбран перенос — запись перенесена с прежней длиной, сказано вслух', async () => {
+    seed();
+    const at15 = dayAt(0); at15.setHours(15, 0, 0, 0);
+    const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, booked_at, created_by) VALUES (3, ?, 5, 'scheduled', 45, ?, 1)").run(at15.toISOString(), new Date().toISOString()).lastInsertRowid);
+    forgetSlots();
+    BODY.children.length = 0; TOASTS_C.length = 0;
+    openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
+        patient: { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' } });
+    const top = () => BODY.children[BODY.children.length - 1];
+    const addOf = (name) => byClass(top(), 'wzc-svc').filter((r) => textOf(r).includes(name)).map((r) => byClass(r, 'wzc-add')[0]).find(Boolean);
+    await until(() => addOf('УЗИ'), 'строка УЗИ в каталоге');
+    addOf('УЗИ').click();
+    await until(() => byAttr(top(), 'data-join'), 'кнопка «в запись»');
+    const join = byAttr(top(), 'data-join');
+    assert.match(textOf(join), /в запись · 15:00/);
+    const grp = byAttr(top(), 'data-move-group');
+    assert.ok(grp && textOf(grp).includes('Перенести запись на'), 'другие времена не под «Перенести запись на»');
+    const ten = walk(grp).find((n) => n.tagName === 'BUTTON' && textOf(n).trim() === '10:00');
+    assert.ok(ten, 'нет времени для переноса');
+    ten.click();
+    await saveCalcFlow(top);
+    await until(() => DB.prepare('SELECT COUNT(*) n FROM visit_services').get().n > 0, 'строка не легла');
+    const v = DB.prepare('SELECT visit_date, duration_minutes FROM visits WHERE id = ?').get(vid);
+    const t = new Date(v.visit_date);
+    assert.deepEqual([t.getHours(), t.getMinutes()], [10, 0], 'запись не перенесена');
+    assert.equal(v.duration_minutes, 45, 'перенос обрезал запись (ревью M3)');
+    assert.ok(TOASTS_C.some((x) => /Приём перенесён с 15:00 на 10:00/.test(x)), 'перенос не назван: ' + JSON.stringify(TOASTS_C));
+});
+
+test('ревью L1: колонка врача, в смете только анализ «на дату», пациент записан к этому врачу — визит дня, без «записи к другому врачу» и без нового визита', async () => {
+    seedLab({ group: 'lab', doctors: 1 });
+    const at10 = dayAt(0); at10.setHours(10, 0, 0, 0);
+    const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, booked_at, created_by) VALUES (3, ?, 40, 'scheduled', 30, ?, 1)").run(at10.toISOString(), new Date().toISOString()).lastInsertRowid);
+    const click = dayAt(0); click.setHours(15, 0, 0, 0);
+    forgetSlots();
+    BODY.children.length = 0; TOASTS_C.length = 0;
+    openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {},
+        lockedDoctor: { id: 40, name: 'Врачев 0', spec: '' }, scheduledISO: click.toISOString(), initialDateIso: ymd(click),
+        patient: { id: 3, fullName: 'Иванов Иван', lastName: 'Иванов', firstName: 'Иван', mrn: 'P-3', phone: '' } });
+    const top = () => BODY.children[BODY.children.length - 1];
+    const addOf = (name) => byClass(top(), 'wzc-svc').filter((r) => textOf(r).includes(name)).map((r) => byClass(r, 'wzc-add')[0]).find(Boolean);
+    await until(() => addOf('СРБ'), 'анализа нет в каталоге врача');
+    addOf('СРБ').click();
+    await saveCalcFlow(top);
+    await until(() => DB.prepare('SELECT COUNT(*) n FROM visit_services WHERE service_id = 31').get().n === 1, 'строка анализа не легла: ' + JSON.stringify(TOASTS_C));
+    assert.ok(!TOASTS_C.some((x) => /запись к/.test(x)), 'отказ «запись к другому врачу»: ' + JSON.stringify(TOASTS_C));
+    assert.equal(DB.prepare('SELECT COUNT(*) n FROM visits').get().n, 1, 'заведён второй визит');
+    assert.equal(DB.prepare('SELECT visit_id FROM visit_services WHERE service_id = 31').get().visit_id, vid, 'анализ не в визите дня');
+    const v = DB.prepare('SELECT visit_date, duration_minutes FROM visits WHERE id = ?').get(vid);
+    assert.equal(Date.parse(v.visit_date), at10.getTime(), 'запись к врачу сдвинута');
+    assert.equal(v.duration_minutes, 30);
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });

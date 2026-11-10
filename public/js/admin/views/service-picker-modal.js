@@ -77,7 +77,7 @@ import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 import { listTemplates, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // SERVICES_PACKAGES_V1 — cartPackage: цена услуги в пакете
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';
 import { nearestFree, noFreeText, nearestButtonText, visitDayNote } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
-import { loadPatientBookings, bookedJoinFor, joinMinutes } from './booked-rows.js';   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
+import { loadPatientBookings, bookedJoinFor, joinMinutes, joinExtensionNote } from './booked-rows.js';   // JOIN_EXTENDS_BOOKING_V1 (ревью M5) — joinExtensionNote   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
 import { groupOf, discountChoiceOptions, choiceArgs, choiceFloorPct, choiceReason, fallbackChoiceKey } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор; fallbackChoiceKey — ревью S1 L-3
 import { ratedOutcome } from '../discount-rates.js';   // DISCOUNT_RATES_V1 — скидка по ставкам услуг, как посчитает счёт
 import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
@@ -2388,14 +2388,27 @@ export function openServicePickerModal({
             const selM = (item.time && item.dateIso === item.__dayIso)
                 ? Number(item.time.slice(0, 2)) * 60 + Number(item.time.slice(3, 5)) : null;
             const tg = h('div', { class: 'wzc-tgroups' });
-            for (const [g, f, to] of [['Утро', 0, 720], ['День', 720, 1020], ['Вечер', 1020, 1440]]) {
-                const part = slots.filter(m => m >= f && m < to);
-                if (!part.length) continue;
-                tg.appendChild(h('div', { class: 'wzc-tg' },
-                    h('div', { class: 'glbl' }, g),
-                    h('div', { class: 'slots' }, ...part.map(m =>
-                        h('button', { class: 'wzc-tm' + (selM === m ? ' on' : ''), type: 'button',
-                            onclick: () => catPickTime(item, item.__dayIso, m, false) }, fmtMin(m))))));
+            const tmBtn = (m, label, attrs = {}) => h('button', { class: 'wzc-tm' + (selM === m ? ' on' : ''), type: 'button', ...attrs,
+                onclick: () => catPickTime(item, item.__dayIso, m, false) }, label);
+            // CRM_JOIN_NOT_MOVE_V1 (ревью M1) — в этот день пациент записан к этому врачу:
+            // «в запись · 10:10» первым, другие времена — под «Перенести запись на» (слова CRM).
+            const jHere = calcJoin(item.doctor.id, item.__dayIso);
+            const jm = jHere && jHere.head ? joinMinutes(jHere) : null;
+            if (jm != null) {
+                tg.appendChild(h('div', { class: 'wzc-tg' }, h('div', { class: 'slots' },
+                    tmBtn(jm, trf('в запись · {time}', { time: fmtMin(jm) }), { 'data-join': '' }))));
+                const others = slots.filter((m) => m !== jm);
+                if (others.length) tg.appendChild(h('div', { class: 'wzc-tg', 'data-move-group': '' },
+                    h('div', { class: 'glbl' }, tr('Перенести запись на')),
+                    h('div', { class: 'slots' }, ...others.map((m) => tmBtn(m, fmtMin(m))))));
+            } else {
+                for (const [g, f, to] of [['Утро', 0, 720], ['День', 720, 1020], ['Вечер', 1020, 1440]]) {
+                    const part = slots.filter(m => m >= f && m < to);
+                    if (!part.length) continue;
+                    tg.appendChild(h('div', { class: 'wzc-tg' },
+                        h('div', { class: 'glbl' }, g),
+                        h('div', { class: 'slots' }, ...part.map(m => tmBtn(m, fmtMin(m))))));
+                }
             }
             box.appendChild(tg);
             if (item.time && item.dateIso) {
@@ -3327,23 +3340,50 @@ export function openServicePickerModal({
                 if (btn && btn.isConnected) btn.disabled = false;
                 return;
             }
-            const booked = await calendarBookOrAsk({
-                patient_id:       p.id,
-                branch_id:        (p._raw && p._raw.branch_id) || p.branch_id || null,
-                doctor_id:        head.__noSlot ? null : (head.doctor?.id || null),   // LAB_NO_DOCTOR_V1 — исполнитель анализа без времени: его календарь не занимаем
-                service_id:       head.service.__consult ? null : head.service.id,
-                room_id:          roomId || null,
-                start:            visitDate,
-                duration_minutes: totalDur,
-                status:           'scheduled',
-                referral_source_id: canNameVisitSource() ? visitReferralSourceId() : null,   // LIVE_AUDIT_FIX_V1 (A6) — источник направления — на визите · DIAG_ROUTE_V1 (D8) — только стойка и колл-центр
-            }, { autoTime: !_explicit });
+            // LAB_NO_DOCTOR_V1 (ревью L1) — каталог врача, а в смете только «на дату» (анализы,
+            // процедуры): времени врача нет вовсе. Визит дня берётся или заводится без времени
+            // (ensure_visit по дате) — ни «запись к другому врачу» не в тему, ни безврачебного
+            // получасового визита на время щелчка.
+            const dateOnlyCart = !!lockedDoctor && state.added.length > 0 && state.added.every((a) => a.__dateOnly);
+            let booked;
+            if (dateOnlyCart) {
+                const day = localDayOf(state.added[0].dateIso || visitDate);
+                const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', {
+                    patient_id: p.id, date: day, branch_id: (p._raw && p._raw.branch_id) || p.branch_id || null,
+                    referral_source_id: canNameVisitSource() ? visitReferralSourceId() : null,
+                });
+                if (evErr) throw new Error(bookErrorText(evErr));
+                booked = { visit: ev.visit, created: !!ev.created, emergency: false };
+            } else {
+                booked = await calendarBookOrAsk({
+                    patient_id:       p.id,
+                    branch_id:        (p._raw && p._raw.branch_id) || p.branch_id || null,
+                    doctor_id:        head.__noSlot ? null : (head.doctor?.id || null),   // LAB_NO_DOCTOR_V1 — исполнитель анализа без времени: его календарь не занимаем
+                    service_id:       head.service.__consult ? null : head.service.id,
+                    room_id:          roomId || null,
+                    start:            visitDate,
+                    duration_minutes: totalDur,
+                    status:           'scheduled',
+                    referral_source_id: canNameVisitSource() ? visitReferralSourceId() : null,   // LIVE_AUDIT_FIX_V1 (A6) — источник направления — на визите · DIAG_ROUTE_V1 (D8) — только стойка и колл-центр
+                }, { autoTime: !_explicit });
+            }
             if (!booked) {   // отказались от экстренной записи — не создано НИЧЕГО
                 toast(tr('Запись не сохранена — время занято.'), 'info');
                 if (btn && btn.isConnected) btn.disabled = false;
                 return;
             }
             const visit = booked.visit;
+            // CRM_JOIN_NOT_MOVE_V1 (ревью M1) — запись пациента к этому врачу перенесена на другое
+            // время (выбран не «в запись») — сказать вслух, откуда и куда.
+            if (booked.moved) {
+                const was = head.doctor ? calcJoin(head.doctor.id, localDayOf(visitDate)) : null;
+                const wm = was ? joinMinutes(was) : null;
+                toast(trf('Приём перенесён с {t0}{doc0} на {t1}', { t0: wm != null ? fmtMin(wm) : '—', doc0: '', t1: head.time || '—' }), 'info');
+            }
+            // ревью M5 — присоединение не удлинило запись (следующая запись / конец приёма) — сказать.
+            if (booked.joined && booked.extended === false && (booked.next || booked.until)) {
+                toast(joinExtensionNote({ ends: booked.ends, next: booked.next, until: booked.until }, trf), 'warn');
+            }
 
             // CRM_CALENDAR_MIRROR_V1 (2026-09-27) — КОЛЛ-ЦЕНТР ЗАПИСЫВАЕТ С УСЛУГАМИ.
             //
