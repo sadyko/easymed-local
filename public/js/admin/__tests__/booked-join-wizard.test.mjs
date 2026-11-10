@@ -250,7 +250,8 @@ test('CRM_JOIN_NOT_MOVE_V1: «Ближайшее» — время записи �
   WD.forEach((k, i) => { if (i !== today) wh[k] = { enabled: true, from: '09:00', to: '18:00' }; });
   DB.prepare('UPDATE users SET working_hours = ? WHERE id = 7').run(JSON.stringify(wh));
   const d = dayOffset(1); d.setHours(10, 10, 0, 0);
-  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, created_by) VALUES (3, ?, 7, 'scheduled', 30, 1)").run(d.toISOString()).lastInsertRowid);
+  // booked_at — время поставила запись (calendar_book), как у записи колл-центра.
+  const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, booked_at, created_by) VALUES (3, ?, 7, 'scheduled', 30, ?, 1)").run(d.toISOString(), new Date().toISOString()).lastInsertRowid);
   DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, scheduled_at, created_by) VALUES (?, 21, 7, 1, 100000, 100000, 'added', ?, 1)").run(vid, d.toISOString());
   await openWizard([24]);
   const btn = byAttr(overlay(), 'data-pick-nearest', 24);

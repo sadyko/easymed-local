@@ -1060,9 +1060,16 @@ function revisitDayTaken(db, dayVisit) {
 // карточка CRM, мастер визита) и calendar_book (калькулятор, «Записать» в
 // календаре), — одним правилом отсюда.
 
-/** Та же запись: визит того же врача на ту же минуту, ещё до прихода. */
+/**
+ * Та же запись: визит того же врача на ту же минуту, ещё до прихода, и это
+ * ЗАПИСЬ — время ему ставил calendar_book (booked_at, CROSS_BRANCH_CALENDAR_V1:
+ * его пишет только запись). Визит дня без времени (ensure_visit без book: «на
+ * дату», 09:00Z и 30 минут по умолчанию таблицы) записью не считается — запись
+ * на его час остаётся обычным переносом.
+ */
 export function isSameBooking(visit, doctorId, startMs) {
   if (!visit || !['scheduled', 'confirmed'].includes(visit.status)) return false;
+  if (!String(visit.booked_at || '').trim()) return false;
   if (!doctorId || Number(visit.doctor_id) !== Number(doctorId)) return false;
   const vMs = Date.parse(visit.visit_date);
   return Number.isFinite(vMs) && Math.floor(vMs / 60000) === Math.floor(Number(startMs) / 60000);
