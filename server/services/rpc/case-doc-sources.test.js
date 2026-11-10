@@ -116,3 +116,31 @@ test('заключения врача и исследований идут од�
     assert.equal((out.lab || []).length, 1, 'анализ пропал из своего списка');
   } finally { db.close(); }
 });
+
+// TG_LAB_MATRIX_V1 (3.23.0) — посев (панель-таблица) в истории болезни открывается
+// таблицей, как на бумаге: источник отдаёт таблицу у каждого анализа, чья активная
+// панель — таблица (shared/lab-matrix.js matrixGroupPart); обычный анализ — без неё.
+test('TG_LAB_MATRIX_V1: анализ с панелью-таблицей — с таблицей посева; обычный — без неё', () => {
+  const db = seed();
+  try {
+    db.prepare("INSERT INTO services (id, name, price, type, is_lab) VALUES (905,'Бак. посев мочи',90000,'lab',1)").run();
+    db.prepare("INSERT INTO visit_services (id, visit_id, service_id, quantity, unit_price, total, status) VALUES (65, 50, 905, 1, 0, 0, 'completed')").run();
+    const matrix = { scale: ['−', '+', '++'], sections: [{ title: 'Посев', columns: ['Рост', 'Нет роста'], rows: ['E. coli', 'S. aureus'] }] };
+    db.prepare("INSERT INTO lab_panels (name, modality, service_id, active, kind, matrix_json) VALUES ('Бак. посев', 'lab', 905, 1, 'matrix', ?)").run(JSON.stringify(matrix));
+    const cell = db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, entered_by) VALUES (65, ?, ?, 5)");
+    cell.run('E. coli · Рост', '++');
+    cell.run('S. aureus · Нет роста', '+');
+    cell.run('E. coli · Рост', '');   // степень сняли — клетка пустая
+
+    const out = admissionDocSources(db, { admission_id: 10 }, doctor);
+    const culture = out.lab.find((x) => x.name === 'Бак. посев мочи');
+    assert.ok(culture && culture.matrix, 'у посева нет таблицы — история болезни откроет его списком');
+    assert.deepEqual(culture.matrix.sections[0].rows, [{ name: 'E. coli', cells: ['', ''] }, { name: 'S. aureus', cells: ['', '+'] }]);
+    const cbc = out.lab.find((x) => x.name === 'Общий анализ крови');
+    assert.equal(cbc.matrix, undefined, 'у обычного анализа появилась таблица');
+
+    // Панель снята с работы — посев снова списком.
+    db.prepare("UPDATE lab_panels SET active = 0 WHERE service_id = 905").run();
+    assert.equal(admissionDocSources(db, { admission_id: 10 }, doctor).lab.find((x) => x.name === 'Бак. посев мочи').matrix, undefined);
+  } finally { db.close(); }
+});

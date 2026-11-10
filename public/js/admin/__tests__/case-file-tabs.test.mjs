@@ -165,6 +165,34 @@ test('пришедший результат — строка «Результа�
     }
 });
 
+// TG_LAB_MATRIX_V1 (3.23.0) — посев (панель-таблица) открывается таблицей: источник
+// (admission_doc_sources) отдаёт таблицу у анализа, экран кладёт её в группу бланка.
+test('TG_LAB_MATRIX_V1: посев в истории болезни открывается таблицей посева, а не списком «строка · графа»', async () => {
+    const matrix = { scale: ['−', '+', '++'], filled: 2, sections: [{ title: 'Посев', columns: ['Рост', 'Нет роста'],
+        rows: [{ name: 'E. coli', cells: ['++', ''] }, { name: 'S. aureus', cells: ['', '+'] }] }] };
+    SOURCES = { lab: [{ name: 'Бак. посев мочи', at: '2026-09-10T09:10:00Z', matrix,
+        results: [{ parameter: 'E. coli · Рост', value: '++' }, { parameter: 'S. aureus · Нет роста', value: '+' }] }],
+        imaging: [], functional: [] };
+    const written = [];
+    const openWas = globalThis.window.open;
+    globalThis.window.open = () => ({ document: { open() {}, write(html) { written.push(String(html)); }, close() {} }, focus() {}, print() {} });
+    try {
+        const box = caseExamsPanel(11, { onAdd: () => {}, charges: CHARGES,
+            patient: { full_name: 'Иванов Иван', mrn: 'ID-1', date_of_birth: '1994-11-15', gender: 'male' } });
+        await settle();
+        findBtn(box, 'Просмотреть').click();
+        await settle();
+        assert.equal(written.length, 1, 'документ не открылся');
+        const html = written[0].replace(/<style[\s\S]*?<\/style>/g, '');
+        assert.match(html, /<table class="res mx">/, 'посев открыт списком');
+        assert.match(html, /<td class="pname">E\. coli<\/td><td class="c mx-v">\+\+<\/td><td class="c mx-v"><\/td>/);
+        assert.ok(!html.includes('E. coli · Рост'), 'строки списка «строка · графа» в документе');
+    } finally {
+        globalThis.window.open = openWas;
+        SOURCES = { lab: [], imaging: [], functional: [] };
+    }
+});
+
 test('во вкладке «Операция» видна назначенная операция и её кнопка', async () => {
     let called = 0;
     const box = caseSurgeryPanel({ operation: { state: 'planned' } }, { items: [] },

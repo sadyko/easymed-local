@@ -144,9 +144,13 @@ async function openResultDoc(it, kind, patient) {
             unit: r.unit || '', ref: r.reference_range || '', flag: FLAG_MARK[r.flag] || '',
         }));
         if (!tests.length) { toast(tr('Результат ещё не внесён — открывать нечего.'), 'fail'); return; }
+        // TG_LAB_MATRIX_V1 (3.23.0) — посев (панель-таблица): таблицу собрал сервер
+        // (admission_doc_sources, shared/lab-matrix.js matrixGroupPart) — бланк печатает
+        // её, а не список «строка · графа». У обычного анализа таблицы нет.
+        const matrixPart = it.matrix && Array.isArray(it.matrix.sections) ? { matrix: it.matrix } : {};
         printableSheet({
             type: 'lab', title: tr('Результаты анализов'),
-            data: Object.assign({}, head, { dateOut: it.at ? dateNumeric(it.at) : '', groups: [{ title: it.name || '', tests }] }),
+            data: Object.assign({}, head, { dateOut: it.at ? dateNumeric(it.at) : '', groups: [{ title: it.name || '', tests, ...matrixPart }] }),
             autoPrint: false,   // PRINT_AUTO_V1 — «Открыть»: только показ, печать — кнопкой окна
         });
         return;
