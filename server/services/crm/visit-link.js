@@ -337,6 +337,65 @@ export function dayLineStatuses(db) {
   return [...new Set([...openStageKeys(db), wonStageKey(db), noShowStageKey(db)].filter(Boolean))];
 }
 
+/** CRM_DAY_LINES_V1 (ревью) — карточки шага A пациента, двигавшиеся последними первыми (с хозяином — для видимости). */
+export function stepACards(db, patientId) {
+  const lookIn = dayLineStatuses(db);
+  if (!lookIn.length) return [];
+  return db.prepare(`SELECT id, status, assigned_to FROM crm_requests WHERE patient_id = ? AND status IN (${holes(lookIn)})
+                      ORDER BY updated_at DESC, id DESC`).all(patientId, ...lookIn);
+}
+
+/**
+ * CRM_DAY_LINES_V1 (ревью 3.23.0) — ШАГ A КАК ЧТЕНИЕ: какие строки карточек `cards` берёт визит
+ * дня `day` (visitId — этот визит; null — визит ещё не заведён). ОДНО ПРАВИЛО для шага связи
+ * (linkTx сажает их в визит) и для сметы регистратуры (RPC crm_day_lines показывает их):
+ *   • строки ждущие, без живого визита — или держащие этот визит без строки визита, или строки
+ *     мёртвого визита («Не пришёл», отменённый); строку, которую держит ДРУГОЙ живой визит, — нет;
+ *   • на этот день; без даты — только с undated, только у живых карточек (открытые и «Не
+ *     пришёл») и только никогда не записанные (released_from_visit_id пуст — отпущенное отменой
+ *     желание само в визит не садится, O4);
+ *   • не строка отменённой записи того же дня (до CRM_ONE_WAY_V1);
+ *   • не строки карточки, привязанной к этому визиту по телефону (P-6: общий номер — не общий счёт).
+ * @returns {Array<{card: {id, status, assigned_to}, lines: object[]}>}
+ */
+export function stepALines(db, { patientId = null, day, visitId = null, undated = false, cards = null }) {
+  const open = openStageKeys(db);
+  const noShow = noShowStageKey(db);
+  const mine = cards || stepACards(db, patientId);
+  // Строки «без даты» — только у ЖИВЫХ карточек (CRM_UNIFY_V1, финальное ревью, A-C2): консультация
+  // «когда придёт» карточки в «Пришёл» вставала бы с ценой в каждый следующий визит.
+  const takeSql = (withUndated) => db.prepare(`
+    SELECT * FROM crm_request_services
+     WHERE request_id = ? AND status = 'pending'
+       AND (visit_id IS NULL
+            OR (visit_id = ? AND visit_service_id IS NULL)
+            OR NOT EXISTS (SELECT 1 FROM visits x WHERE x.id = crm_request_services.visit_id
+                              AND x.status NOT IN ('cancelled', 'no_show')))
+       AND (${withUndated ? "((scheduled_date IS NULL OR scheduled_date = '') AND released_from_visit_id IS NULL) OR " : ''}date(scheduled_date) = date(?))
+       AND NOT EXISTS (SELECT 1 FROM visits w
+                        WHERE w.status = 'cancelled' AND ${localDate('w.visit_date')} = date(crm_request_services.scheduled_date)
+                          AND (w.id = crm_request_services.visit_id
+                               OR w.id = (SELECT vs.visit_id FROM visit_services vs WHERE vs.id = crm_request_services.visit_service_id)))
+     ORDER BY id`);
+  const takeDated = takeSql(false);
+  const takeAny = undated ? takeSql(true) : takeDated;
+  const live = new Set([...open, noShow].filter(Boolean));
+  const V = visitId == null ? -1 : Number(visitId);
+  // CRM_LINK_ALL_V1 (редакция 2б, P-6) — СТРОКИ КАРТОЧКИ ПО ТЕЛЕФОНУ В ЭТОТ ВИЗИТ НЕ
+  //    ИДУТ: карточку, которая держит визит привязкой 'phone' (шаг D), шаг A
+  //    пропускает — и на следующей двери (booking_lines_add после calendar_book,
+  //    стойка, мастер визита). Общий семейный номер — не общий счёт (D4).
+  let phoneCard = null;
+  if (visitId != null) {
+    try {
+      const p = db.prepare("SELECT request_id FROM crm_booking_links WHERE visit_id = ? AND source = 'phone'").get(V);
+      phoneCard = p ? Number(p.request_id) : null;
+    } catch { phoneCard = null; }   // сборка без 189
+  }
+  return mine.filter((r) => !(phoneCard != null && Number(r.id) === phoneCard))
+    .map((r) => ({ card: r, lines: (live.has(r.status) ? takeAny : takeDated).all(r.id, V, day) }));
+}
+
 /**
  * CRM_BOOKING_OWN_CARD_V1 (3.23.0, F1) — НОМЕР КАРТОЧКИ, ПРИСЛАННЫЙ С ЗАПИСЬЮ (crm_request_id
  * у ensure_visit и calendar_book; его шлёт «Сохранить и записать» карточки, views/crm.js
@@ -591,9 +650,7 @@ function linkTx(db, v, user, { undated, arrived, desk, ownCard = null }) {
   //    её строка другого дня — запись, которая обязана дойти до визита и кассы.
   //    Ступень её не меняется (G только у живых). Проигрышные — никогда.
   const noShow = noShowStageKey(db);   // CRM_STAGE_ROLES_V1 — колонка с ролью «не пришёл» (null — роли нет)
-  const lookIn = dayLineStatuses(db);   // CRM_DAY_LINES_V1 — то же правило отдаёт смете регистратуры RPC crm_day_lines
-  const mine = db.prepare(`SELECT id, status FROM crm_requests WHERE patient_id = ? AND status IN (${holes(lookIn)})
-                            ORDER BY updated_at DESC, id DESC`).all(v.patient_id, ...lookIn);
+  const mine = stepACards(db, v.patient_id);   // CRM_DAY_LINES_V1 — то же правило отдаёт смете регистратуры RPC crm_day_lines
   // CRM_UNIFY_V1 (финальное ревью, A-C2) — строки «без даты» — только у ЖИВЫХ
   // карточек (открытые колонки и сидовая «Не пришёл»), никогда у закрытых:
   // консультация «когда придёт» карточки, перетащенной в «Пришёл» (или уже
@@ -612,36 +669,11 @@ function linkTx(db, v, user, { undated, arrived, desk, ownCard = null }) {
   // не берёт (иначе консультация отменённой записи садилась в запись анализа — повторы B1, M2).
   // Такие строки снимает разовое исправление (crm/one-way-repair.js, O8); здесь — на случай,
   // если исправление ещё не прошло. Строку, которой оператор назначил другой день, — берёт.
-  const takeSql = (withUndated) => db.prepare(`
-    SELECT * FROM crm_request_services
-     WHERE request_id = ? AND status = 'pending'
-       AND (visit_id IS NULL
-            OR (visit_id = ? AND visit_service_id IS NULL)
-            OR NOT EXISTS (SELECT 1 FROM visits x WHERE x.id = crm_request_services.visit_id
-                              AND x.status NOT IN ('cancelled', 'no_show')))
-       AND (${withUndated ? "((scheduled_date IS NULL OR scheduled_date = '') AND released_from_visit_id IS NULL) OR " : ''}date(scheduled_date) = date(?))
-       AND NOT EXISTS (SELECT 1 FROM visits w
-                        WHERE w.status = 'cancelled' AND ${localDate('w.visit_date')} = date(crm_request_services.scheduled_date)
-                          AND (w.id = crm_request_services.visit_id
-                               OR w.id = (SELECT vs.visit_id FROM visit_services vs WHERE vs.id = crm_request_services.visit_service_id)))
-     ORDER BY id`);
-  const takeDated = takeSql(false);
-  const takeAny = undated ? takeSql(true) : takeDated;
-  const live = new Set([...open, noShow].filter(Boolean));
-  // CRM_LINK_ALL_V1 (редакция 2б, P-6) — СТРОКИ КАРТОЧКИ ПО ТЕЛЕФОНУ В ЭТОТ ВИЗИТ НЕ
-  //    ИДУТ: карточку, которая держит визит привязкой 'phone' (шаг D), шаг A
-  //    пропускает — и на следующей двери (booking_lines_add после calendar_book,
-  //    стойка, мастер визита). Общий семейный номер — не общий счёт (D4).
-  let phoneCard = null;
-  try {
-    const p = db.prepare("SELECT request_id FROM crm_booking_links WHERE visit_id = ? AND source = 'phone'").get(v.id);
-    phoneCard = p ? Number(p.request_id) : null;
-  } catch { phoneCard = null; }   // сборка без 189
+  // CRM_DAY_LINES_V1 (ревью) — отбор строк шага A вынесен в stepALines: им же читает смету дня
+  // регистратуры RPC crm_day_lines (одно правило для браузера и сервера).
   const wishOnly = new Set();   // CRM_CARD_OWN_BOOKING_V1 (F4) — карточки, давшие визиту только желания без даты
-  for (const r of mine) {
-    if (phoneCard != null && Number(r.id) === phoneCard) continue;   // CRM_LINK_ALL_V1 (P-6)
+  for (const { card: r, lines } of stepALines(db, { day: v.day, visitId: v.id, undated, cards: mine })) {
     if (ownCard != null && Number(r.id) !== ownCard) continue;   // CRM_BOOKING_OWN_CARD_V1 (F1) — только строки своей карточки
-    const lines = (live.has(r.status) ? takeAny : takeDated).all(r.id, v.id, v.day);
     if (lines.length && attachWishes(db, v, lines, { actorId: uid, holdUnplaced: true })) {   // CRM_ONE_WAY_V1 (O1)
       touched.set(r.id, 'lines');
       if (lines.every((l) => l.scheduled_date == null || l.scheduled_date === '')) wishOnly.add(r.id);

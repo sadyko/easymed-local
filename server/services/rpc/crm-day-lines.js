@@ -13,23 +13,40 @@
 // (public/js/shared/crm-day-lines.js pickDayLines: строки этого приёма, одна услуга — одна
 // строка). Наружу — ТОЛЬКО услуга, врач и дата строки (и её номер и визит — смете выбрать
 // приём): ни заметок, ни телефонов, ни имени карточки, ни её хозяина. Чтение.
+//
+// РЕВЬЮ 3.23.0:
+//   • ОДНО ПРАВИЛО С ensure_visit — строки отбирает шаг A шага связи (crm/visit-link.js
+//     stepALines, undated: true), как их посадит визит дня: желания без даты живых карточек
+//     (никогда не записанные), строки мёртвого визита, строки, державшие этот визит без строки
+//     визита; не строки другого живого визита и не строки карточки, привязанной к визиту по
+//     телефону. Визит не назван — визит дня пациента (тот, что возьмёт ensure_visit), если он есть;
+//   • ДОСТУП — тем, кто открывает мастер визита и каталог услуг: администратор, регистратура,
+//     касса, врач, медсестра — все строки дня (ограничения по хозяину нет: визит их строки и так
+//     сажает). Колл-центр — только строки карточек, которые видит сам (свои и ничьи; руководитель
+//     с «crm.all» — все), как /api/db. Остальным — 403.
 import { canRead } from '../../db/schema-registry.js';
-import { effectiveRoles } from '../roles.js';
-import { dayLineStatuses } from '../crm/visit-link.js';
-import { localDate } from '../domain/day.js';
+import { effectiveRoles, hasAnyRole } from '../roles.js';
+import { stepALines } from '../crm/visit-link.js';
+import { leadVisible } from '../crm/visibility.js';
+import { dayVisitOf } from './visits.js';
 import { pickDayLines } from '../../../public/js/shared/crm-day-lines.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
 }
 
+/** CRM_DAY_LINES_V1 (ревью) — роли, которые открывают мастер визита и каталог услуг: все строки дня. */
+export const DAY_LINES_ROLES = Object.freeze(['admin', 'registrar', 'cashier', 'doctor', 'nurse']);
+
 /**
  * crm_day_lines { patient_id, day: 'YYYY-MM-DD', visit_id? } →
  *   [{ id, service_id, consultation_type_id, doctor_id, scheduled_date, visit_id }]
- * Ждущие строки этого дня у карточек пациента; без пациента или дня — пусто.
+ * Строки заявок пациента, которые возьмёт визит этого дня; без пациента или дня — пусто.
  */
 export function crmDayLines(db, args, user) {
-  if (!canRead('crm_request_services', effectiveRoles(user))) {
+  const full = hasAnyRole(user, DAY_LINES_ROLES);
+  const scoped = !full && hasAnyRole(user, ['callcenter']);
+  if ((!full && !scoped) || !canRead('crm_request_services', effectiveRoles(user))) {
     throw new RpcError('Заявки CRM вам недоступны.', 403);
   }
   const a = args || {};
@@ -37,22 +54,17 @@ export function crmDayLines(db, args, user) {
   const day = String(a.day ?? '').slice(0, 10);
   if (!Number.isInteger(pid) || pid <= 0 || !day) return [];
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new RpcError('День указан неверно.', 400);
-  const vid = a.visit_id == null || a.visit_id === '' ? null : Number(a.visit_id);
-  const statuses = dayLineStatuses(db);
-  if (!statuses.length) return [];
-  // Строка, оставшаяся на отменённой записи того же дня (до CRM_ONE_WAY_V1), — отпущенная: шаг
-  // связи её не берёт (crm/visit-link.js takeSql), и смета не предлагает.
-  const lines = db.prepare(`
-    SELECT l.id, l.service_id, l.consultation_type_id, l.doctor_id, l.scheduled_date, l.visit_id
-      FROM crm_request_services l JOIN crm_requests r ON r.id = l.request_id
-     WHERE r.patient_id = ? AND r.status IN (${statuses.map(() => '?').join(',')})
-       AND l.status = 'pending' AND date(l.scheduled_date) = date(?)
-       AND NOT EXISTS (SELECT 1 FROM visits w
-                        WHERE w.status = 'cancelled' AND ${localDate('w.visit_date')} = date(l.scheduled_date)
-                          AND (w.id = l.visit_id
-                               OR w.id = (SELECT vs.visit_id FROM visit_services vs WHERE vs.id = l.visit_service_id)))
-     ORDER BY l.id`).all(pid, ...statuses, day);
-  return pickDayLines(lines, Number.isInteger(vid) && vid > 0 ? vid : null)
+  const asked = a.visit_id == null || a.visit_id === '' ? null : Number(a.visit_id);
+  const named = Number.isInteger(asked) && asked > 0 ? asked : null;
+  const dayVisit = named == null ? dayVisitOf(db, pid, day) : null;
+  const visitId = named != null ? named : (dayVisit ? dayVisit.id : null);
+  const lines = [];
+  for (const { card, lines: ls } of stepALines(db, { patientId: pid, day, visitId, undated: true })) {
+    if (scoped && !leadVisible(db, user, card.assigned_to)) continue;   // колл-центр — как /api/db
+    lines.push(...ls);
+  }
+  lines.sort((x, y) => x.id - y.id);
+  return pickDayLines(lines, named)
     .map((l) => ({ id: l.id, service_id: l.service_id ?? null, consultation_type_id: l.consultation_type_id ?? null,
-      doctor_id: l.doctor_id ?? null, scheduled_date: l.scheduled_date, visit_id: l.visit_id ?? null }));
+      doctor_id: l.doctor_id ?? null, scheduled_date: l.scheduled_date || null, visit_id: l.visit_id ?? null }));
 }
