@@ -44,6 +44,15 @@ test('свободные начала: удержанное 10:00–10:30 зан
   assert.ok(other.slots.some((s) => s.start === '10:00'), 'у другого врача время свободно');
 });
 
+// SLOT_PACK_V1 (3.23.0) — у начал вплотную удержание — такая же занятость: начало
+// внутри него не предлагается, следующее — сразу за его концом.
+test('SLOT_PACK_V1: без шага удержанное 10:00–10:30 занято, следующее начало — 10:30', () => {
+  const { db } = setup();
+  const r = calendarSlots(db, { doctor_id: 7, date: DAY, duration_minutes: 20 }, REG);
+  assert.equal(r.packed, true);
+  assert.deepEqual(r.slots.slice(0, 5).map((s) => s.start), ['09:00', '09:20', '09:40', '10:30', '10:50']);
+});
+
 test('запись календаря и ensure_visit на удержанное время — отказ «время занято»; визит не заводится', async () => {
   const { db } = setup();
   const e1 = await refusal(calendarBook(db, { patient_id: 1, doctor_id: 7, start: new Date(at('10:15')).toISOString(), duration_minutes: 15 }, REG));

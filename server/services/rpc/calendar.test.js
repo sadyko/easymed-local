@@ -656,3 +656,72 @@ test('DOCTOR_PROFILE_V1: длительность консультации — �
   const out = await calendarBook(db, { patient_id: 3, doctor_id: 7, start: at(10), consultation_type_id: 5 }, registrar);
   assert.equal(out.visit.duration_minutes, 45);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SLOT_PACK_V1 (3.23.0) — calendar_slots БЕЗ ШАГА отдаёт начала вплотную:
+// конец записи, дальше шагом длительности. Явный шаг (партнёрский API — 15)
+// оставляет прежнюю сетку. Несохранённые строки сметы — extra_busy.
+// ═══════════════════════════════════════════════════════════════════════════
+async function ownerDay() {
+  const db = freshDb();
+  await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(9) });        // 09:00–09:30
+  await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(10, 10) });   // 10:10–10:40
+  return db;
+}
+const startsOf = (out, n = 4) => out.slots.slice(0, n).map((s) => s.start);
+
+test('SLOT_PACK_V1: без шага — 10:40 сразу за записью 10:10–10:40, дальше шагом услуги', async () => {
+  const db = await ownerDay();
+  const out = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21 }, registrar);
+  assert.deepEqual(startsOf(out), ['09:30', '10:40', '11:10', '11:40']);
+  assert.equal(out.packed, true);
+  assert.equal(out.min_start, null, 'день в будущем — «сейчас» его не режет');
+  assert.equal(out.slots[1].end, '11:10');
+  const short = calendarSlots(db, { doctor_id: 7, date: DAY, duration_minutes: 15 }, registrar);
+  assert.deepEqual(startsOf(short), ['09:30', '09:45', '10:40', '10:55']);
+  db.close();
+});
+
+test('SLOT_PACK_V1: явный шаг — прежняя сетка (партнёрский API шлёт 15)', async () => {
+  const db = await ownerDay();
+  const grid = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21, step_minutes: 30 }, registrar);
+  assert.deepEqual(startsOf(grid), ['09:30', '11:00', '11:30', '12:00']);
+  assert.equal(grid.packed, false);
+  const api = calendarSlots(db, { doctor_id: 7, date: DAY, duration_minutes: 30, step_minutes: 15 }, registrar);
+  assert.deepEqual(startsOf(api), ['09:30', '10:45', '11:00', '11:15']);
+  db.close();
+});
+
+test('SLOT_PACK_EXTRA_BUSY_V1: несохранённая строка сметы занимает время — вторая встаёт сразу за ней', async () => {
+  const db = await ownerDay();
+  const out = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21, extra_busy: [{ from: '09:30', to: '09:40' }] }, registrar);
+  assert.deepEqual(startsOf(out, 3), ['09:40', '10:40', '11:10']);
+  // Мусор в extra_busy не ломает ответ и ничего не занимает.
+  const junk = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21, extra_busy: [{ from: 'x', to: '09:40' }, null, 5] }, registrar);
+  assert.deepEqual(startsOf(junk, 2), ['09:30', '10:40']);
+  assert.deepEqual(junk.busy.length, 2, 'extra_busy не попадает в список чужих записей');
+  db.close();
+});
+
+test('SLOT_PACK_V1: сегодня — первое начало «сейчас», округлённое вверх до 5 минут', async () => {
+  const db = freshDb({ workingHours: '' });
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  db.prepare('UPDATE users SET working_hours = ? WHERE id = 7').run(JSON.stringify({
+    [['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][now.getDay()]]: { enabled: true, from: '00:00', to: '23:59' },
+  }));
+  const before = Date.now();
+  const out = calendarSlots(db, { doctor_id: 7, date: today, duration_minutes: 5 }, registrar);
+  const after = Date.now();
+  const expect = new Set([before, after].map((ms) => {
+    const d = new Date(ms);
+    const exact = d.getSeconds() === 0 && d.getMilliseconds() === 0;
+    const m = Math.ceil((d.getHours() * 60 + d.getMinutes() + (exact ? 0 : 1)) / 5) * 5;
+    return m >= 24 * 60 ? '24:00' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  }));
+  assert.ok(expect.has(out.min_start), `min_start ${out.min_start}, ждали ${[...expect]}`);
+  assert.match(out.min_start, /^\d\d:\d[05]$/, 'min_start не кратно пяти');
+  assert.ok(out.slots.every((s) => s.start >= out.min_start), 'прошедшее время предложено');
+  if (out.min_start && out.min_start <= '23:50') assert.equal(out.slots[0].start, out.min_start, 'первое начало сегодня — не «сейчас»');
+  db.close();
+});

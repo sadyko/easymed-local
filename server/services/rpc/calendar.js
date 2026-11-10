@@ -137,6 +137,7 @@ import {
   BUSY_STATUSES, DEFAULT_DURATION_MIN,
   clampWindow, clinicWindow, dayWindow, formatHhmm,
   overlapsMs, serviceDurationMinutes, slotStarts, windowSegments,
+  packedStarts, packMinStart, parseHhmm,   // SLOT_PACK_V1
 } from './slot-engine.js';
 import { consultMinutes } from '../../../public/js/shared/consultation-price.js';   // DOCTOR_PROFILE_V1 — длительность вида консультации
 import { WEEKDAY_KEYS } from './slot-engine.js';   // DOCTOR_PROFILE_V1
@@ -813,10 +814,20 @@ function crossContext(db, { fromMs, toMs }) {
 /**
  * args: { doctor_id? , room_id?, date:'YYYY-MM-DD', service_id?,
  *         duration_minutes?, step_minutes?, exclude_visit_id?,
- *         consultation_type_id? }   // DOCTOR_PROFILE_V1
+ *         consultation_type_id?,   // DOCTOR_PROFILE_V1
+ *         extra_busy?: [{from:'ЧЧ:ММ', to:'ЧЧ:ММ'}] }   // SLOT_PACK_EXTRA_BUSY_V1
  *
  * Возвращает окно дня, свободные начала и занятое — всё в местном настенном
  * времени ('09:30') плюс ISO для тех, кто будет записывать.
+ *
+ * SLOT_PACK_V1 (3.23.0) — БЕЗ step_minutes начала ВПЛОТНУЮ (packedStarts):
+ * конец записи, дальше шагом длительности услуги; сегодня первое — «сейчас»
+ * вверх до 5 минут (min_start в ответе — экран упаковывает по нему же).
+ * С явным step_minutes — прежняя сетка от начала приёма: её просит партнёрский
+ * API (шаг 15, crm-api-booking.js) — опубликованный договор не меняется.
+ * extra_busy — время ещё не сохранённых строк той же сметы: в базе их нет, а
+ * вторая новая услуга к тому же врачу обязана встать сразу за первой. В
+ * список чужих записей (busy) они не попадают — это не записи.
  */
 // PUBLIC_API_V1 — internal.excludeHoldId: только для вызова изнутри сервера
 // (ensure_visit при подтверждении онлайн-записи). Маршрут /api/rpc зовёт
@@ -846,7 +857,9 @@ export function calendarSlots(db, args, user, internal = {}) {
   const serviceId = optId(a.service_id, 'service_id');
   const consultationTypeId = optId(a.consultation_type_id, 'consultation_type_id');   // DOCTOR_PROFILE_V1
   const durationMin = resolveDuration(db, { serviceId, consultationTypeId, explicit: a.duration_minutes });
-  const stepMin = a.step_minutes ? Math.max(5, Math.round(Number(a.step_minutes))) : durationMin;
+  // SLOT_PACK_V1 — явный шаг = сетка; без шага — вплотную.
+  const gridStep = a.step_minutes ? Math.max(5, Math.round(Number(a.step_minutes))) : null;
+  const stepMin = gridStep || durationMin;
   const excludeVisitId = optId(a.exclude_visit_id, 'exclude_visit_id');
 
   const win = resourceWindow(db, { doctor, room, dayIso });
@@ -863,10 +876,22 @@ export function calendarSlots(db, args, user, internal = {}) {
   // «Сейчас» отсекает прошедшие слоты только СЕГОДНЯ: вчерашний день читают,
   // чтобы посмотреть, что было, а не чтобы записать.
   const now = Date.now();
-  const minStartMin = (now >= dayStartMs && now < dayEndMs) ? minutesOfLocal(now) : null;
+  const isToday = now >= dayStartMs && now < dayEndMs;
+  const minStartMin = isToday ? minutesOfLocal(now) : null;
+  // SLOT_PACK_V1 — у упаковки первое начало сегодня — «сейчас» ВВЕРХ до 5 минут.
+  const packMin = isToday ? packMinStart(now) : null;
+
+  // SLOT_PACK_EXTRA_BUSY_V1 — несохранённые строки той же сметы. Мусор не
+  // ломает ответ и ничего не занимает (экран шлёт только то, что сам поставил).
+  const extraBusy = (Array.isArray(a.extra_busy) ? a.extra_busy : []).slice(0, 100)
+    .map((b) => ({ from: parseHhmm(b && b.from), to: b && b.to === '24:00' ? 24 * 60 : parseHhmm(b && b.to) }))
+    .filter((b) => b.from != null && b.to != null && b.to > b.from);
+  const taken = extraBusy.length ? busyMinutes.concat(extraBusy) : busyMinutes;
 
   const segments = windowSegments(win);
-  const starts = slotStarts({ segments, busy: busyMinutes, durationMin, stepMin, minStartMin });
+  const starts = gridStep
+    ? slotStarts({ segments, busy: taken, durationMin, stepMin, minStartMin })
+    : packedStarts({ segments, busy: taken, durationMin, minStartMin: packMin });
 
   // ВРЕМЯ ПОД ВОПРОСОМ (UNASSIGNED_FOREIGN). Слоты остаются свободными — в том
   // здании это, скорее всего, другой врач, — но названы: спрашивающий обязан
@@ -884,6 +909,9 @@ export function calendarSlots(db, args, user, internal = {}) {
       : { kind: 'room', id: room.id, name: room.name || '', code: room.code || '' },
     duration_minutes: durationMin,
     step_minutes: stepMin,
+    packed: !gridStep,   // SLOT_PACK_V1 — начала вплотную (false — сетка по явному шагу)
+    // SLOT_PACK_V1 — первое допустимое начало сегодня ('24:00' — сегодня уже ничего), null — не сегодня.
+    min_start: packMin == null ? null : (packMin >= 24 * 60 ? '24:00' : formatHhmm(packMin)),
     window: win ? { from: formatHhmm(win.from), to: formatHhmm(win.to), breaks: (win.breaks || []).map((b) => ({ from: formatHhmm(b.from), to: formatHhmm(b.to) })) } : null,
     slots: starts.map((t) => ({
       start: formatHhmm(t),
