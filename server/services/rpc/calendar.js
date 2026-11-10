@@ -1050,32 +1050,6 @@ function revisitDayTaken(db, dayVisit) {
   return err;
 }
 
-/**
- * args:
- *   { visit_id?, patient_id?, doctor_id?, room_id?, service_id?, branch_id?,
- *     start, duration_minutes?, status?, notes?,
- *     emergency?, emergency_reason?,
- *     consultation_type_id? }   // DOCTOR_PROFILE_V1
- *
- * Без visit_id — создаёт запись (нужен patient_id). С visit_id — переносит
- * и/или растягивает существующую: то же действие, та же проверка, тот же отказ.
- *
- * Возвращает { visit, created, emergency, cross_branch? }.
- *
- * cross_branch есть ТОЛЬКО у записи в чужое здание:
- *   { letter, name, published, reason, confirmed:false } — и `published: false`
- * означает «запись создана, слот держим здесь, но там о ней ещё не знают».
- * Экран обязан сказать это оператору словами (см. шапку файла).
- *
- * АСИНХРОННАЯ, и только из-за этого: запись в чужое здание выкладывается на
- * канал немедленно, и результат выгрузки — часть ответа, а не запись в логе,
- * которую никто не прочтёт. Запись в своё здание не ждёт ничего.
- *
- * deps — шов для тестов: publishImpl подменяет выгрузку, dataDir — папку
- * установки, onVisitLinesAdded — сверку карточки CRM после новой строки
- * (REPEAT_VISIT_V1, ревью). В бою всё берётся само (index.js зовёт вызов тремя
- * аргументами).
- */
 // ═══════════════════════════════════════════════════════════════════════════
 // CRM_JOIN_NOT_MOVE_V1 · JOIN_EXTENDS_BOOKING_V1 (3.23.0) — УСЛУГА В ЗАПИСЬ
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1125,6 +1099,32 @@ export async function extendBookingForJoin(db, user, visit, addMin, deps = {}) {
   return { ...out, next: next == null ? null : formatHhmm(next) };
 }
 
+/**
+ * args:
+ *   { visit_id?, patient_id?, doctor_id?, room_id?, service_id?, branch_id?,
+ *     start, duration_minutes?, status?, notes?,
+ *     emergency?, emergency_reason?,
+ *     consultation_type_id? }   // DOCTOR_PROFILE_V1
+ *
+ * Без visit_id — создаёт запись (нужен patient_id). С visit_id — переносит
+ * и/или растягивает существующую: то же действие, та же проверка, тот же отказ.
+ *
+ * Возвращает { visit, created, emergency, cross_branch? }.
+ *
+ * cross_branch есть ТОЛЬКО у записи в чужое здание:
+ *   { letter, name, published, reason, confirmed:false } — и `published: false`
+ * означает «запись создана, слот держим здесь, но там о ней ещё не знают».
+ * Экран обязан сказать это оператору словами (см. шапку файла).
+ *
+ * АСИНХРОННАЯ, и только из-за этого: запись в чужое здание выкладывается на
+ * канал немедленно, и результат выгрузки — часть ответа, а не запись в логе,
+ * которую никто не прочтёт. Запись в своё здание не ждёт ничего.
+ *
+ * deps — шов для тестов: publishImpl подменяет выгрузку, dataDir — папку
+ * установки, onVisitLinesAdded — сверку карточки CRM после новой строки
+ * (REPEAT_VISIT_V1, ревью). В бою всё берётся само (index.js зовёт вызов тремя
+ * аргументами).
+ */
 export async function calendarBook(db, args, user, deps = {}) {
   requireRole(user, BOOK_ROLES);
   const a = args || {};
