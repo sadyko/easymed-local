@@ -129,7 +129,8 @@ export function withConversion(stages, key) {
  *   booked_order    — колонка записи не открытая, не видимая или не ДО конверсии;
  *   confirmed_order — колонка подтверждения не открытая, не видимая, не ПОСЛЕ колонки
  *                     записи (или колонки записи нет) или не ДО конверсии;
- *   no_show_kind    — колонка «Не пришёл» не проигрышная (lost) или скрыта.
+ *   no_show_kind    — колонка «Не пришёл» — конверсия или скрыта (CRM_NO_SHOW_ANY_COLUMN_V1:
+ *                     открытая теперь допустима; прежде — только проигрышная).
  * Роли может не быть ни у одной колонки: без «записи» запись не двигает карточку, без
  * «подтверждения» отметка «Подтверждён» её не двигает, без «Не пришёл» автоматика неявки
  * выключена.
@@ -172,7 +173,9 @@ export function roleProblem(stages, role) {
   }
   if (role === 'no_show') {
     const n = at('no_show');
-    return n >= 0 && (list[n].kind !== 'lost' || !isActive(list[n])) ? 'no_show_kind' : null;
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — любая видимая колонка, кроме конверсии (прежде — только
+    // проигрышная). Владелец: «we also need to add the "unarrived" status tick».
+    return n >= 0 && (list[n].kind === 'won' || !isActive(list[n])) ? 'no_show_kind' : null;
   }
   return null;
 }

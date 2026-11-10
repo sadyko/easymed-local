@@ -426,7 +426,10 @@ test('CRM_STAGE_ROLES_V1: validateStages — те же отказы ролей, 
     bad(setRole(ROLED, 'came', 'booked'), /^Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией\.$/);
     bad(setRole(ROLED, 'in_process', 'confirmed'), /^Колонка подтверждения должна быть/);
     bad(setRole(ROLED, 'stopped', 'booked'), /^Колонка записи/);
-    bad(setRole(ROLED, 'in_process', 'no_show'), /^Колонкой «Не пришёл» может быть только видимая проигрышная колонка\.$/);
+    // CRM_NO_SHOW_ANY_COLUMN_V1 — ПЕРЕПИСАНО НАМЕРЕННО: открытая колонка — можно; скрытая — нельзя.
+    assert.deepEqual(validateStages(setRole(ROLED, 'in_process', 'no_show'), t, ROLED), { ok: true }, '«не пришёл» на открытой колонке отвергнут');
+    bad(setRole(ROLED, 'stopped', 'no_show').map((s) => (s.key === 'stopped' ? { ...s, is_active: 0 } : s)),
+        /^Колонкой «Не пришёл» может быть любая видимая колонка, кроме колонки-конверсии\.$/);
     bad(ROLED.map((s) => (s.key === 'scheduled' ? { ...s, is_active: 0 } : s)), /^Колонка «Записан» — колонка записи: сначала передайте роль другой колонке\.$/);
     // Ревью: снять галочку и удалить колонку одной правкой можно (как снять и скрыть).
     assert.deepEqual(validateStages(ROLED.filter((s) => s.key !== 'approved'), t, ROLED), { ok: true });
@@ -438,11 +441,24 @@ test('CRM_STAGE_ROLES_V1: validateStages — те же отказы ролей, 
 });
 
 test('CRM_STAGE_ROLES_V1: отметки ролей — какие роли предлагает строка; бейджи «запись», «подтверждение», «не пришёл»', () => {
-    assert.deepEqual(roleOptionsFor({ kind: 'open' }), ['booked', 'confirmed']);
+    // CRM_NO_SHOW_ANY_COLUMN_V1 — «не пришёл» и у открытых колонок; у конверсии — ничего.
+    assert.deepEqual(roleOptionsFor({ kind: 'open' }), ['booked', 'confirmed', 'no_show']);
     assert.deepEqual(roleOptionsFor({ kind: 'lost' }), ['no_show']);
     assert.deepEqual(roleOptionsFor({ kind: 'won' }), []);
     assert.deepEqual(Object.fromEntries(Object.entries(ROLE_BADGES).map(([k, v]) => [k, v.label])),
         { booked: 'запись', confirmed: 'подтверждение', no_show: 'не пришёл' });
+});
+
+// CRM_NO_SHOW_ANY_COLUMN_V1 — колонка с ролью «не пришёл» на доске — неявка, а не живая работа и не
+// «Записан»: отчёт доски считает её потерей (как сервер, config.js lostStageKeys), среди
+// активных её нет.
+test('CRM_NO_SHOW_ANY_COLUMN_V1: boardConfig — колонка «Не пришёл» на открытой колонке среди потерянных, не среди активных', () => {
+    const b = boardConfig({ stages: setRole(ROLED, 'in_process', 'no_show') });
+    assert.deepEqual(b.activeStatuses, ['scheduled', 'approved']);
+    assert.deepEqual(b.lostStatuses, ['no_show', 'stopped', 'in_process']);
+    const seed = boardConfig({ stages: ROLED });
+    assert.deepEqual(seed.activeStatuses, ['in_process', 'scheduled', 'approved']);
+    assert.deepEqual(seed.lostStatuses, ['no_show', 'stopped']);
 });
 
 // CLINIC_API_STEP7_V1 — источник подключения API доезжает до экрана с пометкой.

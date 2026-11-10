@@ -201,7 +201,10 @@ export function crmNoShowSweep(db, { day = null } = {}) {
   try {
     const noShow = noShowStageKey(db);   // CRM_STAGE_ROLES_V1 — роль колонки; нет — проход выключен
     if (!noShow) return moved;
-    const open = openStageKeys(db);
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — колонка «Не пришёл» бывает открытой: её карточки не ждут
+    // приёма и второй раз не ставятся (openStageKeys её уже не отдаёт; фильтр — на случай, если
+    // правило там поменяют).
+    const open = openStageKeys(db).filter((k) => k !== noShow);
     const booked = scheduledStageKey(db);
     const waiting = booked && open.includes(booked) ? open.slice(open.indexOf(booked)) : [];
     if (!waiting.length) return moved;

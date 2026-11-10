@@ -314,6 +314,27 @@ test('CRM_LINKS_V1: своя проигрышная колонка считае�
   db.close();
 });
 
+// CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — роль «не пришёл» на ОТКРЫТОЙ колонке: отчёт считает её
+// карточки неявкой (а не потерей и не зависшей работой оператора), как у проигрышной.
+test('CRM_NO_SHOW_ANY_COLUMN_V1: «не пришёл» на открытой колонке — показатель «не пришёл», не потеря и не «зависшие»', () => {
+  const db = seed();
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'in_process'").run();
+  const a = addLead(db, { day: '2026-08-12', localHour: 10, status: 'in_process' });
+  const b = addLead(db, { day: '2026-08-12', localHour: 11, status: 'recall' });
+  addLead(db, { day: '2026-08-17', localHour: 12, status: 'no_show' });
+  addLead(db, { day: '2026-08-17', localHour: 13, status: 'stopped' });
+  // Нетронуты 10 дней — «зависли» бы, будь они работой оператора.
+  db.prepare("UPDATE crm_requests SET updated_at = datetime('now','localtime','-10 days') WHERE id IN (?, ?)").run(a, b);
+
+  const r = callcenterReport(db, RANGE, USER);
+
+  assert.equal(r.kpi.no_show, 1, 'колонка с ролью «не пришёл» не посчитана неявкой');
+  assert.equal(r.kpi.lost, 2, 'сидовая «Не пришёл» без роли — обычная проигрышная');
+  assert.deepEqual(r.stale.oldest.map((x) => x.status), ['Перезвонить'], 'неявка посчитана зависшей работой оператора');
+  db.close();
+});
+
 test('CRM_LINKS_V1: конверсия считается по колонке-конверсии справочника', () => {
   const db = seed();
   db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('waiting_pay','Ждёт оплаты','info',9,1,'open')").run();

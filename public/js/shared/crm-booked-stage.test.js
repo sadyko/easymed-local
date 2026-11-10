@@ -81,7 +81,7 @@ test('withRole: роль одна на воронку и у колонки од�
   assert.equal(roleKey(off, 'no_show'), null);
   assert.equal(roleKey(ROLED, 'booked'), 'scheduled', 'чистая функция правит вход');
 });
-test('roleRefusal: запись — открытая видимая до конверсии; подтверждение — после записи и до конверсии; «Не пришёл» — проигрышная', () => {
+test('roleRefusal: запись — открытая видимая до конверсии; подтверждение — после записи и до конверсии; «Не пришёл» — любая видимая, кроме конверсии', () => {
   assert.equal(roleRefusal(ROLED), null);
   assert.equal(roleRefusal(withRole(ROLED, 'came', 'booked')), 'booked_order', 'конверсия — колонка записи');
   assert.equal(roleRefusal(withRole(ROLED, 'stopped', 'booked')), 'booked_order', 'проигрышная — колонка записи');
@@ -92,7 +92,13 @@ test('roleRefusal: запись — открытая видимая до кон�
   assert.equal(roleRefusal(withRole(ROLED, 'scheduled', 'booked', false)), 'confirmed_order', 'подтверждение без записи');
   assert.equal(roleRefusal(hide(ROLED, 'approved')), 'confirmed_order', 'скрытая — колонка подтверждения');
   assert.equal(roleRefusal(withRole(ROLED, 'approved', 'confirmed', false)), null, 'без подтверждения можно');
-  assert.equal(roleRefusal(withRole(ROLED, 'recall', 'no_show')), 'no_show_kind', '«Не пришёл» — открытая');
+  // CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — ПЕРЕПИСАНО НАМЕРЕННО: «Не пришёл» — любая видимая колонка,
+  // кроме конверсии (владелец: «we also need to add the "unarrived" status tick»).
+  assert.equal(roleRefusal(withRole(ROLED, 'recall', 'no_show')), null, '«Не пришёл» на открытой колонке — можно');
+  assert.equal(roleRefusal(withRole(ROLED, 'in_process', 'no_show')), null, 'и на первой открытой');
+  assert.equal(roleRefusal(withRole(ROLED, 'came', 'no_show')), 'no_show_kind', '«Не пришёл» на конверсии — нельзя');
+  assert.equal(roleRefusal(withRole(hide(ROLED, 'recall'), 'recall', 'no_show'), ROLED), 'no_show_kind', 'новая роль скрытой открытой колонке');
+  assert.equal(roleProblem(withRole(ROLED, 'recall', 'no_show'), 'no_show'), null);
   assert.equal(roleRefusal(withRole(ROLED, 'stopped', 'no_show')), null, 'другая проигрышная — можно');
   assert.equal(roleRefusal(withRole(hide(ROLED, 'stopped'), 'stopped', 'no_show'), ROLED), 'no_show_kind', 'новая роль скрытой колонке');
   assert.equal(roleRefusal(hide(ROLED, 'no_show'), hide(ROLED, 'no_show')), null, 'скрытая «Не пришёл» с прежней ролью (миграция 284) — можно');

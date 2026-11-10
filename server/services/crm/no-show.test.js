@@ -295,6 +295,52 @@ test('роли «не пришёл» нет — проход выключен; �
   assert.deepEqual([st(db, rid), st(db, dated)], ['scheduled', 'scheduled']);
 });
 
+// CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — РОЛЬ «НЕ ПРИШЁЛ» НА ОТКРЫТОЙ КОЛОНКЕ. Владелец: «we also need
+// to add the "unarrived" status tick». Колонка «Не пришёл» может быть открытой — тогда проход обязан
+// не считать её карточки ждущими приёма: иначе каждый час он «ставил» бы их в неё заново (и
+// отчитывался о них), а карточки из неё уезжали бы по правилам открытых колонок.
+// Дни — по часам базы (SQLite localtime), как у прохода: поздним вечером дни JS и базы расходятся.
+const dbDay = (db, off) => db.prepare("SELECT date('now', 'localtime', ?) AS d").get(off + ' days').d;
+const visitDb = (db, d) => Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (1, strftime('%Y-%m-%dT%H:%M:%SZ', ? || ' 10:00:00', 'utc'), 'scheduled')")
+  .run(d).lastInsertRowid);
+const noShowOn = (db, key, pos = null) => {
+  if (pos != null) db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES (?, 'Неявка', 'crit', ?, 1, 'open')").run(key, pos);
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = ?").run(key);
+};
+
+test('CRM_NO_SHOW_ANY_COLUMN_V1: «не пришёл» на открытой колонке ПОСЛЕ «Колонки записи» — карточка уходит туда ровно один раз', () => {
+  const db = freshDb();
+  noShowOn(db, 'missed', 4);   // открытая «Неявка» между «Подтверждён» и «Пришёл»
+  const y = dbDay(db, -1), y2 = dbDay(db, -2);
+  const vid = visitDb(db, y); const rid = lead(db, { date: y }); line(db, rid, vid, y);
+  const already = lead(db, { status: 'missed', date: y2 }); line(db, already, visitDb(db, y2), y2);
+  assert.deepEqual(crmNoShowSweep(db), [rid]);
+  assert.equal(st(db, rid), 'missed');
+  assert.deepEqual(crmNoShowSweep(db), [], 'проход снова «поставил» карточку, которая уже в колонке «Не пришёл»');
+  assert.deepEqual(crmNoShowSweep(db), []);
+  assert.equal(st(db, already), 'missed');
+  // Самоисправление поднимает из неё же; догоняющий проход её видит.
+  crmVisitStatus(db, { visitId: vid, from: null, to: 'arrived' });
+  assert.equal(st(db, rid), 'came');
+});
+
+test('CRM_NO_SHOW_ANY_COLUMN_V1: «не пришёл» на открытой колонке ДО «Колонки записи» («Перезвонить») — туда, один раз', () => {
+  const db = freshDb();
+  noShowOn(db, 'recall');
+  const y = dbDay(db, -1);
+  const vid = visitDb(db, y); const rid = lead(db, { date: y }); line(db, rid, vid, y);
+  const dated = lead(db, { date: y });
+  assert.deepEqual(sorted(crmNoShowSweep(db)), sorted([rid, dated]));
+  assert.deepEqual([st(db, rid), st(db, dated)], ['recall', 'recall']);
+  assert.deepEqual(crmNoShowSweep(db), []);
+  // Догоняющий проход поднимает из неё по отметке «Пришёл».
+  db.prepare("UPDATE visits SET status = 'arrived' WHERE id = ?").run(vid);
+  crmArrivalCatchUp(db);
+  assert.equal(st(db, rid), 'came');
+  assert.equal(st(db, dated), 'recall');
+});
+
 // ─── САМОИСПРАВЛЕНИЕ: ДОКАЗАТЕЛЬСТВО, ПРИШЕДШЕЕ ПОЗЖЕ ─────────────────────
 
 test('оплата вчерашнего визита приходит сегодня — карточка с записью поднимается в «Пришёл»', () => {

@@ -37,18 +37,22 @@ const SEED_NO_SHOW = 'no_show';
 export function stageKeysFrom(data) {
     const cfg = shapeConfig(data);
     const stages = cfg.stages;
-    const open = stages.filter((s) => s.kind === 'open').map((s) => s.key);
-    const lost = stages.filter((s) => s.kind === 'lost').map((s) => s.key);
+    const lostKind = stages.filter((s) => s.kind === 'lost').map((s) => s.key);
+    // Своей колонки «Не пришёл» нет — берём первую проигрышную: угадывать
+    // другую ПО ИМЕНИ хуже, чем назвать единственное, что известно.
+    // CRM_STAGE_ROLES_V1 — колонка с ролью «не пришёл» (null — роли нет); догадка выше —
+    // только у сервера без ролей.
+    const noShow = cfg.hasRoles ? roleKey(stages, 'no_show') : (lostKind.includes(SEED_NO_SHOW) ? SEED_NO_SHOW : (lostKind[0] || null));
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — колонка «Не пришёл» бывает открытой: для работы с
+    // воронкой она «Не пришёл», не живая (как у сервера, config.js openStageKeys / lostStageKeys).
+    const open = stages.filter((s) => s.kind === 'open' && s.key !== noShow).map((s) => s.key);
+    const lost = noShow && !lostKind.includes(noShow) ? [...lostKind, noShow] : lostKind;
     const won = stages.find((s) => s.kind === 'won');
     return {
         open,
         won: won ? won.key : FALLBACK_CONVERT_STAGE,
         lost,
-        // Своей колонки «Не пришёл» нет — берём первую проигрышную: угадывать
-        // другую ПО ИМЕНИ хуже, чем назвать единственное, что известно.
-        // CRM_STAGE_ROLES_V1 — колонка с ролью «не пришёл» (null — роли нет); догадка выше —
-        // только у сервера без ролей.
-        noShow: cfg.hasRoles ? roleKey(stages, 'no_show') : (lost.includes(SEED_NO_SHOW) ? SEED_NO_SHOW : (lost[0] || null)),
+        noShow,
     };
 }
 

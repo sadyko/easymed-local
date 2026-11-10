@@ -162,10 +162,14 @@ export const ROLE_BADGES = Object.freeze({
     confirmed: Object.freeze({ label: 'подтверждение', kind: 'teal' }),
     no_show: Object.freeze({ label: 'не пришёл', kind: 'crit' }),
 });
-/** Какие роли можно отметить у колонки: открытой — запись и подтверждение, проигрышной — «не пришёл», конверсии — никакие. */
+/**
+ * Какие роли можно отметить у колонки: открытой — запись, подтверждение и «не пришёл», проигрышной —
+ * «не пришёл», конверсии — никакие. CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — «не пришёл» и у открытой
+ * (владелец: «we also need to add the "unarrived" status tick»).
+ */
 export function roleOptionsFor(stage) {
     const kind = stage && stage.kind;
-    if (kind === 'open') return ['booked', 'confirmed'];
+    if (kind === 'open') return ['booked', 'confirmed', 'no_show'];   // CRM_NO_SHOW_ANY_COLUMN_V1
     if (kind === 'lost') return ['no_show'];
     return [];
 }
@@ -175,7 +179,7 @@ const ROLE_REFUSALS = {
     role_twice: 'Каждую роль можно отметить только у одной колонки.',
     booked_order: 'Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией.',
     confirmed_order: 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.',
-    no_show_kind: 'Колонкой «Не пришёл» может быть только видимая проигрышная колонка.',
+    no_show_kind: 'Колонкой «Не пришёл» может быть любая видимая колонка, кроме колонки-конверсии.',   // CRM_NO_SHOW_ANY_COLUMN_V1
 };
 const ROLE_LEAVING = {
     booked: 'Колонка «{label}» — колонка записи: сначала передайте роль другой колонке.',
@@ -580,6 +584,7 @@ export function shapeConfig(data) {
 export function boardConfig(data) {
     const cfg = shapeConfig(data);
     const won = cfg.stages.find((s) => s.kind === 'won');
+    const noShowKey = cfg.hasRoles ? roleKey(cfg.stages, 'no_show') : null;   // CRM_NO_SHOW_ANY_COLUMN_V1
     return {
         statuses: cfg.stages.filter((s) => s.is_active).map((s) => [s.key, s.label, tagKind(s.color)]),
         statusRu: Object.fromEntries(cfg.stages.map((s) => [s.key, [s.label, tagKind(s.color)]])),
@@ -589,8 +594,11 @@ export function boardConfig(data) {
         // CONVERT_STATUS can never be undefined: it is the only path that
         // registers a patient.
         convertStatus: won ? won.key : FALLBACK_CONVERT_STAGE,
-        activeStatuses: cfg.stages.filter((s) => s.is_active && s.kind === 'open').map((s) => s.key),
-        lostStatuses: cfg.stages.filter((s) => s.kind === 'lost').map((s) => s.key),
+        // CRM_NO_SHOW_ANY_COLUMN_V1 — колонка с ролью «не пришёл» бывает открытой: для доски она неявка
+        // (как у сервера, config.js openStageKeys / lostStageKeys) — не среди активных, среди потерянных.
+        activeStatuses: cfg.stages.filter((s) => s.is_active && s.kind === 'open' && s.key !== noShowKey).map((s) => s.key),
+        lostStatuses: [...cfg.stages.filter((s) => s.kind === 'lost').map((s) => s.key),
+            ...cfg.stages.filter((s) => s.kind === 'open' && s.key === noShowKey).map((s) => s.key)],
         // CRM_HEAD_MERGE_TAGS_V1 — метки: tags [[key, label, tagKind]] — ВИДИМЫЕ,
         // их предлагают окно заявки и фильтр; tagRu {key: [label, tagKind]} —
         // ВСЕ, потому что скрытая метка на карточке, где уже стоит, остаётся

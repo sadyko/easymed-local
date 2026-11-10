@@ -228,11 +228,30 @@ function stageKeysOfKind(db, kind, fallback) {
   }
 }
 
-/** Stages a lead is still ALIVE in. */
-export function openStageKeys(db) { return stageKeysOfKind(db, 'open', SEED_OPEN); }
+/**
+ * Stages a lead is still ALIVE in.
+ * CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — кроме колонки с ролью «не пришёл», даже открытой: для
+ * автоматики она «Не пришёл», а не ждущая работа. Иначе проход наутро «ставил» бы её карточки в неё
+ * заново каждый час, запись прошлого дня уводила бы их в «Записан», возврат в начало воронки
+ * (firstStageKey) и новая карточка (open[0]) уходили бы в неё. Кто считает «Не пришёл» живой
+ * (контакт, запись, приход), добавляет noShowStageKey сам — как и прежде, когда она была проигрышной.
+ */
+export function openStageKeys(db) {
+  const open = stageKeysOfKind(db, 'open', SEED_OPEN);
+  const noShow = noShowStageKey(db);
+  return noShow ? open.filter((k) => k !== noShow) : open;
+}
 
-/** Stages a lead is lost in — the no-show column among them. */
-export function lostStageKeys(db) { return stageKeysOfKind(db, 'lost', SEED_LOST); }
+/**
+ * Stages a lead is lost in — the no-show column among them.
+ * CRM_NO_SHOW_ANY_COLUMN_V1 — и колонка с ролью «не пришёл», когда она открытая (в конце списка):
+ * отчёты считают её карточки неявкой, а не живой работой.
+ */
+export function lostStageKeys(db) {
+  const lost = stageKeysOfKind(db, 'lost', SEED_LOST);
+  const noShow = noShowStageKey(db);
+  return noShow && !lost.includes(noShow) ? [...lost, noShow] : lost;
+}
 
 /** The one conversion column — schema-guaranteed unique, never undefined. */
 export function wonStageKey(db) {
@@ -255,7 +274,10 @@ const LEGACY = Symbol('crm-stages-before-284');
 function roleStage(db, role, kind) {
   try {
     if (!db.prepare('SELECT 1 FROM crm_stages LIMIT 1').get()) return EMPTY;
-    const r = db.prepare('SELECT key FROM crm_stages WHERE role = ? AND kind = ? ORDER BY position, key LIMIT 1').get(role, kind);
+    // CRM_NO_SHOW_ANY_COLUMN_V1 — kind может быть списком видов («не пришёл» — открытая или проигрышная).
+    const kinds = Array.isArray(kind) ? kind : [kind];
+    const r = db.prepare(`SELECT key FROM crm_stages WHERE role = ? AND kind IN (${kinds.map(() => '?').join(',')})
+                           ORDER BY position, key LIMIT 1`).get(role, ...kinds);
     if (!r) return null;
     // CRM_STAGE_ROLES_V1 (ревью) — «запись» на скрытой колонке или после конверсии (ручная правка
     // базы, откат версии) не действует: как неотмеченная. То же «подтверждение», стоящее не
@@ -275,14 +297,18 @@ function legacyBookedChoice(db) {
 }
 
 /**
- * «Не пришёл». CRM_STAGE_ROLES_V1 — ПЕРЕПИСАНО: проигрышная колонка с ролью «не пришёл»
+ * «Не пришёл». CRM_STAGE_ROLES_V1 — ПЕРЕПИСАНО: колонка с ролью «не пришёл» (CRM_NO_SHOW_ANY_COLUMN_V1 —
+ * проигрышная или открытая, не конверсия)
  * (отметка в «CRM-канбан»), а не сидовый ключ и не «первая проигрышная». null — роли нет:
  * автоматика «Не пришёл» выключена (проход наутро, отметка в календаре, возврат на стойке),
  * и ничего не уносится в колонку, которую клиника под это не отмечала.
  */
 export function noShowStageKey(db) {
-  const k = roleStage(db, 'no_show', 'lost');
-  if (k === LEGACY) return lostStageKeys(db).includes('no_show') ? 'no_show' : null;
+  // CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — роль на открытой или проигрышной колонке; на конверсии
+  // (ручная правка базы мимо экрана) — не действует.
+  const k = roleStage(db, 'no_show', ['lost', 'open']);
+  // База до 284 — сидовая проигрышная; виды читаются напрямую (lostStageKeys зовёт эту функцию).
+  if (k === LEGACY) return stageKeysOfKind(db, 'lost', SEED_LOST).includes('no_show') ? 'no_show' : null;
   return k === EMPTY ? null : k;
 }
 
@@ -377,7 +403,7 @@ const ROLE_REFUSALS = {
   role_twice: 'Каждую роль можно отметить только у одной колонки.',
   booked_order: BOOKED_REFUSAL,
   confirmed_order: 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.',
-  no_show_kind: 'Колонкой «Не пришёл» может быть только видимая проигрышная колонка.',
+  no_show_kind: 'Колонкой «Не пришёл» может быть любая видимая колонка, кроме колонки-конверсии.',   // CRM_NO_SHOW_ANY_COLUMN_V1
 };
 /** CRM_STAGE_ROLES_V1 — колонку с ролью скрывают или удаляют: по шаблону на роль (подстановка — только название колонки). */
 const ROLE_LEAVING = {
@@ -580,7 +606,7 @@ function requireArray(v, what) {
  * crm-booked-stage.js): колонку с ролью скрыли или удалили, не передав роль другой
  * («сначала передайте роль другой колонке»); колонка записи не открытая, не видимая или
  * не до конверсии (в том числе после перестановки); подтверждение не после записи и не до
- * конверсии; «Не пришёл» не видимая проигрышная; одна роль у двух колонок.
+ * конверсии; «Не пришёл» скрыта или на конверсии (CRM_NO_SHOW_ANY_COLUMN_V1); одна роль у двух колонок.
  */
 export function saveStages(db, stages) {
   const kindOf = new Map(db.prepare('SELECT key, kind FROM crm_stages').all().map((r) => [r.key, r.kind]));   // CRM_UNIFY_V1

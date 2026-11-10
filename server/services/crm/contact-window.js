@@ -68,10 +68,15 @@ export function leadInWindow(db, requestId, hours = windowHours(db)) {
   return !!db.prepare(`SELECT 1 FROM crm_requests r WHERE r.id = ? AND ${inWindowSql('r')}`).get(requestId, windowArg(hours));
 }
 
-/** Первая открытая ВИДИМАЯ колонка — начало воронки («Новый лид» у клиники, Р3). null — некуда. */
+/**
+ * Первая открытая ВИДИМАЯ колонка — начало воронки («Новый лид» у клиники, Р3). null — некуда.
+ * CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — кроме колонки с ролью «не пришёл» (она бывает открытой):
+ * возврат в начало воронки не уносит карточку в неявку.
+ */
 export function firstStageKey(db) {
   try {
-    const r = db.prepare("SELECT key FROM crm_stages WHERE kind = 'open' AND is_active = 1 ORDER BY position, key LIMIT 1").get();
+    const noShow = noShowStageKey(db);
+    const r = db.prepare("SELECT key FROM crm_stages WHERE kind = 'open' AND is_active = 1 AND key IS NOT ? ORDER BY position, key LIMIT 1").get(noShow);
     return r ? r.key : null;
   } catch { return null; }
 }

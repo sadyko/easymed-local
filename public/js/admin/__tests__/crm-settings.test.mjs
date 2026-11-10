@@ -469,8 +469,12 @@ test('CRM_STAGE_ROLES_V1: галочки ролей у колонок и зна�
   const root = await render();
   assert.ok(!bookedSel(root), 'осталось прежнее поле колонки записи');
   assert.ok(!textOf(root).includes('Колонка подтверждения (запись)'), 'неверная подпись осталась');
-  // Открытым — «запись» и «подтверждение», проигрышным — «не пришёл», конверсии — ничего.
-  assert.strictEqual(roleBoxes(root).length, 3 * 2 + 2);
+  // CRM_NO_SHOW_ANY_COLUMN_V1 — ПЕРЕПИСАНО НАМЕРЕННО: открытым — «запись», «подтверждение» и
+  // «не пришёл», проигрышным — «не пришёл», конверсии — ничего.
+  assert.strictEqual(roleBoxes(root).length, 3 * 3 + 2);
+  for (const key of ['in_process', 'recall', 'approved', 'no_show', 'not_qualified']) assert.ok(roleBox(root, key, 'no_show'), 'нет галочки «не пришёл» у ' + key);
+  assert.ok(!roleBox(root, 'came', 'no_show'), 'у конверсии галочка «не пришёл»');
+  assert.ok(textOf(root).includes('галочку можно поставить любой колонке, кроме конверсии'), 'подсказка не говорит, где можно отметить «Не пришёл»');
   assert.deepStrictEqual(roleBoxes(root).filter((n) => 'checked' in n.attrs).map((n) => [n.attrs['data-crm-role-of'], n.attrs['data-crm-role']]),
     [['recall', 'booked'], ['approved', 'confirmed'], ['no_show', 'no_show']]);
   // Ревью: имя галочки называет и колонку — читалка экрана различает строки.
@@ -503,6 +507,22 @@ test('CRM_STAGE_ROLES_V1: галочка «запись» у другой кол
   assert.deepStrictEqual(Object.keys(lastSaveBody), ['stages']);
   assert.deepStrictEqual(rolesSent(lastSaveBody), { booked: 'in_process', confirmed: 'approved', no_show: 'no_show' });
   assert.ok(lastSaveBody.stages.every((s) => 'role' in s), 'строка без поля role — сервер счёл бы роли не присланными');
+});
+
+// CRM_NO_SHOW_ANY_COLUMN_V1 (3.23.0) — владелец: «we also need to add the "unarrived" status tick».
+// Галочка «не пришёл» у открытой колонки переносит роль; сохранение проходит без отказа.
+test('CRM_NO_SHOW_ANY_COLUMN_V1: галочка «не пришёл» у открытой колонки переносит роль и уходит на сервер', async () => {
+  resetServer();
+  getRespond = () => jsonOk(JSON.parse(JSON.stringify(ROLED_CONFIG)));
+  saveRespond = () => jsonOk(JSON.parse(JSON.stringify(ROLED_CONFIG)));
+  const root = await render();
+  tickRole(root, 'in_process', 'no_show');
+  assert.ok('checked' in roleBox(root, 'in_process', 'no_show').attrs);
+  assert.ok(!('checked' in roleBox(root, 'no_show', 'no_show').attrs), 'роль у двух колонок');
+  saveStagesBtn(root).click();
+  await tick();
+  assert.strictEqual(saveCalls, 1, 'экран отказал до сервера: ' + lastToast());
+  assert.deepStrictEqual(rolesSent(lastSaveBody), { booked: 'recall', confirmed: 'approved', no_show: 'in_process' });
 });
 
 test('CRM_STAGE_ROLES_V1: отказ ролей — до сервера, той же фразой, что у сервера', async () => {

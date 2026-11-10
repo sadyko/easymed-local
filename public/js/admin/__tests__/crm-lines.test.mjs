@@ -110,4 +110,12 @@ test('CRM_STAGE_ROLES_V1: stageKeysFrom — «Не пришёл» по роли 
   assert.equal(stageKeysFrom({ stages: stages.map((s) => ({ ...s, role: null })) }).noShow, null, 'без роли «Не пришёл» колонки нет');
   assert.equal(stageKeysFrom({ stages: stages.map(({ role, ...s }) => s) }).noShow, 'no_show', 'сервер без ролей — сидовый ключ');
   assert.equal(stageKeysFrom(null).noShow, 'no_show', 'запасная воронка — роли миграции 284');
+  // CRM_NO_SHOW_ANY_COLUMN_V1 — «Не пришёл» на открытой колонке: для доски она «Не пришёл», а не
+  // живая (как сервер, config.js openStageKeys / lostStageKeys): дата записи в окне заявки не
+  // переводит её карточку в «Записан» мимо правила неявки.
+  const openNoShow = stages.map((s) => ({ ...s, role: s.key === 'in_process' ? 'no_show' : (s.role === 'no_show' ? null : s.role) }));
+  const k = stageKeysFrom({ stages: openNoShow });
+  assert.equal(k.noShow, 'in_process');
+  assert.deepEqual(k.open, ['scheduled']);
+  assert.deepEqual(k.lost, ['no_show', 'gone', 'in_process']);
 });
