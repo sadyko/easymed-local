@@ -929,12 +929,15 @@ export function voidInvoice(db, args, user) {
 // Видят все, у кого касса (кассир, старший кассир, администратор): это касса
 // клиники, и список счетов кассы общий. Депозиты (DEP-) и продажи карт (CARD-)
 // возвращаются в своих вкладках — здесь их нет. Только чтение.
-const REFUND_EVENTS = ['refund_line', 'void', 'line_swap_paid'];
+// DISCOUNT_CHANGE_PAID_V1 — и «Изменить скидку» после оплаты (журнал 'discount_change', возврат
+// разницы с пометкой « DISC#<счёт>» — вид 'discount', экран: «Изменение скидки»).
+const REFUND_EVENTS = ['refund_line', 'void', 'line_swap_paid', 'discount_change'];
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function refundKind(notes) {
   const n = String(notes || '');
   if (/ SWAP#\d+/.test(n)) return 'swap';
+  if (/ DISC#\d+/.test(n)) return 'discount';   // DISCOUNT_CHANGE_PAID_V1
   if (/ LINE#\d+/.test(n)) return 'line';
   return 'payment';
 }

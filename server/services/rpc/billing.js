@@ -3275,7 +3275,12 @@ export function cashierInvoiceDiscount(db, args, user) {
     { const refusal = moneyDocRefusal(db, inv); if (refusal) throw new RpcError(refusal, 400); }
     if (inv.status !== 'unpaid' || (Number(inv.paid_amount) || 0) > 0
         || db.prepare('SELECT 1 FROM payments WHERE invoice_id = ? LIMIT 1').get(inv.id)) {
-      throw rpcT(RpcError, 'Скидку дают до оплаты: счёт уже {status}.', { status: inv.paid_amount > 0 ? 'оплачен (частично)' : statusRu(inv.status) }, 409);
+      // DISCOUNT_CHANGE_PAID_V1 — статус словами как есть: оплаченный счёт — «оплачен» (прежде любой
+      // счёт с деньгами назывался «оплачен (частично)»); «Не оплачен» с платежами в истории (оплатили
+      // и вернули) — «с платежами». После оплаты скидку меняет «Изменить скидку».
+      const st = inv.status !== 'unpaid' ? statusRu(inv.status)
+        : (Number(inv.paid_amount) || 0) > 0 ? statusRu('partial') : 'с платежами (оплата или возврат)';
+      throw rpcT(RpcError, 'Скидку дают до оплаты: счёт уже {status}. После оплаты скидку меняют кнопкой «Изменить скидку».', { status: st }, 409);
     }
     if (inv.visit_id) assertVisitMonthOpen(db, inv.visit_id);
     const own = invoiceOwnDiscount(db, inv.id);
@@ -3334,4 +3339,234 @@ export function cashierInvoiceDiscount(db, args, user) {
     return idemRemember(db, 'cashier_invoice_discount', args, user, { invoice: after, discount: add });
   });
   return run();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0, решения владельца Q2–Q4 2026-11-10) — «ИЗМЕНИТЬ СКИДКУ»
+// ПОСЛЕ ОПЛАТЫ.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Владелец: «in the cashier window, when a discount is applied we should add an option for
+// editing the discount of paid services». Скидку кассы давали только до оплаты (выше: 409
+// «Скидку дают до оплаты»), а у счёта со скидкой 100 % (сумма 0, закрыт при выставлении) не
+// было ни кнопки, ни окна «Платежи». Обход был один — частичный возврат, а его отчёты считают
+// вернувшимися деньгами. Теперь касса меняет скидку счёта и после оплаты — выше и ниже, 100 %
+// тоже (Q2), одной транзакцией вместе с деньгами, по образцу «Заменить услугу» (swapPaidLineTx).
+//
+// ЧТО МЕНЯЕТСЯ — скидка СЧЁТА: остаток скидки на строках без своей скидки (ручная, группы,
+// промокод, касса). Новая R′ — процент от суммы этих строк (база остатка) или сумма, не больше
+// базы; 0 — без скидки. Скидки строк — пакет, ставки по услугам («Сотрудники: консультация
+// 100 %»), часть кассы на строках по ставкам — не трогаются; окно это говорит. Скидка после
+// продажи (уступка деньгами, post_sale_discount) ложится снова в той же доле от новой суммы,
+// как у замены услуги: доля денег после неё (отчёты: POST_SALE_KEEP_SQL) не меняется. Счёт
+// запоминает ручную часть «как её дали» (manual_discount / manual_base — правка строк потом
+// пересчитает её в той же доле), долю скидки, уменьшающую долю врача (doctor_discount_share),
+// и след в discount_note: «Касса после оплаты: <причина> — было X, стало Y». Скидка ниже пола
+// группы пациента — явный выбор кассы: счёт помечается «Без скидки» (discount_source 'none'),
+// иначе правка строк вернула бы пол группы молча.
+//
+// «СКИДКА УМЕНЬШАЕТ ДОЛЮ ВРАЧА». Не передан — доля прежняя. Передан: скидку подняли —
+// добавленная часть идёт с ним, прежняя — со своей (средняя по суммам, как у скидки кассы до
+// оплаты); снизили — с ним идёт вся оставшаяся скидка.
+//
+// ДЕНЬГИ — как у «Заменить услугу». Новая сумма T против оплаченного P:
+//   T < P — разница возвращается сразу (refundOverpaid, пометка REFUND#<платёж> DISC#<счёт> —
+//           «Возвраты и отмены» называют её «Изменение скидки»): каждый платёж своим способом
+//           или вся разница на баланс пациента — выбирает кассир каждый раз (Q3); оплата
+//           подарочной картой — всегда на ту же карту; кэшбэк откатывается в той же доле;
+//   T > P — «К доплате T − P»: счёт частично оплачен (долг — остаётся долгом); счёт без денег,
+//           закрытый на 0 скидкой 100 %, снова «Не оплачен», и его неначатые услуги снова ждут
+//           кассу (settleZeroTotal) — начатая и сделанная работа остаётся;
+//   счёт стал оплаченным — кэшбэк по обычному правилу (один раз за жизнь счёта).
+// Доля врача и вознаграждение — прежние формулы отчётов: возврат разницы, как у замены, долю
+// не режет (чистые деньги / min(получено, сумма) = 1), вознаграждение — от полной цены.
+//
+// ОТКАЗ: счёт плательщику, депозит и продажа карты, счёт госпитализации (скидку там дают при
+// выписке), отменённый, чужого здания, закрытый месяц «Оплаты врачей» (как у замены услуги).
+// КТО (Q4): «Кассир может давать скидку» (cashier.discount) и денежная роль — кассир или
+// администратор: двигаются деньги, как у замены. Журнал счёта — 'discount_change'.
+const DISCOUNT_CHANGE_REASON = 'Изменение скидки — возврат разницы';
+
+function requireDiscountChangeRight(db, user) {
+  requireCashierDiscount(db, user);
+  if (!hasAnyRole(user, PAYMENT_ROLES)) {
+    throw new RpcError('Изменение скидки двигает деньги (возврат разницы или доплата) — его делает касса: кассир или администратор.', 403);
+  }
+}
+
+function discountChangeRefusal(db, inv) {
+  if (inv.status === 'void' || inv.status === 'refunded') return 'Счёт отменён — менять в нём нечего.';
+  if (inv.payer_id != null) return 'Счёт выставлен плательщику (страховой или организации) — его строки у кассы не правят.';
+  { const r = moneyDocRefusal(db, inv); if (r) return r; }
+  if (!inv.visit_id || inv.admission_id) return 'Это счёт госпитализации — скидку на него дают при выписке.';
+  return null;
+}
+
+// «20% (40 000 сум)» — скидка словами следа и журнала (discount-note.js на экране переводит).
+function discountWords(pct, sum) {
+  return String(Math.round(Number(pct) * 100) / 100).replace('.', ',') + '% (' + moneyWords(sum) + ' сум)';
+}
+
+// Изменение целиком, внутри транзакции вызывающего. `dryRun` — предпросмотр (транзакция
+// откатывается, ключ повтора не пишется); без значения скидки — только нынешнее состояние
+// (окно открывается с ним), причина в предпросмотре не обязательна.
+function discountChangeTx(db, args, user, { rpc, dryRun = false }) {
+  const a = args || {};
+  const invoiceId = a.invoice_id;
+  if (!isPositiveInt(invoiceId)) throw new RpcError('Счёт указан неверно.', 400);
+  const stateOnly = dryRun && (a.value === undefined || a.value === null || a.value === '');
+  let mode = null;
+  let value = null;
+  if (!stateOnly) {
+    value = Number(a.value);
+    if (!(typeof a.value === 'number' && Number.isFinite(value) && value >= 0)) throw new RpcError('Скидка — число не меньше нуля.', 400);
+    mode = a.mode === 'abs' ? 'abs' : a.mode === 'pct' ? 'pct' : null;
+    if (!mode) throw new RpcError('Укажите скидку процентом или суммой.', 400);
+    if (mode === 'pct' && value > 100) throw new RpcError('Скидка в процентах — не больше 100.', 400);
+  }
+  const reason = typeof a.reason === 'string' ? a.reason.trim() : '';
+  if (!dryRun && !reason) throw new RpcError('Укажите причину скидки.', 400);
+  if (reason.length > CASHIER_DISCOUNT_REASON_MAX) throw new RpcError('Причина скидки — не длиннее 200 знаков.', 400);
+  const rr = a.reduces_doctor_share;
+  const reduces = rr === true || rr === 1 ? 1 : rr === false || rr === 0 ? 0 : null;
+  const toBalance = !!(a.to_balance === true || a.to_balance === 1);
+  const cardFallback = a.card_fallback === 'cash' || a.card_fallback === 'balance' ? a.card_fallback : (toBalance ? 'balance' : undefined);
+
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
+  if (!inv) throw new RpcError('Счёт не найден.', 400);
+  assertOwnBuilding(db, inv, 'Счёт');
+  { const r = discountChangeRefusal(db, inv); if (r) throw new RpcError(r, 400); }
+  assertVisitMonthOpen(db, inv.visit_id);
+
+  // 1. Нынешняя скидка счёта и её база.
+  const subtotal = round2(Number(inv.subtotal) || 0);
+  const own = invoiceOwnDiscount(db, inv.id);   // скидки строк — не меняются
+  const base = invoiceRestBase(db, inv.id);     // строки без своей скидки
+  const oldPostSale = round2(Number(inv.post_sale_discount) || 0);
+  const oldTotal = round2(Number(inv.total_amount) || 0);
+  const P = round2(Number(inv.paid_amount) || 0);
+  const R = Math.max(round2((Number(inv.discount_amount) || 0) - oldPostSale - own), 0);
+  const oldShare = inv.doctor_discount_share == null || !Number.isFinite(Number(inv.doctor_discount_share))
+    ? 1 : Math.min(1, Math.max(0, Number(inv.doctor_discount_share)));
+  if (!(base > 0)) throw new RpcError('Скидке счёта класть не на что: у всех строк своя скидка (пакет или ставка по услуге) — её здесь не меняют.', 409);
+  const pctOf = (sum) => round2(sum * 100 / base);
+  const state = {
+    base, line_discounts: own, discount_before: R, pct_before: pctOf(R), share_before: oldShare,
+    post_sale_before: oldPostSale, total_before: oldTotal, paid_before: P,
+  };
+
+  // 2. Новая скидка и доля врача.
+  const want = stateOnly ? R : (mode === 'pct' ? round2(base * value / 100) : round2(value));
+  const Rn = round2(Math.min(want, base));
+  const clamped = !stateOnly && want > base + 0.005;
+  let share = reduces === null ? oldShare
+    : Rn > R + 0.005 ? (R * oldShare + (Rn - R) * reduces) / Rn
+      : reduces;
+  share = Math.round(Math.min(1, Math.max(0, share)) * 1e6) / 1e6;
+  if (stateOnly || (Math.abs(Rn - R) < 0.005 && Math.abs(share - oldShare) < 1e-6)) {
+    return { changed: false, invoice: inv, mode, value, ...state, discount_after: R, pct_after: pctOf(R), share_after: oldShare,
+      post_sale_after: oldPostSale, total_after: oldTotal, refunded: 0, due: 0, refund_plan: [], to_balance: false, clamped };
+  }
+  // Пол группы пациента (как в repriceUnpaidInvoice): касса явно поставила меньше — «Без скидки».
+  const catPct = floorApplies(inv) ? patientCategoryDiscount(db, inv.patient_id) : 0;
+  const floor = round2(invoiceFloorBase(db, inv.id) * catPct / 100);
+  const source = catPct > 0 && Rn < floor - 0.005 ? 'none' : (inv.discount_source ?? null);
+
+  // 3. Сумма счёта: скидки строк + новая скидка счёта, потом скидка после продажи в той же доле.
+  const discNoPs = Math.min(round2(own + Rn), subtotal);
+  const preTotal = round2(subtotal - discNoPs);
+  const oldPreTotal = round2(oldTotal + oldPostSale);
+  const ps = oldPostSale > 0 && oldPreTotal > 0 ? round2(Math.min(oldPostSale * preTotal / oldPreTotal, preTotal)) : 0;
+  const discount = round2(discNoPs + ps);
+  const T = round2(subtotal - discount);
+  const shareNote = share <= 0 ? ' (доля врача — от цены до скидки)' : share < 1 ? ' (доля врача — частично от цены до скидки)' : '';
+  const wasW = discountWords(pctOf(R), R);
+  const nowW = discountWords(pctOf(Rn), Rn);
+  const piece = `Касса после оплаты: ${reason || '—'} — было ${wasW}, стало ${nowW}${shareNote}`;
+  const prevNote = inv.discount_note || (R > 0 && floorApplies(inv) ? groupNote(patientGroupDiscount(db, inv.patient_id)) : null);
+  // След не длиннее 500 знаков: уходят самые старые части, новая остаётся целой.
+  const parts = [prevNote, piece].filter(Boolean).join('; ').split('; ');
+  while (parts.length > 1 && parts.join('; ').length > 500) parts.shift();
+  const note = parts.join('; ').slice(0, 500);
+  db.prepare(`UPDATE invoices SET discount_amount = ?, total_amount = ?, post_sale_discount = ?, manual_discount = ?, manual_base = ?,
+                     doctor_discount_share = ?, discount_source = ?, discount_note = ? WHERE id = ?`)
+    .run(discount, T, ps, Rn, base, share, source, note, inv.id);
+  // Счёт без денег: сумма 0 — закрыт, услуги в очередь; был закрыт на 0, стал с суммой — снова
+  // «Не оплачен», неначатые услуги снова ждут кассу (начатая работа остаётся). С деньгами — не трогает.
+  settleZeroTotal(db, inv.id);
+
+  // 4. Расчёт с заплаченным — как у «Заменить услугу».
+  let refunded = 0;
+  let due = 0;
+  let plan = [];
+  let anyBalance = false;
+  if (T < P - 0.005) {
+    ({ refunded, plan, anyBalance } = refundOverpaid(db, inv, {
+      P, T, toBalance, cardFallback, reason: DISCOUNT_CHANGE_REASON + (reason ? ': ' + reason : ''), tag: 'DISC#' + inv.id,
+    }, user));
+    db.prepare("UPDATE invoices SET paid_amount = ?, status = 'paid', paid_at = COALESCE(paid_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id = ?").run(T, inv.id);
+    adjustCashbackAfterRefund(db, db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id));   // кэшбэк — за новыми деньгами
+  } else if (T > P + 0.005) {
+    due = round2(T - P);
+    db.prepare('UPDATE invoices SET status = ?, paid_at = NULL WHERE id = ?').run(invoiceStatusFor(T, P, inv.status), inv.id);
+  } else if (P > 0) {
+    db.prepare("UPDATE invoices SET status = 'paid', paid_at = COALESCE(paid_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id = ?").run(inv.id);
+  }
+  const final0 = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+  if (final0.status === 'paid' && inv.status !== 'paid' && Number(final0.paid_amount) > 0) {
+    creditCashbackOnPaid(db, final0, user);   // стал оплаченным — кэшбэк, один раз за жизнь счёта
+  }
+  if (final0.status === 'paid' || final0.status === 'partial' || final0.status === 'debt') {
+    db.prepare(`UPDATE visit_services SET status = 'queued'
+                 WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
+                   AND status NOT IN ('queued', 'cancelled', 'in_progress', 'completed', 'collected', 'resulted')`).run(inv.id);
+  }
+
+  // 5. Журнал счёта.
+  const final = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+  lineAudit(db, {
+    inv: final, number: inv.invoice_number, visitId: inv.visit_id, action: 'discount_change',
+    fromStatus: inv.status, toStatus: final.status, amount: final.total_amount, refundAmount: refunded,
+    notes: 'Скидка счёта изменена кассой: было ' + wasW + ', стало ' + nowW + shareNote
+      + (refunded > 0 ? ' · возвращено ' + moneyWords(refunded) + ' (' + methodsWords(plan) + ')'
+        : due > 0 ? ' · к доплате ' + moneyWords(due) : ' · сумма к оплате не изменилась'),
+    reason: reason || null,
+  }, user);
+
+  const result = {
+    changed: true, invoice: final, mode, value, ...state,
+    discount_after: Rn, pct_after: pctOf(Rn), share_after: share, post_sale_after: ps, total_after: T,
+    refunded, due, refund_plan: plan, to_balance: anyBalance, clamped,
+  };
+  return dryRun ? result : idemRemember(db, rpc, args, user, result);
+}
+
+/**
+ * cashier_invoice_discount_change({ invoice_id, mode: 'pct'|'abs', value ≥ 0, reason,
+ *   reduces_doctor_share?, to_balance?, card_fallback?, idempotency_key? }) — изменить скидку
+ * счёта после оплаты (или скидку 100 %) с расчётом денег (см. шапку блока).
+ */
+export function cashierInvoiceDiscountChange(db, args, user) {
+  const rpc = 'cashier_invoice_discount_change';
+  requireDiscountChangeRight(db, user);
+  { const seen = idemReplay(db, rpc, args); if (seen) return seen; }
+  const run = db.transaction(() => discountChangeTx(db, args, user, { rpc }));
+  // IMMEDIATE — как у всех возвратов: баланс и карта читаются и меняются под одной блокировкой.
+  return run.immediate();
+}
+
+/**
+ * cashier_invoice_discount_change_quote(те же аргументы) — предпросмотр для окна: та же
+ * операция в транзакции, которая откатывается, — разойтись с тем, что сделает касса, он не
+ * может. Без value — нынешняя скидка счёта (base, discount_before, pct_before, share_before …).
+ */
+export function cashierInvoiceDiscountChangeQuote(db, args, user) {
+  requireDiscountChangeRight(db, user);
+  try {
+    db.transaction(() => { throw new SwapPreview(discountChangeTx(db, args, user, { rpc: 'cashier_invoice_discount_change_quote', dryRun: true })); })();
+  } catch (e) {
+    if (e instanceof SwapPreview) return { ...e.result, preview: true };
+    throw e;
+  }
+  return null;
 }
