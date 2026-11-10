@@ -46,6 +46,33 @@ function fileDb(n = N) {
 
 const RANGE = { from: '2024-01-01', to: '2026-12-31' };
 
+// REPORT_POOL_LOAD_TOLERANT_V1 — дешёвые вызовы основного потока, пока пул
+// считает отчёт: сколько дольше порога и 95-й процентиль (нижнее значение
+// ранга — один выброс при малом числе замеров его не сдвигает).
+const CHEAP_SLOW_MS = 250;
+const CHEAP_P95_MS = 100;
+function cheapCallStats(ms) {
+  const sorted = [...ms].sort((x, y) => x - y);
+  return {
+    slow: ms.filter((x) => x >= CHEAP_SLOW_MS).length,
+    p95: sorted.length ? sorted[Math.floor(0.95 * (sorted.length - 1))] : 0,
+  };
+}
+
+test('REPORT_POOL_LOAD_TOLERANT_V1: один выброс под нагрузкой проходит; поток, стоящий весь отчёт, — нет', () => {
+  // Прогон 3.22.0: сотни вызовов по 8–12 мс и один 639 мс — машина была занята.
+  const spike = [...Array.from({ length: 200 }, (_, i) => 8 + (i % 5)), 639];
+  assert.deepEqual(cheapCallStats(spike), { slow: 1, p95: 12 });
+  // Мало замеров — тот же выброс процентиль не сдвигает.
+  assert.ok(cheapCallStats([9, 10, 11, 12, 639]).p95 < CHEAP_P95_MS);
+  // Основной поток ждал отчёта: медленные почти все — оба правила это ловят.
+  const blocked = Array.from({ length: 20 }, (_, i) => (i < 3 ? 10 : 400));
+  assert.ok(cheapCallStats(blocked).slow > 1);
+  assert.ok(cheapCallStats(blocked).p95 >= CHEAP_P95_MS);
+  // Два выброса — уже не случайность.
+  assert.equal(cheapCallStats([...spike, 700]).slow, 2);
+});
+
 test('без файла базы пула нет — отчёт считается здесь же, как прежде', async () => {
   const db = openDb(':memory:');
   migrate(db);
@@ -71,6 +98,7 @@ test('долгий отчёт в пуле не держит основной п�
     // Пока отчёт считается — основной поток отвечает: цикл событий крутится,
     // дешёвый вызов к базе проходит сразу.
     let maxLag = 0, cheapMax = 0, ticks = 0;
+    const cheapMs = [];   // REPORT_POOL_LOAD_TOLERANT_V1 — каждый дешёвый вызов, а не только худший
     while (!done) {
       const a = performance.now();
       await new Promise((r) => setTimeout(r, 5));
@@ -79,15 +107,26 @@ test('долгий отчёт в пуле не держит основной п�
       getRpc('report_buildings')(db, {}, admin);
       // И запись: регистратура заводит пациента, пока поток отчёта читает.
       db.prepare("INSERT INTO patients (full_name) VALUES ('Новый пациент')").run();
-      cheapMax = Math.max(cheapMax, performance.now() - c);
+      const ms = performance.now() - c;
+      cheapMs.push(ms);
+      cheapMax = Math.max(cheapMax, ms);
       ticks++;
     }
     const got = await pending;
     const pooledMs = performance.now() - started;
+    const { slow: cheapSlow, p95: cheapP95 } = cheapCallStats(cheapMs);   // REPORT_POOL_LOAD_TOLERANT_V1
     console.log(`[report-pool] sync ${Math.round(syncMs)} ms (loop blocked the whole time); pooled ${Math.round(pooledMs)} ms, `
-      + `main loop max lag ${Math.round(maxLag)} ms, cheap call max ${Math.round(cheapMax)} ms, ${ticks} ticks`);
+      + `main loop max lag ${Math.round(maxLag)} ms, cheap call max ${Math.round(cheapMax)} ms, p95 ${Math.round(cheapP95)} ms, `
+      + `${cheapSlow} over ${CHEAP_SLOW_MS} ms, ${ticks} ticks`);
     assert.deepEqual(got, want, 'поток считает то же, что основной');
-    assert.ok(cheapMax < 250, `чтение и запись в основном потоке не ждали отчёта: ${Math.round(cheapMax)} мс`);
+    // REPORT_POOL_LOAD_TOLERANT_V1 (3.23.0) — было «cheapMax < 250»: в прогоне
+    // всего набора тестов параллельно (релиз 3.22.0) один вызов из сотен ждал
+    // 639 мс — машина была занята другими файлами, а не отчётом (этот файл один:
+    // 8–12 мс). Смысл проверки прежний — основной поток НЕ стоит весь отчёт:
+    // заблокированный поток сделал бы медленными почти все вызовы, а не один.
+    // Поэтому: не больше ОДНОГО вызова дольше 250 мс и 95-й процентиль меньше 100 мс.
+    assert.ok(cheapSlow <= 1, `чтение и запись в основном потоке ждали отчёта: ${cheapSlow} вызовов дольше ${CHEAP_SLOW_MS} мс из ${ticks} (худший ${Math.round(cheapMax)} мс)`);
+    assert.ok(cheapP95 < CHEAP_P95_MS, `чтение и запись в основном потоке ждали отчёта: 95-й процентиль ${Math.round(cheapP95)} мс из ${ticks} вызовов`);
     assert.ok(ticks >= 5, 'пока считался отчёт, основной поток успел ответить много раз');
     assert.ok(maxLag < Math.max(250, syncMs / 4), `цикл событий не стоял: задержка ${Math.round(maxLag)} мс при отчёте ${Math.round(syncMs)} мс`);
 
