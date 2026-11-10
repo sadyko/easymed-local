@@ -13,6 +13,7 @@ import { canNameVisitSource } from '../domain/line-referral.js';   // REFERRAL_L
 // calendar_book — единственный, кто ставит визиту время и врача.
 import { calendarSlots, calendarBook } from './calendar.js';
 import { DEFAULT_DURATION_MIN, serviceDurationMinutes, formatHhmm } from './slot-engine.js';
+import { dayStartFits } from '../../../public/js/shared/slot-pack.js';   // JOIN_EXTENDS_BOOKING_V1 — помещается ли продолжение записи
 // BILLING_AUDIT_FIX_V1 (A1) — день визита считается в МЕСТНОМ времени клиники.
 import { localDate } from '../domain/day.js';
 // CRM_CALENDAR_MIRROR_V1 · CRM_ONE_WAY_V1 — строки заявки садятся в визит в шаге связи
@@ -161,6 +162,79 @@ export function dayVisitOf(db, patientId, day) {
   return db.prepare(DAY_VISIT_SQL).get(patientId, day) || null;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_JOIN_NOT_MOVE_V1 (3.23.0, снимок владельца 2026-11-10) — УСЛУГА В ЗАПИСЬ,
+// А НЕ ПЕРЕНОС ЗАПИСИ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Пациент записан к врачу на 10:10. Оператор в карточке CRM добавлял к тому же
+// врачу ещё услугу — окно о записи не знало, предлагало 09:30, и «Сохранить и
+// записать» слало сюда book на 09:30: визит дня без работы ПЕРЕНОСИЛСЯ
+// (moved, 10:10 → 09:30), а оператор видел только тост «перенесено».
+//
+// Теперь у присоединения своя просьба — args.join { doctor_id, start,
+// duration_minutes } (то же, что мастер визита делает без book, BOOKED_JOIN_V1),
+// и та же просьба узнаётся в book: тот же врач, тот же день, до прихода и ТО
+// ЖЕ НАЧАЛО — это присоединение. calendar_book не зовётся, запись не двигается.
+// Перенос на другое время — только book с другим временем, то есть явный выбор
+// «Перенести запись на …» в окне.
+
+/** args.join → { doctorId, startMs, addMin } или null (мусор — обычный ensure_visit без времени). */
+function parseJoin(join) {
+  if (!join || typeof join !== 'object') return null;
+  const doctorId = Number(join.doctor_id);
+  const startMs = Date.parse(String(join.start || ''));
+  if (!isPositiveInt(doctorId) || Number.isNaN(startMs)) return null;
+  const dur = Math.round(Number(join.duration_minutes));
+  return { doctorId, startMs, addMin: Number.isFinite(dur) && dur > 0 ? Math.min(dur, 12 * 60) : 0 };
+}
+
+/** Запись, к которой присоединяют: визит того же врача, на ту же минуту, ещё до прихода. */
+function isJoinTarget(visit, { doctorId, startMs }) {
+  if (!visit || !['scheduled', 'confirmed'].includes(visit.status)) return false;
+  if (Number(visit.doctor_id) !== Number(doctorId)) return false;
+  const vMs = Date.parse(visit.visit_date);
+  return Number.isFinite(vMs) && Math.floor(vMs / 60000) === Math.floor(startMs / 60000);
+}
+
+/**
+ * JOIN_EXTENDS_BOOKING_V1 — присоединённая услуга удлиняет запись на свою
+ * длительность, если время за записью свободно (внутри приёма врача, ни с кем
+ * не пересекается). Иначе запись остаётся своей длины, а ответ называет, когда
+ * приём закончился бы (ends) и когда следующая запись (next) — экран говорит это
+ * оператору. Удлиняет calendar_book — та же дверь, что растягивает запись в
+ * календаре (запрет двойной записи и выгрузка филиалам — там).
+ * @returns {Promise<{extended:boolean, ends:string, next:string|null, visit?:object}>}
+ */
+async function extendJoined(db, user, visit, addMin) {
+  const startMs = Date.parse(visit.visit_date);
+  const curMin = Math.max(5, Number(visit.duration_minutes) || DEFAULT_DURATION_MIN);
+  const endMin = minutesOfLocal(startMs) + curMin;
+  const out = { extended: false, ends: formatHhmm(endMin + addMin), next: null };
+  if (!addMin || endMin + addMin > 24 * 60) return out;
+  const day = calendarSlots(db, {
+    doctor_id: visit.doctor_id, date: localDayIso(startMs), duration_minutes: addMin, exclude_visit_id: visit.id,
+  }, user);
+  if (dayStartFits(day, addMin, endMin)) {
+    try {
+      const bk = await calendarBook(db, { visit_id: visit.id, start: visit.visit_date, duration_minutes: curMin + addMin }, user);
+      return { ...out, extended: true, visit: bk.visit };
+    } catch {
+      return out;   // время заняли в ту же секунду — запись остаётся своей длины
+    }
+  }
+  const next = (day.busy || []).map((b) => hhmmToMin(b.from)).filter((m) => m >= endMin && m < endMin + addMin).sort((a, b) => a - b)[0];
+  return { ...out, next: next == null ? null : formatHhmm(next) };
+}
+
+/** Ответ ensure_visit на присоединение: тот же визит, время записи держит она сама. */
+async function finishJoin(db, user, out, join, { desk }) {
+  const ext = await extendJoined(db, user, out.visit, join.addMin);
+  const visit = ext.visit || out.visit;
+  crmLinkVisit(db, visit.id, user, { undated: true, desk });   // CRM_UNIFY_V1 — как у ensure_visit без book
+  return { visit, created: false, booked: true, joined: true, extended: ext.extended, ends: ext.ends, next: ext.next };
+}
+
 // args: { patient_id, date (ISO datetime or YYYY-MM-DD), doctor_id?,
 //         visit_type?, referral_source_id? (только стойка и колл-центр), branch_id?, notes?,
 //         desk?: true (CRM_UNIFY_V1 — регистрация на стойке; CRM_LINK_ALL_V1 (R3) — с book
@@ -236,7 +310,14 @@ export async function ensureVisit(db, args, user, internal = {}) {
   //     не присылают book: у них нет слота — не «проверка пропущена», а
   //     проверять нечего. Решает это экран (headTimedLine в visit-wizard.js),
   //     и это единственная честная причина сюда не прийти.
-  const book = parseBook(args && args.book);
+  const bookAsked = parseBook(args && args.book);
+  // CRM_JOIN_NOT_MOVE_V1 — присоединение: явная просьба join или book на ТО ЖЕ
+  // время записи того же врача (до прихода). Такой book — не запись и не перенос.
+  const joinAsk = parseJoin(args && args.join)
+    || (bookAsked && isJoinTarget(dayVisitOf(db, patientId, day), bookAsked)
+      ? { doctorId: bookAsked.doctorId, startMs: bookAsked.startMs, addMin: bookAsked.durationMin || bookDuration(db, bookAsked.serviceId) }
+      : null);
+  const book = joinAsk ? null : bookAsked;
   // CRM_LINK_ALL_V1 (R3; решение D2) — мастер на сегодня «сейчас» шлёт desk и с
   // записью на время: верим, только если слот начинается не позже чем через
   // DESK_NOW_MINUTES минут (то же правило, что у экрана, wizard-desk.js).
@@ -298,6 +379,11 @@ export async function ensureVisit(db, args, user, internal = {}) {
   });
 
   const out = run();
+  // CRM_JOIN_NOT_MOVE_V1 · JOIN_EXTENDS_BOOKING_V1 — услуга в запись: визит тот же,
+  // время записи то же; запись удлиняется, если время за ней свободно. Записи уже
+  // нет (отменили, перенесли) — обычный визит дня без времени ниже.
+  if (joinAsk && !out.created && isJoinTarget(out.visit, joinAsk)) return finishJoin(db, user, out, joinAsk, { desk });
+
   if (!book) {
     // CRM_UNIFY_V1 — строки «без даты» берёт только ensure_visit; desk — только здесь, без записи на время.
     // CRM_ONE_WAY_V1 (O1) — строки заявки, которые визит взял, садятся в него в этом же шаге.
