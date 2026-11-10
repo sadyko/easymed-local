@@ -192,8 +192,10 @@ test('CRM_PERIOD_ALL_COLUMNS_V1: строка называет выбранны�
     const to = dmy(ymdOf(now));
     assert.equal(textOf(periodLine(root)), `Период «${from} – ${to}»: показаны заявки, поступившие с ${from} по ${to}. Открытых за другие дни: 1 — Показать все`);
     const [fromInp, toInp] = walk(root).filter((n) => n.tagName === 'INPUT' && n.attrs.type === 'date');
+    // Ревью 3.23.0 (Q2) — строка только при N > 0: открытая карточка ПОСЛЕ «по» (дата в будущем).
+    S.leads.push(lead(3, 'recall', { created_at: isoAgo(-2) }));
     fromInp.value = ''; fromInp.dispatchEvent({ type: 'change', target: fromInp }); await tick(80);
-    assert.equal(textOf(periodLine(root)), `Период «по ${to}»: показаны заявки, поступившие по ${to}. Открытых за другие дни: 0 — Показать все`);
+    assert.equal(textOf(periodLine(root)), `Период «по ${to}»: показаны заявки, поступившие по ${to}. Открытых за другие дни: 1 — Показать все`);
     const [f2, t2] = walk(root).filter((n) => n.tagName === 'INPUT' && n.attrs.type === 'date');
     f2.value = ymdOf(new Date(now.getFullYear(), now.getMonth(), 1)); f2.dispatchEvent({ type: 'change', target: f2 }); await tick(80);
     t2.value = ''; t2.dispatchEvent({ type: 'change', target: t2 }); await tick(80);

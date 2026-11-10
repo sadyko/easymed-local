@@ -199,7 +199,12 @@ const state = { view: 'kanban', search: '', rows: [], sources: [], period: 'all'
                 // CRM_PERIOD_ALL_COLUMNS_V1 — открытые ВНЕ выбранного периода (лёгкие
                 // строки id/status/source/sources) для «Открытых за другие дни: N»;
                 // null — периода нет или сервер не ответил (строка без числа).
-                outside: null };
+                outside: null,
+                // CRM_PERIOD_ALL_COLUMNS_V1 (ревью) — границы периода, с которыми
+                // загружена доска: считаются ОДИН раз на загрузку (load), по ним же
+                // сужает экран (inPeriod) — без пересчёта на каждую строку и без
+                // сдвига в полночь до следующей загрузки.
+                bounds: { from: null, to: null } };
 let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний ответ поиска побеждает
 
 // Период считается по created_at — «когда обратились», а не когда записаны:
@@ -244,14 +249,26 @@ function inPeriod(r) {
     // никогда не прячет открытые») снято: при «Сегодня» на доске оставались
     // тысячи давних открытых, и фильтр выглядел сломанным. Давние открытые
     // называет строка над доской (periodLine) с кнопкой «Показать все».
-    // Границы — те же, что у загрузки (crm-board-load.js periodBounds).
-    const b = periodBounds(state.period, state.customFrom, state.customTo);
-    if (!b.from && !b.to) return true;
+    // Ревью 3.23.0 (решение координатора) — ПОИСК ВСЕГДА ПО ВСЕМ ДАТАМ: набранное
+    // в поиске период не сужает (тот, кто ищет позвонившего, ищет его, а не
+    // сегодняшних). Границы — те, с которыми загружена доска (state.bounds).
+    if (isSearching()) return true;
+    return inBounds(r, state.bounds);
+}
+const isSearching = () => !!state.search.trim();
+const periodActive = () => !!(state.bounds && (state.bounds.from || state.bounds.to));
+/** CRM_PERIOD_ALL_COLUMNS_V1 — created_at в границах (from включительно, to исключительно). */
+function inBounds(r, b) {
+    if (!b || (!b.from && !b.to)) return true;
     const t = Date.parse(r && r.created_at);
     if (!Number.isFinite(t)) return false;
     if (b.from && t < Date.parse(b.from)) return false;
     if (b.to && t >= Date.parse(b.to)) return false;   // «по» — исключительно: начало следующего дня
     return true;
+}
+/** CRM_FILTER_ALL_VALUE_V1 (ревью) — карточка видимой колонки: скрытую доска не рисует. */
+function inVisibleColumn(r) {
+    return STATUSES.some(([k]) => k === r.status);
 }
 
 // CRM_FILTER_ALL_VALUE_V1 (3.23.0) — «Все» в списках «Источник» и «Метки» —
@@ -296,16 +313,22 @@ function periodSentence() {
     return trf('Период «по {to}»: показаны заявки, поступившие по {to}.', { to });
 }
 function periodLine() {
-    const b = periodBounds(state.period, state.customFrom, state.customTo);
-    if (!b.from && !b.to) return null;
-    const visible = new Set(STATUSES.map(([k]) => k));
+    if (!periodActive()) return null;
+    // Ревью 3.23.0 — при поиске период не действует (inPeriod): вместо строки о
+    // давних открытых — что поиск идёт по всем датам.
+    if (isSearching()) {
+        return h('div', { class: 'muted crm-period-line', 'data-crm-search-all': '' }, Icon('Search', { size: 13 }), ' ', 'Поиск — по всем датам');
+    }
+    // Ревью 3.23.0 (решение координатора, Q2) — строка только когда давних
+    // открытых больше нуля; сервер не ответил (null) — строки нет, доска на месте.
     const n = Array.isArray(state.outside)
-        ? state.outside.filter((r) => visible.has(r.status) && inSource(r) && inTag(r)).length
-        : null;   // сервер не ответил — строка без числа, доска на месте
+        ? state.outside.filter((r) => inVisibleColumn(r) && inSource(r) && inTag(r)).length
+        : 0;
+    if (!(n > 0)) return null;
     return h('div', { class: 'muted crm-period-line', 'data-crm-period-line': '' },
         h('span', null, periodSentence()),
-        n == null ? null : ' ',
-        n == null ? null : h('span', { 'data-crm-period-outside': String(n) }, trf('Открытых за другие дни: {n}', { n })),
+        ' ',
+        h('span', { 'data-crm-period-outside': String(n) }, trf('Открытых за другие дни: {n}', { n })),
         ' — ',
         h('button', {
             class: 'btn btn-ghost btn-sm crm-period-all', type: 'button', 'data-crm-period-all': '',
@@ -317,8 +340,13 @@ function periodLine() {
 // оператора, сохранение карточки), чипы периода заняты: disabled + aria-busy.
 // Новая отрисовка ставит новые, свободные чипы.
 const periodChips = [];
+let periodRowEl = null;   // ревью 3.23.0 — ряд чипов: туда встаёт «Загрузка…»
 function markPeriodBusy() {
     for (const b of periodChips) { b.setAttribute('disabled', ''); b.setAttribute('aria-busy', 'true'); }
+    // Ревью 3.23.0 — занятость видна словами, а не только бледными чипами.
+    if (periodRowEl && !periodRowEl.querySelector('[data-crm-period-busy]')) {
+        periodRowEl.appendChild(h('span', { class: 'muted crm-period-busy', 'data-crm-period-busy': '', role: 'status' }, 'Загрузка…'));
+    }
 }
 // CRM_MULTI_SOURCE_V1 — фильтр отмечается по несколько: заявка видна, если
 // ХОТЯ БЫ ОДИН её источник отмечен (ничего не отмечено — видны все).
@@ -603,10 +631,11 @@ async function load() {
     // приходил после быстрого нового («Мои») и перезаписывал карточки и числа.
     // Ответ устаревшей загрузки отбрасывается целиком; false — «не рисовать».
     const my = ++loadSeq;
+    const bounds = periodBounds(state.period, state.customFrom, state.customTo);   // CRM_PERIOD_ALL_COLUMNS_V1 (ревью) — один раз на загрузку
     const [res, tasks, tags, apiMarks] = await Promise.all([
         loadBoard({
             closedKeys: closedKeys(),
-            bounds: periodBounds(state.period, state.customFrom, state.customTo),
+            bounds,
             operator: state.operator, me: selfUserId(),   // CRM_UNIFY_V1 — «Оператор» до любого предела
             outside: true,   // CRM_PERIOD_ALL_COLUMNS_V1 — открытые вне периода для строки над доской
         }),
@@ -619,11 +648,12 @@ async function load() {
     if (my !== loadSeq) return false;
     if (res.error) {
         toast(trf('Не удалось загрузить заявки: {msg}', { msg: res.error.message }), 'fail');
-        state.rows = []; state.counts = {}; state.capped = {}; state.outside = null;
+        state.rows = []; state.counts = {}; state.capped = {}; state.outside = null; state.bounds = bounds;
         return true;
     }
     state.rows = res.rows; state.counts = res.counts; state.capped = res.capped;
     state.outside = res.outside || null;   // CRM_PERIOD_ALL_COLUMNS_V1
+    state.bounds = bounds;                 // CRM_PERIOD_ALL_COLUMNS_V1 (ревью) — по ним сужает экран
     state.openTasks = nearestOpenTasks(tasks, selfUserId());   // CRM_UNIFY_V1 — своя задача первой
     state.leadTags = tags;
     state.apiMarks = apiMarks;   // PUBLIC_API_V1
@@ -638,13 +668,16 @@ let loadSeq = 0;   // CRM_UNIFY_V1 (итоговое ревью) — номер 
  * @returns {Promise<{rows: object[], error?: object}>}
  */
 export async function crmExportRows() {
+    // Ревью 3.23.0 — при поиске выгрузка, как и доска, — по всем датам.
+    const searching = isSearching();
+    const bounds = searching ? { from: null, to: null } : periodBounds(state.period, state.customFrom, state.customTo);
     const res = await loadBoard({
         closedKeys: closedKeys(),
-        bounds: periodBounds(state.period, state.customFrom, state.customTo),
+        bounds,
         operator: state.operator, me: selfUserId(), closedLimit: 0,
     });
     if (res.error) return { rows: [], error: res.error };
-    return { rows: res.rows.filter((r) => leadMatchesQuery(r, state.search) && inSource(r) && inPeriod(r) && inTag(r) && inOperator(r)) };
+    return { rows: res.rows.filter((r) => leadMatchesQuery(r, state.search) && inSource(r) && inBounds(r, bounds) && inTag(r) && inOperator(r)) };
 }
 
 // CRM_CARD_V2 — КТО это и КАК до него дозвониться, одним ответом на две строки.
@@ -862,7 +895,10 @@ async function paint() {
     // называет набранный номер по заявке с этой доски и открывает карточку тем же
     // окном, что доска. Регистрируется на каждой отрисовке: requestModal живёт в
     // этой же области видимости.
-    registerCrmPhoneHooks({ leads: () => state.rows, openLead: (r) => requestModal(r), newLead: (p) => requestModal(null, p) });   // CALL_RING_V1 — newLead: «Новая заявка» с номером звонящего
+    registerCrmPhoneHooks({ leads: () => state.rows, openLead: (r) => requestModal(r), newLead: (p) => requestModal(null, p),   // CALL_RING_V1 — newLead: «Новая заявка» с номером звонящего
+        // CRM_PERIOD_ALL_COLUMNS_V1 (ревью) — при выбранном периоде давней заявки на доске нет:
+        // панель «Телефон» открывает её через доску — из загруженных, иначе с сервера.
+        openLeadById: (id) => openLeadById(id) });
     root.appendChild(h('div', { class: 'page-head' },
         h('div', null,
             h('h1', { class: 'page-title' }, 'CRM · Заявки'),
@@ -1023,7 +1059,9 @@ async function paint() {
         // CRM_MULTI_SOURCE_V1 — число у источника: сколько заявок выборки имеют
         // этот источник. Заявка с двумя источниками считается в обоих, поэтому
         // сумма строк бывает больше «Все · N» — а «Все» считает заявки.
-        const tally = sourceTally(byPeriod);
+        // CRM_FILTER_ALL_VALUE_V1 (ревью) — без скрытых колонок, как «Все · N»: выбор
+        // «X · n» показывает n карточек (у обрезанной 300 колонки — по загруженным).
+        const tally = sourceTally(byPeriod.filter(inVisibleColumn));
 
         // Видимые источники по порядку справочника, затем скрытые, которые стоят
         // у заявок выборки (заявку со скрытым источником тоже надо уметь найти).
@@ -1046,7 +1084,8 @@ async function paint() {
             dropdown({ 'aria-label': 'Источник', 'data-src-select': '' }, srcOptions, state.sources[0] || CRM_FILTER_ALL,
                 (v) => { state.sources = isAllValue(v) ? [] : [v]; paintFilters(); paintBody(); }));   // CRM_FILTER_ALL_VALUE_V1
 
-        const perRow = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Период'));
+        const perRow = h('div', { class: 'row', 'data-crm-period-row': '', style: { gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, lbl('Период'));
+        periodRowEl = perRow;   // ревью 3.23.0 — сюда встаёт «Загрузка…»
         for (const [key, label] of PERIODS) {
             perRow.appendChild(chip(key, state.period === key, label, () => {
                 // CRM_PERIOD_CUSTOM_V1 — при первом переходе в «Свой период»
@@ -1074,7 +1113,7 @@ async function paint() {
         // иначе фильтр нельзя было бы снять.
         const bySrc = byPeriodAll.filter(inSource);
         const tagCounts = {};
-        for (const r of bySrc) for (const k of tagsOf(r)) tagCounts[k] = (tagCounts[k] || 0) + 1;
+        for (const r of bySrc) if (inVisibleColumn(r)) for (const k of tagsOf(r)) tagCounts[k] = (tagCounts[k] || 0) + 1;   // ревью: без скрытых колонок
         const order = [...TAGS.map(([k]) => k), ...Object.keys(TAG_RU).filter((k) => !TAGS.some(([t]) => t === k))];
         const shownTags = order.filter((k) => tagCounts[k] || state.tag === k);
         if (shownTags.length) {
@@ -1469,7 +1508,10 @@ async function paint() {
         const rows = filtered();
         if (!rows.length) {
             return h('div', { class: 'card', style: { padding: '26px' } },
-                h('div', { class: 'empty' }, state.rows.length ? 'Ничего не найдено.' : 'Заявок пока нет — зафиксируйте первое обращение.'));
+                h('div', { class: 'empty', 'data-list-empty': '' }, (state.rows.length || isSearching()) ? 'Ничего не найдено.'
+                    // ревью 3.23.0 — за выбранный период пусто, а заявки за другие дни есть: так и сказать
+                    : periodActive() ? 'За этот период заявок нет'
+                    : 'Заявок пока нет — зафиксируйте первое обращение.'));
         }
         const tbody = h('tbody');
         // CRM_UNIFY_V1 (итоговое ревью) — «Список» при «Всё время» показывает
@@ -3715,6 +3757,14 @@ async function paint() {
             // доску и тут же заменить другими числами значило бы мигнуть неправдой.
             if (reportRows === undefined) {
                 bodyEl.appendChild(h('div', { class: 'muted', 'data-report-loading': '' }, 'Загружаем…'));
+                return;
+            }
+            // Ревью 3.23.0 — база не ответила, а доска загружена только за свой период:
+            // считать по ней отчёт за другой срок значило бы показать неправду. Ошибка словами.
+            if (reportRows === null && periodActive()) {
+                bodyEl.appendChild(h('div', { class: 'card', 'data-report-error': '', style: { padding: '14px', color: 'var(--crit-600, #dc2626)' } },
+                    'Не удалось посчитать по базе. На доске — только выбранный период, по ней отчёт не считается. Попробуйте ещё раз.',
+                    ' ', h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => refresh() }, 'Повторить')));
                 return;
             }
             if (reportRows === null) {

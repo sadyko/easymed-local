@@ -338,6 +338,10 @@ export const STRINGS = {
   "Период «с {from}»: показаны заявки, поступившие с {from}.": {"en":"Period «from {from}»: showing requests received from {from} on.","ru":"Период «с {from}»: показаны заявки, поступившие с {from}.","uz":"Davr «{from} dan»: {from} dan boshlab kelgan arizalar ko‘rsatilgan."},   // CRM_PERIOD_ALL_COLUMNS_V1
   "Период «по {to}»: показаны заявки, поступившие по {to}.": {"en":"Period «to {to}»: showing requests received up to {to}.","ru":"Период «по {to}»: показаны заявки, поступившие по {to}.","uz":"Davr «{to} gacha»: {to} gacha kelgan arizalar ko‘rsatilgan."},   // CRM_PERIOD_ALL_COLUMNS_V1
   "Открытых за другие дни: {n}": {"en":"Open from other days: {n}","ru":"Открытых за другие дни: {n}","uz":"Boshqa kunlardagi ochiq arizalar: {n}"},   // CRM_PERIOD_ALL_COLUMNS_V1
+  // CRM_PERIOD_ALL_COLUMNS_V1 (ревью 3.23.0) — поиск по всем датам, пустой период в «Списке», «Отчёт» без запасного счёта по доске за период
+  "Поиск — по всем датам": {"en":"Search covers all dates","ru":"Поиск — по всем датам","uz":"Qidiruv — barcha sanalar bo‘yicha"},   // CRM_PERIOD_ALL_COLUMNS_V1
+  "За этот период заявок нет": {"en":"No requests in this period","ru":"За этот период заявок нет","uz":"Bu davrda arizalar yo‘q"},   // CRM_PERIOD_ALL_COLUMNS_V1
+  "Не удалось посчитать по базе. На доске — только выбранный период, по ней отчёт не считается. Попробуйте ещё раз.": {"en":"Could not count from the database. The board holds only the chosen period, so the report is not counted from it. Try again.","ru":"Не удалось посчитать по базе. На доске — только выбранный период, по ней отчёт не считается. Попробуйте ещё раз.","uz":"Bazadan hisoblab bo‘lmadi. Doskada faqat tanlangan davr bor, hisobot undan hisoblanmaydi. Qayta urinib ko‘ring."},   // CRM_PERIOD_ALL_COLUMNS_V1
   "«{label}» — {n} из {total}": {"en":"«{label}» — {n} of {total}","ru":"«{label}» — {n} из {total}","uz":"«{label}» — {total} tadan {n} ta"},   // CRM_UNIFY_V1
   // CRM_UNIFY_V1 (2026-10-09) — фильтр «Оператор»: доска, поиск, список, Excel, «Отчёт» (views/crm.js)
   "Ничьи": {"en":"Unassigned","ru":"Ничьи","uz":"Hech kimniki emas"},   // CRM_UNIFY_V1

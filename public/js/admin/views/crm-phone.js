@@ -46,6 +46,7 @@ import { tr, trf } from '../i18n.js';
 import { supabase } from '../../supabase.js';
 import { grantLevel, grantAllows, hasActorRole, isRouteAllowed } from '../permissions.js';
 import { formatPhone } from '../phone-format.js';
+import { phoneKey } from './crm-phone-match.js';   // CRM_PERIOD_ALL_COLUMNS_V1 (ревью) — ключ номера для ответа сервера
 import { askRecordingUntilReady, recordingMessage, RECORDING_WAITING, RECORDING_GAVE_UP, RECORDING_RETRY_EVERY_MS }
     from '../../shared/call-recording.js?v=crr1';   // CALL_RECORDING_REASONS_V1 — та же причина словами, что в карточке заявки
 import { MIN_DIGITS, POLL_MS, DIAL_CARD_TTL_MS, digitsOf, tail9, cleanTyped, groupTyped, canDial, outcomeOf, talkLabel,
@@ -113,6 +114,9 @@ const P = {
     // сколько раз повторяли и таймер повтора; с какого мига подключается и
     // таймер «подключается долго»; слушается ли pageshow.
     spAuto: false, spToasted: false, spTries: 0, spRetryTimer: null, spConnSince: 0, spSlowTimer: null, spSlow: false, spShowArmed: false,
+    // CRM_PERIOD_ALL_COLUMNS_V1 (ревью 3.23.0) — заявки номеров, которых нет среди
+    // загруженных на доску (выбран «Период»): ключ номера → { done, lead }.
+    leadNums: new Map(),
 };
 const ME_RETRY_MS = 30000;   // SOFTPHONE_V1 — «кто я» не ответил при загрузке: спросить снова не чаще
 const HUSH_MS = 15000;       // SOFTPHONE_V1 — станция догоняет звонок с задержкой: столько молчим о нём после конца
@@ -122,13 +126,16 @@ const MUTE_KEY = 'easymed.phone.mute';
 // Что даёт доска CRM, когда она смонтирована: заявки (назвать набранный номер по
 // имени) и способ открыть карточку заявки тем же окном, что открывает доска.
 // Доска регистрирует их на каждой своей отрисовке (views/crm.js paint()).
-const H = { leads: null, openLead: null, newLead: null };
+// CRM_PERIOD_ALL_COLUMNS_V1 (ревью 3.23.0) — и открыть заявку по номеру карточки, даже
+// если её нет среди загруженных (выбран «Период»): доска возьмёт её с сервера.
+const H = { leads: null, openLead: null, newLead: null, openLeadById: null };
 
 /** Доска CRM отдаёт панели свои заявки, окно карточки и окно новой заявки с номером (CALL_RING_V1). */
-export function registerCrmPhoneHooks({ leads = null, openLead = null, newLead = null } = {}) {
+export function registerCrmPhoneHooks({ leads = null, openLead = null, newLead = null, openLeadById = null } = {}) {
     H.leads = typeof leads === 'function' ? leads : null;
     H.openLead = typeof openLead === 'function' ? openLead : null;
     H.newLead = typeof newLead === 'function' ? newLead : null;
+    H.openLeadById = typeof openLeadById === 'function' ? openLeadById : null;   // CRM_PERIOD_ALL_COLUMNS_V1
 }
 
 /** Класс на элементе — через className: поддельный DOM стенда classList не умеет. */
@@ -157,6 +164,44 @@ function hasAudio(el) {
 // и это выглядело как «кнопка не работает».
 const busyWithAudio = () => Date.now() < P.holdUntil || !!(P.els && hasAudio(P.els.list));
 const leadsOf = () => (H.leads ? (H.leads() || []) : []);
+// CRM_PERIOD_ALL_COLUMNS_V1 (ревью 3.23.0) — доска при выбранном «Периоде» держит
+// только карточки периода, и номер давней открытой заявки панель по ним не
+// назовёт. Нет среди загруженных — спрашиваем сервер, один раз на номер
+// (crm_leads_by_phone: все стадии, видимость та же, что у доски); ответ — в
+// кэш, панель перерисовывается. Сервер не ответил или отказал — как раньше.
+function serverLeadFor(raw) {
+    const d = digitsOf(raw);
+    if (d.length < MIN_DIGITS) return null;
+    const k = phoneKey(d);
+    const seen = P.leadNums.get(k);
+    if (seen) return seen.lead;
+    const rec = { done: false, lead: null };
+    const map = P.leadNums;
+    map.set(k, rec);
+    Promise.resolve(supabase.rpc('crm_leads_by_phone', { phone: d }))
+        .then((r) => {
+            const rows = r && !r.error && Array.isArray(r.data) ? r.data : [];
+            rec.lead = rows.find((x) => x && x.can_open && x.id != null) || null;
+        })
+        .catch(() => {})
+        .finally(() => {
+            rec.done = true;
+            if (P.leadNums !== map || !rec.lead || !P.els) return;
+            paintPhone();
+            if (!busyWithAudio()) paintList();   // открытый плеер не стираем
+        });
+    return null;
+}
+/** Заявки, по которым называть номер: загруженные на доску, а если номера среди них нет — ответ сервера. */
+function leadsFor(raw) {
+    const local = leadsOf();
+    const d = digitsOf(raw);
+    if (d.length < MIN_DIGITS) return local;
+    const k = phoneKey(d);
+    if (local.some((r) => r && phoneKey(r.phone) === k)) return local;
+    const extra = serverLeadFor(d);
+    return extra ? [...local, extra] : local;
+}
 // SOFTPHONE_V1 — звонок телефона Easy-Med — тоже «карточка»: свернуть — в пилюлю, клавиши не набирают.
 const inCard = () => !!P.card || !!softCall();
 
@@ -216,8 +261,8 @@ export function mountPhoneButton(ctx = {}) {
 export function resetCrmPhone() {
     teardown();
     stopLivePoll();
-    H.leads = null; H.openLead = null; H.newLead = null;
-    Object.assign(P, { ctx: null, btn: null, btnDot: null, open: false, min: false, pick: false, typed: '',
+    H.leads = null; H.openLead = null; H.newLead = null; H.openLeadById = null;
+    Object.assign(P, { leadNums: new Map(), ctx: null, btn: null, btnDot: null, open: false, min: false, pick: false, typed: '',
         me: null, calls: [], mayDial: false, mayLog: false, mayHear: false, logError: '', seg: 'all', query: '',
         card: null, expanded: null, holdUntil: 0, msg: '',
         live: [], liveSource: 'off', ringSig: '', outSig: '', ringHidden: new Set(), ringSeen: new Map(), ringToasted: new Set(),
@@ -446,7 +491,7 @@ async function dial(number) {
     if (!P.els) return;
     if (error) { P.msg = error.message || tr('Телефония ответила ошибкой. Попробуйте ещё раз через минуту.'); paintPhone(); return; }
     const digits = digitsOf(phone);
-    const who = whoIs(digits, { leads: leadsOf(), calls: P.calls });
+    const who = whoIs(digits, { leads: leadsFor(digits), calls: P.calls });   // CRM_PERIOD_ALL_COLUMNS_V1 (ревью)
     P.card = { phase: 'ringing', digits, phone, name: who ? who.name : '', who, since: Date.now(), ext: (P.me && P.me.extension) || '' };
     P.typed = '';
     P.expanded = null;
@@ -570,7 +615,7 @@ function paintPhone() {
 
 function paintIdle() {
     const body = P.els.body;
-    const who = whoIs(P.typed, { leads: leadsOf(), calls: P.calls });
+    const who = whoIs(P.typed, { leads: leadsFor(P.typed), calls: P.calls });   // CRM_PERIOD_ALL_COLUMNS_V1 (ревью)
     const pad = h('div', { class: 'cph-pad' });
     for (const [k, sub] of KEYS) {
         pad.appendChild(h('button', {
@@ -773,10 +818,12 @@ function detailsEl(c) {
     const who = c.operator_name || c.internal_number || '';
     const actions = [];
     if (o.answered && P.mayHear) actions.push(listenButton(c));
-    const owner = whoIs(c.external_number, { leads: leadsOf(), calls: [] });
+    const owner = whoIs(c.external_number, { leads: leadsFor(c.external_number), calls: [] });   // CRM_PERIOD_ALL_COLUMNS_V1 (ревью)
     if (owner && owner.kind === 'lead') {
+        // Ответ сервера — короткая строка, не карточка доски: открываем по номеру
+        // карточки (доска найдёт её среди загруженных или возьмёт с сервера).
         actions.push(h('button', { class: 'btn btn-sm', type: 'button', 'data-cph-open-lead': '',
-            onclick: (ev) => { ev.stopPropagation(); openLead(owner.lead); } }, Icon('Headset', { size: 13 }), 'Открыть заявку'));
+            onclick: (ev) => { ev.stopPropagation(); openLeadById(owner.lead.id); } }, Icon('Headset', { size: 13 }), 'Открыть заявку'));
     }
     if (c.patient_id && P.ctx && typeof P.ctx.onNavigate === 'function' && isRouteAllowed('patient-card')) {
         actions.push(h('button', { class: 'btn btn-sm', type: 'button', 'data-cph-open-patient': '',
@@ -901,6 +948,9 @@ function openLeadById(id) {
         const row = leadsOf().find((r) => r && String(r.id) === String(id));
         if (row) { openLead(row); return; }
         if (P.ctx && typeof P.ctx.onNavigate === 'function') P.ctx.onNavigate('crm');
+        // CRM_PERIOD_ALL_COLUMNS_V1 (ревью 3.23.0) — карточки нет среди загруженных
+        // (выбран «Период»): доска откроет её с сервера тем же окном.
+        if (H.openLeadById) { H.openLeadById(id); return; }
         toast(tr('Заявки нет на доске — откройте её в CRM.'), 'warn');
     });
 }
