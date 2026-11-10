@@ -108,6 +108,8 @@ const USER = { id: 1, role: 'registrar', extra_roles: [] };
 let DB = null;
 let busyToday = false;
 const QUOTES = [];
+// Ревью потока G — котировка «по требованию»: отказ сервера (FAIL) или медленный ответ (DELAY, мс).
+const QUOTE = { FAIL: false, DELAY: 0 };
 globalThis.fetch = async (url, opts) => {
     const u = String(url);
     const body = JSON.parse((opts && opts.body) || '{}');
@@ -117,7 +119,11 @@ globalThis.fetch = async (url, opts) => {
         if (busyToday && body.date === ymd(new Date())) return ok({ date: body.date, slots: [], busy: [] });
         return ok({ date: body.date, slots: [{ start: '10:00', end: '10:30' }], busy: [] });
     }
-    if (u === '/api/rpc/service_price_quote') QUOTES.push(body);
+    if (u === '/api/rpc/service_price_quote') {
+        QUOTES.push(body);
+        if (QUOTE.FAIL) return fail(500, 'boom');
+        if (QUOTE.DELAY) await new Promise((r) => setTimeout(r, QUOTE.DELAY));
+    }
     if (u.startsWith('/api/rpc/')) {
         const handler = getRpc(decodeURIComponent(u.slice('/api/rpc/'.length)));
         if (!handler) return fail(501, 'RPC not implemented');
@@ -371,6 +377,88 @@ test('кабинет: приём 3 дня назад, прошлый УЗИ 4 д
     pastUzi(4);
     await openCabinetPicker(3);
     assert.deepEqual(smetaLine(), { chip: null, price: 80000 });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VISIT_TIER_QUOTE_SETTLE_V1 (ревью потока G) — НЕ ПИСАТЬ СТРОКУ С ЯРУСОМ ЧУЖОГО ДНЯ.
+// Котировка помнила, о чём уже спросила, ещё ДО ответа и не забывала при отказе: день
+// визита сменился («Ближайшее» — завтра), котировка на завтра не пришла (сбой) или
+// пришла поздно — смета и строка оставались с ярусом сегодняшнего дня. Прошлый УЗИ 5
+// дней назад: сегодня — 5 дней, второй визит 20 000; завтра — 6 дней, окно 3–5 прошло,
+// первичный 80 000. Писалось 20 000 — пациент недоплачивал 60 000.
+// ═══════════════════════════════════════════════════════════════════════════
+/** Калькулятор: УЗИ в смете на сегодня (врач сегодня занят — строка без времени), котировка на сегодня пришла. */
+async function calcTodayQuoted() {
+    seed();
+    pastUzi(5);
+    forgetSlots();
+    BODY.children.length = 0; TOASTS.length = 0; QUOTES.length = 0;
+    busyToday = true;
+    openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {}, patient: PATIENT });
+    await until(() => addOf('УЗИ брюшной полости'), 'строка УЗИ в каталоге');
+    addOf('УЗИ брюшной полости').click();
+    await until(() => byAttr(top(), 'data-pick-nearest', 22), 'кнопка «Ближайшее»');
+    await settle(250);
+    assert.deepEqual(smetaLine(), { chip: 'Второй визит', price: 20000 }, 'на сегодня (5 дней) — второй визит');
+}
+
+test('сбой котировки после смены дня: ярус сегодняшнего дня не остаётся в смете; при записи котировка спрашивается снова — строка «первичный» 80 000, счёт 80 000', { skip: TZ_SPLIT }, async () => {
+    try {
+        await calcTodayQuoted();
+        QUOTE.FAIL = true;
+        byAttr(top(), 'data-pick-nearest', 22).click();
+        await until(ctaReady, 'смета готова');
+        await settle(250);
+        assert.ok(QUOTES.some((q) => q.date === ymd(dayAt(1))), 'котировка на завтра не спрошена');
+        assert.notDeepEqual(smetaLine(), { chip: 'Второй визит', price: 20000 }, 'смета держит ярус сегодняшнего дня на завтрашнем визите');
+        QUOTE.FAIL = false;
+        await saveCalcFlow();
+        const line = savedLine();
+        assert.equal(ymd(new Date(line.visit_date)), ymd(dayAt(1)));
+        assert.deepEqual([line.price_tier, line.unit_price], ['primary', 80000], 'строка записана с ярусом сегодняшнего дня');
+        const inv = invoicedUzi();
+        assert.ok(inv, 'счёт не выставлен: ' + JSON.stringify(TOASTS));
+        assert.equal(inv.unit_price, 80000);
+    } finally { busyToday = false; QUOTE.FAIL = false; }
+});
+
+test('медленная котировка после смены дня: запись ждёт ответа — строка «первичный» 80 000, а не ярус сегодняшнего дня', { skip: TZ_SPLIT }, async () => {
+    try {
+        await calcTodayQuoted();
+        QUOTE.DELAY = 2500;
+        byAttr(top(), 'data-pick-nearest', 22).click();
+        await saveCalcFlow();
+        const line = savedLine();
+        assert.equal(ymd(new Date(line.visit_date)), ymd(dayAt(1)));
+        assert.deepEqual([line.price_tier, line.unit_price], ['primary', 80000], 'запись не дождалась котировки на день визита');
+        const inv = invoicedUzi();
+        assert.ok(inv, 'счёт не выставлен: ' + JSON.stringify(TOASTS));
+        assert.equal(inv.unit_price, 80000);
+    } finally { busyToday = false; QUOTE.DELAY = 0; }
+});
+
+test('окно визита: «Добавить к визиту», пока котировка в пути — onPick ждёт ответа: «второй», 20 000', { skip: TZ_SPLIT }, async () => {
+    try {
+        seed();
+        pastUzi(2);
+        const at = dayAt(1, 10, 0);
+        const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, created_by) VALUES (3, ?, 5, 'scheduled', 1)").run(at.toISOString()).lastInsertRowid);
+        forgetSlots();
+        BODY.children.length = 0; TOASTS.length = 0; QUOTES.length = 0;
+        const picks = [];
+        QUOTE.DELAY = 2000;
+        openServicePickerModal({
+            attachMode: true, requireSlot: false, title: 'Добавить услуги к визиту', patient: PATIENT, patientId: 3,
+            visitId: vid, packageDay: at.toISOString(),
+            onPick: async (p) => { picks.push(p); },
+        });
+        await until(() => addOf('УЗИ брюшной полости'), 'строка УЗИ в каталоге');
+        addOf('УЗИ брюшной полости').click();
+        await until(ctaReady, 'смета готова');
+        byClass(top(), 'wzc-cta')[0].click();
+        await until(() => picks.length > 0, 'onPick не позван', 10000);
+        assert.deepEqual([picks[0].price_tier, picks[0].unit_price], ['secondary', 20000], 'строка ушла без котировки');
+    } finally { QUOTE.DELAY = 0; }
 });
 
 test.after(() => { if (DB) DB.close(); DB = null; });
