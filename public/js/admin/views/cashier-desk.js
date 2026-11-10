@@ -2476,6 +2476,9 @@ export function openDiscountChange(inv, root = null, opts = {}) {
     let quote = null;          // предпросмотр с новым значением
     let seq = 0;               // ответ устаревшего предпросмотра не рисуется
     let touched = false;       // переключатель трогали — уходит на сервер; нет — доля прежняя
+    // Ревью R2 — значение в поле не трогали (в нём нынешняя скидка): на сервер уходит прежняя
+    // скидка СУММОЙ, а не округлённый процент — деньги не двигаются.
+    let valueTouched = false;
     const idemKey = newIdemKey();
     const no = inv.invoice_number || ('#' + inv.id);
     const head = h('div', { 'data-dc-state': '', style: { display: 'grid', gap: '4px', fontSize: '12.5px', lineHeight: 1.45 } },
@@ -2484,7 +2487,7 @@ export function openDiscountChange(inv, root = null, opts = {}) {
     const reasonIn = h('input', { type: 'text', 'data-dc-reason': '', maxlength: '200', placeholder: tr('Например: постоянный пациент'), style: { width: '100%' } });
     const reducesBox = h('input', { type: 'checkbox', 'data-dc-reduces': '' });
     const reducesHint = h('div', { class: 'muted', style: { fontSize: '12.5px' } });
-    const result = h('div', { 'data-dc-result': '', style: { display: 'grid', gap: '6px' } });
+    const result = h('div', { 'data-dc-result': '', 'aria-live': 'polite', style: { display: 'grid', gap: '6px' } });   // ревью п. 10 — итог объявляется читалке
     const kv = (k, v) => h('div', { class: 'row', style: { gap: '10px', fontSize: '13.5px', fontWeight: 500, alignItems: 'baseline' } },
         h('span', { style: { flex: 1, color: 'var(--ink-600)' } }, k), h('span', { class: 'num' }, v));
     const big = (label, sum, attr) => h('div', { [attr]: String(sum), style: { display: 'flex', gap: '10px', alignItems: 'baseline', marginTop: '4px' } },
@@ -2494,7 +2497,11 @@ export function openDiscountChange(inv, root = null, opts = {}) {
     const fillValue = () => {
         if (!state) return;
         valueIn.value = mode === 'pct' ? pctText(state.pct_before) : fmtPrice(state.discount_before);
+        valueTouched = false;
     };
+    const valueArgs = () => (!valueTouched && state
+        ? { mode: 'abs', value: Number(state.discount_before) || 0 }
+        : { mode, value: valueOf() });
     const reducesArg = () => (touched ? { reduces_doctor_share: !!reducesBox.checked } : {});
     const destArgs = () => (dest === 'balance' ? { to_balance: true, card_fallback: 'balance' } : { card_fallback: 'cash' });
 
@@ -2533,7 +2540,7 @@ export function openDiscountChange(inv, root = null, opts = {}) {
         result.appendChild(kv(tr('Уже оплачено'), fmtPrice(q.paid_before) + ' ' + tr('сум')));
         if (q.clamped) {
             result.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                trf('Скидка — не больше суммы услуг без своей скидки: {sum} сум.', { sum: fmtPrice(q.base) })));
+                trf('Скидка — не больше суммы услуг без своей скидки: {sum} сум.', { sum: fmtPrice(q.room != null ? q.room : q.base) })));
         }
         if (Number(q.refunded) > 0) {
             result.appendChild(big(tr('Вернуть пациенту'), q.refunded, 'data-dc-refund'));
@@ -2573,7 +2580,7 @@ export function openDiscountChange(inv, root = null, opts = {}) {
         clear(result);
         result.appendChild(h('div', { class: 'muted' }, 'Считаем…'));
         const { data, error } = await supabase.rpc('cashier_invoice_discount_change_quote',
-            { invoice_id: inv.id, mode, value: v, ...reducesArg(), ...destArgs() });
+            { invoice_id: inv.id, ...valueArgs(), ...reducesArg(), ...destArgs() });
         if (my !== seq) return;
         if (error || !data) {
             quote = null;
@@ -2584,7 +2591,7 @@ export function openDiscountChange(inv, root = null, opts = {}) {
         quote = data;
         paintResult();
     };
-    valueIn.addEventListener('input', () => { load(); });
+    valueIn.addEventListener('input', () => { valueTouched = true; load(); });
     reducesBox.addEventListener('change', () => { touched = true; load(); });
     const modeRow = segmented([['pct', '%'], ['abs', 'сум']], mode, (v) => { mode = v; fillValue(); load(); });
 
@@ -2599,14 +2606,27 @@ export function openDiscountChange(inv, root = null, opts = {}) {
         result,
     ], tr('Сохранить скидку'), async () => {
         const v = valueOf();
-        if (!(String(valueIn.value || '').trim() && Number.isFinite(v) && v >= 0)) { toast(tr('Скидка — число не меньше нуля.'), 'fail'); return false; }
-        if (mode === 'pct' && v > 100) { toast(tr('Скидка в процентах — не больше 100.'), 'fail'); return false; }
+        if (valueTouched || !state) {
+            if (!(String(valueIn.value || '').trim() && Number.isFinite(v) && v >= 0)) { toast(tr('Скидка — число не меньше нуля.'), 'fail'); return false; }
+            if (mode === 'pct' && v > 100) { toast(tr('Скидка в процентах — не больше 100.'), 'fail'); return false; }
+        }
         const reason = String(reasonIn.value || '').trim();
         if (!reason) { toast(tr('Укажите причину скидки.'), 'fail'); return false; }
         if (quote && quote.changed === false) { toast(tr('Скидка та же — менять нечего.'), 'info'); return false; }
+        // Ревью R10 — сохранение несёт то, что видел кассир: сумму и оплаченное из предпросмотра.
+        const seen = quote || state || {};
         const { data, error } = await supabase.rpc('cashier_invoice_discount_change', {
-            invoice_id: inv.id, mode, value: v, reason, ...reducesArg(), ...destArgs(), idempotency_key: idemKey,
+            invoice_id: inv.id, ...valueArgs(), reason, ...reducesArg(), ...destArgs(),
+            ...(seen.total_before != null ? { expect_total_before: seen.total_before, expect_paid_before: seen.paid_before } : {}),
+            idempotency_key: idemKey,
         });
+        if (error && error.code === 'invoice_changed') {
+            // Второй кассир успел изменить счёт: окно остаётся и пересчитывает с новым счётом.
+            toast(error.message || tr('Счёт изменился, пока окно было открыто — проверьте сумму ещё раз.'), 'fail');
+            await refreshState();
+            await load();
+            return false;
+        }
         if (error) { toast(error.message || tr('Скидка не изменена.'), 'fail'); return false; }
         if (data && data.changed === false) { toast(tr('Скидка та же — менять нечего.'), 'info'); return true; }
         // Окна этого счёта («Платежи», оплата, «Исправить услуги») устарели — их закрывает afterRefundSwap.
@@ -2614,8 +2634,8 @@ export function openDiscountChange(inv, root = null, opts = {}) {
         return true;
     }, 480);
 
-    // Нынешняя скидка счёта — предпросмотр без значения.
-    (async () => {
+    // Нынешняя скидка счёта — предпросмотр без значения (и после отказа «счёт изменился»).
+    async function refreshState() {
         const { data, error } = await supabase.rpc('cashier_invoice_discount_change_quote', { invoice_id: inv.id });
         if (error || !data) {
             clear(head);
@@ -2624,8 +2644,9 @@ export function openDiscountChange(inv, root = null, opts = {}) {
         }
         state = data;
         paintState();
-        if (!String(valueIn.value || '').trim()) fillValue();
-    })();
+        if (!valueTouched) fillValue();
+    }
+    refreshState();
 }
 
 function voidModal(root, inv) {
@@ -3287,13 +3308,31 @@ async function loadUnassignedCash(wrap) {
 // =============================================================================
 // REFUND_SWAP_V1 — onClose: окно закрылось (кнопкой, крестиком, фоном или
 // после удачного действия) — зовётся один раз.
+// DISCOUNT_CHANGE_PAID_V1 (ревью п. 10) — окно кассы — настоящий диалог: role="dialog",
+// aria-modal, aria-labelledby (заголовок), Escape закрывает верхнее окно, фокус уходит в окно
+// (первое поле или главная кнопка) и возвращается туда, где был, когда окно закрыли.
+let modalSeq = 0;
 function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFooter = null, onClose = null) {
     const overlay = h('div', { class: 'modal' });
+    const doc = typeof document !== 'undefined' ? document : null;
+    const prevFocus = (doc && doc.activeElement) || null;
+    const titleId = 'cd-modal-title-' + (++modalSeq);
+    const isTop = () => {
+        try { const all = Array.from(doc.querySelectorAll('.modal')); return all.length > 0 && all[all.length - 1] === overlay; } catch (e) { return false; }
+    };
+    const onKey = (e) => { if (e && e.key === 'Escape' && isTop()) { if (typeof e.preventDefault === 'function') e.preventDefault(); close(); } };
     let closed = false;
     const close = () => {
         overlay.remove();
-        if (closed || typeof onClose !== 'function') return;
+        if (closed) return;   // второй вызов (окно уже закрыли другим путём) — ничего: фокус не уводим у нового окна
         closed = true;
+        try { if (doc && typeof doc.removeEventListener === 'function') doc.removeEventListener('keydown', onKey); } catch (e) { /* без клавиатуры */ }
+        try {
+            const ae = doc && doc.activeElement;
+            if (prevFocus && typeof prevFocus.focus === 'function' && prevFocus.isConnected !== false
+                && (!ae || ae === doc.body || (typeof overlay.contains === 'function' && overlay.contains(ae)))) prevFocus.focus();
+        } catch (e) { /* фокус — удобство, не повод ронять окно */ }
+        if (typeof onClose !== 'function') return;
         Promise.resolve().then(onClose).catch(() => {});
     };
     overlay._close = close;   // ревью A3 — closeRefundModals закрывает окно им же
@@ -3311,9 +3350,9 @@ function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFo
         submitBtn.textContent = prev;
     });
 
-    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: width + 'px', maxWidth: 'calc(100vw - 32px)' } },
+    const card = h('div', { class: 'modal-card modal-compact', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, style: { width: width + 'px', maxWidth: 'calc(100vw - 32px)' } },
         h('header', { class: 'modal-head' },
-            h('h2', null, Icon(icon, { size: 16 }), ' ', title),
+            h('h2', { id: titleId }, Icon(icon, { size: 16 }), ' ', title),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' }, ...bodyEls),
         h('footer', { class: 'modal-foot' },
@@ -3321,8 +3360,15 @@ function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFo
             typeof extraFooter === 'function' ? extraFooter(close) : extraFooter,   // DEBT_BTN_V1 — доп. кнопка рядом с «Отмена»
             h('span', { class: 'grow' }),
             submitBtn),
-    ));
+    );
+    overlay.appendChild(card);
     document.body.appendChild(overlay);
+    try { if (doc && typeof doc.addEventListener === 'function') doc.addEventListener('keydown', onKey); } catch (e) { /* без клавиатуры */ }
+    try {
+        const first = typeof card.querySelector === 'function'
+            ? card.querySelector('.modal-body input:not([type=hidden]):not([disabled]), .modal-body select, .modal-body textarea') || submitBtn : null;
+        if (first && typeof first.focus === 'function') first.focus();
+    } catch (e) { /* фокус — удобство */ }
 }
 
 // DEPOSIT_ACCEPT_MODAL_V1 — окно приёма депозита.

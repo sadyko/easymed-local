@@ -87,6 +87,8 @@ globalThis.fetch = async (url, opts = {}) => {
         const a = rpcAnswers[name];
         if (a && a.__error) return { ok: false, status: 500, json: async () => ({ error: { message: a.__error } }), headers: { getSetCookie: () => [] } };
         data = typeof a === 'function' ? await a(body) : (a !== undefined ? a : []);   // ответ-обещание — сервер «думает», пока тест не ответит
+        // DISCOUNT_CHANGE_PAID_V1 — ответ-функция может отказать с кодом: { __refuse: { status, code, message } }.
+        if (data && data.__refuse) return { ok: false, status: data.__refuse.status || 400, json: async () => ({ error: { code: data.__refuse.code, message: data.__refuse.message } }), headers: { getSetCookie: () => [] } };
     } else {
         calls.push(['db:' + body.table, body]);
         const rows = (tables[body.table] || []).filter((r) => (body.filters || []).every((f) => matches(r, f)));
@@ -349,4 +351,74 @@ test('DISCOUNT_CHANGE_PAID_V1: новые строки окна — в слов�
             assert.doesNotMatch(e[lang], /[Ѐ-ӿ]/, key + ': кириллица в ' + lang);
         }
     }
+});
+
+// Ревью R2 — значение в поле не трогали (кассир только переключил «Скидка уменьшает долю врача»):
+// окно шлёт ту же скидку СУММОЙ (discount_before), а не округлённый процент — деньги не двигаются.
+test('ревью R2: значение не трогали — окно шлёт прежнюю скидку суммой, а не округлённый процент', async () => {
+    asRole();
+    closeAll(); calls.length = 0; TOASTS.length = 0;
+    rpcAnswers = DC_ANSWERS();
+    desk.openDiscountChange(PAID, null, {});
+    await tick();
+    const m = lastModal();
+    const box = inputBy(m, 'data-dc-reduces');
+    box.checked = false; box.fire('change');
+    await tick();
+    const q = dcCalls('cashier_invoice_discount_change_quote').pop();
+    assert.deepEqual([q.mode, q.value, q.reduces_doctor_share], ['abs', 40000, false], 'предпросмотр — прежней суммой');
+    inputBy(m, 'data-dc-reason').value = 'клиника берёт скидку на себя';
+    buttonByText(m, 'Сохранить скидку').click();
+    await tick(80);
+    const [c] = dcCalls('cashier_invoice_discount_change');
+    assert.deepEqual([c.mode, c.value, c.reduces_doctor_share], ['abs', 40000, false]);
+    closeAll();
+});
+
+// Ревью R10 — сохранение несёт сумму и оплаченное из предпросмотра; сервер ответил «счёт изменился» —
+// окно остаётся, говорит это и пересчитывает с новым счётом.
+test('ревью R10: сохранение несёт то, что видел кассир; «счёт изменился» — окно пересчитывает заново', async () => {
+    asRole();
+    closeAll(); calls.length = 0; TOASTS.length = 0;
+    let changedOnce = false;
+    rpcAnswers = {
+        cashier_invoice_discount_change_quote: quoteFor,
+        cashier_invoice_discount_change: (b) => {
+            if (!changedOnce) { changedOnce = true; return { __refuse: { status: 409, code: 'invoice_changed', message: 'Счёт изменился, пока окно было открыто — проверьте сумму ещё раз.' } }; }
+            return quoteFor(b);
+        },
+    };
+    desk.openDiscountChange(PAID, null, {});
+    await tick();
+    const m = lastModal();
+    const val = inputBy(m, 'data-dc-value');
+    val.value = '50'; val.fire('input');
+    await tick();
+    inputBy(m, 'data-dc-reason').value = 'акция';
+    const quotesBefore = dcCalls('cashier_invoice_discount_change_quote').length;
+    buttonByText(m, 'Сохранить скидку').click();
+    await tick(80);
+    const [c] = dcCalls('cashier_invoice_discount_change');
+    assert.deepEqual([c.expect_total_before, c.expect_paid_before], [160000, 160000], 'нет того, что видел кассир');
+    assert.ok(TOASTS.some((t) => /Счёт изменился, пока окно было открыто/.test(t)), JSON.stringify(TOASTS));
+    assert.ok(modals().includes(m), 'окно закрылось после отказа');
+    assert.ok(dcCalls('cashier_invoice_discount_change_quote').length >= quotesBefore + 2, 'окно не пересчитало: нынешняя скидка и предпросмотр');
+    closeAll();
+});
+
+// Ревью п. 10 — результат предпросмотра объявляется читалке экрана; окно кассы — настоящий диалог.
+test('ревью п. 10: результат — aria-live="polite"; окно — role="dialog", aria-modal, заголовок', async () => {
+    asRole();
+    closeAll(); calls.length = 0;
+    rpcAnswers = DC_ANSWERS();
+    desk.openDiscountChange(PAID, null, {});
+    await tick();
+    const m = lastModal();
+    assert.equal(byAttr(m, 'data-dc-result', '').attrs['aria-live'], 'polite');
+    const card = walk(m).find((e) => e.attrs && e.attrs.role === 'dialog');
+    assert.ok(card, 'нет role="dialog"');
+    assert.equal(card.attrs['aria-modal'], 'true');
+    const labelId = card.attrs['aria-labelledby'];
+    assert.ok(labelId && walk(m).some((e) => e.attrs && e.attrs.id === labelId), 'aria-labelledby не указывает на заголовок');
+    closeAll();
 });
