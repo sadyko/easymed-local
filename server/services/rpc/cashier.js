@@ -929,12 +929,17 @@ export function voidInvoice(db, args, user) {
 // Видят все, у кого касса (кассир, старший кассир, администратор): это касса
 // клиники, и список счетов кассы общий. Депозиты (DEP-) и продажи карт (CARD-)
 // возвращаются в своих вкладках — здесь их нет. Только чтение.
+// DISCOUNT_CHANGE_PAID_V1 — «Изменить скидку» после оплаты попадает сюда только деньгами: возврат
+// разницы с пометкой «REFUND#<платёж> DISC#<счёт>» — вид 'discount', экран: «Изменение скидки».
+// Изменение, которое денег не вернуло (скидку только снизили), — не возврат: его событие
+// ('discount_change') список не собирает (ревью R13); оно — в журнале счёта.
 const REFUND_EVENTS = ['refund_line', 'void', 'line_swap_paid'];
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function refundKind(notes) {
   const n = String(notes || '');
   if (/ SWAP#\d+/.test(n)) return 'swap';
+  if (/^REFUND#\d+ DISC#\d+/.test(n)) return 'discount';   // DISCOUNT_CHANGE_PAID_V1 — пометка сразу за номером платежа (как reports.js DISC_REFUND_SQL)
   if (/ LINE#\d+/.test(n)) return 'line';
   return 'payment';
 }

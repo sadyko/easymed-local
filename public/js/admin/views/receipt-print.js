@@ -287,6 +287,34 @@ export function slipData(o = {}) {
             note: 'Замена услуги — возврат разницы.',
         };
     }
+    // DISCOUNT_CHANGE_PAID_V1 — «Изменить скидку» после оплаты: квитанция о возвращённой разнице —
+    // скидка была и стала, причина, сколько и куда (каждый возврат своим способом).
+    // kind 'discount' — { invoice, patient, pctBefore, sumBefore, pctAfter, sumAfter, reason, refunded, plan, cashier }
+    if (o.kind === 'discount') {
+        const inv = o.invoice || {};
+        const p = o.patient || {};
+        const where = (x) => (x.to_card ? 'Подарочная карта' : x.to_balance ? 'На баланс пациента' : (METHOD_RU[x.refund_method] || x.refund_method || ''));
+        const pct = (n) => String(Math.round((Number(n) || 0) * 100) / 100).replace('.', ',');
+        const disc = (pc, sum) => (Number(sum) > 0 ? 'Скидка ' + pct(pc) + '% — ' + fmtSum(sum) + ' сум' : 'Без скидки');
+        return {
+            title: 'Квитанция',
+            subtitle: 'Изменение скидки',
+            docNo: inv.invoice_number || '',
+            date: now, cashier: o.cashier || '',
+            rows: [
+                ['Пациент', p.full_name || ''],
+                ['Карта пациента №', p.mrn || ''],
+                ['Было', disc(o.pctBefore, o.sumBefore)],
+                ['Стало', disc(o.pctAfter, o.sumAfter)],
+                ...(o.reason ? [['Причина', o.reason]] : []),
+            ],
+            amountLabel: 'Возвращено',
+            amount: Number(o.refunded) || 0,
+            method: (o.plan || []).map((x) => where(x) + ' ' + fmtSum(x.amount)).join(', '),
+            afterRows: [['Сумма счёта', fmtSum(inv.total_amount)], ['Оплачено', fmtSum(inv.paid_amount)]],
+            note: 'Изменение скидки — возврат разницы.',
+        };
+    }
     if (o.kind === 'card') {
         const c = o.card || {};
         const b = o.buyer || {};

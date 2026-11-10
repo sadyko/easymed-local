@@ -33,7 +33,7 @@ import { canOfferLineFix, openLineFix, openRebill, openRefundSwap, invoiceSwappa
 import { discountNoteText } from '../discount-note.js';   // DISCOUNT_V2 (ревью S1 L-4) — причина скидки на языке экрана
 import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт по счёту плательщику, та же сборка, что у мастера визита
 import { canCloseOtherShifts, canSwapPaidLines } from '../permissions.js';
-import { canCashierDiscount } from '../permissions.js';   // CASHIER_DISCOUNT_V1 — «Кассир может давать скидку»   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
+import { canCashierDiscount, canChangePaidDiscount } from '../permissions.js';   // CASHIER_DISCOUNT_V1 — «Кассир может давать скидку»; DISCOUNT_CHANGE_PAID_V1 — и денежная роль   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 import { watchScreen } from '../live.js';   // LIVE_REFRESH_V1 — касса обновляется сама (без ?v=: один клиент потока на вкладку)
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
@@ -1455,16 +1455,20 @@ function openCardRefundModal(c, root) {
 // строки: «Открыть визит», «Исправить услуги» (оплаченный счёт — замена с
 // расчётом разницы) и «Выставить заново» (строки визита без счёта). Сервер:
 // cashier_refunds (rpc/cashier.js), видит его вся касса.
-const REFUND_KIND_RU = { swap: 'Замена услуги', line: 'Возврат услуги', payment: 'Возврат оплаты' };
-const EVENT_RU = { void: 'Счёт отменён', refund_line: 'Возвращена услуга', line_swap_paid: 'Замена в оплаченном счёте' };
+// DISCOUNT_CHANGE_PAID_V1 — возврат разницы при «Изменить скидку» (пометка DISC#, cashier.js refundKind).
+const REFUND_KIND_RU = { swap: 'Замена услуги', line: 'Возврат услуги', payment: 'Возврат оплаты', discount: 'Изменение скидки' };
+const EVENT_RU = { void: 'Счёт отменён', refund_line: 'Возвращена услуга', line_swap_paid: 'Замена в оплаченном счёте', discount_change: 'Изменение скидки' };
 
 // Опции окна «Исправить услуги»: доплата — окно оплаты кассы (чек «Доплата»),
 // возврат разницы — квитанция.
+// DISCOUNT_CHANGE_PAID_V1 — discountChange: «Изменить скидку» у итога окна (окно скидки живёт здесь,
+// в кассе: cashier-line-fix.js его не импортирует, ему его передают).
 function lineFixOptions(root) {
     return {
         onChanged: () => paint(root),
         onPayDue: (row, due) => payModal(root, row, due, { checkSubtitle: 'Доплата' }),
         printSlip: (data) => printSlip(printableSheet, data),
+        discountChange: { allowed: (row) => cashierDiscountChangeAllowed(row), open: (row) => openDiscountChange(row, root) },
     };
 }
 
@@ -1907,6 +1911,14 @@ function invoiceRow(inv, root) {
         ? iconBtn('Исправить услуги', 'Edit', () => openLineFix(inv, lineFixOptions(root)),
             'var(--ink-700)', 'var(--ink-200)')
         : null;
+    // DISCOUNT_CHANGE_PAID_V1 — у счёта со скидкой 100 % (сумма 0, денег нет) нет ни «Оплатить», ни
+    // окна «Платежи»: «Изменить скидку» стоит прямо в строке. У счёта с деньгами она — в «Платежах»
+    // и в окне оплаты.
+    const discBtn = isFullDiscount(inv) && cashierDiscountChangeAllowed(inv)
+        ? iconBtn('Изменить скидку', 'Coins', () => openDiscountChange(inv, root),
+            'var(--primary-700)', 'var(--primary-200, #b6e2d6)')
+        : null;
+    if (discBtn) discBtn.setAttribute('data-discount-change', String(inv.id));
 
     return h('tr', null,
         // CASHIER_ROW_FIT_V1 — the patient cell needs a width floor and its own
@@ -1951,7 +1963,7 @@ function invoiceRow(inv, root) {
         h('td', null, methods),
         h('td', null, invStatusTag(inv.status)),
         h('td', null, h('div', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end' } },
-            payBtn, fixBtn, checkBtn, invoiceBtn, refundBtn, voidBtn, deleteBtn)),   // REPRINT_DOCS_V1 — чек/счёт доступны и после оплаты
+            payBtn, fixBtn, discBtn, checkBtn, invoiceBtn, refundBtn, voidBtn, deleteBtn)),   // REPRINT_DOCS_V1 — чек/счёт доступны и после оплаты · DISCOUNT_CHANGE_PAID_V1 — discBtn
     );
 }
 
@@ -2068,6 +2080,12 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
                         payModal(root, fresh, due, opts);
                     }) },
                     Icon('Coins', { size: 13 }), ' ', tr('Скидка'))) : null,
+            // DISCOUNT_CHANGE_PAID_V1 — частично оплаченный счёт (или долг): «Скидка» до оплаты здесь уже
+            // нельзя, скидку меняют «Изменить скидку» — с расчётом денег. Окно оплаты закроется само.
+            !cashierDiscountAllowed(inv) && cashierDiscountChangeAllowed(inv) && Number(inv.total_amount) > 0 ? h('div', { style: { marginTop: '8px' } },
+                h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-discount-change': String(inv.id),
+                    onclick: () => openDiscountChange(inv, root, { keep: opts.keep, onDone: typeof opts.after === 'function' ? opts.after : undefined }) },
+                    Icon('Coins', { size: 13 }), ' ', tr('Изменить скидку'))) : null,
         ));
         linesEl.appendChild(box);
     };
@@ -2426,6 +2444,211 @@ export function openCashierDiscount(inv, onDone) {
     }, 420);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0, решения владельца Q2–Q4 2026-11-10) — «ИЗМЕНИТЬ СКИДКУ».
+// ═══════════════════════════════════════════════════════════════════════════
+// Скидку счёта меняют и после оплаты: выше и ниже, 100 % тоже. Деньги считает сервер
+// (cashier_invoice_discount_change): окно показывает нынешнюю скидку (предпросмотр без значения),
+// спрашивает новую — процент или сумму (0 — без скидки), причину и «Скидка уменьшает долю врача»
+// (по умолчанию — как у счёта; не трогали — доля прежняя) и живым предпросмотром
+// (cashier_invoice_discount_change_quote) говорит, что будет: «Вернуть пациенту N» — тем же
+// способом или на баланс пациента (подарочная карта — всегда на карту) — или «К доплате N».
+// Скидки строк (пакет, ставки по услугам) здесь не меняются — окно это говорит. После — квитанция
+// «Изменение скидки» или окно оплаты «Доплата» (afterRefundSwap).
+// Двери: окно «Платежи», строка счёта со скидкой 100 %, окно оплаты частично оплаченного счёта,
+// итог «Исправить услуги».
+export function cashierDiscountChangeAllowed(inv) {
+    if (!inv || !canChangePaidDiscount()) return false;
+    if (inv.payer_id != null || inv.status === 'void' || inv.status === 'refunded') return false;
+    if (/^(DEP|CARD)-/.test(String(inv.invoice_number || ''))) return false;
+    if (!inv.visit_id || inv.admission_id) return false;   // стационар — скидку дают при выписке
+    if (!(Number(inv.subtotal) > 0)) return false;         // бесплатная услуга — скидке не на что лечь
+    // Деньги по счёту есть (оплачен, частично), долг или скидка 100 %; до оплаты — обычная «Скидка».
+    return Number(inv.paid_amount) > 0 || inv.status === 'partial' || inv.status === 'debt' || isFullDiscount(inv);
+}
+
+const pctText = (n) => String(Math.round((Number(n) || 0) * 100) / 100).replace('.', ',');
+
+export function openDiscountChange(inv, root = null, opts = {}) {
+    let mode = 'pct';
+    let dest = 'original';     // разница: тем же способом или на баланс пациента
+    let state = null;          // нынешняя скидка счёта (предпросмотр без значения)
+    let quote = null;          // предпросмотр с новым значением
+    let seq = 0;               // ответ устаревшего предпросмотра не рисуется
+    let touched = false;       // переключатель трогали — уходит на сервер; нет — доля прежняя
+    // Ревью R2 — значение в поле не трогали (в нём нынешняя скидка): на сервер уходит прежняя
+    // скидка СУММОЙ, а не округлённый процент — деньги не двигаются.
+    let valueTouched = false;
+    const idemKey = newIdemKey();
+    const no = inv.invoice_number || ('#' + inv.id);
+    const head = h('div', { 'data-dc-state': '', style: { display: 'grid', gap: '4px', fontSize: '12.5px', lineHeight: 1.45 } },
+        h('div', { class: 'muted' }, 'Загрузка…'));
+    const valueIn = h('input', { type: 'text', inputmode: 'decimal', 'data-dc-value': '', placeholder: '0', style: { width: '100%' } });
+    const reasonIn = h('input', { type: 'text', 'data-dc-reason': '', maxlength: '200', placeholder: tr('Например: постоянный пациент'), style: { width: '100%' } });
+    const reducesBox = h('input', { type: 'checkbox', 'data-dc-reduces': '' });
+    const reducesHint = h('div', { class: 'muted', style: { fontSize: '12.5px' } });
+    const result = h('div', { 'data-dc-result': '', 'aria-live': 'polite', style: { display: 'grid', gap: '6px' } });   // ревью п. 10 — итог объявляется читалке
+    const kv = (k, v) => h('div', { class: 'row', style: { gap: '10px', fontSize: '13.5px', fontWeight: 500, alignItems: 'baseline' } },
+        h('span', { style: { flex: 1, color: 'var(--ink-600)' } }, k), h('span', { class: 'num' }, v));
+    const big = (label, sum, attr) => h('div', { [attr]: String(sum), style: { display: 'flex', gap: '10px', alignItems: 'baseline', marginTop: '4px' } },
+        h('span', { style: { flex: 1, fontSize: '15px', fontWeight: 800 } }, label),
+        h('span', { class: 'num', style: { fontSize: '24px', fontWeight: 800 } }, fmtPrice(sum) + ' ' + tr('сум')));
+    const valueOf = () => discountNumber(valueIn.value);
+    const fillValue = () => {
+        if (!state) return;
+        valueIn.value = mode === 'pct' ? pctText(state.pct_before) : fmtPrice(state.discount_before);
+        valueTouched = false;
+    };
+    const valueArgs = () => (!valueTouched && state
+        ? { mode: 'abs', value: Number(state.discount_before) || 0 }
+        : { mode, value: valueOf() });
+    const reducesArg = () => (touched ? { reduces_doctor_share: !!reducesBox.checked } : {});
+    const destArgs = () => (dest === 'balance' ? { to_balance: true, card_fallback: 'balance' } : { card_fallback: 'cash' });
+
+    const paintState = () => {
+        clear(head);
+        const s = state;
+        head.appendChild(h('div', { class: 'muted' }, trf('Счёт {no} · услуги {sub} сум · оплачено {paid} сум',
+            { no, sub: fmtPrice(inv.subtotal), paid: fmtPrice(s.paid_before) })));
+        head.appendChild(h('div', { style: { fontWeight: 700 } }, Number(s.discount_before) > 0
+            ? trf('Сейчас скидка счёта: {pct}% — {sum} сум', { pct: pctText(s.pct_before), sum: fmtPrice(s.discount_before) })
+            : tr('Сейчас скидки счёта нет.')));
+        if (inv.discount_note && Number(inv.discount_amount) > 0) {
+            head.appendChild(h('div', { class: 'muted' }, Icon('Coins', { size: 12 }), ' ', trf('Причина: {note}', { note: discountNoteText(inv.discount_note) })));
+        }
+        head.appendChild(h('div', { class: 'muted', 'data-dc-lines': String(s.line_discounts || 0) }, Number(s.line_discounts) > 0
+            ? trf('Скидки строк (пакет, ставки по услугам) — {sum} сум — здесь не меняются.', { sum: fmtPrice(s.line_discounts) })
+            : tr('Скидки строк (пакет, ставки по услугам) здесь не меняются.')));
+        const on = Number(s.share_before) >= 0.5;
+        reducesBox.checked = on;
+        if (on) reducesBox.setAttribute('checked', '');
+        reducesHint.textContent = Number(s.share_before) > 0 && Number(s.share_before) < 1
+            ? tr('Сейчас скидка уменьшает долю врача частично — не трогайте переключатель, и так и останется.')
+            : tr('Подняли скидку — касается добавленной части; снизили — всей оставшейся.');
+    };
+
+    const paintResult = () => {
+        clear(result);
+        const q = quote;
+        if (!q) return;
+        if (q.changed === false) {
+            result.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Скидка та же — менять нечего.'));
+            return;
+        }
+        result.appendChild(kv(tr('Новая скидка'), pctText(q.pct_after) + '% — ' + fmtPrice(q.discount_after) + ' ' + tr('сум')));
+        result.appendChild(kv(tr('Сумма счёта'), fmtPrice(q.total_before) + ' → ' + fmtPrice(q.total_after) + ' ' + tr('сум')));
+        result.appendChild(kv(tr('Уже оплачено'), fmtPrice(q.paid_before) + ' ' + tr('сум')));
+        if (q.clamped) {
+            result.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                trf('Скидка — не больше суммы услуг без своей скидки: {sum} сум.', { sum: fmtPrice(q.room != null ? q.room : q.base) })));
+        }
+        if (Number(q.refunded) > 0) {
+            result.appendChild(big(tr('Вернуть пациенту'), q.refunded, 'data-dc-refund'));
+            const destBox = h('div', { style: { display: 'grid', gap: '6px' } });
+            for (const [v, label] of [['original', 'Вернуть тем же способом'], ['balance', 'На баланс пациента']]) {
+                const radio = h('input', { type: 'radio', name: 'discount-change-dest', value: v, checked: dest === v ? true : null });
+                radio.addEventListener('change', () => { if (dest === v) return; dest = v; load(); });
+                destBox.appendChild(h('label', { 'data-dc-dest': v, style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } }, radio, tr(label)));
+            }
+            result.appendChild(destBox);
+            result.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, dest === 'balance'
+                ? tr('Наличные из кассы не выдаются: сумма ляжет на баланс пациента и пойдёт в оплату следующей услуги.')
+                : tr('Тем же способом, каким платили; наличные выдаются из кассы текущей смены.')));
+            result.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Оплата подарочной картой всегда возвращается на ту же карту.'));
+            const plan = h('div', { class: 'muted', style: { fontSize: '12.5px', display: 'grid', gap: '2px' } });
+            for (const x of (q.refund_plan || [])) {
+                const where = x.to_card ? tr('На ту же подарочную карту') : x.to_balance ? tr('На баланс пациента') : tr(METHOD_RU[x.refund_method] || x.refund_method || '');
+                plan.appendChild(h('div', { 'data-dc-plan': x.refund_method || '' }, where + ' — ' + fmtPrice(x.amount) + ' ' + tr('сум')));
+            }
+            result.appendChild(plan);
+        } else if (Number(q.due) > 0) {
+            result.appendChild(big(tr('К доплате'), q.due, 'data-dc-due'));
+            result.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'После сохранения откроется окно оплаты разницы.'));
+        } else {
+            result.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Сумма к оплате не меняется — деньги не двигаются.'));
+        }
+    };
+
+    const load = async () => {
+        const my = ++seq;
+        const v = valueOf();
+        if (!state || !String(valueIn.value || '').trim() || !(Number.isFinite(v) && v >= 0) || (mode === 'pct' && v > 100)) {
+            quote = null;
+            clear(result);
+            return;
+        }
+        clear(result);
+        result.appendChild(h('div', { class: 'muted' }, 'Считаем…'));
+        const { data, error } = await supabase.rpc('cashier_invoice_discount_change_quote',
+            { invoice_id: inv.id, ...valueArgs(), ...reducesArg(), ...destArgs() });
+        if (my !== seq) return;
+        if (error || !data) {
+            quote = null;
+            clear(result);
+            result.appendChild(h('div', { role: 'alert', style: { color: 'var(--crit-600, #dc2626)', fontSize: '12.5px' } }, (error && error.message) || tr('Не удалось.')));
+            return;
+        }
+        quote = data;
+        paintResult();
+    };
+    valueIn.addEventListener('input', () => { valueTouched = true; load(); });
+    reducesBox.addEventListener('change', () => { touched = true; load(); });
+    const modeRow = segmented([['pct', '%'], ['abs', 'сум']], mode, (v) => { mode = v; fillValue(); load(); });
+
+    modal(trf('Изменить скидку · {no}', { no }), 'Coins', [
+        head,
+        modeRow,
+        field(tr('Новая скидка'), valueIn, { required: true }),
+        field(tr('Причина скидки'), reasonIn, { required: true }),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', cursor: 'pointer' } },
+            reducesBox, tr('Скидка уменьшает долю врача')),
+        reducesHint,
+        result,
+    ], tr('Сохранить скидку'), async () => {
+        const v = valueOf();
+        if (valueTouched || !state) {
+            if (!(String(valueIn.value || '').trim() && Number.isFinite(v) && v >= 0)) { toast(tr('Скидка — число не меньше нуля.'), 'fail'); return false; }
+            if (mode === 'pct' && v > 100) { toast(tr('Скидка в процентах — не больше 100.'), 'fail'); return false; }
+        }
+        const reason = String(reasonIn.value || '').trim();
+        if (!reason) { toast(tr('Укажите причину скидки.'), 'fail'); return false; }
+        if (quote && quote.changed === false) { toast(tr('Скидка та же — менять нечего.'), 'info'); return false; }
+        // Ревью R10 — сохранение несёт то, что видел кассир: сумму и оплаченное из предпросмотра.
+        const seen = quote || state || {};
+        const { data, error } = await supabase.rpc('cashier_invoice_discount_change', {
+            invoice_id: inv.id, ...valueArgs(), reason, ...reducesArg(), ...destArgs(),
+            ...(seen.total_before != null ? { expect_total_before: seen.total_before, expect_paid_before: seen.paid_before } : {}),
+            idempotency_key: idemKey,
+        });
+        if (error && error.code === 'invoice_changed') {
+            // Второй кассир успел изменить счёт: окно остаётся и пересчитывает с новым счётом.
+            toast(error.message || tr('Счёт изменился, пока окно было открыто — проверьте сумму ещё раз.'), 'fail');
+            await refreshState();
+            await load();
+            return false;
+        }
+        if (error) { toast(error.message || tr('Скидка не изменена.'), 'fail'); return false; }
+        if (data && data.changed === false) { toast(tr('Скидка та же — менять нечего.'), 'info'); return true; }
+        // Окна этого счёта («Платежи», оплата, «Исправить услуги») устарели — их закрывает afterRefundSwap.
+        afterRefundSwap({ ...(data || {}), discount: true, reason }, inv, root, opts);
+        return true;
+    }, 480);
+
+    // Нынешняя скидка счёта — предпросмотр без значения (и после отказа «счёт изменился»).
+    async function refreshState() {
+        const { data, error } = await supabase.rpc('cashier_invoice_discount_change_quote', { invoice_id: inv.id });
+        if (error || !data) {
+            clear(head);
+            head.appendChild(h('div', { role: 'alert', style: { color: 'var(--crit-600, #dc2626)' } }, (error && error.message) || tr('Не удалось.')));
+            return;
+        }
+        state = data;
+        paintState();
+        if (!valueTouched) fillValue();
+    }
+    refreshState();
+}
+
 function voidModal(root, inv) {
     // DEBT_FLOW_V1 — счёт стационара, пациент ещё на койке: отмена его НЕ
     // выписывает. Окно говорит это словами и просит явное подтверждение —
@@ -2617,8 +2840,19 @@ async function openInvoiceRefund(inv, root, opts = {}) {   // REFUND_ANY_V1 — 
         }, 'Возврат') : h('span', { style: { width: '72px' } }),
     ));
 
+    // DISCOUNT_CHANGE_PAID_V1 — «Изменить скидку» счёта (право «Кассир может давать скидку» и денежная
+    // роль): возврат разницы или доплата считаются в окне скидки; opts — те же, что у возвратов этого
+    // окна (окно визита, из которого открыли «Платежи», остаётся).
+    const discountRow = cashierDiscountChangeAllowed(inv)
+        ? h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap', padding: '0 0 10px', fontSize: '12.5px' } },
+            h('span', { class: 'muted', style: { flex: '1 1 200px' } },
+                Number(inv.discount_amount) > 0 ? trf('Скидка счёта: {sum} сум', { sum: fmtPrice(inv.discount_amount) }) : tr('Скидки у счёта нет.')),
+            h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-discount-change': String(inv.id),
+                onclick: () => openDiscountChange(inv, root, opts) }, Icon('Coins', { size: 13 }), ' ', 'Изменить скидку'))
+        : null;
     modal(trf('Платежи · {label}', { label: info.invoice_number + (info.patient_name ? ' · ' + info.patient_name : '') }), 'Receipt',
-        [rows.length
+        [discountRow,
+         rows.length
             ? h('div', { style: { maxHeight: '50vh', overflow: 'auto' } }, ...rows)
             : h('div', { class: 'empty' }, 'По счёту нет платежей.'),
          itemRows.length ? h('div', { style: { padding: '14px 0 4px', fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } }, 'Услуги счёта') : null,
@@ -2642,11 +2876,29 @@ async function afterRefundSwap(r, inv, root, opts = {}) {
     // Сначала деньги, потом (у возврата с новой) — что стало с прежней услугой.
     let note;
     let kind = 'ok';
-    if (sum > 0) {
+    const u = (window.easymed && window.easymed.state && window.easymed.state.user) || {};
+    if (r.discount) {
+        // DISCOUNT_CHANGE_PAID_V1 — после «Изменить скидку»: те же три исхода, свои слова и своя
+        // квитанция «Изменение скидки» (было и стало, причина, сколько и куда вернули).
+        if (sum > 0) {
+            note = r.to_balance
+                ? trf('Скидка изменена — разница {sum} сум зачислена на баланс пациента.', { sum: fmtPrice(sum) })
+                : trf('Скидка изменена — пациенту возвращено {sum} сум.', { sum: fmtPrice(sum) });
+            printSlip(printableSheet, {
+                kind: 'discount', invoice: r.invoice || inv, patient: { full_name: inv.patient_name, mrn: inv.mrn },
+                pctBefore: r.pct_before, sumBefore: r.discount_before, pctAfter: r.pct_after, sumAfter: r.discount_after,
+                reason: r.reason || '', refunded: sum, plan: r.refund_plan || [], cashier: u.full_name || u.username || '',
+            });
+        } else if (due > 0) {
+            note = trf('Скидка изменена — к доплате {sum} сум.', { sum: fmtPrice(due) });
+            kind = 'info';
+        } else {
+            note = tr('Скидка изменена — сумма к оплате не изменилась.');
+        }
+    } else if (sum > 0) {
         note = r.to_balance
             ? trf('Разница {sum} сум зачислена на баланс пациента.', { sum: fmtPrice(sum) })
             : trf('Пациенту возвращено {sum} сум.', { sum: fmtPrice(sum) });
-        const u = (window.easymed && window.easymed.state && window.easymed.state.user) || {};
         printSlip(printableSheet, {
             kind: 'swap', invoice: r.invoice || inv, patient: { full_name: inv.patient_name, mrn: inv.mrn },
             before: r.line_before, after: r.line_after, refunded: sum, plan: r.refund_plan || [], cashier: u.full_name || u.username || '',
@@ -2674,7 +2926,7 @@ async function afterRefundSwap(r, inv, root, opts = {}) {
         try { await afterMoney(root, opts); } catch (e) { /* окно перечитается при следующем заходе */ }
     };
     if (!(due > 0)) { await finish(); return; }
-    payModal(root, { ...inv, ...(r.invoice || {}) }, due, { checkSubtitle: 'Доплата', after: finish, onClose: finish });
+    payModal(root, { ...inv, ...(r.invoice || {}) }, due, { checkSubtitle: 'Доплата', after: finish, onClose: finish, keep: opts.keep });   // DISCOUNT_CHANGE_PAID_V1 — keep: «Изменить скидку» из окна оплаты не закроет окно визита
 }
 
 // BILLING_AUDIT_FIX_V1 (B1) — подтверждение возврата одной услуги. Сумму
@@ -3056,13 +3308,31 @@ async function loadUnassignedCash(wrap) {
 // =============================================================================
 // REFUND_SWAP_V1 — onClose: окно закрылось (кнопкой, крестиком, фоном или
 // после удачного действия) — зовётся один раз.
+// DISCOUNT_CHANGE_PAID_V1 (ревью п. 10) — окно кассы — настоящий диалог: role="dialog",
+// aria-modal, aria-labelledby (заголовок), Escape закрывает верхнее окно, фокус уходит в окно
+// (первое поле или главная кнопка) и возвращается туда, где был, когда окно закрыли.
+let modalSeq = 0;
 function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFooter = null, onClose = null) {
     const overlay = h('div', { class: 'modal' });
+    const doc = typeof document !== 'undefined' ? document : null;
+    const prevFocus = (doc && doc.activeElement) || null;
+    const titleId = 'cd-modal-title-' + (++modalSeq);
+    const isTop = () => {
+        try { const all = Array.from(doc.querySelectorAll('.modal')); return all.length > 0 && all[all.length - 1] === overlay; } catch (e) { return false; }
+    };
+    const onKey = (e) => { if (e && e.key === 'Escape' && isTop()) { if (typeof e.preventDefault === 'function') e.preventDefault(); close(); } };
     let closed = false;
     const close = () => {
         overlay.remove();
-        if (closed || typeof onClose !== 'function') return;
+        if (closed) return;   // второй вызов (окно уже закрыли другим путём) — ничего: фокус не уводим у нового окна
         closed = true;
+        try { if (doc && typeof doc.removeEventListener === 'function') doc.removeEventListener('keydown', onKey); } catch (e) { /* без клавиатуры */ }
+        try {
+            const ae = doc && doc.activeElement;
+            if (prevFocus && typeof prevFocus.focus === 'function' && prevFocus.isConnected !== false
+                && (!ae || ae === doc.body || (typeof overlay.contains === 'function' && overlay.contains(ae)))) prevFocus.focus();
+        } catch (e) { /* фокус — удобство, не повод ронять окно */ }
+        if (typeof onClose !== 'function') return;
         Promise.resolve().then(onClose).catch(() => {});
     };
     overlay._close = close;   // ревью A3 — closeRefundModals закрывает окно им же
@@ -3080,9 +3350,9 @@ function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFo
         submitBtn.textContent = prev;
     });
 
-    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: width + 'px', maxWidth: 'calc(100vw - 32px)' } },
+    const card = h('div', { class: 'modal-card modal-compact', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, style: { width: width + 'px', maxWidth: 'calc(100vw - 32px)' } },
         h('header', { class: 'modal-head' },
-            h('h2', null, Icon(icon, { size: 16 }), ' ', title),
+            h('h2', { id: titleId }, Icon(icon, { size: 16 }), ' ', title),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' }, ...bodyEls),
         h('footer', { class: 'modal-foot' },
@@ -3090,8 +3360,15 @@ function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFo
             typeof extraFooter === 'function' ? extraFooter(close) : extraFooter,   // DEBT_BTN_V1 — доп. кнопка рядом с «Отмена»
             h('span', { class: 'grow' }),
             submitBtn),
-    ));
+    );
+    overlay.appendChild(card);
     document.body.appendChild(overlay);
+    try { if (doc && typeof doc.addEventListener === 'function') doc.addEventListener('keydown', onKey); } catch (e) { /* без клавиатуры */ }
+    try {
+        const first = typeof card.querySelector === 'function'
+            ? card.querySelector('.modal-body input:not([type=hidden]):not([disabled]), .modal-body select, .modal-body textarea') || submitBtn : null;
+        if (first && typeof first.focus === 'function') first.focus();
+    } catch (e) { /* фокус — удобство */ }
 }
 
 // DEPOSIT_ACCEPT_MODAL_V1 — окно приёма депозита.

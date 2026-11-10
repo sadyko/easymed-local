@@ -423,3 +423,32 @@ test('«Старший кассир» без уровня (старый экра
     assert.equal(buttons(c).find((b) => textOf(b).trim() === 'Закрыть смену'), undefined);
     assert.match(textOf(c), /закрыл\(а\): Старший Кассир/);
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0) — у итога «Исправить услуги» — «Изменить скидку». Окно скидки
+// живёт в кассе: «Исправить услуги» его не импортирует, касса передаёт его опцией discountChange
+// вместе с правилом (cashierDiscountChangeAllowed). Без опции и для неоплаченного счёта — кнопки нет.
+test('DISCOUNT_CHANGE_PAID_V1: «Изменить скидку» у итога окна — по правилу кассы; нажатие открывает окно скидки этого счёта', async () => {
+    asCashier({ 'cashier.lines': 'edit' });
+    const paid = { ...INV, status: 'paid', paid_amount: 265000 };
+    world(paid);
+    closeAll();
+    const opened = [];
+    await fix.openLineFix(paid, { discountChange: { allowed: (i) => i.status === 'paid', open: (i) => opened.push(i) } });
+    let m = lastModal();
+    const btn = walk(m).find((e) => e.attrs && e.attrs['data-discount-change'] === '5');
+    assert.ok(btn, 'у итога нет «Изменить скидку»');
+    assert.match(textOf(btn), /Изменить скидку/);
+    btn.click();
+    assert.equal(opened.length, 1);
+    assert.deepEqual([opened[0].id, opened[0].patient_name], [5, 'Рахимов Жасур'], 'окно скидки получает счёт со строкой кассы');
+    // Без опции (прежние вызовы) и когда правило говорит «нет» — кнопки нет.
+    closeAll();
+    await fix.openLineFix(paid);
+    assert.equal(walk(lastModal()).find((e) => e.attrs && e.attrs['data-discount-change'] !== undefined), undefined);
+    world(INV);
+    closeAll();
+    await fix.openLineFix(INV, { discountChange: { allowed: (i) => i.status === 'paid', open: () => {} } });
+    m = lastModal();
+    assert.equal(walk(m).find((e) => e.attrs && e.attrs['data-discount-change'] !== undefined), undefined, 'до оплаты — обычная «Скидка» в окне оплаты');
+    closeAll();
+});

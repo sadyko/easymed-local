@@ -526,9 +526,20 @@ const LIVE_VISIT_SQL = (v) => `COALESCE(${v}.status, '') NOT IN ('cancelled', 'n
 // вообще может присоединиться (счета строк периода). Группировка — по счёту,
 // поэтому для счетов из invScope агрегат тот же, а остальные просто не
 // считаются.
+//
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0, решение координатора по ревью денег) — «ИЗМЕНИТЬ СКИДКУ» —
+// ЭТО СКИДКА, А НЕ ВОЗВРАТ. Возврат разницы при изменении скидки после оплаты (платёж возврата с
+// пометкой «REFUND#<платёж> DISC#<счёт>», billing.js discountChangeTx) не входит ни в
+// «возвращено», ни в «получено»: сумма счёта уже уменьшилась на него. Счёт, которому подняли
+// скидку до 100 % после оплаты, платит врачу ровно как скидка 100 % до оплаты (переключатель
+// «Скидка уменьшает долю врача» решает, фикс — целиком), а не как полный возврат; и доля не
+// зависит от истории (подняли, потом сняли — как обычный частично оплаченный счёт). Пометка
+// проверяется на своём месте — сразу за номером платежа, — поэтому причина возврата, в которой
+// встретилось «DISC#», настоящий возврат не прячет.
+const DISC_REFUND_SQL = `(p.amount < 0 AND substr(COALESCE(p.notes, ''), instr(COALESCE(p.notes, ''), ' ') + 1, 5) = 'DISC#')`;
 const REFUND_AGG_SQL = (invScope = null) => `SELECT p.invoice_id AS invoice_id,
-         SUM(CASE WHEN p.amount > 0 THEN p.amount ELSE 0 END)  AS gross,
-         SUM(CASE WHEN p.amount < 0 THEN -p.amount ELSE 0 END) AS refunded,
+         SUM(CASE WHEN p.amount > 0 THEN p.amount WHEN ${DISC_REFUND_SQL} THEN p.amount ELSE 0 END)  AS gross,
+         SUM(CASE WHEN p.amount < 0 AND NOT ${DISC_REFUND_SQL} THEN -p.amount ELSE 0 END) AS refunded,
          SUM(p.amount)                                         AS net,
          MAX(iv.total_amount)                                  AS total
     FROM payments p JOIN invoices iv ON iv.id = p.invoice_id

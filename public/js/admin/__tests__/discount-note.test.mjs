@@ -85,3 +85,24 @@ test('ревью S5 L-1: скидка по ставкам — ru как есть
     }
   } finally { setLang('ru'); }
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0) — след «Изменить скидку» после оплаты (rpc/billing.js
+// discountChangeTx): «Касса после оплаты: <причина> — было X% (A сум), стало Y% (B сум)» и
+// пометка доли врача (целиком или частично от цены до скидки).
+const CHANGE = 'Касса после оплаты: акция — было 20% (40 000 сум), стало 50% (100 000 сум)';
+const CHANGE_PART = 'Касса после оплаты: жалоба — было 20% (40 000 сум), стало 33,33% (66 660 сум) (доля врача — частично от цены до скидки)';
+const CHANGE_OFF = 'Касса после оплаты: ошибка — было 0% (0 сум), стало 10% (20 000 сум) (доля врача — от цены до скидки)';
+
+test('DISCOUNT_CHANGE_PAID_V1: ru — как есть; en и uz — неизменные части словарём, причина — как ввели', () => {
+  setLang('ru');
+  assert.equal(discountNoteText(DESK_PCT + '; ' + CHANGE), DESK_PCT + '; ' + CHANGE);
+  setLang('en');
+  try {
+    assert.equal(discountNoteText(CHANGE), 'Cash desk after payment: акция — was 20% (40 000 UZS), now 50% (100 000 UZS)');
+    assert.equal(discountNoteText(CHANGE_PART), "Cash desk after payment: жалоба — was 20% (40 000 UZS), now 33,33% (66 660 UZS) (the doctor's share is partly from the price before the discount)");
+    assert.match(discountNoteText(CHANGE_OFF), /^Cash desk after payment: ошибка — was 0% \(0 UZS\), now 10% \(20 000 UZS\) \(/);
+    assert.doesNotMatch(discountNoteText(CHANGE_OFF).replace('ошибка', ''), /[Ѐ-ӿ]/, 'русское слово в английской записи');
+    setLang('uz');
+    assert.doesNotMatch(discountNoteText(CHANGE_PART).replace('жалоба', ''), /[Ѐ-ӿ]/, 'русское слово в узбекской записи');
+  } finally { setLang('ru'); }
+});

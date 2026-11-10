@@ -87,6 +87,8 @@ globalThis.fetch = async (url, opts = {}) => {
         const a = rpcAnswers[name];
         if (a && a.__error) return { ok: false, status: 500, json: async () => ({ error: { message: a.__error } }), headers: { getSetCookie: () => [] } };
         data = typeof a === 'function' ? await a(body) : (a !== undefined ? a : []);   // ответ-обещание — сервер «думает», пока тест не ответит
+        // DISCOUNT_CHANGE_PAID_V1 — ответ-функция может отказать с кодом: { __refuse: { status, code, message } }.
+        if (data && data.__refuse) return { ok: false, status: data.__refuse.status || 400, json: async () => ({ error: { code: data.__refuse.code, message: data.__refuse.message } }), headers: { getSetCookie: () => [] } };
     } else {
         calls.push(['db:' + body.table, body]);
         const rows = (tables[body.table] || []).filter((r) => (body.filters || []).every((f) => matches(r, f)));
@@ -185,4 +187,238 @@ test('DISCOUNT_V2: счёт со скидкой 100 % — «скидка 100%» 
     assert.equal(desk.isFullDiscount({ total_amount: 0, subtotal: 100000, discount_amount: 100000 }), true);
     assert.equal(desk.isFullDiscount({ total_amount: 0, subtotal: 0, discount_amount: 0 }), false, 'бесплатная услуга — не скидка');
     assert.equal(desk.isFullDiscount({ total_amount: 5000, subtotal: 100000, discount_amount: 95000 }), false);
+});
+
+// ═══ DISCOUNT_CHANGE_PAID_V1 (3.23.0, решения владельца Q2–Q4) — «ИЗМЕНИТЬ СКИДКУ» ═══
+// Скидку счёта меняют и после оплаты; окно спрашивает новую скидку (0 — без скидки), причину и
+// переключатель доли врача, а сервер (предпросмотр cashier_invoice_discount_change_quote) говорит,
+// что будет с деньгами: «Вернуть пациенту» — тем же способом или на баланс — или «К доплате».
+const PAID = { id: 52, invoice_number: 'INV-A-26-00052', status: 'paid', subtotal: 200000, discount_amount: 40000, total_amount: 160000, paid_amount: 160000,
+    payer_id: null, patient_id: 3, visit_id: 77, patient_name: 'Рахимов Жасур', mrn: 'A-26-00015', discount_note: 'Касса: постоянный пациент — 20% — 40 000 сум' };
+const FULL = { ...PAID, id: 53, invoice_number: 'INV-A-26-00053', discount_amount: 200000, total_amount: 0, paid_amount: 0, discount_note: 'Скидка вручную' };
+const STATE = { changed: false, preview: true, base: 200000, line_discounts: 0, discount_before: 40000, pct_before: 20, share_before: 1, post_sale_before: 0,
+    total_before: 160000, paid_before: 160000, discount_after: 40000, pct_after: 20, total_after: 160000, refunded: 0, due: 0, refund_plan: [] };
+function quoteFor(b) {
+    if (b.value == null) return STATE;
+    const after = b.mode === 'abs' ? b.value : 200000 * b.value / 100;
+    const total = 200000 - after;
+    const refunded = Math.max(0, 160000 - total);
+    return { ...STATE, changed: true, discount_after: after, pct_after: after / 2000, total_after: total, refunded, due: Math.max(0, total - 160000),
+        refund_plan: refunded > 0 ? [{ payment_id: 1, method: 'cash', refund_method: b.to_balance ? 'wallet' : 'cash', amount: refunded, to_balance: !!b.to_balance, to_card: false }] : [],
+        to_balance: !!b.to_balance, invoice: { ...PAID, total_amount: total, paid_amount: Math.min(160000, total), discount_amount: after, status: total > 160000 ? 'partial' : 'paid' } };
+}
+const DC_ANSWERS = () => ({ cashier_invoice_discount_change_quote: quoteFor, cashier_invoice_discount_change: (b) => quoteFor(b) });
+const dcCalls = (name) => rpcCalls(name).map(([, b]) => b);
+
+test('DISCOUNT_CHANGE_PAID_V1: «Изменить скидку» — оплаченный, частично, долг, скидка 100 %; не до оплаты, не плательщику, не депозит, не стационар; право и денежная роль', () => {
+    asRole();
+    assert.equal(desk.cashierDiscountChangeAllowed(PAID), true);
+    assert.equal(desk.cashierDiscountChangeAllowed({ ...PAID, status: 'partial', paid_amount: 50000 }), true);
+    assert.equal(desk.cashierDiscountChangeAllowed({ ...PAID, status: 'debt', paid_amount: 0 }), true, 'долг — пациент ушёл');
+    assert.equal(desk.cashierDiscountChangeAllowed(FULL), true, 'скидка 100 % — окна «Платежи» нет, но скидку меняют');
+    assert.equal(desk.cashierDiscountChangeAllowed(UNPAID), false, 'до оплаты — обычная «Скидка»');
+    assert.equal(desk.cashierDiscountChangeAllowed({ ...PAID, payer_id: 5 }), false, 'плательщик');
+    assert.equal(desk.cashierDiscountChangeAllowed({ ...PAID, invoice_number: 'DEP-A-26-00001' }), false, 'депозит');
+    assert.equal(desk.cashierDiscountChangeAllowed({ ...PAID, status: 'void' }), false, 'отменён');
+    assert.equal(desk.cashierDiscountChangeAllowed({ ...PAID, visit_id: null, admission_id: 4 }), false, 'стационар — при выписке');
+    assert.equal(desk.cashierDiscountChangeAllowed({ ...PAID, subtotal: 0, total_amount: 0, discount_amount: 0, paid_amount: 0 }), false, 'бесплатная услуга');
+    asRole({ 'cashier.discount': 'none' });
+    assert.equal(desk.cashierDiscountChangeAllowed(PAID), false, '«Кассир может давать скидку: Нет»');
+    perms.setEffectiveFromRole({ name: 'registrar', permissions: { sections: ['cashier'], levels: { cashier: 'editor' }, grants: { 'cashier.discount': 'edit' } } });
+    window.easymed.state.user = { id: 7, full_name: 'Регистратор', role: 'registrar' };
+    assert.equal(desk.cashierDiscountChangeAllowed(PAID), false, 'деньги двигает касса: кассир или администратор');
+    asRole();
+});
+
+test('DISCOUNT_CHANGE_PAID_V1: окно — нынешняя скидка, 50 % → «Вернуть пациенту 60 000», «На баланс пациента»; без причины не уходит; сервер получает выбор', async () => {
+    asRole();
+    closeAll(); calls.length = 0; TOASTS.length = 0;
+    rpcAnswers = DC_ANSWERS();
+    desk.openDiscountChange(PAID, null, {});
+    await tick();
+    const m = lastModal();
+    assert.match(textOf(m), /Изменить скидку · INV-A-26-00052/);
+    assert.match(textOf(m), /Сейчас скидка счёта: 20% — 40.000 сум/);
+    assert.match(textOf(m), /Скидки строк \(пакет, ставки по услугам\) здесь не меняются\./);
+    assert.match(textOf(m), /Касса: постоянный пациент — 20% — 40.000 сум/, 'причина скидки');
+    assert.deepEqual(dcCalls('cashier_invoice_discount_change_quote')[0], { invoice_id: 52 }, 'нынешнее состояние — предпросмотр без значения');
+    const val = inputBy(m, 'data-dc-value');
+    assert.equal(val.value, '20', 'окно открывается с нынешним процентом');
+    assert.ok(inputBy(m, 'data-dc-reduces').checked, '«Скидка уменьшает долю врача» — как у счёта');
+    val.value = '50'; val.fire('input');
+    await tick();
+    assert.match(textOf(byAttr(m, 'data-dc-refund', '60000')), /Вернуть пациенту\s+60.000 сум/);
+    assert.match(textOf(m), /160.000 → 100.000 сум/);
+    assert.match(textOf(m), /Оплата подарочной картой всегда возвращается на ту же карту\./);
+    const q1 = dcCalls('cashier_invoice_discount_change_quote').pop();
+    assert.deepEqual([q1.mode, q1.value, q1.card_fallback, 'reduces_doctor_share' in q1], ['pct', 50, 'cash', false], 'переключатель не трогали — доля прежняя');
+    const balance = walk(byAttr(m, 'data-dc-dest', 'balance')).find((e) => e.tagName === 'INPUT');
+    balance.fire('change');
+    await tick();
+    const q2 = dcCalls('cashier_invoice_discount_change_quote').pop();
+    assert.deepEqual([q2.to_balance, q2.card_fallback], [true, 'balance']);
+    const submit = buttonByText(m, 'Сохранить скидку');
+    submit.click();
+    await tick();
+    assert.equal(dcCalls('cashier_invoice_discount_change').length, 0, 'без причины ушло на сервер');
+    assert.ok(TOASTS.some((t) => t.includes('Укажите причину скидки')), JSON.stringify(TOASTS));
+    inputBy(m, 'data-dc-reason').value = 'акция';
+    submit.click();
+    await tick(80);
+    const [c] = dcCalls('cashier_invoice_discount_change');
+    assert.deepEqual([c.invoice_id, c.mode, c.value, c.reason, c.to_balance, c.card_fallback, 'reduces_doctor_share' in c], [52, 'pct', 50, 'акция', true, 'balance', false]);
+    assert.ok(c.idempotency_key, 'нет ключа повтора');
+    assert.ok(TOASTS.some((t) => /Скидка изменена — разница 60.000 сум зачислена на баланс пациента\./.test(t)), JSON.stringify(TOASTS));
+    assert.equal(modals().length, 0, 'окно скидки закрыто');
+});
+
+test('DISCOUNT_CHANGE_PAID_V1: скидку сняли (0 %) — «К доплате 40 000», после сохранения — окно оплаты «Доплата»; тронутый переключатель уходит на сервер', async () => {
+    asRole();
+    closeAll(); calls.length = 0; TOASTS.length = 0;
+    rpcAnswers = DC_ANSWERS();
+    desk.openDiscountChange(PAID, null, {});
+    await tick();
+    const m = lastModal();
+    const box = inputBy(m, 'data-dc-reduces');
+    box.checked = false; box.fire('change');
+    const val = inputBy(m, 'data-dc-value');
+    val.value = '0'; val.fire('input');
+    await tick();
+    assert.match(textOf(byAttr(m, 'data-dc-due', '40000')), /К доплате\s+40.000 сум/);
+    assert.match(textOf(m), /После сохранения откроется окно оплаты разницы\./);
+    inputBy(m, 'data-dc-reason').value = 'скидка дана ошибочно';
+    buttonByText(m, 'Сохранить скидку').click();
+    await tick(80);
+    const [c] = dcCalls('cashier_invoice_discount_change');
+    assert.deepEqual([c.value, c.reduces_doctor_share], [0, false]);
+    assert.ok(TOASTS.some((t) => /Скидка изменена — к доплате 40.000 сум\./.test(t)), JSON.stringify(TOASTS));
+    const pay = lastModal();
+    assert.ok(pay, 'окно оплаты не открылось');
+    assert.match(textOf(pay), /Оплата · INV-A-26-00052/);
+    closeAll();
+});
+
+test('DISCOUNT_CHANGE_PAID_V1: двери — строка счёта со скидкой 100 %, окно «Платежи», окно оплаты частично оплаченного счёта', async () => {
+    asRole();
+    closeAll(); calls.length = 0;
+    rpcAnswers = DC_ANSWERS();
+    tables = {};
+    const row = desk.__test_invoiceRow(FULL, mkEl('div'));
+    const btn = byAttr(row, 'data-discount-change', '53');
+    assert.ok(btn, 'у счёта со скидкой 100 % нет «Изменить скидку»');
+    assert.ok(!byAttr(desk.__test_invoiceRow(PAID, mkEl('div')), 'data-discount-change', '52'), 'у оплаченного — в «Платежах», не в строке');
+    btn.click();
+    await tick();
+    assert.match(textOf(lastModal()), /Изменить скидку · INV-A-26-00053/);
+    closeAll();
+    await desk.__test_openInvoiceRefund(PAID, mkEl('div'));
+    await tick();
+    const pm = lastModal();
+    assert.match(textOf(pm), /Платежи · INV-A-26-00052/);
+    assert.ok(byAttr(pm, 'data-discount-change', '52'), 'в «Платежах» нет «Изменить скидку»');
+    assert.match(textOf(pm), /Скидка счёта: 40.000 сум/);
+    closeAll();
+    const PART = { ...PAID, status: 'partial', paid_amount: 100000 };
+    desk.__test_payModal(mkEl('div'), PART, 60000);
+    await tick();
+    const pay = lastModal();
+    assert.ok(byAttr(pay, 'data-discount-change', '52'), 'в окне оплаты частично оплаченного счёта нет «Изменить скидку»');
+    assert.ok(!byAttr(pay, 'data-cashier-discount', '52'), '«Скидка» до оплаты здесь не предлагается');
+    closeAll();
+    asRole({ 'cashier.discount': 'none' });
+    assert.ok(!byAttr(desk.__test_invoiceRow(FULL, mkEl('div')), 'data-discount-change', '53'), 'без права — кнопки нет');
+    asRole();
+});
+
+test('DISCOUNT_CHANGE_PAID_V1: новые строки окна — в словаре на трёх языках, uz/en без кириллицы', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const key of ['Изменить скидку', 'Изменить скидку · {no}', 'Изменение скидки', 'Скидка счёта: {sum} сум', 'Скидки у счёта нет.',
+        'Счёт {no} · услуги {sub} сум · оплачено {paid} сум', 'Сейчас скидка счёта: {pct}% — {sum} сум', 'Сейчас скидки счёта нет.', 'Причина: {note}',
+        'Скидки строк (пакет, ставки по услугам) здесь не меняются.', 'Скидки строк (пакет, ставки по услугам) — {sum} сум — здесь не меняются.',
+        'Подняли скидку — касается добавленной части; снизили — всей оставшейся.',
+        'Сейчас скидка уменьшает долю врача частично — не трогайте переключатель, и так и останется.',
+        'Скидка та же — менять нечего.', 'Скидка — не больше суммы услуг без своей скидки: {sum} сум.', 'Вернуть тем же способом',
+        'Оплата подарочной картой всегда возвращается на ту же карту.', 'После сохранения откроется окно оплаты разницы.',
+        'Сумма к оплате не меняется — деньги не двигаются.', 'Сохранить скидку', 'Скидка не изменена.',
+        'Скидка изменена — пациенту возвращено {sum} сум.', 'Скидка изменена — разница {sum} сум зачислена на баланс пациента.',
+        'Скидка изменена — к доплате {sum} сум.', 'Скидка изменена — сумма к оплате не изменилась.',
+        'Касса после оплаты: {reason} — было {wasPct}% ({wasSum} сум), стало {nowPct}% ({nowSum} сум)', '(доля врача — частично от цены до скидки)']) {
+        const e = STRINGS[key];
+        assert.ok(e, 'нет ключа словаря: ' + key);
+        assert.equal(e.ru, key);
+        for (const lang of ['uz', 'en']) {
+            assert.ok(e[lang], key + ': нет перевода ' + lang);
+            assert.doesNotMatch(e[lang], /[Ѐ-ӿ]/, key + ': кириллица в ' + lang);
+        }
+    }
+});
+
+// Ревью R2 — значение в поле не трогали (кассир только переключил «Скидка уменьшает долю врача»):
+// окно шлёт ту же скидку СУММОЙ (discount_before), а не округлённый процент — деньги не двигаются.
+test('ревью R2: значение не трогали — окно шлёт прежнюю скидку суммой, а не округлённый процент', async () => {
+    asRole();
+    closeAll(); calls.length = 0; TOASTS.length = 0;
+    rpcAnswers = DC_ANSWERS();
+    desk.openDiscountChange(PAID, null, {});
+    await tick();
+    const m = lastModal();
+    const box = inputBy(m, 'data-dc-reduces');
+    box.checked = false; box.fire('change');
+    await tick();
+    const q = dcCalls('cashier_invoice_discount_change_quote').pop();
+    assert.deepEqual([q.mode, q.value, q.reduces_doctor_share], ['abs', 40000, false], 'предпросмотр — прежней суммой');
+    inputBy(m, 'data-dc-reason').value = 'клиника берёт скидку на себя';
+    buttonByText(m, 'Сохранить скидку').click();
+    await tick(80);
+    const [c] = dcCalls('cashier_invoice_discount_change');
+    assert.deepEqual([c.mode, c.value, c.reduces_doctor_share], ['abs', 40000, false]);
+    closeAll();
+});
+
+// Ревью R10 — сохранение несёт сумму и оплаченное из предпросмотра; сервер ответил «счёт изменился» —
+// окно остаётся, говорит это и пересчитывает с новым счётом.
+test('ревью R10: сохранение несёт то, что видел кассир; «счёт изменился» — окно пересчитывает заново', async () => {
+    asRole();
+    closeAll(); calls.length = 0; TOASTS.length = 0;
+    let changedOnce = false;
+    rpcAnswers = {
+        cashier_invoice_discount_change_quote: quoteFor,
+        cashier_invoice_discount_change: (b) => {
+            if (!changedOnce) { changedOnce = true; return { __refuse: { status: 409, code: 'invoice_changed', message: 'Счёт изменился, пока окно было открыто — проверьте сумму ещё раз.' } }; }
+            return quoteFor(b);
+        },
+    };
+    desk.openDiscountChange(PAID, null, {});
+    await tick();
+    const m = lastModal();
+    const val = inputBy(m, 'data-dc-value');
+    val.value = '50'; val.fire('input');
+    await tick();
+    inputBy(m, 'data-dc-reason').value = 'акция';
+    const quotesBefore = dcCalls('cashier_invoice_discount_change_quote').length;
+    buttonByText(m, 'Сохранить скидку').click();
+    await tick(80);
+    const [c] = dcCalls('cashier_invoice_discount_change');
+    assert.deepEqual([c.expect_total_before, c.expect_paid_before], [160000, 160000], 'нет того, что видел кассир');
+    assert.ok(TOASTS.some((t) => /Счёт изменился, пока окно было открыто/.test(t)), JSON.stringify(TOASTS));
+    assert.ok(modals().includes(m), 'окно закрылось после отказа');
+    assert.ok(dcCalls('cashier_invoice_discount_change_quote').length >= quotesBefore + 2, 'окно не пересчитало: нынешняя скидка и предпросмотр');
+    closeAll();
+});
+
+// Ревью п. 10 — результат предпросмотра объявляется читалке экрана; окно кассы — настоящий диалог.
+test('ревью п. 10: результат — aria-live="polite"; окно — role="dialog", aria-modal, заголовок', async () => {
+    asRole();
+    closeAll(); calls.length = 0;
+    rpcAnswers = DC_ANSWERS();
+    desk.openDiscountChange(PAID, null, {});
+    await tick();
+    const m = lastModal();
+    assert.equal(byAttr(m, 'data-dc-result', '').attrs['aria-live'], 'polite');
+    const card = walk(m).find((e) => e.attrs && e.attrs.role === 'dialog');
+    assert.ok(card, 'нет role="dialog"');
+    assert.equal(card.attrs['aria-modal'], 'true');
+    const labelId = card.attrs['aria-labelledby'];
+    assert.ok(labelId && walk(m).some((e) => e.attrs && e.attrs.id === labelId), 'aria-labelledby не указывает на заголовок');
+    closeAll();
 });
