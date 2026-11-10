@@ -4692,6 +4692,13 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    («Все · 5561» → «Instagram · 1»). */
 .crm-filter-sel { min-width: 170px; max-width: 280px; }
 .crm-foreign-hint { display: flex; align-items: center; gap: 6px; font-size: 13.5px; margin: 0 0 8px; }
+/* CRM_PERIOD_ALL_COLUMNS_V1 (3.23.0) — строка о выбранном периоде над доской:
+   «Период «Сегодня»: показаны заявки, поступившие сегодня. Открытых за другие
+   дни: N — Показать все». Кнопка — ссылкой в строке, не отдельной плашкой. */
+.crm-period-line { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; font-size: 13.5px; margin: 0 0 8px; }
+.crm-period-line .crm-period-all { padding: 2px 8px; font-weight: 600; color: var(--primary-700); }
+/* Пока доска перезагружается, чипы периода заняты: второй щелчок не уходит. */
+.wzc-cat[aria-busy="true"] { cursor: progress; opacity: .6; }
 
 /* CRM_CARD_V2 (2026-09-05, владелец: «name phone number and other badges design
    be more appealing?») — КАРТОЧКА ЗАЯВКИ.

@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { S, CALLS, TOASTS, mk, walk, textOf, byAttr, byClass, tick, button } from './crm-harness.mjs';
 
-const { renderCrm, crmExcelRows } = await import('../views/crm.js');
+const { renderCrm, crmExcelRows, CRM_FILTER_ALL } = await import('../views/crm.js');
 
 const ADMIN = { id: 7, full_name: 'Админ', role: 'admin', is_admin: true };
 const SOURCES = [
@@ -46,14 +46,16 @@ async function board(view = 'kanban', leads = LEADS) {
   await renderCrm(root, { onNavigate() {} });
   await tick();
   // Фильтр — состояние модуля: возвращаем «Все», чтобы тесты не зависели от порядка.
-  if (srcSel(root)) await pickSrc(root, '');
+  if (srcSel(root)) await pickSrc(root, CRM_FILTER_ALL);
   button(root, view === 'list' ? /Список/ : /Канбан/).click();
   await tick();
   return root;
 }
 // CRM_FILTERS_DROPDOWN_V1 (2026-10-29) — фильтр «Источник» над доской стал
-// выпадающим списком (data-src-select) с ОДНИМ значением: «Все · N» — пустое,
-// затем источники выборки со счётчиком. Чипов data-src-chip больше нет; окно
+// выпадающим списком (data-src-select) с ОДНИМ значением: «Все · N», затем
+// источники выборки со счётчиком. CRM_FILTER_ALL_VALUE_V1 (3.23.0) — у «Все»
+// настоящее значение (CRM_FILTER_ALL), а не пустое: пустое список программы
+// рисовал серым, как незаполненное поле, и не показывал среди вариантов. Чипов data-src-chip больше нет; окно
 // заявки по-прежнему отмечает источники по несколько.
 const srcSel = (root) => byAttr(root, 'data-src-select')[0];
 const srcOpts = (root) => (srcSel(root) ? walk(srcSel(root)).filter((n) => n.tagName === 'OPTION') : []);
@@ -79,8 +81,9 @@ const mainPick = (modal) => picks(modal).filter((n) => n.hasAttribute('data-src-
 
 test('список фильтра: заявка считается в каждом своём источнике, «Все» — по заявкам; скрытый источник заявки тоже в списке', async () => {
   const root = await board();
-  assert.equal(textOf(optOf(root, '')), 'Все · 4');
-  const counts = Object.fromEntries(srcOpts(root).filter((o) => o.value).map((o) => [o.value, textOf(o)]));
+  assert.equal(textOf(optOf(root, CRM_FILTER_ALL)), 'Все · 4');
+  assert.equal(optOf(root, ''), undefined, '«Все» снова с пустым значением');
+  const counts = Object.fromEntries(srcOpts(root).filter((o) => o.value !== CRM_FILTER_ALL).map((o) => [o.value, textOf(o)]));
   assert.deepEqual(counts, {
     call: 'Звонок · 2', instagram: 'Instagram · 2', referral: 'Рекомендация · 1', telegram: 'Telegram · 1',
   });
@@ -99,9 +102,9 @@ test('фильтр по одному источнику: видна заявка
   assert.equal(shown.length, 2, 'Звонок: Бахтиёрова и Азимов (у него звонок — второй источник)');
   assert.ok(!shown.some((t) => t.includes('Юсупов')) && !shown.some((t) => t.includes('Каримова')), 'при одном выбранном источнике видны чужие заявки');
   assert.equal(srcSel(root).value, 'call');
-  await pickSrc(root, '');
+  await pickSrc(root, CRM_FILTER_ALL);
   assert.equal(cards(root).length, 4);
-  assert.equal(srcSel(root).value, '', '«Все» не снял выбор');
+  assert.equal(srcSel(root).value, CRM_FILTER_ALL, '«Все» не снял выбор');
   window.easymed.state.user = null;
 });
 
@@ -239,10 +242,9 @@ test('CRM_UNIFY_V1: «Отчёт» спрашивает базу за свой �
 // Ревью M1 — отмеченный скрытый источник, у которого в новом периоде нет ни
 // одной заявки, пропадал из ряда: доска пустая, ни один чип не отмечен, и
 // снять отметку нечем. Отмеченный источник рисуется всегда (с нулём).
-// CRM_UNIFY_V1 (итоговое ревью) — ОБНОВЛЕНО НАМЕРЕННО: «Период» больше не
-// прячет ОТКРЫТЫЕ карточки (решение контролёра: владелец — «карточки
-// пропадают»), он сужает только закрытые колонки. Поэтому случай «в периоде
-// заявок этого источника нет» строится на закрытых карточках («Пришёл»).
+// CRM_UNIFY_V1 (итоговое ревью) — случай «в периоде заявок этого источника нет»
+// построен на закрытых карточках («Пришёл»). CRM_PERIOD_ALL_COLUMNS_V1 (3.23.0):
+// «Период» снова сужает и открытые — на закрытых случай тот же.
 test('ревью M1: отмеченный источник остаётся в ряду с нулём, когда в периоде его заявок нет, — и снимается', async () => {
   const old = new Date(Date.now() - 40 * 86400000).toISOString();
   const leads = [
@@ -261,7 +263,7 @@ test('ревью M1: отмеченный источник остаётся в �
     assert.equal(textOf(tg), 'Telegram · 0');
     assert.equal(srcSel(root).value, 'telegram');
     assert.equal(cards(root).length, 0);
-    await pickSrc(root, '');
+    await pickSrc(root, CRM_FILTER_ALL);
     assert.equal(cards(root).length, 1, 'после снятия выбора доска не вернулась');
     assert.ok(!optOf(root, 'telegram'), 'невыбранный источник без заявок в периоде предложен');
   } finally {

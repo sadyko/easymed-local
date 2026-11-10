@@ -53,6 +53,17 @@ export async function crmLeaks(lang) {
   await setOp('me');
   found.kanbanMine = leaks(root);
   await setOp('all');
+  // CRM_PERIOD_ALL_COLUMNS_V1 (3.23.0) — строка о периоде над доской: каждый период
+  // и свои даты; «Показать все» возвращает «Всё время».
+  for (const key of ['today', 'week', '30', 'custom']) {
+    byAttr(root, 'data-crm-period').find((n) => n.getAttribute('data-crm-period') === key).click();
+    await tick(60);
+    assert.equal(byAttr(root, 'data-crm-period-line').length, 1, 'нет строки о периоде: ' + key);
+    found['period_' + key] = leaks(root);
+  }
+  byAttr(root, 'data-crm-period-all')[0].click();
+  await tick(60);
+  assert.equal(byAttr(root, 'data-crm-period-line').length, 0, '«Показать все» не вернуло «Всё время»');
   const inp = walk(root).find((n) => n.tagName === 'INPUT' && String(n.className).includes('crm-search'));
   inp.value = '909092638'; inp.dispatchEvent({ type: 'input', target: inp, currentTarget: inp });
   await tick(560); await tick(40);

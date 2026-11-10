@@ -6,12 +6,15 @@
 //     тоже не пропадает;
 //   • закрытые («Пришёл», «Отказ», прочие проигрышные) — созданные в периоде;
 //     для «Всё время» — последние 300 на колонку, а число — из базы.
+// CRM_PERIOD_ALL_COLUMNS_V1 (3.23.0, решение владельца Q1) — выбранный «Период»
+// сужает и ОТКРЫТЫЕ (по дате поступления); «по» — исключительная граница (начало
+// следующего дня); открытые за другие дни — лёгкий запрос для строки над доской.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 globalThis.window = globalThis.window || { location: { hostname: 'localhost' }, localStorage: { getItem: () => 'ru', setItem() {}, removeItem() {} } };
 globalThis.localStorage = globalThis.localStorage || globalThis.window.localStorage;
-const { loadBoard, periodBounds, periodStart, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT, withOperator } = await import('../views/crm-board-load.js');
+const { loadBoard, periodBounds, periodStart, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT, withOperator, OUTSIDE_SELECT } = await import('../views/crm-board-load.js');
 
 /** Поддельный db-клиент: записывает описания запросов и отвечает по таблице. */
 function fakeDb(answer) {
@@ -50,15 +53,61 @@ test('«Всё время»: открытые — одним запросом б
   assert.deepEqual(res.capped, {}, 'полная колонка помечена обрезанной');
 });
 
-test('период задан: закрытые — одним запросом в границах created_at, без предела', async () => {
+// CRM_PERIOD_ALL_COLUMNS_V1 — ОБНОВЛЕНО НАМЕРЕННО: открытые тоже в границах
+// периода (раньше — все, без даты: «Сегодня» грузило тысячи давних открытых);
+// «по» — исключительная граница: lt начала следующего дня, а не lte 23:59:59.999.
+test('период задан: и открытые, и закрытые — в границах created_at («по» — исключительно), без предела', async () => {
   const db = fakeDb(() => ({ data: [], error: null }));
-  await loadBoard({ db, closedKeys: ['came', 'refused'], bounds: { from: '2026-10-01T00:00:00Z', to: '2026-10-05T18:59:59Z' } });
+  await loadBoard({ db, closedKeys: ['came', 'refused'], bounds: { from: '2026-10-01T00:00:00Z', to: '2026-10-05T19:00:00.000Z' } });
   const closed = db.calls.find((c) => c.filters.some(([op, col, val]) => op === 'in' && col === 'status' && val.includes('came')));
   assert.ok(closed, 'закрытые за период не запрошены одним запросом');
-  assert.ok(closed.filters.some(([op, col, val]) => op === 'gte' && col === 'created_at' && val === '2026-10-01T00:00:00Z'));
-  assert.ok(closed.filters.some(([op, col, val]) => op === 'lte' && col === 'created_at' && val === '2026-10-05T18:59:59Z'));
-  assert.equal(closed.limit, null);
-  assert.equal(db.calls.length, 2);
+  const open = db.calls.find(isOpenQuery);
+  for (const [what, q] of [['закрытые', closed], ['открытые', open]]) {
+    assert.ok(q.filters.some(([op, col, val]) => op === 'gte' && col === 'created_at' && val === '2026-10-01T00:00:00Z'), what + ' без начала периода');
+    assert.ok(q.filters.some(([op, col, val]) => op === 'lt' && col === 'created_at' && val === '2026-10-05T19:00:00.000Z'), what + ' без конца периода');
+    assert.ok(!q.filters.some(([op]) => op === 'lte'), what + ': «по» снова включительная граница');
+    assert.equal(q.limit, null);
+  }
+  assert.equal(db.calls.length, 2, 'без просьбы открытые за другие дни не спрашиваются');
+});
+
+test('CRM_PERIOD_ALL_COLUMNS_V1: открытые за другие дни — лёгкий запрос вне периода (до «с» и с «по»), тот же оператор, без предела', async () => {
+  const F = '2026-10-01T00:00:00.000Z';
+  const T = '2026-10-05T19:00:00.000Z';
+  const db = fakeDb((d) => {
+    if (d.select !== OUTSIDE_SELECT) return { data: [lead(9, 'recall')], error: null };
+    const before = d.filters.some(([op, col, val]) => op === 'lt' && col === 'created_at' && val === F);
+    return { data: before ? [{ id: 1, status: 'recall' }, { id: 2, status: 'no_show' }] : [{ id: 2, status: 'no_show' }, { id: 3, status: 'in_process' }], error: null };
+  });
+  const res = await loadBoard({ db, closedKeys: ['came'], bounds: { from: F, to: T }, operator: 'me', me: 21, outside: true });
+  const lite = db.calls.filter((c) => c.select === OUTSIDE_SELECT);
+  assert.equal(lite.length, 2, 'вне периода — до «с» и с «по»');
+  assert.ok(lite.some((c) => c.filters.some(([op, col, val]) => op === 'lt' && col === 'created_at' && val === F)));
+  assert.ok(lite.some((c) => c.filters.some(([op, col, val]) => op === 'gte' && col === 'created_at' && val === T)));
+  for (const c of lite) {
+    assert.ok(c.filters.some(([op, col, val]) => op === 'not.in' && col === 'status' && val.includes('came')), 'вне периода — только открытые');
+    assert.ok(c.filters.some(([op, col, val]) => op === 'eq' && col === 'assigned_to' && val === 21), 'без фильтра «Оператор»');
+    assert.equal(c.limit, null);
+  }
+  assert.deepEqual(res.outside.map((r) => r.id).sort(), [1, 2, 3], 'строки вне периода — без повторов');
+  assert.deepEqual(res.rows.map((r) => r.id), [9]);
+  assert.equal(OUTSIDE_SELECT, 'id, status, source, sources', 'лёгкий запрос тянет лишнее');
+
+  // Только «с» — один запрос; «Всё время» — ни одного, outside = null.
+  const one = fakeDb(() => ({ data: [], error: null }));
+  await loadBoard({ db: one, closedKeys: ['came'], bounds: { from: F, to: null }, outside: true });
+  assert.equal(one.calls.filter((c) => c.select === OUTSIDE_SELECT).length, 1);
+  const all = fakeDb(() => ({ data: [], error: null }));
+  const resAll = await loadBoard({ db: all, closedKeys: ['came'], bounds: { from: null, to: null }, outside: true });
+  assert.equal(all.calls.filter((c) => c.select === OUTSIDE_SELECT).length, 0);
+  assert.equal(resAll.outside, null);
+
+  // Сбой лёгкого запроса — доска на месте, строки «вне периода» нет (null), а не ошибка доски.
+  const bad = fakeDb((d) => (d.select === OUTSIDE_SELECT ? { data: null, error: { message: 'boom' } } : { data: [lead(9, 'recall')], error: null }));
+  const resBad = await loadBoard({ db: bad, closedKeys: ['came'], bounds: { from: F, to: T }, outside: true });
+  assert.equal(resBad.error, undefined);
+  assert.deepEqual(resBad.rows.map((r) => r.id), [9]);
+  assert.equal(resBad.outside, null);
 });
 
 test('закрытая колонка упёрлась в 300 — число из базы (тот же запрос, тот же фильтр оператора)', async () => {
@@ -94,8 +143,19 @@ test('границы периода: «Сегодня», «Эта неделя»
   assert.equal(new Date(periodBounds('30', '', '', wed).from).getDate(), 8);   // 30 календарных дней, включая сегодня
   const c = periodBounds('custom', '2026-10-01', '2026-10-03', wed);
   assert.equal(new Date(c.from).getDate(), 1);
-  assert.equal(new Date(c.to).getDate(), 3);
-  assert.equal(new Date(c.to).getHours(), 23);
+  // CRM_PERIOD_ALL_COLUMNS_V1 — «по» — исключительная граница: начало дня ПОСЛЕ «по».
+  assert.equal(new Date(c.to).getDate(), 4);
+  assert.equal(new Date(c.to).getHours(), 0);
+  // Весь последний день: база пишет created_at без долей секунды ('…:59Z') и
+  // сравнивает строки. Карточка в 23:59:59 «по»-дня — внутри (с границей
+  // '…:59.999Z' она была снаружи: 'Z' > '.'), полночь следующего дня — снаружи.
+  const asDb = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const lastSecond = asDb(new Date(2026, 9, 3, 23, 59, 59));
+  const nextMidnight = asDb(new Date(2026, 9, 4, 0, 0, 0));
+  assert.ok(lastSecond >= c.from && lastSecond < c.to, `23:59:59 последнего дня вне периода: ${lastSecond} / ${c.to}`);
+  assert.ok(!(nextMidnight < c.to), 'полночь следующего дня попала в период');
+  assert.equal(periodBounds('custom', '', '2026-10-03', wed).from, null);
+  assert.equal(periodBounds('custom', '', '2026-10-03', wed).to, c.to);
   assert.deepEqual(periodBounds('custom', '', '', wed), { from: null, to: null });
   assert.deepEqual(periodBounds('all'), { from: null, to: null });
   assert.equal(periodStart('all'), null);

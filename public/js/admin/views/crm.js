@@ -59,7 +59,7 @@ import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso } fro
 // CRM_UNIFY_V1 — вид «Задачи»: третий вид раздела (Канбан / Список / Задачи).
 import { renderTasksView } from './crm-tasks-view.js';
 // CRM_UNIFY_V1 — загрузка доски: все открытые, закрытые за период, настоящие числа.
-import { loadBoard, periodBounds, periodStart, dayStart, dayEnd, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT, loadReportRows } from './crm-board-load.js';
+import { loadBoard, periodBounds, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT, loadReportRows } from './crm-board-load.js';   // CRM_PERIOD_ALL_COLUMNS_V1 — границы периода только из periodBounds
 // CRM_MULTI_SOURCE_V1 — несколько источников у заявки (миграция 231). Правило
 // чтения одно на экран и сервер: sources, иначе [source], иначе ['other'].
 import { leadSources, leadHasAnySource, sourceTally } from '../crm-sources.js';   // CRM_SOURCE_SINGLE_V1 — toggleLeadSource/MAX_LEAD_SOURCES форме больше не нужны
@@ -195,7 +195,11 @@ const state = { view: 'kanban', search: '', rows: [], sources: [], period: 'all'
                 operator: 'all', staff: [], staffLoaded: false, searchForeign: false,
                 // CRM_UNIFY_V1 — у обрезанных закрытых колонок («Всё время», 300)
                 // настоящее число из базы: Map ключ ступени → число / обрезана ли.
-                counts: {}, capped: {} };
+                counts: {}, capped: {},
+                // CRM_PERIOD_ALL_COLUMNS_V1 — открытые ВНЕ выбранного периода (лёгкие
+                // строки id/status/source/sources) для «Открытых за другие дни: N»;
+                // null — периода нет или сервер не ответил (строка без числа).
+                outside: null };
 let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний ответ поиска побеждает
 
 // Период считается по created_at — «когда обратились», а не когда записаны:
@@ -209,9 +213,11 @@ let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний отв�
 const PERIODS = [['all', 'Всё время'], ['today', 'Сегодня'], ['week', 'Эта неделя'], ['30', '30 дней'],
                  ['custom', 'Свой период']];   // CRM_PERIOD_CUSTOM_V1
 // Граница периода — НАЧАЛО дня по местному времени, а не «минус 24 часа».
-// CRM_UNIFY_V1 — periodStart / dayStart / dayEnd (неделя с понедельника, «по» —
-// включая весь последний день, CRM_PERIOD_CUSTOM_V1) перенесены в
-// views/crm-board-load.js: по ним же грузятся закрытые карточки периода.
+// CRM_UNIFY_V1 — periodStart / dayStart (неделя с понедельника, «по» — включая
+// весь последний день, CRM_PERIOD_CUSTOM_V1) перенесены в
+// views/crm-board-load.js: по ним же грузятся карточки периода.
+// CRM_PERIOD_ALL_COLUMNS_V1 — экран берёт границы оттуда же (periodBounds):
+// «по» — начало следующего дня, исключительно.
 // Местная дата как 'YYYY-MM-DD'. Через toISOString() вечером на UTC+5
 // получилось бы завтрашнее число.
 function ymdLocal(d) {
@@ -220,8 +226,8 @@ function ymdLocal(d) {
 }
 
 // CRM_UNIFY_V1 (итоговое ревью, решение контролёра) — ключи закрытых колонок:
-// конверсия и проигрышные. Их и только их сужает «Период»; открытые карточки
-// видны всегда (владелец: «карточки пропадают»).
+// конверсия и проигрышные. При «Всё время» у них последние 300 на колонку.
+// (CRM_PERIOD_ALL_COLUMNS_V1, 3.23.0: «Период» сужает уже КАЖДУЮ колонку — см. inPeriod.)
 // Сидовая «Не пришёл» — ЖИВАЯ работа, а не закрытая: операторы перезванивают
 // этим пациентам, и звонок или запись её открывает (сервер: I-3,
 // services/crm/contact-window.js liveKeys = открытые + 'no_show'). На доске
@@ -232,22 +238,87 @@ function closedKeys() {
     return [STAGE_KEYS.won, ...STAGE_KEYS.lost].filter((k) => k && k !== SEED_NO_SHOW_STAGE);
 }
 function inPeriod(r) {
-    // CRM_UNIFY_V1 (итоговое ревью) — «Период» НИКОГДА не прячет открытые
-    // карточки: это работа, и её не должно быть «не видно» из-за даты обращения.
-    if (!closedKeys().includes(r.status)) return true;
-    if (state.period === 'custom') {
-        const d = new Date(r.created_at);
-        if (isNaN(d)) return false;
-        const f = dayStart(state.customFrom);
-        const t = dayEnd(state.customTo);
-        if (f && d < f) return false;
-        if (t && d > t) return false;
-        return true;
-    }
-    const from = periodStart(state.period);
-    if (!from) return true;
-    const d = new Date(r.created_at);
-    return !isNaN(d) && d >= from;
+    // CRM_PERIOD_ALL_COLUMNS_V1 (3.23.0, решение владельца Q1) — «Период» сужает
+    // КАЖДУЮ колонку по дате поступления (created_at): открытые и «Не пришёл»
+    // тоже. Прежнее исключение открытых (CRM_UNIFY_V1, итоговое ревью: «Период
+    // никогда не прячет открытые») снято: при «Сегодня» на доске оставались
+    // тысячи давних открытых, и фильтр выглядел сломанным. Давние открытые
+    // называет строка над доской (periodLine) с кнопкой «Показать все».
+    // Границы — те же, что у загрузки (crm-board-load.js periodBounds).
+    const b = periodBounds(state.period, state.customFrom, state.customTo);
+    if (!b.from && !b.to) return true;
+    const t = Date.parse(r && r.created_at);
+    if (!Number.isFinite(t)) return false;
+    if (b.from && t < Date.parse(b.from)) return false;
+    if (b.to && t >= Date.parse(b.to)) return false;   // «по» — исключительно: начало следующего дня
+    return true;
+}
+
+// CRM_FILTER_ALL_VALUE_V1 (3.23.0) — «Все» в списках «Источник» и «Метки» —
+// НАСТОЯЩЕЕ значение. Пустое список программы (ui-select.js) считает подсказкой:
+// рисует серым, как незаполненное поле, и не показывает среди вариантов — фильтр
+// работал, но выглядел выключенным. Ключи справочников — [a-z0-9_] (сервер,
+// crm/config.js KEY_RE), поэтому «*» ни с одним ключом не совпадёт.
+export const CRM_FILTER_ALL = '*';
+const isAllValue = (v) => !v || v === CRM_FILTER_ALL;
+
+// CRM_FILTER_ALL_VALUE_V1 — ЧИСЛО КОЛОНКИ, одно правило для заголовка колонки и
+// для «Все · N»: у обрезанной закрытой колонки («Всё время», последние 300) —
+// настоящее из базы, если доску не сужает фильтр экрана (поиск, источник,
+// метка: итог базы под него не считан); иначе — показанные карточки.
+function columnCount(key, shown, clientFiltered) {
+    return state.capped[key] && !clientFiltered ? Number(state.counts[key]) || 0 : shown;
+}
+/** Сумма чисел ВИДИМЫХ колонок по строкам rows — то, что складывают заголовки доски. */
+function columnsTotal(rows, clientFiltered) {
+    const by = new Map();
+    for (const r of rows || []) by.set(r.status, (by.get(r.status) || 0) + 1);
+    let n = 0;
+    for (const [key] of STATUSES) n += columnCount(key, by.get(key) || 0, clientFiltered);
+    return n;
+}
+
+// CRM_PERIOD_ALL_COLUMNS_V1 — СТРОКА НАД ДОСКОЙ при выбранном периоде:
+// «Период «Сегодня»: показаны заявки, поступившие сегодня. Открытых за другие
+// дни: N — Показать все». N — открытые ВНЕ периода (лёгкий запрос загрузки, тот
+// же фильтр «Оператор» в нём), здесь — с тем же источником и меткой, только
+// видимые колонки (скрытую доска не показывает и при «Всё время»).
+// «Показать все» — «Всё время».
+const dotsDate = (ymd) => String(ymd || '').split('-').reverse().join('.');
+function periodSentence() {
+    if (state.period === 'today') return tr('Период «Сегодня»: показаны заявки, поступившие сегодня.');
+    if (state.period === 'week') return tr('Период «Эта неделя»: показаны заявки, поступившие на этой неделе.');
+    if (state.period === '30') return tr('Период «30 дней»: показаны заявки, поступившие за последние 30 дней.');
+    const from = state.customFrom ? dotsDate(state.customFrom) : '';
+    const to = state.customTo ? dotsDate(state.customTo) : '';
+    if (from && to) return trf('Период «{from} – {to}»: показаны заявки, поступившие с {from} по {to}.', { from, to });
+    if (from) return trf('Период «с {from}»: показаны заявки, поступившие с {from}.', { from });
+    return trf('Период «по {to}»: показаны заявки, поступившие по {to}.', { to });
+}
+function periodLine() {
+    const b = periodBounds(state.period, state.customFrom, state.customTo);
+    if (!b.from && !b.to) return null;
+    const visible = new Set(STATUSES.map(([k]) => k));
+    const n = Array.isArray(state.outside)
+        ? state.outside.filter((r) => visible.has(r.status) && inSource(r) && inTag(r)).length
+        : null;   // сервер не ответил — строка без числа, доска на месте
+    return h('div', { class: 'muted crm-period-line', 'data-crm-period-line': '' },
+        h('span', null, periodSentence()),
+        n == null ? null : ' ',
+        n == null ? null : h('span', { 'data-crm-period-outside': String(n) }, trf('Открытых за другие дни: {n}', { n })),
+        ' — ',
+        h('button', {
+            class: 'btn btn-ghost btn-sm crm-period-all', type: 'button', 'data-crm-period-all': '',
+            onclick: () => { state.period = 'all'; paint(); },
+        }, 'Показать все'));
+}
+
+// CRM_PERIOD_ALL_COLUMNS_V1 — пока доска перезагружается (смена периода,
+// оператора, сохранение карточки), чипы периода заняты: disabled + aria-busy.
+// Новая отрисовка ставит новые, свободные чипы.
+const periodChips = [];
+function markPeriodBusy() {
+    for (const b of periodChips) { b.setAttribute('disabled', ''); b.setAttribute('aria-busy', 'true'); }
 }
 // CRM_MULTI_SOURCE_V1 — фильтр отмечается по несколько: заявка видна, если
 // ХОТЯ БЫ ОДИН её источник отмечен (ничего не отмечено — видны все).
@@ -537,6 +608,7 @@ async function load() {
             closedKeys: closedKeys(),
             bounds: periodBounds(state.period, state.customFrom, state.customTo),
             operator: state.operator, me: selfUserId(),   // CRM_UNIFY_V1 — «Оператор» до любого предела
+            outside: true,   // CRM_PERIOD_ALL_COLUMNS_V1 — открытые вне периода для строки над доской
         }),
         // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
         // права на задачи) — доска без меток, а не без заявок.
@@ -547,10 +619,11 @@ async function load() {
     if (my !== loadSeq) return false;
     if (res.error) {
         toast(trf('Не удалось загрузить заявки: {msg}', { msg: res.error.message }), 'fail');
-        state.rows = []; state.counts = {}; state.capped = {};
+        state.rows = []; state.counts = {}; state.capped = {}; state.outside = null;
         return true;
     }
     state.rows = res.rows; state.counts = res.counts; state.capped = res.capped;
+    state.outside = res.outside || null;   // CRM_PERIOD_ALL_COLUMNS_V1
     state.openTasks = nearestOpenTasks(tasks, selfUserId());   // CRM_UNIFY_V1 — своя задача первой
     state.leadTags = tags;
     state.apiMarks = apiMarks;   // PUBLIC_API_V1
@@ -709,6 +782,7 @@ async function setStatus(r, status) {
 }
 
 async function paint() {
+    markPeriodBusy();   // CRM_PERIOD_ALL_COLUMNS_V1 — чипы периода заняты, пока доска грузится
     // CRM_UNIFY_V1 — «Оператор: по имени» и «Чьи задачи» — только тому, кто видит
     // всю доску; список тот же, что у поля «Оператор» в карточке. Один раз.
     if (canSeeAllLeads() && !state.staffLoaded) {
@@ -897,7 +971,15 @@ async function paint() {
             fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase',
             letterSpacing: '.04em', alignSelf: 'center', marginRight: '2px',
         } }, t);
-        const chip = (on, label, onclick) => h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', onclick }, label);
+        // CRM_PERIOD_ALL_COLUMNS_V1 — чип знает свой период (data-crm-period) и
+        // попадает в список «занятых» на время перезагрузки доски.
+        periodChips.length = 0;
+        const chip = (key, on, label, onclick) => {
+            const b = h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', 'data-crm-period': key,
+                'aria-pressed': on ? 'true' : 'false', onclick }, label);
+            periodChips.push(b);
+            return b;
+        };
 
         const byPeriodAll = searchBase().filter(r => matchesSearch(r) && inPeriod(r) && inOperator(r));   // CRM_UNIFY_V1
         // CRM_HEAD_MERGE_TAGS_V1 — счётчики источников учитывают выбранную
@@ -927,7 +1009,12 @@ async function paint() {
         // новая загрузка: фильтр стоит в запросе доски до любого предела.
         const opRow = h('div', { class: 'row', 'data-crm-op-filter': '', style: { gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, lbl('Оператор'));
         const setOperator = (key) => { state.operator = key || 'all'; paint(); };
-        const opOptions = [['all', 'Все'], ['me', 'Мои'], ['none', 'Ничьи']];
+        // CRM_FILTER_ALL_VALUE_V1 — «Все · N» оператора — то же число, что у «Все»
+        // источника и меток: сумма колонок доски. Выбран другой оператор — число
+        // «всех» не загружено, «Все» без числа.
+        const opAll = !state.operator || state.operator === 'all';
+        const opOptions = [['all', opAll ? trf('Все · {n}', { n: columnsTotal(byPeriod.filter(inSource), !!state.search.trim() || state.sources.length > 0 || !!state.tag) }) : 'Все'],
+            ['me', 'Мои'], ['none', 'Ничьи']];
         if (canSeeAllLeads() && state.staff.length) {
             for (const p of state.staff) opOptions.push([String(p.id), p.full_name || trf('Сотрудник №{id}', { id: p.id })]);
         }
@@ -945,19 +1032,23 @@ async function paint() {
         // скрытый источник, у которого в новом периоде нет заявок, иначе
         // пропадал — доска пустая, и в списке не видно, что выбрано.
         const srcOrder = [...new Set([...SOURCES.map(([k]) => k), ...tally.keys(), ...state.sources])];
-        const srcOptions = [['', trf('Все · {n}', { n: byPeriod.length })]];
+        // CRM_FILTER_ALL_VALUE_V1 — «Все» с настоящим значением; число — сумма чисел
+        // видимых колонок без выбора источника (у обрезанной — из базы, скрытые не
+        // считаются), т. е. сколько покажут заголовки, если выбрать «Все». Раньше —
+        // число загруженных заявок, с которым не сходилась ни одна колонка.
+        const srcOptions = [[CRM_FILTER_ALL, trf('Все · {n}', { n: columnsTotal(byPeriod, !!state.search.trim() || !!state.tag) })]];
         for (const key of srcOrder) {
             const n = tally.has(key) ? tally.get(key).total : 0;
             if (!n && !state.sources.includes(key)) continue;
             srcOptions.push([key, tr(sourceLabel(key)) + ' · ' + n]);   // CRM_UNIFY_V1 — подпись переводится до числа
         }
         const srcRow = h('div', { class: 'row', 'data-crm-src-filter': '', style: { gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, lbl('Источник'),
-            dropdown({ 'aria-label': 'Источник', 'data-src-select': '' }, srcOptions, state.sources[0] || '',
-                (v) => { state.sources = v ? [v] : []; paintFilters(); paintBody(); }));
+            dropdown({ 'aria-label': 'Источник', 'data-src-select': '' }, srcOptions, state.sources[0] || CRM_FILTER_ALL,
+                (v) => { state.sources = isAllValue(v) ? [] : [v]; paintFilters(); paintBody(); }));   // CRM_FILTER_ALL_VALUE_V1
 
         const perRow = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Период'));
         for (const [key, label] of PERIODS) {
-            perRow.appendChild(chip(state.period === key, label, () => {
+            perRow.appendChild(chip(key, state.period === key, label, () => {
                 // CRM_PERIOD_CUSTOM_V1 — при первом переходе в «Свой период»
                 // подставляем текущий месяц. Пустая форма выглядела бы как
                 // сломанная кнопка: нажал — ничего не изменилось. Обе даты
@@ -988,10 +1079,13 @@ async function paint() {
         const shownTags = order.filter((k) => tagCounts[k] || state.tag === k);
         if (shownTags.length) {
             // CRM_FILTERS_DROPDOWN_V1 — тоже список: «Все», затем метки выборки со счётчиком.
-            const tagOptions = [['', 'Все'], ...shownTags.map((key) => [key, (TAG_RU[key] || [key])[0] + ' · ' + (tagCounts[key] || 0)])];
+            // CRM_FILTER_ALL_VALUE_V1 — «Все» с настоящим значением и тем же числом, что
+            // у «Источника»: сумма колонок без выбора метки.
+            const tagAll = trf('Все · {n}', { n: columnsTotal(bySrc, !!state.search.trim() || state.sources.length > 0) });
+            const tagOptions = [[CRM_FILTER_ALL, tagAll], ...shownTags.map((key) => [key, (TAG_RU[key] || [key])[0] + ' · ' + (tagCounts[key] || 0)])];
             const tagRow = h('div', { class: 'row', 'data-crm-tag-filter': '', style: { gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, lbl('Метки'),
-                dropdown({ 'aria-label': 'Метки', 'data-tag-select': '' }, tagOptions, state.tag || '',
-                    (v) => { state.tag = v; paintFilters(); paintBody(); }));
+                dropdown({ 'aria-label': 'Метки', 'data-tag-select': '' }, tagOptions, state.tag || CRM_FILTER_ALL,
+                    (v) => { state.tag = isAllValue(v) ? '' : v; paintFilters(); paintBody(); }));   // CRM_FILTER_ALL_VALUE_V1
             filtersEl.appendChild(tagRow);
         }
     }
@@ -1033,6 +1127,8 @@ async function paint() {
             wrap.appendChild(h('div', { class: 'muted crm-foreign-hint', 'data-crm-foreign-hint': '' },
                 Icon('Lock', { size: 13 }), ' ', 'Этот номер есть у карточки другого оператора — она вам не видна.'));
         }
+        const pl = periodLine();   // CRM_PERIOD_ALL_COLUMNS_V1 — выбранный период и давние открытые
+        if (pl) wrap.appendChild(pl);
         if (state.view === 'kanban') {
             wrap.appendChild(kanban());
             // CRM_UNIFY_V1 (итоговое ревью) — высота колонок по месту под доской.
@@ -1099,15 +1195,16 @@ async function paint() {
             // или метка, число — по показанным: итог базы под такой фильтр не считан.
             const clientFiltered = !!state.search.trim() || state.sources.length > 0 || !!state.tag;
             const trimmed = !!state.capped[key] && !clientFiltered;
-            const n = trimmed ? state.counts[key] : colRows.length;
+            const n = columnCount(key, colRows.length, clientFiltered);   // CRM_FILTER_ALL_VALUE_V1 — то же правило, что у «Все · N»
             // CRM_UNIFY_V1 (итоговое ревью) — подсказка не зовёт выбирать период ради
-            // открытых: «Период» сужает только закрытые колонки. Стоит ПЕРВОЙ
+            // открытых. CRM_PERIOD_ALL_COLUMNS_V1 — подсказка бывает только при «Всё
+            // время», где открытые показаны все; «всегда» — уже неправда. Стоит ПЕРВОЙ
             // внутри прокручиваемого списка: под списком она делала колонку выше
             // соседних, сетка тянула по ней всю доску, и высота колонок по месту
             // (sizeBoardColumns) срезалась у всех.
             if (trimmed) {
                 list.appendChild(h('div', { class: 'muted crm-col-capped', 'data-col-capped': key },
-                    trf('Показаны последние {n} закрытых — более ранние найдёт поиск или «Период»; открытые карточки видны всегда.', { n: CLOSED_ALL_TIME_LIMIT })));
+                    trf('Показаны последние {n} закрытых — более ранние найдёт поиск или «Период»; открытые показаны все.', { n: CLOSED_ALL_TIME_LIMIT })));
             }
             for (const r of colRows) list.appendChild(kanbanCard(r));
 
@@ -1381,7 +1478,7 @@ async function paint() {
         const listClientFiltered = !!state.search.trim() || state.sources.length > 0 || !!state.tag;
         const cappedKeys = listClientFiltered ? [] : STATUSES.map(([k]) => k).filter((k) => state.capped[k]);
         const cappedNote = cappedKeys.length ? h('div', { class: 'muted crm-col-capped', 'data-list-capped': '', style: { margin: '0 0 8px' } },
-            trf('Закрытые колонки показаны не целиком: {list}. Более ранние найдёт поиск или «Период»; открытые карточки видны всегда.', {
+            trf('Закрытые колонки показаны не целиком: {list}. Более ранние найдёт поиск или «Период»; открытые показаны все.', {   // CRM_PERIOD_ALL_COLUMNS_V1
                 list: cappedKeys.map((k) => trf('«{label}» — {n} из {total}', {
                     label: tr((STATUS_RU[k] || [k])[0]), n: CLOSED_ALL_TIME_LIMIT, total: state.counts[k] })).join(', '),
             })) : null;

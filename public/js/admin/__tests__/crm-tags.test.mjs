@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { S, CALLS, mk, walk, textOf, byAttr, byClass, tick, button, TOASTS } from './crm-harness.mjs';
 import { boardConfig, shapeConfig, validateTags } from '../crm-settings-logic.js?v=crmcfg1';
 
-const { renderCrm, groupLeadTags } = await import('../views/crm.js');
+const { renderCrm, groupLeadTags, CRM_FILTER_ALL } = await import('../views/crm.js');
 
 const ADMIN = { id: 7, full_name: 'Админ', role: 'admin', is_admin: true };
 const TAGS = [
@@ -34,7 +34,7 @@ async function board(view = 'kanban') {
   // Состояние доски (вид, выбранная метка) — общее для модуля: возвращаем
   // исходное, чтобы тесты не зависели от порядка.
   const ts = byAttr(root, 'data-tag-select')[0];   // CRM_FILTERS_DROPDOWN_V1 — «Метки» — выпадающий список
-  if (ts) { ts.value = ''; ts.dispatchEvent({ type: 'change', target: ts, currentTarget: ts }); await tick(); }
+  if (ts) { ts.value = CRM_FILTER_ALL; ts.dispatchEvent({ type: 'change', target: ts, currentTarget: ts }); await tick(); }
   button(root, view === 'list' ? /Список/ : /Канбан/).click();
   await tick();
   return root;
@@ -66,9 +66,14 @@ test('фильтр «Метки»: список по меткам выборки
   const root = await board();
   const row = byAttr(root, 'data-crm-tag-filter')[0];
   assert.ok(row, 'над доской нет фильтра «Метки»');
-  // CRM_FILTERS_DROPDOWN_V1 — выпадающий список: «Все» (пустое значение), затем метки выборки.
+  // CRM_FILTERS_DROPDOWN_V1 — выпадающий список: «Все», затем метки выборки.
+  // CRM_FILTER_ALL_VALUE_V1 — у «Все» настоящее значение, и число — сумма колонок.
   const sel = byAttr(row, 'data-tag-select')[0];
-  const opts = walk(sel).filter((n) => n.tagName === 'OPTION').filter((o) => o.value);
+  const all = walk(sel).filter((n) => n.tagName === 'OPTION')[0];
+  assert.equal(all.value, CRM_FILTER_ALL);
+  assert.equal(textOf(all), 'Все · 2');
+  assert.equal(sel.value, CRM_FILTER_ALL, '«Все» меток — пустое значение');
+  const opts = walk(sel).filter((n) => n.tagName === 'OPTION').filter((o) => o.value !== CRM_FILTER_ALL);
   assert.deepEqual(opts.map((o) => o.value), ['vip', 'repeat', 'old']);
   assert.ok(textOf(opts[0]).includes('VIP · 1'));
   sel.value = 'repeat';
