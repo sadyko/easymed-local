@@ -12,6 +12,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
+import { createRequire } from 'node:module';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { getRpc } from './rpc/index.js';
@@ -58,6 +60,26 @@ function cheapCallStats(ms) {
     p95: sorted.length ? sorted[Math.floor(0.95 * (sorted.length - 1))] : 0,
   };
 }
+/**
+ * REPORT_POOL_LOAD_TOLERANT_V1 — правила для дешёвых вызовов основного потока,
+ * пока пул считает отчёт длиной syncMs (столько он шёл бы без пула). Пусто —
+ * поток отчёта не ждал. Три правила:
+ *   • не больше ОДНОГО вызова дольше 250 мс (один выброс — нагрузка машины);
+ *   • 95-й процентиль меньше 100 мс (поток, который ждёт отчёт по кусочку на
+ *     каждом вызове, сделал бы медленными почти все);
+ *   • ревью 3.23.0 — худший вызов короче max(250, syncMs / 2): поток, который ОДИН
+ *     раз ждёт отчёт целиком (замок записи до конца отчёта), — это один медленный
+ *     вызов длиной почти в отчёт, и первые два правила его пропускали.
+ */
+function cheapCallProblems(ms, syncMs) {
+  const { slow, p95 } = cheapCallStats(ms);
+  const max = ms.length ? Math.max(...ms) : 0;
+  const out = [];
+  if (slow > 1) out.push(`${slow} вызовов дольше ${CHEAP_SLOW_MS} мс из ${ms.length} (худший ${Math.round(max)} мс)`);
+  if (p95 >= CHEAP_P95_MS) out.push(`95-й процентиль ${Math.round(p95)} мс из ${ms.length} вызовов`);
+  if (max >= Math.max(CHEAP_SLOW_MS, syncMs / 2)) out.push(`худший вызов ${Math.round(max)} мс при отчёте ${Math.round(syncMs)} мс — поток ждал отчёт`);
+  return out;
+}
 
 test('REPORT_POOL_LOAD_TOLERANT_V1: один выброс под нагрузкой проходит; поток, стоящий весь отчёт, — нет', () => {
   // Прогон 3.22.0: сотни вызовов по 8–12 мс и один 639 мс — машина была занята.
@@ -71,6 +93,55 @@ test('REPORT_POOL_LOAD_TOLERANT_V1: один выброс под нагрузк�
   assert.ok(cheapCallStats(blocked).p95 >= CHEAP_P95_MS);
   // Два выброса — уже не случайность.
   assert.equal(cheapCallStats([...spike, 700]).slow, 2);
+  // Ревью 3.23.0 — те же правила целиком: выброс 639 мс при отчёте ~2 с проходит;
+  // один вызов, ждавший отчёт целиком (1,5 с при отчёте 1,8 с), — нет.
+  assert.deepEqual(cheapCallProblems(spike, 2000), []);
+  const oneLongWait = [...Array.from({ length: 30 }, () => 2), 1500];
+  assert.equal(cheapCallStats(oneLongWait).slow, 1, 'стенд не тот: два первых правила этот случай пропускают');
+  assert.ok(cheapCallStats(oneLongWait).p95 < CHEAP_P95_MS, 'стенд не тот');
+  assert.equal(cheapCallProblems(oneLongWait, 1800).length, 1, 'поток, ждавший отчёт целиком, не пойман');
+});
+
+// Ревью 3.23.0 (стенд ревьюера pool-regression-sim.mjs) — по-настоящему: поток-«отчёт»
+// читает 300 мс, затем держит замок записи до конца (ещё 1,5 с); основной поток —
+// тот же цикл, что в тесте пула ниже (таймер 5 мс, чтение и вставка). Правила обязаны
+// поймать, что основной поток ждал отчёт.
+test('REPORT_POOL_LOAD_TOLERANT_V1: основной поток, ждавший отчёт целиком (замок записи), правила ловят', async () => {
+  const require = createRequire(import.meta.url);
+  const Database = require('better-sqlite3');
+  const file = path.join(tmpDir('em-rpool-lock-'), 'x.db');
+  const db = closeOnExit(new Database(file));
+  db.pragma('journal_mode = WAL');
+  db.exec("CREATE TABLE patients (id INTEGER PRIMARY KEY, full_name TEXT); CREATE TABLE b (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO b (name) VALUES ('A'),('B');");
+  const READ_MS = 300, LOCK_MS = 1500;
+  const src = `
+const { parentPort, workerData } = require('node:worker_threads');
+const Database = require(workerData.bs);
+const db = new Database(workerData.file);
+const spin = (ms) => { const end = Date.now() + ms; while (Date.now() < end) db.prepare('SELECT count(*) FROM b').get(); };
+spin(workerData.readMs);
+db.exec('BEGIN IMMEDIATE');
+spin(workerData.lockMs);
+db.exec('COMMIT');
+db.close();
+parentPort.postMessage('done');`;
+  const w = new Worker(src, { eval: true, workerData: { bs: require.resolve('better-sqlite3'), file, readMs: READ_MS, lockMs: LOCK_MS } });
+  let done = false;
+  const pending = new Promise((resolve, reject) => { w.once('message', () => { done = true; resolve(); }); w.once('error', reject); });
+  const ms = [];
+  while (!done) {
+    await new Promise((r) => setTimeout(r, 5));
+    const c = performance.now();
+    db.prepare('SELECT * FROM b').all();
+    db.prepare("INSERT INTO patients (full_name) VALUES ('Новый пациент')").run();
+    ms.push(performance.now() - c);
+  }
+  await pending;
+  await w.terminate();
+  const problems = cheapCallProblems(ms, READ_MS + LOCK_MS);
+  console.log(`[report-pool] blocked main thread: ${ms.length} calls, worst ${Math.round(Math.max(...ms))} ms → ${JSON.stringify(problems)}`);
+  assert.ok(problems.length >= 1, 'основной поток ждал отчёт целиком, а правила промолчали');
+  db.close();
 });
 
 test('без файла базы пула нет — отчёт считается здесь же, как прежде', async () => {
@@ -115,6 +186,7 @@ test('долгий отчёт в пуле не держит основной п�
     const got = await pending;
     const pooledMs = performance.now() - started;
     const { slow: cheapSlow, p95: cheapP95 } = cheapCallStats(cheapMs);   // REPORT_POOL_LOAD_TOLERANT_V1
+    const cheapProblems = cheapCallProblems(cheapMs, syncMs);
     console.log(`[report-pool] sync ${Math.round(syncMs)} ms (loop blocked the whole time); pooled ${Math.round(pooledMs)} ms, `
       + `main loop max lag ${Math.round(maxLag)} ms, cheap call max ${Math.round(cheapMax)} ms, p95 ${Math.round(cheapP95)} ms, `
       + `${cheapSlow} over ${CHEAP_SLOW_MS} ms, ${ticks} ticks`);
@@ -124,9 +196,9 @@ test('долгий отчёт в пуле не держит основной п�
     // 639 мс — машина была занята другими файлами, а не отчётом (этот файл один:
     // 8–12 мс). Смысл проверки прежний — основной поток НЕ стоит весь отчёт:
     // заблокированный поток сделал бы медленными почти все вызовы, а не один.
-    // Поэтому: не больше ОДНОГО вызова дольше 250 мс и 95-й процентиль меньше 100 мс.
-    assert.ok(cheapSlow <= 1, `чтение и запись в основном потоке ждали отчёта: ${cheapSlow} вызовов дольше ${CHEAP_SLOW_MS} мс из ${ticks} (худший ${Math.round(cheapMax)} мс)`);
-    assert.ok(cheapP95 < CHEAP_P95_MS, `чтение и запись в основном потоке ждали отчёта: 95-й процентиль ${Math.round(cheapP95)} мс из ${ticks} вызовов`);
+    // Поэтому: не больше ОДНОГО вызова дольше 250 мс и 95-й процентиль меньше 100 мс;
+    // ревью 3.23.0 — и худший вызов короче max(250, syncMs / 2) (cheapCallProblems).
+    assert.deepEqual(cheapProblems, [], 'чтение и запись в основном потоке ждали отчёта: ' + cheapProblems.join('; '));
     assert.ok(ticks >= 5, 'пока считался отчёт, основной поток успел ответить много раз');
     assert.ok(maxLag < Math.max(250, syncMs / 4), `цикл событий не стоял: задержка ${Math.round(maxLag)} мс при отчёте ${Math.round(syncMs)} мс`);
 
