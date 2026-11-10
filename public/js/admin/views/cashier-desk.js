@@ -2489,7 +2489,7 @@ export function openDiscountChange(inv, root = null, opts = {}) {
         h('span', { style: { flex: 1, color: 'var(--ink-600)' } }, k), h('span', { class: 'num' }, v));
     const big = (label, sum, attr) => h('div', { [attr]: String(sum), style: { display: 'flex', gap: '10px', alignItems: 'baseline', marginTop: '4px' } },
         h('span', { style: { flex: 1, fontSize: '15px', fontWeight: 800 } }, label),
-        h('span', { class: 'num', style: { fontSize: '22px', fontWeight: 800 } }, fmtPrice(sum) + ' ' + tr('сум')));
+        h('span', { class: 'num', style: { fontSize: '24px', fontWeight: 800 } }, fmtPrice(sum) + ' ' + tr('сум')));
     const valueOf = () => discountNumber(valueIn.value);
     const fillValue = () => {
         if (!state) return;
