@@ -351,7 +351,8 @@ export function validateStages(stages, t = (s) => s, prev = null) {
     if (!activeCount) return { ok: false, error: 'Хотя бы одна колонка должна быть видимой.' };
     // CRM_STAGE_ROLES_V1 — роли колонок.
     if (prev) {
-        const leaving = roleLeaving(prev, arr);
+        // Ревью: экран шлёт роли — удалённая колонка уносит снятую роль (как «снять и скрыть»).
+        const leaving = roleLeaving(prev, arr, { deletions: false });
         if (leaving) return { ok: false, error: fill(t(ROLE_LEAVING[leaving.role]), { label: leaving.label }) };
     }
     const why = roleRefusal(arr, prev);

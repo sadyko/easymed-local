@@ -120,6 +120,7 @@ test('CRM_UNIFY_V1: оператор без права админа не мен�
 
 test('CRM_UNIFY_V1: администратор переносит конверсию — кто и когда записано; отказ — 400 с фразой', () => {
   const db = fresh();
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
   const out = crmConfigSave(db, { settings: { won_stage: 'approved', booked_stage: 'scheduled' } }, doctorAdmin);
   assert.equal(out.stages.find((s) => s.kind === 'won').key, 'approved');
   assert.deepEqual(out.settings, { booked_stage: 'scheduled', window_hours: 72, booked_effective: 'scheduled' });

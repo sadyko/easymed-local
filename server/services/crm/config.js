@@ -15,7 +15,7 @@
 // CRM_UNIFY_V1 — «Колонка записи» и «Колонка конверсии»: одно правило с экраном.
 import { bookedStageKey, confirmedStageKeyOf } from '../../../public/js/shared/crm-booked-stage.js';   // CRM_LINK_ALL_V1 — confirmedStageKeyOf
 // CRM_STAGE_ROLES_V1 — роли колонок (миграция 284): одно правило проверки с экраном.
-import { STAGE_ROLES, roleKey, withRole, roleRefusal, roleLeaving, conversionMove } from '../../../public/js/shared/crm-booked-stage.js';
+import { STAGE_ROLES, roleKey, withRole, roleRefusal, roleLeaving, conversionMove, roleProblem } from '../../../public/js/shared/crm-booked-stage.js';
 import { rpcT } from '../server-message.js';   // CRM_UNIFY_V1 — отказ с числом карточек переводится на экране
 import { apiSourceKey } from '../../../public/js/shared/api-connections.js';   // CLINIC_API_STEP7_V1
 
@@ -256,7 +256,12 @@ function roleStage(db, role, kind) {
   try {
     if (!db.prepare('SELECT 1 FROM crm_stages LIMIT 1').get()) return EMPTY;
     const r = db.prepare('SELECT key FROM crm_stages WHERE role = ? AND kind = ? ORDER BY position, key LIMIT 1').get(role, kind);
-    return r ? r.key : null;
+    if (!r) return null;
+    // CRM_STAGE_ROLES_V1 (ревью) — «запись» на скрытой колонке или после конверсии (ручная правка
+    // базы, откат версии) не действует: как неотмеченная. То же «подтверждение», стоящее не
+    // после действующей колонки записи. Правило — общее с сохранением (roleProblem).
+    if (role !== 'no_show' && roleProblem(listStages(db), role)) return null;
+    return r.key;
   } catch (e) {
     return /no such column: role/.test(String(e && e.message)) ? LEGACY : EMPTY;
   }
@@ -394,6 +399,11 @@ function roleRefusalError(why, status = 409) {
   if (CONVERSION_REFUSALS[why]) return new CrmConfigError(CONVERSION_REFUSALS[why]);
   return new CrmConfigError(ROLE_REFUSALS[why] || BOOKED_REFUSAL, status);
 }
+/** CRM_STAGE_ROLES_V1 (ревью) — роль колонки `key` мешает: «Колонка «…» — колонка …: сначала передайте роль другой колонке» (409). */
+function roleHeldError(stages, key) {
+  const s = stages.find((x) => x.key === key) || {};
+  return rpcT(CrmConfigError, ROLE_LEAVING[s.role] || ROLE_LEAVING.confirmed, { label: s.label || key }, 409);
+}
 
 /**
  * CRM_STAGE_ROLES_V1 — ЗАПИСАТЬ РОЛИ колонок воронки `stages` (одна правка внутри транзакции
@@ -434,8 +444,9 @@ function writeRoles(db, stages) {
  *
  * CRM_STAGE_ROLES_V1 — РОЛИ НЕ ПЕРЕЕЗЖАЮТ С КОНВЕРСИЕЙ (conversionMove): колонка записи
  * обязана остаться до конверсии — иначе отказ (сначала роль передают другой колонке в
- * «Колонки канбана»); роль «подтверждение», которую перенос сделал бы недопустимой (её
- * колонка стала конверсией или оказалась после неё), снимается той же транзакцией.
+ * «Колонки канбана»); то же колонка подтверждения (ревью; решение координатора 2026-11-10:
+ * роль не снимается молча — отказ 409 «Колонка «…» — колонка подтверждения: сначала
+ * передайте роль другой колонке»).
  * booked_stage — экран старше сервера: «Колонка записи» передаёт роль «запись» выбранной
  * колонке (до переноса конверсии, как и прежде проверялась пара); пусто — ничего не
  * меняет. В crm_settings.booked_stage больше ничего не пишется.
@@ -448,7 +459,11 @@ export function saveCrmSettings(db, s = {}, actorId = null) {
   // CRM_STAGE_ROLES_V1 — экран старше сервера выбрал колонку записи.
   if (has('booked_stage') && s.booked_stage != null && s.booked_stage !== '') {
     const key = normKey(s.booked_stage);
-    if (!stages.some((x) => x.key === key)) throw new CrmConfigError(BOOKED_REFUSAL, 409);
+    const target = stages.find((x) => x.key === key);
+    if (!target) throw new CrmConfigError(BOOKED_REFUSAL, 409);
+    // CRM_STAGE_ROLES_V1 (ревью) — у выбранной колонки другая роль (подтверждение, «Не пришёл»):
+    // отказ — роль не снимается молча, её сначала передают.
+    if (target.role && target.role !== 'booked') throw roleHeldError(stages, key);
     if (roleKey(stages, 'booked') !== key) {
       const moved = withRole(stages, key, 'booked');
       const why = roleRefusal(moved, stages);
@@ -463,6 +478,9 @@ export function saveCrmSettings(db, s = {}, actorId = null) {
     const current = (stages.find((x) => x.kind === 'won') || {}).key || null;
     if (key !== current) {
       const move = conversionMove(stages, key);   // CRM_STAGE_ROLES_V1
+      // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — колонка подтверждения на месте
+      // конверсии или после неё — отказ 409 с названием колонки; роль не снимается молча.
+      if (move.why === 'confirmed_role') throw roleHeldError(stages, move.roleAt);
       if (move.why) throw roleRefusalError(move.why, 400);
       // CRM_UNIFY_V1 — 1. цель пустая.
       const n = db.prepare('SELECT COUNT(*) AS n FROM crm_requests WHERE status = ?').get(key).n;
@@ -480,8 +498,7 @@ export function saveCrmSettings(db, s = {}, actorId = null) {
         .run(actorId, current, key, moved);
       // CRM_UNIFY_V1 — 3. звонок не заводит карточку прямо в конверсию.
       db.prepare("UPDATE crm_call_routing SET action = 'ignore', stage_key = NULL WHERE stage_key = ?").run(key);
-      // CRM_STAGE_ROLES_V1 — роль подтверждения, ставшая недопустимой, снимается.
-      if (roleKey(move.stages, 'confirmed') !== roleKey(stages, 'confirmed')) writeRoles(db, move.stages);
+
       stages = listStages(db);
     }
   }
@@ -643,7 +660,9 @@ export function saveStages(db, stages) {
 
   // CRM_STAGE_ROLES_V1 — роли: сначала уход колонки с ролью (самая понятная фраза), потом
   // правила ролей по воронке после правки.
-  const leaving = roleLeaving(prevStages, wanted);
+  // CRM_STAGE_ROLES_V1 (ревью) — правка с ролями: удалённая колонка уносит снятую роль (как
+  // «снять галочку и скрыть»); без ролей в правке (экран старше сервера) — отказ.
+  const leaving = roleLeaving(prevStages, wanted, { deletions: !sentRoles });
   if (leaving) throw rpcT(CrmConfigError, ROLE_LEAVING[leaving.role], { label: leaving.label }, 409);
   const why = roleRefusal(wanted, prevStages);
   if (why) throw roleRefusalError(why);

@@ -28,6 +28,19 @@ ALTER TABLE crm_stages ADD COLUMN role TEXT
 
 CREATE UNIQUE INDEX crm_stages_one_role ON crm_stages(role) WHERE role IS NOT NULL;
 
+-- 0. Ревью — РАВНЫЕ position (их оставляет только ручная правка базы: экран пишет 1..n). Порядок
+--    таких колонок 3.22.0 решал localeCompare (crm-booked-stage.js, экран), а SQLite — коды
+--    символов; для ключей [a-z0-9_] они расходятся только в «_» (localeCompare ставит его перед
+--    цифрами и буквами). Колонки перенумеровываются 1..n в том порядке, который клиника видела на
+--    экране и по которому 3.22.0 угадывал колонку записи, — и дальше равенства нет, а SQL и JS
+--    (сравнение по кодам) видят один порядок. Без равных position ничего не меняется.
+CREATE TEMP TABLE _crm_stage_order AS
+  SELECT key, ROW_NUMBER() OVER (ORDER BY position, replace(key, '_', ' ')) AS n FROM crm_stages
+   WHERE EXISTS (SELECT 1 FROM crm_stages a JOIN crm_stages b ON a.key < b.key AND a.position = b.position);
+UPDATE crm_stages SET position = (SELECT o.n FROM _crm_stage_order o WHERE o.key = crm_stages.key)
+ WHERE key IN (SELECT key FROM _crm_stage_order);
+DROP TABLE _crm_stage_order;
+
 -- 1. «Запись»: допустимый сохранённый выбор, иначе 'scheduled', иначе последняя кандидатка.
 --    Кандидатки — открытые видимые колонки ДО первой колонки-конверсии (без конверсии — все).
 WITH ord AS (

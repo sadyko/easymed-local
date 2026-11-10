@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { openDb } from '../connection.js';
 import { migrate } from '../migrate.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
-import { bookedStageKey, confirmedStageKeyOf } from '../../../public/js/shared/crm-booked-stage.js';
+import { bookedStageKey, confirmedStageKeyOf, roleRefusal } from '../../../public/js/shared/crm-booked-stage.js';
 
 const MIGRATIONS = path.dirname(fileURLToPath(import.meta.url));
 
@@ -38,8 +38,12 @@ const roleOf = (db, role) => (db.prepare('SELECT key FROM crm_stages WHERE role 
 const roles = (db) => ({ booked: roleOf(db, 'booked'), confirmed: roleOf(db, 'confirmed'), no_show: roleOf(db, 'no_show') });
 
 /** Что сервер 3.22.0 считал ролями этой воронки (services/crm/config.js scheduledStageKey / confirmedStageKey / noShowStageKey). */
+// Ревью: 3.22.0 упорядочивал колонки с равной position через localeCompare (crm-booked-stage.js
+// и экран), а не по кодам символов. Догадка 3.22.0 здесь — дословно, с тем порядком; общие
+// функции 3.23.0 сравнивают ключи как SQLite.
 function legacy(db) {
-  const stages = stagesOf(db);
+  const stages = stagesOf(db).sort((a, b) => (Number(a.position) || 0) - (Number(b.position) || 0) || String(a.key).localeCompare(String(b.key)))
+    .map((s, i) => ({ ...s, position: i + 1 }));
   const chosen = db.prepare('SELECT booked_stage FROM crm_settings WHERE id = 1').get().booked_stage || null;
   const booked = stages.length ? bookedStageKey(stages, chosen) : null;
   const lost = stages.filter((s) => s.kind === 'lost').map((s) => s.key);
@@ -93,6 +97,17 @@ const FUNNELS = [
   ['своя колонка между «Записан» и «Подтверждён» — подтверждение у неё', (db) => {
     db.prepare("INSERT INTO crm_stages (key, label, color, position, is_active, kind) VALUES ('agreed', 'Согласовано', '', 3.5, 1, 'open')").run();
   }, { booked: 'scheduled', confirmed: 'agreed', no_show: 'no_show' }],
+  // Ревью: равные position (ручная правка) — порядок, какой видела клиника в 3.22.0
+  // (localeCompare: «x_2» раньше «x2»), а не коды символов SQLite (наоборот).
+  ['равные position: «x2» и «x_2» — колонка записи та, что была последней на экране', (db) => {
+    db.prepare("DELETE FROM crm_stages WHERE key = 'scheduled'").run();
+    db.prepare("INSERT INTO crm_stages (key, label, color, position, is_active, kind) VALUES ('x2', 'Икс 2', '', 4, 1, 'open'), ('x_2', 'Икс_2', '', 4, 1, 'open')").run();
+  }, { booked: 'x2', confirmed: null, no_show: 'no_show' }],
+  ['равные position с конверсией: «a_b» перед «a1» (конверсия) — колонка записи', (db) => {
+    db.prepare("UPDATE crm_stages SET kind = 'open' WHERE key = 'came'").run();
+    db.prepare("DELETE FROM crm_stages WHERE key IN ('scheduled', 'approved')").run();
+    db.prepare("INSERT INTO crm_stages (key, label, color, position, is_active, kind) VALUES ('a1', 'А1', '', 2, 1, 'won'), ('a_b', 'А_Б', '', 2, 1, 'open')").run();
+  }, { booked: 'a_b', confirmed: null, no_show: 'no_show' }],
 ];
 
 for (const [name, seed, want] of FUNNELS) {
@@ -104,6 +119,10 @@ for (const [name, seed, want] of FUNNELS) {
       assert.deepEqual(was, want, 'проверка самой проверки: старая догадка дала другое');
       migrate(db);
       assert.deepEqual(roles(db), want);
+      // Ревью: после миграции равных position нет, и правила ролей 3.23.0 принимают воронку.
+      const after = db.prepare('SELECT key, label, position, is_active, kind, role FROM crm_stages ORDER BY position, key').all();
+      assert.equal(new Set(after.map((s) => s.position)).size, after.length, 'остались равные position');
+      assert.equal(roleRefusal(after, after), null, 'сохранение колонок без правок отказано: роли миграции не проходят правила 3.23.0');
     } finally { db.close(); }
   });
 }

@@ -52,7 +52,10 @@ test('без смены конверсии: карточка «Пришёл» н
 });
 
 test('сидовая воронка, конверсия — «Подтверждён»: история переехала в неё и под обход не попадает', async () => {
-  const s = serverState((db) => saveConfig(db, { settings: { won_stage: 'approved' } }));
+  const s = serverState((db) => {
+    db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
+    saveConfig(db, { settings: { won_stage: 'approved' } });
+  });
   assert.equal(s.card.status, 'approved', 'конвертированная карточка не пошла за конверсией');
   assertNotSwept(await boardSweep(s), s.card);
 });

@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   bookedStageKey, bookedStageCandidates, withConversion, conversionRefusal, conversionCandidates,
-  STAGE_ROLES, roleKey, hasStageRoles, withRole, roleRefusal, roleLeaving, conversionMove,   // CRM_STAGE_ROLES_V1
+  STAGE_ROLES, roleKey, hasStageRoles, withRole, roleRefusal, roleLeaving, conversionMove, roleProblem, confirmedStageKeyOf,   // CRM_STAGE_ROLES_V1
 } from './crm-booked-stage.js';
 
 const st = (key, kind, position, is_active = 1) => ({ key, kind, position, is_active });
@@ -98,6 +98,21 @@ test('roleRefusal: запись — открытая видимая до кон�
   assert.equal(roleRefusal(hide(ROLED, 'no_show'), hide(ROLED, 'no_show')), null, 'скрытая «Не пришёл» с прежней ролью (миграция 284) — можно');
   assert.equal(roleRefusal(ROLED.map((s) => (s.key === 'recall' ? { ...s, role: 'booked' } : s))), 'role_twice');
   assert.equal(roleRefusal(SEED), null, 'без ролей — можно');
+  // Ревью: судится только то, что правка изменила — плохое состояние до правки сохранения не блокирует.
+  const bad = hide(ROLED, 'scheduled');   // колонка записи скрыта мимо экрана
+  assert.equal(roleRefusal(bad.map((s) => (s.key === 'recall' ? { ...s, label: 'Перезвон' } : s)), bad), null, 'плохая роль, которую правка не трогала');
+  assert.equal(roleRefusal(withRole(bad, 'in_process', 'booked'), bad), null, 'плохую роль исправили');
+  assert.equal(roleRefusal(withRole(hide(bad, 'recall'), 'recall', 'booked'), bad), 'booked_order', 'роль перенесли на другую недопустимую колонку');
+  assert.equal(roleProblem(bad, 'booked'), 'booked_order');
+  assert.equal(roleProblem(bad, 'confirmed'), 'confirmed_order', 'подтверждение без действующей записи');
+  assert.equal(roleProblem(ROLED, 'booked'), null);
+});
+
+// Ревью: порядок колонок с равной position — по кодам символов, как ORDER BY key у SQLite.
+test('равные position — ключи по кодам символов (как SQLite), а не localeCompare', () => {
+  const tie = [st('a_1', 'open', 1), st('a1', 'open', 1), st('came', 'won', 2)];
+  assert.deepEqual(bookedStageCandidates(tie), ['a1', 'a_1']);
+  assert.equal(confirmedStageKeyOf(tie, 'a1'), 'a_1');
 });
 test('roleLeaving: колонку с ролью удаляют или скрывают — отказ; роль передали в той же правке — можно', () => {
   const without = (list, key) => list.filter((s) => s.key !== key);
@@ -107,6 +122,9 @@ test('roleLeaving: колонку с ролью удаляют или скрыв
   assert.equal(roleLeaving(ROLED, hide(withRole(ROLED, 'approved', 'confirmed', false), 'approved')), null, 'роль снята — скрыть можно');
   assert.equal(roleLeaving(hide(ROLED, 'no_show'), hide(ROLED, 'no_show')), null, 'уже скрытая — не уход');
   assert.equal(roleLeaving(ROLED, ROLED), null);
+  // Ревью: правка с ролями (экран с галочками) — удалённая колонка уносит снятую роль, как скрытие.
+  assert.equal(roleLeaving(ROLED, without(ROLED, 'approved'), { deletions: false }), null, 'снять галочку и удалить одной правкой');
+  assert.deepEqual(roleLeaving(ROLED, hide(ROLED, 'approved'), { deletions: false }).why, 'hidden', 'скрытие с ролью — по-прежнему отказ');
 });
 test('конверсией нельзя: проигрышную, колонку «Не пришёл», скрытую, несуществующую', () => {
   assert.equal(conversionRefusal(ROLED, 'stopped'), 'lost');
@@ -117,19 +135,20 @@ test('конверсией нельзя: проигрышную, колонку 
   assert.equal(conversionRefusal(ROLED, 'nope'), 'missing');
   assert.equal(conversionRefusal(ROLED, 'came'), null, 'нынешняя конверсия — допустима');
 });
-test('роли не переезжают с конверсией: колонка записи на месте конверсии или после неё — отказ; подтверждение — снимается', () => {
+// Решение координатора (2026-11-10, Q1): конверсия на колонке подтверждения — ОТКАЗ, роль не снимается молча.
+test('роли не переезжают с конверсией и не снимаются: колонка записи или подтверждения на месте конверсии или после неё — отказ', () => {
   assert.equal(conversionRefusal(ROLED, 'scheduled'), 'booked_order', 'конверсия на колонке записи');
-  assert.equal(conversionRefusal(ROLED, 'approved'), null, 'конверсия на колонке подтверждения — роль подтверждения снимается');
-  const moved = conversionMove(ROLED, 'approved');
-  assert.equal(roleKey(moved.stages, 'confirmed'), null);
-  assert.equal(roleKey(moved.stages, 'booked'), 'scheduled');
+  assert.equal(conversionRefusal(ROLED, 'approved'), 'confirmed_role', 'конверсия на колонке подтверждения');
+  assert.deepEqual([conversionMove(ROLED, 'approved').why, conversionMove(ROLED, 'approved').roleAt], ['confirmed_role', 'approved']);
+  const between = [...ROLED, { ...st('mid', 'open', 3.5), role: null }];
+  assert.deepEqual([conversionMove(between, 'mid').why, conversionMove(between, 'mid').roleAt], ['confirmed_role', 'approved'], 'подтверждение оказалось бы после конверсии');
   assert.equal(conversionMove(ROLED, 'scheduled').why, 'booked_order');
   assert.equal(conversionRefusal(ROLED, 'recall'), 'booked_order', 'запись после конверсии');
   assert.equal(conversionRefusal(withRole(ROLED, 'approved', 'confirmed', false), 'approved'), null);
   assert.equal(conversionRefusal(SEED, 'in_process'), null, 'без ролей конверсии ничто не мешает');
 });
 test('кандидаты конверсии — по порядку доски, с нынешней; без проигрышных, скрытых и мест, ломающих роли', () => {
-  assert.deepEqual(conversionCandidates(ROLED), ['approved', 'came']);
+  assert.deepEqual(conversionCandidates(ROLED), ['came'], 'колонки с ролями конверсией не предлагаются');
   assert.deepEqual(conversionCandidates(withRole(ROLED, 'approved', 'confirmed', false)), ['approved', 'came']);
   assert.deepEqual(conversionCandidates(withRoles(CLINIC, { approved: 'booked' })), ['uspeshno', 'came']);
   assert.deepEqual(conversionCandidates(hide(SEED, 'recall')), ['in_process', 'scheduled', 'approved', 'came']);

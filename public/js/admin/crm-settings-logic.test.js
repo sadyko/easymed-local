@@ -428,7 +428,8 @@ test('CRM_STAGE_ROLES_V1: validateStages — те же отказы ролей, 
     bad(setRole(ROLED, 'stopped', 'booked'), /^Колонка записи/);
     bad(setRole(ROLED, 'in_process', 'no_show'), /^Колонкой «Не пришёл» может быть только видимая проигрышная колонка\.$/);
     bad(ROLED.map((s) => (s.key === 'scheduled' ? { ...s, is_active: 0 } : s)), /^Колонка «Записан» — колонка записи: сначала передайте роль другой колонке\.$/);
-    bad(ROLED.filter((s) => s.key !== 'approved'), /^Колонка «Подтверждён» — колонка подтверждения: сначала передайте роль другой колонке\.$/);
+    // Ревью: снять галочку и удалить колонку одной правкой можно (как снять и скрыть).
+    assert.deepEqual(validateStages(ROLED.filter((s) => s.key !== 'approved'), t, ROLED), { ok: true });
     bad(ROLED.map((s) => (s.key === 'no_show' ? { ...s, is_active: 0 } : s)), /^Колонка «Не пришёл» — колонка «Не пришёл»: сначала передайте роль другой колонке\.$/);
     // Роль снята — скрыть можно; передана — удалить можно.
     assert.deepEqual(validateStages(ROLED.map((s) => (s.key === 'no_show' ? { ...s, role: null, is_active: 0 } : s)), t, ROLED), { ok: true });

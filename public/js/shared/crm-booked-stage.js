@@ -64,10 +64,17 @@ export function withRole(stages, key, role, on = true) {
 // строка без поля — видимая (как в shapeConfig).
 const isActive = (s) => (s.is_active === undefined || s.is_active === null ? true : s.is_active === true || !!Number(s.is_active));
 
-/** Колонки по порядку доски: position, при равенстве — ключ. */
+/**
+ * Колонки по порядку доски: position, при равенстве — ключ.
+ * CRM_STAGE_ROLES_V1 (ревью) — ключ сравнивается ПО КОДАМ СИМВОЛОВ, как ORDER BY position, key у
+ * SQLite (listStages, миграция 284), а не localeCompare: иначе при равных position правила ролей
+ * в JS и роли в базе видели бы разный порядок («a_1» и «a1»). Миграция 284 к тому же
+ * перенумеровывает равные position, так что в базе равенства больше нет.
+ */
+const byCode = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 function ordered(stages) {
   return (Array.isArray(stages) ? stages : []).filter((s) => s && s.key)
-    .slice().sort((a, b) => (Number(a.position) || 0) - (Number(b.position) || 0) || String(a.key).localeCompare(String(b.key)));
+    .slice().sort((a, b) => (Number(a.position) || 0) - (Number(b.position) || 0) || byCode(String(a.key), String(b.key)));
 }
 
 /** Ключи колонок, которые могут быть «Колонкой записи», по порядку доски. */
@@ -122,28 +129,50 @@ export function withConversion(stages, key) {
  *   booked_order    — колонка записи не открытая, не видимая или не ДО конверсии;
  *   confirmed_order — колонка подтверждения не открытая, не видимая, не ПОСЛЕ колонки
  *                     записи (или колонки записи нет) или не ДО конверсии;
- *   no_show_kind    — колонка «Не пришёл» не проигрышная (lost) или скрыта. Скрытая
- *                     допустима, только если роль у неё уже была (`prev`): миграция 284
- *                     оставила роль скрытой «Не пришёл», куда сервер 3.22.0 и ставил карточки.
+ *   no_show_kind    — колонка «Не пришёл» не проигрышная (lost) или скрыта.
  * Роли может не быть ни у одной колонки: без «записи» запись не двигает карточку, без
  * «подтверждения» отметка «Подтверждён» её не двигает, без «Не пришёл» автоматика неявки
  * выключена.
+ *
+ * CRM_STAGE_ROLES_V1 (ревью) — С `prev` (воронка до правки) СУДИТСЯ ТОЛЬКО ТО, ЧТО ЭТА ПРАВКА
+ * ИЗМЕНИЛА: роль, которая уже была недопустимой у той же колонки (ручная правка базы, откат
+ * версии, скрытая «Не пришёл» после миграции 284), сохранение не блокирует — иначе одна
+ * плохая строка запрещала бы любые правки. Роль, которую правка сделала недопустимой
+ * (перенесла, скрыла, переставила за конверсию), — отказ, как прежде.
  */
 export function roleRefusal(stages, prev = null) {
   const list = ordered(stages);
   for (const r of STAGE_ROLES) if (list.filter((s) => roleOf(s) === r).length > 1) return 'role_twice';
+  const before = prev ? ordered(prev) : null;
+  for (const r of STAGE_ROLES) {
+    const why = roleProblem(list, r);
+    if (!why) continue;
+    if (before && roleKey(before, r) === roleKey(list, r) && roleProblem(before, r)) continue;   // была такой и до правки
+    return why;
+  }
+  return null;
+}
+
+/**
+ * CRM_STAGE_ROLES_V1 (ревью) — ЧТО НЕ ТАК С РОЛЬЮ `role` в воронке `stages` (код roleRefusal или
+ * null — всё в порядке или роли нет). Одно правило для сохранения и для чтения роли сервером
+ * (config.js: недопустимая роль читается как неотмеченная).
+ */
+export function roleProblem(stages, role) {
+  const list = ordered(stages);
   const wonAt = list.findIndex((s) => s.kind === 'won');
-  const at = (role) => list.findIndex((s) => roleOf(s) === role);
+  const at = (r) => list.findIndex((s) => roleOf(s) === r);
   const openBeforeWon = (i) => list[i].kind === 'open' && isActive(list[i]) && (wonAt < 0 || i < wonAt);
   const b = at('booked');
-  if (b >= 0 && !openBeforeWon(b)) return 'booked_order';
-  const c = at('confirmed');
-  if (c >= 0 && (!openBeforeWon(c) || b < 0 || c < b)) return 'confirmed_order';
-  const n = at('no_show');
-  if (n >= 0) {
-    const s = list[n];
-    const kept = !!prev && roleKey(prev, 'no_show') === s.key;
-    if (s.kind !== 'lost' || (!isActive(s) && !kept)) return 'no_show_kind';
+  if (role === 'booked') return b >= 0 && !openBeforeWon(b) ? 'booked_order' : null;
+  if (role === 'confirmed') {
+    const c = at('confirmed');
+    if (c < 0) return null;
+    return !openBeforeWon(c) || b < 0 || !openBeforeWon(b) || c < b ? 'confirmed_order' : null;
+  }
+  if (role === 'no_show') {
+    const n = at('no_show');
+    return n >= 0 && (list[n].kind !== 'lost' || !isActive(list[n])) ? 'no_show_kind' : null;
   }
   return null;
 }
@@ -151,17 +180,19 @@ export function roleRefusal(stages, prev = null) {
 /**
  * CRM_STAGE_ROLES_V1 — КОЛОНКА С РОЛЬЮ УХОДИТ: её удаляют, а роль не передана другой, или
  * её скрывают с ролью. Первое такое — { role, key, label, why: 'deleted' | 'hidden' }; null —
- * нет. Отказ сервера: «сначала передайте роль другой колонке». Снять роль и скрыть или
- * удалить колонку — два сохранения: так снятие роли не бывает случайным.
+ * нет. Отказ сервера: «сначала передайте роль другой колонке».
+ * CRM_STAGE_ROLES_V1 (ревью) — deletions: false — правка несёт роли (экран с галочками): удалённая
+ * колонка, чью роль никому не передали, — роль снята вместе с ней (как «снять галочку и
+ * скрыть» одной правкой). Удаление без ролей в правке (экран старше сервера) — отказ.
  */
-export function roleLeaving(prev, next) {
+export function roleLeaving(prev, next, { deletions = true } = {}) {
   const now = Array.isArray(next) ? next.filter(Boolean) : [];
   for (const p of (Array.isArray(prev) ? prev : []).filter(Boolean)) {
     const r = roleOf(p);
     if (!r) continue;
     const n = now.find((x) => x.key === p.key);
     if (!n) {
-      if (!roleKey(now, r)) return { role: r, key: p.key, label: p.label || p.key, why: 'deleted' };
+      if (deletions && !roleKey(now, r)) return { role: r, key: p.key, label: p.label || p.key, why: 'deleted' };
     } else if (roleOf(n) === r && isActive(p) && !isActive(n)) {
       return { role: r, key: p.key, label: n.label || p.key, why: 'hidden' };
     }
@@ -176,20 +207,20 @@ export function roleLeaving(prev, next) {
  *   no_show      — колонка с ролью «Не пришёл» (CRM_STAGE_ROLES_V1; прежде — сидовый ключ);
  *   hidden       — скрытая колонка;
  *   и коды roleRefusal воронки ПОСЛЕ переноса (CRM_STAGE_ROLES_V1, conversionMove):
- *   колонка записи оказалась бы на месте конверсии или после неё — booked_order. Колонка
- *   записи — главная роль: она не переезжает и не снимается сама, её сначала передают.
+ *   booked_order  — колонка записи оказалась бы на месте конверсии или после неё;
+ *   confirmed_role — то же с колонкой подтверждения (решение координатора 2026-11-10: роль
+ *                    не снимается молча — сначала её передают другой колонке).
+ * Роли с конверсией не переезжают и не снимаются сами.
  */
 export function conversionRefusal(stages, key) {
   return conversionMove(stages, key).why;
 }
 
 /**
- * CRM_STAGE_ROLES_V1 — ПЕРЕНОС КОНВЕРСИИ НА `key`: { why, stages }. why — код отказа
- * (conversionRefusal) или null; stages — воронка после переноса. Роль «подтверждение»,
- * которая после переноса стала бы недопустимой (её колонка — новая конверсия или стоит
- * после неё), СНИМАЕТСЯ: колонка не бывает и «Пришёл», и «Подтверждён», а прежняя
- * догадка 3.22.0 в этом случае тоже оставляла воронку без колонки подтверждения. Колонку
- * записи перенос не трогает никогда — отказ booked_order.
+ * CRM_STAGE_ROLES_V1 — ПЕРЕНОС КОНВЕРСИИ НА `key`: { why, stages, roleAt }. why — код отказа
+ * (conversionRefusal) или null; stages — воронка после переноса; roleAt — колонка, чья роль
+ * мешает (для фразы «Колонка «…» — колонка подтверждения: сначала передайте роль другой
+ * колонке»).
  */
 export function conversionMove(stages, key) {
   const list = ordered(stages);
@@ -200,13 +231,10 @@ export function conversionMove(stages, key) {
     if (roleOf(s) === 'no_show') return { why: 'no_show', stages: list };
     if (!isActive(s)) return { why: 'hidden', stages: list };
   }
-  let next = withConversion(list, key);
-  if (roleRefusal(next, list) === 'confirmed_order' && roleKey(next, 'booked')) {
-    const conf = roleKey(next, 'confirmed');
-    const without = withRole(next, conf, 'confirmed', false);
-    if (roleRefusal(without, list) === null) next = without;
-  }
-  return { why: roleRefusal(next, list), stages: next };
+  const next = withConversion(list, key);
+  const why = roleRefusal(next, list);
+  if (why === 'confirmed_order') return { why: 'confirmed_role', stages: next, roleAt: roleKey(list, 'confirmed') };
+  return { why, stages: next, roleAt: why === 'booked_order' ? roleKey(list, 'booked') : null };
 }
 
 /** Ключи колонок, которые можно выбрать конверсией, по порядку доски. */

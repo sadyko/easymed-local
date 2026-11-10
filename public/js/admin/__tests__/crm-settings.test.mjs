@@ -473,7 +473,9 @@ test('CRM_STAGE_ROLES_V1: галочки ролей у колонок и зна�
   assert.strictEqual(roleBoxes(root).length, 3 * 2 + 2);
   assert.deepStrictEqual(roleBoxes(root).filter((n) => 'checked' in n.attrs).map((n) => [n.attrs['data-crm-role-of'], n.attrs['data-crm-role']]),
     [['recall', 'booked'], ['approved', 'confirmed'], ['no_show', 'no_show']]);
-  assert.strictEqual(roleBox(root, 'recall', 'booked').attrs['aria-label'], 'Колонка записи');
+  // Ревью: имя галочки называет и колонку — читалка экрана различает строки.
+  assert.strictEqual(roleBox(root, 'recall', 'booked').attrs['aria-label'], 'Колонка записи — Перезвонить');
+  assert.strictEqual(roleBox(root, 'no_show', 'no_show').attrs['aria-label'], 'Колонка «Не пришёл» — Не пришёл');
   const text = textOf(root);
   for (const w of ['запись', 'подтверждение', 'не пришёл', 'конверсия']) assert.ok(text.includes(w), 'нет значка ' + w);
   assert.ok(text.includes('«Запись» — сюда переходит карточка, когда пациента записали на приём.'), 'нет подсказки о ролях');

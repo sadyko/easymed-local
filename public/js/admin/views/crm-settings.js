@@ -273,7 +273,10 @@ function roleTicks(row, onPick) {
     if (!opts.length) return null;
     return h('div', { class: 'crm-set-role-list' }, ...opts.map((role) => {
         const on = row.role === role;
-        const cb = h('input', { type: 'checkbox', checked: on, 'aria-label': ROLE_ARIA[role], 'data-crm-role': role, 'data-crm-role-of': row.key });
+        // Ревью: имя галочки называет и колонку («Колонка записи — Записан»): строк с одинаковыми
+        // галочками много, и читалке экрана иначе их не различить. Части переводятся по отдельности.
+        const cb = h('input', { type: 'checkbox', checked: on, 'aria-label': tr(ROLE_ARIA[role]) + ' — ' + tr(String(row.label || row.key)),
+            'data-crm-role': role, 'data-crm-role-of': row.key });
         cb.addEventListener('change', () => onPick(role, !!cb.checked));
         const badge = ROLE_BADGES[role];
         return h('label', { class: 'crm-set-role' + (on ? ' on' : '') }, cb,

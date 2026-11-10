@@ -29,6 +29,12 @@ const wonKeys = (db) => db.prepare("SELECT key FROM crm_stages WHERE kind = 'won
 const OLD_UPDATED = daysAgoIso(200);
 const historyCard = (db, extra = {}) => addLead(db, { status: 'came', date: '2025-05-01', updated: OLD_UPDATED, name: 'История', ...extra });
 const moveTo = async (t, key) => {
+  // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ.
+  const cfg = (await t.rpc('crm_config_get', 'boss', {})).json.data;
+  if ((cfg.stages.find((x) => x.key === key) || {}).role) {
+    const u = await t.rpc('crm_config_save', 'boss', { stages: cfg.stages.map((x) => (x.key === key ? { ...x, role: null } : x)) });
+    assert.equal(u.status, 200, u.text);
+  }
   const s = await t.rpc('crm_config_save', 'boss', { settings: { won_stage: key } });
   assert.equal(s.status, 200, s.text);
 };
@@ -85,6 +91,7 @@ for (const move of [false, true]) {
     // (за окном повторного обращения). Закрытая карточка В ОКНЕ новый лид не
     // заводит (Р5, lead-from-call.test.js).
     db.prepare("INSERT INTO crm_requests (full_name, phone, status, updated_at, created_at) VALUES ('История', '+998 90 909 26 38', 'came', ?, ?)").run(OLD_UPDATED, OLD_UPDATED);
+    if (move) db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
     if (move) saveConfig(db, { settings: { won_stage: 'approved' } });
     const cid = Number(db.prepare("INSERT INTO calls (general_call_id, started_at, disposition, external_number, call_type) VALUES ('X1','2026-10-09T08:00:00Z','ANSWER','998909092638',0)").run().lastInsertRowid);
     const created = leadFromCall(db, { id: cid, disposition: 'ANSWER', external_number: '998909092638', call_type: 0 });
@@ -180,6 +187,7 @@ test('новая колонка конверсии должна быть пус�
     const live = addLead(t.db, { status: 'approved', name: 'Живая в «Подтверждён»' });
     addLead(t.db, { status: 'approved', name: 'Вторая', patient: null });
     const hist = historyCard(t.db);
+    t.db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
     const r = await t.rpc('crm_config_save', 'boss', { settings: { won_stage: 'approved' } });
     assert.equal(r.status, 409, r.text);
     assert.match(r.json.error.message, /В колонке «Подтверждён» карточек: 2 — сначала перенесите их в другие колонки/);

@@ -248,6 +248,7 @@ test('карточка «на дату»: визит того дня без до
 
 test('«Колонка записи» — выбор клиники: до неё ничего не трогается', () => {
   const db = freshDb();
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью) — у «Подтверждён» роль подтверждения: сначала снята, иначе отказ
   saveConfig(db, { settings: { booked_stage: 'approved' } });
   const before = lead(db, { status: 'scheduled', date: Y }); line(db, before, visit(db, Y), Y);
   const from = lead(db, { status: 'approved', date: Y }); line(db, from, visit(db, Y), Y);
@@ -259,6 +260,7 @@ test('смена «Колонки конверсии»: история идёт 
   const db = freshDb();
   const hist = lead(db, { status: 'came', date: Y2 }); line(db, hist, visit(db, Y2), Y2);
   const histDated = lead(db, { status: 'came', date: Y2 });
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
   saveConfig(db, { settings: { won_stage: 'approved' } });
   assert.deepEqual([st(db, hist), st(db, histDated)], ['approved', 'approved'], 'история не пошла за ролью');
   assert.deepEqual(crmNoShowSweep(db), []);
