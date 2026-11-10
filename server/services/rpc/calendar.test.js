@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';
+import { doctorDayWindows, slotIsFree } from './calendar.js';   // SLOT_PACK_V1 — сетка партнёров не тронута
 // CROSS_BRANCH_CALENDAR_V1 — квитанция соседа приходит НАСТОЯЩИМ механизмом.
 import { markConfirmed } from '../branch-sync/journal.js';
 // СЕТЬ СТРОИТСЯ НАСТОЯЩИМ СПРАВОЧНИКОМ — см. crossDb ниже.
@@ -755,5 +756,21 @@ test('JOIN_EXTENDS_BOOKING_V1: calendar_book на время записи, сл�
   assert.equal(out.next, '10:30');
   assert.equal(out.ends, '10:35');
   assert.equal(db.prepare('SELECT duration_minutes d FROM visits WHERE id = ?').get(first.visit.id).d, 30);
+  db.close();
+});
+
+// SLOT_PACK_V1 — ПАРТНЁРСКИЙ API И ОНЛАЙН-ЗАПИСЬ ОСТАЮТСЯ НА СЕТКЕ 15 МИНУТ (опубликованный
+// договор, PUBLIC_SLOT_MIN): после записи 10:10–10:40 окно для партнёров — 10:45, а не 10:40;
+// начало вне сетки онлайн-записи не свободно. Упаковка — только у экранов клиники.
+test('SLOT_PACK_V1: окна для партнёров и проверка онлайн-записи — прежняя сетка 15 минут', async () => {
+  const db = await ownerDay();
+  const before = new Date(MON.getFullYear(), MON.getMonth(), MON.getDate(), 7, 0).getTime();
+  const w = doctorDayWindows(db, { doctorId: 7, dayIso: DAY, durationMin: 15, now: before });
+  const starts = w.windows.map((x) => x.start);
+  assert.ok(starts.includes('10:45') && !starts.includes('10:40'), 'сетка партнёров сдвинулась на упаковку: ' + starts.slice(0, 12).join(', '));
+  assert.equal(w.windows.find((x) => x.start === '10:30').free, false);
+  assert.equal(w.windows.find((x) => x.start === '10:45').free, true);
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: Date.parse(at(10, 40)), durationMin: 15, now: before }), false, 'онлайн-запись приняла начало вне сетки');
+  assert.equal(slotIsFree(db, { doctorId: 7, startMs: Date.parse(at(10, 45)), durationMin: 15, now: before }), true);
   db.close();
 });
