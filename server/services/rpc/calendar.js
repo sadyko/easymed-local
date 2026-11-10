@@ -870,8 +870,11 @@ export function calendarSlots(db, args, user, internal = {}) {
   // Занятое переводится в минуты дня СМЕЩЕНИЕМ ОТ ПОЛУНОЧИ, а не часами начала:
   // приём, начавшийся вчера в 23:40 и кончающийся сегодня в 00:10, обязан
   // занять первые десять минут суток, а не 1420-ю минуту.
-  const clampMin = (ms) => Math.max(0, Math.min(24 * 60, Math.round((ms - dayStartMs) / 60000)));
-  const busyMinutes = busy.map((b) => ({ from: clampMin(b.startMs), to: clampMin(b.endMs) }))
+  // SLOT_PACK_V1 (ревью H1) — начало занятого ВНИЗ до минуты, конец ВВЕРХ: приход
+  // «сейчас» в 10:07:20 занимает врача до 10:37:20, и 10:37 предлагать нельзя —
+  // calendar_book (в миллисекундах) его откажет. Прежнее округление отдавало 10:37.
+  const clampMin = (ms, up = false) => Math.max(0, Math.min(24 * 60, (up ? Math.ceil : Math.floor)((ms - dayStartMs) / 60000)));
+  const busyMinutes = busy.map((b) => ({ from: clampMin(b.startMs), to: clampMin(b.endMs, true) }))
     .filter((b) => b.to > b.from);
 
   // «Сейчас» отсекает прошедшие слоты только СЕГОДНЯ: вчерашний день читают,
@@ -922,7 +925,8 @@ export function calendarSlots(db, args, user, internal = {}) {
     busy: busy.map((b) => ({
       visit_id: b.visit_id,
       from: formatHhmm(minutesOfLocal(b.startMs)),
-      to: formatHhmm(minutesOfLocal(b.startMs) + b.durationMin),
+      // SLOT_PACK_V1 (ревью H1) — конец вверх до минуты (начало с секундами кончается с ними же).
+      to: formatHhmm(minutesOfLocal(b.startMs) + b.durationMin + (b.startMs % 60000 ? 1 : 0)),
       duration_minutes: b.durationMin,
       status: b.status,
       patient_id: b.patient_id,

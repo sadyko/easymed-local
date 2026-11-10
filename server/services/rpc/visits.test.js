@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { ensureVisit } from './visits.js';
+import { calendarSlots, calendarBook } from './calendar.js';   // SLOT_PACK_V1 (ревью H1)
 
 const REG = { id: 1, role: 'registrar' };
 
@@ -513,4 +514,48 @@ test('CRM_REAL_BOOKING_V1: у переноса визита без врача fr
   }, REG);
   assert.equal(moved.moved, true);
   assert.deepEqual(moved.from, { start: hhmm(first.visit.visit_date), doctor_id: null, doctor_name: '' });
+});
+
+// ═══ SLOT_PACK_V1 (ревью H1) — ПРИХОД «СЕЙЧАС» С СЕКУНДАМИ ══════════════════════════
+// Регистрация у стойки шлёт ensure_visit «сейчас» до секунды (10:07:20). Занятость
+// считалась округлением: 10:07–10:37, и упакованный список предлагал 10:37 — а
+// calendar_book (в миллисекундах) это время отказывал: приём кончается в 10:37:20.
+// Теперь визит хранится на целой минуте (вверх: 10:08), конец занятого — вверх.
+function nextMondayAt(h, m, s = 0) {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  do { d.setDate(d.getDate() + 1); } while (d.getDay() !== 1);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m, s, 0);
+}
+const dayOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const atHm = (base, hhmm) => { const [h, m] = hhmm.split(':').map(Number); return new Date(base.getFullYear(), base.getMonth(), base.getDate(), h, m).toISOString(); };
+
+test('SLOT_PACK_V1 (ревью H1): приход 10:07:20 — визит на целой минуте, первое начало после него не раньше 10:38, и запись на него проходит', async () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (2,'Q')").run();
+  const walk = nextMondayAt(10, 7, 20);
+  const ev = await ensureVisit(db, { patient_id: 1, date: walk.toISOString(), doctor_id: 2 }, REG);
+  const stored = new Date(ev.visit.visit_date);
+  assert.equal(stored.getSeconds(), 0, 'визит хранится с секундами: ' + ev.visit.visit_date);
+  const sl = calendarSlots(db, { doctor_id: 2, date: dayOf(walk), duration_minutes: 30 }, REG);
+  const first = sl.slots.map((x) => x.start).find((t) => t > '10:00');
+  assert.ok(first >= '10:38', 'первое начало после прихода — внутри приёма: ' + first);
+  const bk = await calendarBook(db, { patient_id: 2, doctor_id: 2, start: atHm(walk, first), duration_minutes: 30 }, REG);
+  assert.equal(bk.created, true, 'предложенное время не записалось');
+});
+
+test('SLOT_PACK_V1 (ревью H1): старая строка визита с секундами — занятость до целой минуты ВВЕРХ; ensure_visit на её конец отказывает до записи, а не после', async () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (2,'Q')").run();
+  const old = nextMondayAt(10, 7, 20);
+  db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, duration_minutes, status) VALUES (1, 2, ?, 30, 'scheduled')").run(old.toISOString());
+  const sl = calendarSlots(db, { doctor_id: 2, date: dayOf(old), duration_minutes: 30 }, REG);
+  assert.deepEqual(sl.busy.map((b) => b.from + '-' + b.to), ['10:07-10:38'], 'конец занятого округлён вниз');
+  assert.ok(!sl.slots.some((x) => x.start === '10:37'), '10:37 предложено, а приём идёт до 10:37:20');
+  assert.ok(sl.slots.some((x) => x.start === '10:38'));
+  await assert.rejects(() => ensureVisit(db, { patient_id: 2, date: atHm(old, '10:37'), doctor_id: 2,
+    book: { doctor_id: 2, start: atHm(old, '10:37'), duration_minutes: 30 } }, REG), (e) => e.code === 'slot_taken');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visits WHERE patient_id = 2').get().n, 0, 'отказ оставил визит');
+  const ok = await ensureVisit(db, { patient_id: 2, date: atHm(old, '10:38'), doctor_id: 2,
+    book: { doctor_id: 2, start: atHm(old, '10:38'), duration_minutes: 30 } }, REG);
+  assert.equal(ok.booked, true);
 });

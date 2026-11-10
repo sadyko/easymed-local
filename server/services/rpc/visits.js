@@ -81,6 +81,14 @@ function localDayIso(ms) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 const minutesOfLocal = (ms) => { const d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); };
+/** SLOT_PACK_V1 (ревью H1) — ISO с секундами → целая минута вверх (в пределах того же местного дня); без секунд — как есть. */
+function wholeMinuteIso(iso) {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms) || ms % 60000 === 0) return iso;
+  const up = Math.ceil(ms / 60000) * 60000;
+  const t = new Date(up).getDate() === new Date(ms).getDate() ? up : Math.floor(ms / 60000) * 60000;
+  return new Date(t).toISOString();
+}
 const hhmmToMin = (s) => { const [h, m] = String(s || '0:0').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
 
 /**
@@ -99,8 +107,10 @@ function slotConflict(db, user, { doctorId, startMs, durationMin, excludeVisitId
     step_minutes: durationMin,
     exclude_visit_id: excludeVisitId || null,
   }, user, { excludeHoldId });
+  // SLOT_PACK_V1 (ревью H1) — начало вниз, конец вверх до минуты: та же граница, что у
+  // calendar_book в миллисекундах (конец занятого calendar_slots тоже округлён вверх).
   const from = minutesOfLocal(startMs);
-  const to = from + durationMin;
+  const to = from + durationMin + (startMs % 60000 ? 1 : 0);
   const clash = (res.busy || []).find((b) => from < hhmmToMin(b.to) && hhmmToMin(b.from) < to) || null;
   return clash ? { clash, doctorName: (res.resource && res.resource.name) || '' } : null;
 }
@@ -238,7 +248,11 @@ export async function ensureVisit(db, args, user, internal = {}) {
     if (!local || !local.d) throw new RpcError('Дата визита указана неверно.', 400);
     day = local.d;
   }
-  const whenIso = rawDate.length > 10 ? rawDate : day + 'T09:00:00Z';
+  // SLOT_PACK_V1 (ревью H1) — ВИЗИТ НА ЦЕЛОЙ МИНУТЕ. Приход «сейчас» приезжает до
+  // секунды (10:07:20): занятость врача кончалась в 10:37:20, а экраны предлагали
+  // 10:37, которое calendar_book отказывал. Секунды — вверх до минуты (10:08), но не
+  // через полночь: 23:59:40 остаётся в своём дне (вниз).
+  const whenIso = rawDate.length > 10 ? wholeMinuteIso(rawDate) : day + 'T09:00:00Z';
 
   const optInt = (v, name) => {
     if (v === undefined || v === null || v === '') return null;
