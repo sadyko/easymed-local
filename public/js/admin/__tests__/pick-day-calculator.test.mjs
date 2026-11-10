@@ -355,6 +355,18 @@ test('LAB_NO_DOCTOR_V1: колонка врача в календаре — ан
 });
 
 // ═══ ревью M1, L1 — калькулятор на дне с записью пациента ═══════════════════════════
+// Визит дня сервер ищет по местному дню SQLite (localtime), а день записи считает часами
+// JS. Предзагрузка tz-late двигает только пояс JS — визит дня не находится (так же падают
+// прежние тесты визита дня на 3.22.0). В таком прогоне оба теста пропускаются.
+const TZ_SPLIT = (() => {
+    const db = openDb(':memory:');
+    const iso = '2030-01-07T00:30:00Z';
+    const sql = db.prepare("SELECT strftime('%Y-%m-%d %H:%M', ?, 'localtime') AS v").get(iso).v;
+    db.close();
+    const d = new Date(iso);
+    const js = `${ymd(d)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return sql === js ? false : 'пояс JS не совпадает с поясом SQLite (предзагрузка tz-late) — визит дня по местному дню не найти';
+})();
 const TOASTS_C = [];
 Object.defineProperty(TOAST_EL, 'textContent', { get() { return ''; }, set(v) { TOASTS_C.push(String(v)); }, configurable: true });
 const btnText = (root, text) => walk(root).find((n) => n.tagName === 'BUTTON' && n.style.display !== 'none' && textOf(n).includes(text));
@@ -367,7 +379,7 @@ async function saveCalcFlow(top) {
     btnText(top(), 'Создать визит').click();
 }
 
-test('ревью M1: калькулятор — «в запись · 15:00» первым, другие времена под «Перенести запись на»; выбран перенос — запись перенесена с прежней длиной, сказано вслух', async () => {
+test('ревью M1: калькулятор — «в запись · 15:00» первым, другие времена под «Перенести запись на»; выбран перенос — запись перенесена с прежней длиной, сказано вслух', { skip: TZ_SPLIT }, async () => {
     seed();
     const at15 = dayAt(0); at15.setHours(15, 0, 0, 0);
     const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, booked_at, created_by) VALUES (3, ?, 5, 'scheduled', 45, ?, 1)").run(at15.toISOString(), new Date().toISOString()).lastInsertRowid);
@@ -396,7 +408,7 @@ test('ревью M1: калькулятор — «в запись · 15:00» п�
     assert.ok(TOASTS_C.some((x) => /Приём перенесён с 15:00 на 10:00/.test(x)), 'перенос не назван: ' + JSON.stringify(TOASTS_C));
 });
 
-test('ревью L1: колонка врача, в смете только анализ «на дату», пациент записан к этому врачу — визит дня, без «записи к другому врачу» и без нового визита', async () => {
+test('ревью L1: колонка врача, в смете только анализ «на дату», пациент записан к этому врачу — визит дня, без «записи к другому врачу» и без нового визита', { skip: TZ_SPLIT }, async () => {
     seedLab({ group: 'lab', doctors: 1 });
     const at10 = dayAt(0); at10.setHours(10, 0, 0, 0);
     const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, duration_minutes, booked_at, created_by) VALUES (3, ?, 40, 'scheduled', 30, ?, 1)").run(at10.toISOString(), new Date().toISOString()).lastInsertRowid);
