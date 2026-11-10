@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { serviceRoute, serviceGroup, goesToCabinet, procedureSql, noGroupSql, hintedSql, groupDecides, needsPerformer, SERVICE_GROUPS, HINTED_GROUPS, LAB_NAME_RE } from './service-route.js';
+import { performerRequired } from './service-route.js';   // LAB_NO_DOCTOR_V1
 import { openDb } from '../../../server/db/connection.js';
 import { migrate } from '../../../server/db/migrate.js';
 
@@ -113,4 +114,18 @@ test('SQL сервера — то же правило: группа «Диагн
     assert.equal(db.prepare(`SELECT ${noGroupSql('s')} AS ng FROM (SELECT 'imaging' AS type) s`).get().ng, 0);
     assert.deepEqual([...SERVICE_GROUPS].sort(), ['consultation', 'imaging', 'lab', 'other', 'procedure', 'radiology']);
   } finally { db.close(); }
+});
+
+// LAB_NO_DOCTOR_V1 (3.23.0) — анализ, оставленный в группе «Консультации» (умолчание колонки)
+// без подсказок отделения и типа, уходит в кабинет (needsPerformer), но исполнитель ему не
+// обязателен: решает флаг «нужен врач» (0 из базы). «Диагностика» — как прежде (D1).
+test('LAB_NO_DOCTOR_V1: performerRequired — у группы «Консультации» решает requires_doctor; «Диагностика» и флаг 1 — обязателен', () => {
+  assert.equal(performerRequired({ type: 'consultation', requires_doctor: 0 }), false, 'анализ в «Консультациях» держит «Далее»');
+  assert.equal(performerRequired({ type: '', requires_doctor: 0 }), false, 'строка без группы — так же');
+  assert.equal(performerRequired({ type: 'consultation', requires_doctor: 1 }), true);
+  assert.equal(performerRequired({ type: 'consultation' }), true, 'флага нет — как прежде');
+  assert.equal(performerRequired({ type: 'imaging', requires_doctor: 0 }), true, 'УЗИ «Диагностики» — исполнитель обязателен (D1)');
+  assert.equal(performerRequired({ type: 'other', requires_doctor: 0 }), true);
+  assert.equal(performerRequired({ type: 'lab', requires_doctor: 0 }), false);
+  assert.equal(performerRequired({ type: 'consultation', requires_doctor: 0, departments: { kind: 'laboratory' } }), false);
 });

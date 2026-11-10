@@ -332,3 +332,22 @@ test('M-1: строка «из записи» без исполнителя, к�
   await pressUntilCreate(ov);
   assert.deepEqual(lines31(), [{ doctor_id: 25, billed: 1 }], JSON.stringify(TOASTS.slice(-3)));
 });
+
+// LAB_NO_DOCTOR_V1 (3.23.0, снимок владельца 62) — анализ, оставленный в группе «Консультации»
+// (умолчание колонки) без подсказок отделения и типа, с «нужен врач» = 0: выбор исполнителя
+// предлагается (запасной список — все врачи), но «Далее» он не держит, и врач сам не ставится.
+test('LAB_NO_DOCTOR_V1: анализ в группе «Консультации», requires_doctor = 0 — «Далее» открыт, врач не подставлен, визит заводится', async () => {
+  const ov = await open({ type: 'consultation', req: 0, performers: [] });
+  const btn = nextButton(ov);
+  assert.ok(btn && !('disabled' in btn.attrs), '«Далее» закрыт у анализа без врача: ' + textOf(ov()).slice(0, 300));
+  assert.ok(!/выберите исполнителя услуги/.test(textOf(ov())), 'анализ просит исполнителя');
+  await pressUntilCreate(ov);
+  assert.ok(RPC.some((c) => c.name === 'ensure_visit'), 'визит не заведён: ' + JSON.stringify(TOASTS));
+  assert.equal(lineDoctor(), null, 'анализу подставлен врач');
+});
+
+test('LAB_NO_DOCTOR_V1: УЗИ группы «Диагностика» с «нужен врач» = 0 и без исполнителя — по-прежнему держит «Далее» (D1)', async () => {
+  const ov = await open({ type: 'imaging', req: 0, performers: [] });
+  const btn = nextButton(ov);
+  assert.ok(btn && 'disabled' in btn.attrs, '«Далее» открыт у УЗИ без исполнителя');
+});

@@ -26,10 +26,10 @@
 // по-прежнему правильный ответ («врач не требуется»).
 // ROUTE_SELECT — колонки услуги, по которым needsPerformer узнаёт маршрут: у группы
 // «Консультации» в лабораторию ведут отделение и тип каталога (DIAG_ROUTE_V1, поправка ревью).
-import { needsPerformer, ROUTE_SELECT } from '../../shared/service-route.js';
+import { needsPerformer, performerRequired, ROUTE_SELECT } from '../../shared/service-route.js';
 import { isOn } from '../../shared/flags.js';
 
-export { needsPerformer, ROUTE_SELECT };
+export { needsPerformer, performerRequired, ROUTE_SELECT };   // LAB_NO_DOCTOR_V1 — performerRequired
 
 export function ratesOf(user) {
     // service_rates приходит из БД как JSON-колонка; у части сотрудников она
