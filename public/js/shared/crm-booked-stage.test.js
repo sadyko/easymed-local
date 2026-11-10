@@ -7,6 +7,7 @@ import {
   bookedStageKey, bookedStageCandidates, withConversion, conversionRefusal, conversionCandidates,
   STAGE_ROLES, roleKey, hasStageRoles, withRole, roleRefusal, roleLeaving, conversionMove, roleProblem, confirmedStageKeyOf,   // CRM_STAGE_ROLES_V1
   noShowAllowed,   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1)
+  effectiveKind,   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3)
 } from './crm-booked-stage.js';
 
 const st = (key, kind, position, is_active = 1) => ({ key, kind, position, is_active });
@@ -180,4 +181,15 @@ test('кандидаты конверсии — по порядку доски, 
   assert.deepEqual(conversionCandidates(withRoles(CLINIC, { approved: 'booked' })), ['uspeshno', 'came']);
   assert.deepEqual(conversionCandidates(hide(SEED, 'recall')), ['in_process', 'scheduled', 'approved', 'came']);
   assert.deepEqual(conversionCandidates(null), []);
+});
+
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3) — ОДИН ВИД НА ВСЕХ: колонка «Не пришёл» — проигрышная, какого бы
+// вида она ни была (слияние дублей, окно дублей, звонок, отчёты).
+test('effectiveKind: колонка с ролью «не пришёл» — lost; прочие — свой вид', () => {
+  assert.equal(effectiveKind({ key: 'missed', kind: 'open' }, 'missed'), 'lost');
+  assert.equal(effectiveKind({ key: 'no_show', kind: 'lost' }, 'no_show'), 'lost');
+  assert.equal(effectiveKind({ key: 'recall', kind: 'open' }, 'missed'), 'open');
+  assert.equal(effectiveKind({ key: 'came', kind: 'won' }, 'missed'), 'won');
+  assert.equal(effectiveKind({ key: 'recall', kind: 'open' }, null), 'open');
+  assert.equal(effectiveKind(null, 'missed'), null);
 });

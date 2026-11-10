@@ -205,6 +205,17 @@ export function roleProblem(stages, role, opts = {}) {
 }
 
 /**
+ * CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3) — ВИД КОЛОНКИ ДЛЯ ВСЕХ, КТО ДЕЛИТ КАРТОЧКИ НА ЖИВЫЕ И ЗАКРЫТЫЕ:
+ * колонка с ролью «не пришёл» — проигрышная (lost), какого бы вида она ни была в справочнике; прочие —
+ * свой вид. Слияние дублей, окно дублей, звонок и софтфон, отчёты — одно правило с автоматикой
+ * (config.js openStageKeys / lostStageKeys). stage — { key, kind }; null — null.
+ */
+export function effectiveKind(stage, noShowKey) {
+  if (!stage) return null;
+  return noShowKey && stage.key === noShowKey ? 'lost' : (stage.kind || null);
+}
+
+/**
  * CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — можно ли отметить «не пришёл» у колонки `key` (роль переедет
  * с прежней колонки). Экран предлагает галочку только там, где сервер её сохранит.
  */

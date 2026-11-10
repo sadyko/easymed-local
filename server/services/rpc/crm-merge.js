@@ -44,7 +44,7 @@ import { allowedSurvivors, isOpenCard, suggestSurvivor, patientConflict, namesDi
 import { canWrite } from '../../db/schema-registry.js';
 import { effectiveRoles } from '../roles.js';
 import { canSeeAllLeads, leadVisible } from '../crm/visibility.js';
-import { listStages } from '../crm/config.js';
+import { listStages, noShowStageKey, effectiveKind } from '../crm/config.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3) — noShowStageKey, effectiveKind
 // V3120_FIX — после слияния одна услуга записи — одна строка (booking-mirror.js).
 import { lineKey } from '../crm/booking-mirror.js';
 import { removeFromBooking } from '../crm/one-way.js';   // CRM_ONE_WAY_V1 (O3) — снятый дубль уносит свою свободную строку визита
@@ -122,23 +122,26 @@ function tableExists(db, name) {
 // --------------------------------------------------------------------------
 // Дошедшая (won) — дальше всех; живые — по порядку колонок; проигранные — ниже
 // живых. Ступень, которой в справочнике нет, — в самом низу.
-export function stageRanker(stages) {
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3) — колонка «Не пришёл» (noShowKey) — проигрышная, какого бы вида
+// она ни была (shared effectiveKind): живую «Пришёл» её карточка не перебивает.
+export function stageRanker(stages, noShowKey = null) {
   const by = new Map((stages || []).map((s) => [s.key, s]));
   return (key) => {
     const s = by.get(key);
     if (!s) return -1;
     const pos = Number(s.position) || 0;
-    if (s.kind === 'won') return 3000 + pos;
-    if (s.kind === 'open') return 2000 + pos;
+    const kind = effectiveKind(s, noShowKey);
+    if (kind === 'won') return 3000 + pos;
+    if (kind === 'open') return 2000 + pos;
     return 1000 + pos;
   };
 }
 
 /** Карточка → то, что знают правила слияния: вид ступени и её место в воронке. */
-function withStage(stageBy) {
+function withStage(stageBy, noShowKey = null) {
   return (c) => {
     const st = stageBy.get(c.status);
-    return { ...c, stage_kind: st ? st.kind : 'open', stage_pos: st ? Number(st.position) || 0 : 0 };
+    return { ...c, stage_kind: st ? effectiveKind(st, noShowKey) : 'open', stage_pos: st ? Number(st.position) || 0 : 0 };   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3)
   };
 }
 
@@ -164,7 +167,7 @@ export function crmDuplicateGroups(db, _args, user) {
   requireMerger(db, user);
   const stages = listStages(db);
   const stageBy = new Map(stages.map((s) => [s.key, s]));
-  const staged = withStage(stageBy);
+  const staged = withStage(stageBy, noShowStageKey(db));   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3)
   const rows = db.prepare(`
     SELECT r.id, r.full_name, r.phone, r.status, r.source, r.patient_id, r.assigned_to, r.created_at,
            p.full_name AS patient_name, p.mrn AS patient_mrn, u.full_name AS assigned_name,
@@ -227,7 +230,8 @@ export function crmMergeLeads(db, args, user) {
   const holes = all.map(() => '?').join(',');
   const stages = listStages(db);
   const stageBy = new Map(stages.map((s) => [s.key, s]));
-  const cards = db.prepare(`SELECT * FROM crm_requests WHERE id IN (${holes})`).all(...all).map(withStage(stageBy));
+  const noShow = noShowStageKey(db);   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3)
+  const cards = db.prepare(`SELECT * FROM crm_requests WHERE id IN (${holes})`).all(...all).map(withStage(stageBy, noShow));
   const byId = new Map(cards.map((c) => [c.id, c]));
   for (const id of all) {
     // Чужая невидимая карточка отвечает тем же «не найдена», что и
@@ -252,7 +256,7 @@ export function crmMergeLeads(db, args, user) {
     throw new RpcError('Среди карточек есть заявка в работе — остаться должна она (или другая карточка в работе), а не закрытая.', 409);
   }
 
-  const rank = stageRanker(stages);
+  const rank = stageRanker(stages, noShow);   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3)
   // Порядок «первой непустой»: сначала оставшаяся, потом остальные по дате.
   const byAge = cards.slice().sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')) || (a.id - b.id));
   const order = [keep, ...byAge.filter((c) => c.id !== keepId)];

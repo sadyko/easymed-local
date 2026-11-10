@@ -241,3 +241,25 @@ test('ранжирование ступеней: дошедшая > живые �
     assert.equal(namesDiffer([{ full_name: 'Буронова Феруза' }, { full_name: 'Буронов Азиз' }]), true);
   } finally { db.close(); }
 });
+
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3; проба probe-noshow-open B) — колонка «Не пришёл» на ОТКРЫТОЙ
+// колонке — для слияния дублей закрытая, как проигрышная: «Пришёл» можно оставить, предлагается она.
+test('CRM_NO_SHOW_ANY_COLUMN_V1: открытая колонка «Не пришёл» — для слияния закрытая (как проигрышная)', () => {
+  const db = seed();
+  try {
+    db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('missed','Не дошли','crit',4,1,'open')").run();
+    db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+    db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'missed'").run();
+    const came = lead(db, { status: 'came', created_at: '2026-10-01T08:00:00Z' });
+    const miss = lead(db, { status: 'missed', created_at: '2026-11-01T08:00:00Z' });
+    const g = crmDuplicateGroups(db, {}, BOSS).groups[0];
+    assert.equal(g.cards.find((c) => c.id === miss).stage_kind, 'lost');
+    assert.deepEqual(allowedSurvivors(g.cards).map((c) => c.id).sort(), [came, miss].sort(), 'закрытую «Пришёл» нельзя оставить');
+    assert.equal(g.suggested_id, came);
+    crmMergeLeads(db, { keep_id: came, merge_ids: [miss] }, BOSS);
+    assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(came).status, 'came');
+    // Ранг ступени: «Не пришёл» — ниже живых.
+    const rank = stageRanker(listStages(db), 'missed');
+    assert.ok(rank('missed') < rank('recall'), 'колонка «Не пришёл» выше живых');
+  } finally { db.close(); }
+});

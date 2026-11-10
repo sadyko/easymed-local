@@ -148,3 +148,20 @@ test('DASHBOARD_OVERVIEW_V1: обзор пропускается при блок
   const { isReadOnlyRpc } = await import('../control/gate.js');
   assert.equal(isReadOnlyRpc('dashboard_overview'), true);
 });
+
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4) — открытая колонка «Не пришёл»: в «Обзоре» её карточки — потерянные,
+// а сама колонка в воронке — проигрышная (не «в работе»).
+test('CRM_NO_SHOW_ANY_COLUMN_V1: открытая колонка «Не пришёл» — потеря и вид lost в воронке обзора', () => {
+  const d = seed();
+  try {
+    d.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('missed','Не дошли','crit',4,1,'open')").run();
+    d.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+    d.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'missed'").run();
+    const before = dashboardOverview(d, { days: 7 }, ADMIN).crm;
+    d.prepare(`INSERT INTO crm_requests (full_name, phone, source, status, created_at) VALUES ('Н', '+998 90 000 00 77', 'call', 'missed', ${NOW})`).run();
+    const c = dashboardOverview(d, { days: 7 }, ADMIN).crm;
+    assert.equal(c.lost, before.lost + 1, 'карточка колонки «Не пришёл» не посчитана потерей');
+    assert.equal(c.open, before.open, 'карточка колонки «Не пришёл» посчитана «в работе»');
+    assert.equal(c.stages.find((s) => s.key === 'missed').kind, 'lost');
+  } finally { d.close(); }
+});

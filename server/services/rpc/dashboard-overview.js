@@ -36,7 +36,7 @@ import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';
 import { canSeeReportKey } from '../report-access.js';
 import { canSeeAllLeads } from '../crm/visibility.js';
 import { canViewSection } from '../roles.js';
-import { openStageKeys, lostStageKeys, wonStageKey } from '../crm/config.js';
+import { openStageKeys, lostStageKeys, wonStageKey, stageKindOf } from '../crm/config.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4) — stageKindOf
 import { overviewDepartments } from './dashboard-overview-depts.js';
 
 const DAYS_DEFAULT = 14;
@@ -232,6 +232,7 @@ export function dashboardOverview(db, args, user) {
     const won = wonStageKey(db);
     const open = openStageKeys(db);
     const lost = lostStageKeys(db);
+    const kindOf = stageKindOf(db);   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4)
     const leads = pair((w, p) => { const x = w('r.created_at', p);
       return one(`SELECT COUNT(*) n FROM crm_requests r WHERE ${x.sql}`, x.params).n; });
     const rw = win('r.created_at');
@@ -268,7 +269,8 @@ export function dashboardOverview(db, args, user) {
       won: kinds.won || 0, won_prev: wonPrev, lost: kinds.lost || 0, open: kinds.open || 0,
       conversion: leads.cur ? r1(((kinds.won || 0) / leads.cur) * 100) : 0,
       conversion_prev: leads.prev ? r1((wonPrev / leads.prev) * 100) : 0,
-      stages: stages.map((s) => ({ key: s.key, label: s.label, kind: s.kind, color: s.color || '', n: s.n })),
+      // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4) — колонка «Не пришёл» (бывает открытой) — проигрышная.
+      stages: stages.map((s) => ({ key: s.key, label: s.label, kind: kindOf(s.key) || s.kind, color: s.color || '', n: s.n })),
       sources: sources.map((s) => ({ key: s.key, label: s.label || '', n: s.n, won: s.won || 0 })),
       operators: operators.map((o) => ({ id: o.id, name: o.name || null, n: o.n, won: o.won || 0 })),
       open_now: openNow.n || 0, unassigned_now: openNow.unassigned || 0,

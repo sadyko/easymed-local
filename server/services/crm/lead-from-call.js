@@ -19,7 +19,7 @@ import { phoneKey, phoneLikePattern, digitsOf, MIN_PHONE_DIGITS }
 // CRM_UNIFY_V1 — окно повторного обращения (решение владельца 4): одно правило
 // со входящим звонком и записью колл-центра.
 import { contactDecision, reopenLead, firstStageKey } from './contact-window.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — firstStageKey
-import { noShowStageKey } from './config.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1)
+import { noShowStageKey, effectiveKind } from './config.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1, F4)
 
 // The source key every call-born lead carries. config.js refuses to delete it
 // for exactly this reason.
@@ -48,7 +48,12 @@ export function leadsForPhone(db, rawPhone, { open = false } = {}) {
       LEFT JOIN crm_stages s ON s.key = r.status
      WHERE r.phone <> '' AND r.phone LIKE ? ${open ? "AND s.kind = 'open'" : ''}
      ORDER BY r.id DESC`).all(phoneLikePattern(key));
-  return rows.filter((r) => phoneKey(r.phone) === key);
+  // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4) — колонка «Не пришёл» (бывает открытой) — проигрышная: окно звонка
+  // и софтфон не предлагают её карточку как открытую, окно дублей видит её закрытой — как прежде.
+  const noShow = noShowStageKey(db);
+  return rows.filter((r) => phoneKey(r.phone) === key)
+    .map((r) => (noShow && r.status === noShow ? { ...r, stage_kind: effectiveKind({ key: r.status, kind: r.stage_kind }, noShow) } : r))
+    .filter((r) => !open || r.stage_kind === 'open');
 }
 
 /**

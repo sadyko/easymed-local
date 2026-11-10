@@ -22,6 +22,7 @@
 //     Suite или с телефона. Оно считается ответом, но без имени.
 
 import { today, localDate, localMonth } from '../domain/day.js';
+import { noShowStageKey, effectiveKind } from '../crm/config.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4)
 
 export const STATS_PERIODS = Object.freeze([1, 7, 30, 90, 0]);   // 0 — всё время
 export const CHANNELS = Object.freeze(['messenger', 'instagram', 'facebook', 'instagram_comments']);
@@ -237,6 +238,7 @@ export function inboxStats(db, { days = 30, nowMs = Date.now(), from = null, to 
      ORDER BY x.at`).all(...R);
   const seen = new Set();
   const stages = new Map();
+  const noShow = noShowStageKey(db);   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4)
   const leads = { total: 0, created: 0, merged: 0, won: 0, lost: 0, open: 0, patients: 0 };
   for (const l of leadRows) {
     if (seen.has(l.crm)) continue;
@@ -244,7 +246,8 @@ export function inboxStats(db, { days = 30, nowMs = Date.now(), from = null, to 
     leads.total++;
     if (l.kind === 'merged') leads.merged++; else leads.created++;
     if (l.patient_id) leads.patients++;
-    const kind = l.stage_kind || 'open';
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4) — колонка «Не пришёл» (бывает открытой) — потеря.
+    const kind = (l.stage_key ? effectiveKind({ key: l.stage_key, kind: l.stage_kind }, noShow) : null) || 'open';
     leads[kind] = (leads[kind] || 0) + 1;
     if (ch[l.channel]) ch[l.channel].leads++;
     if (l.by) staffRow(l.by).leads++;

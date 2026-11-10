@@ -30,6 +30,7 @@ import { registerCrmPhoneHooks } from './crm-phone.js';   // CRM_PHONE_V1 — п
 import { canView, canEdit, isRouteAllowed } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev» · LIVE_AUDIT_FIX_V1 — isRouteAllowed
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
 import { stageKeysFrom } from '../crm-stages.js';   // CRM_LINKS_V1 — ступени по виду, а не по имени
+import { effectiveKind } from '../../shared/crm-booked-stage.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4) — «Не пришёл» — проигрышная
 // PASTEL_IDENTITY_V1 — оттенок ступени воронки. Словарь один на три доски
 // (канбан, календарь, очередь), чтобы «мятный» везде значил одно и то же.
 import { pastelAt } from '../pastel.js?v=pastel1';
@@ -772,7 +773,9 @@ export function askDuplicateLead(rows, opts = {}) {
                     h('span', { style: { fontSize: '13.5px', fontWeight: 600 } }, 'Есть карточка у другого оператора')));
                 continue;
             }
-            const kind = r.stage_kind === 'won' ? 'ok' : (r.stage_kind === 'lost' ? '' : 'info');
+            // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4) — колонка «Не пришёл» (бывает открытой) — проигрышная.
+            const sk = effectiveKind({ key: r.status, kind: r.stage_kind }, STAGE_KEYS.noShow);
+            const kind = sk === 'won' ? 'ok' : (sk === 'lost' ? '' : 'info');
             list.appendChild(h('div', { 'data-dup-row': String(r.id), class: 'row', style: {
                 gap: '10px', alignItems: 'center', flexWrap: 'wrap',
                 border: '1px solid var(--ink-100)', borderRadius: '10px', padding: '9px 11px',

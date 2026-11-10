@@ -537,3 +537,16 @@ test('CRM_NO_SHOW_ANY_COLUMN_V1: правило звонка в колонку �
   assert.equal(rows.length, 1);
   assert.equal(rows[0].status, 'in_process', 'карточка звонка родилась в «Не пришёл»');
 });
+
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4; проба probe-noshow-open C) — открытая колонка «Не пришёл»: всплывающее
+// окно звонка и софтфон не предлагают её карточку как открытую (как при проигрышной «Не пришёл»); вид — lost.
+test('CRM_NO_SHOW_ANY_COLUMN_V1: leadsForPhone — карточка открытой колонки «Не пришёл» не «открытая», вид lost', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('missed','Не дошли','crit',4,1,'open')").run();
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'missed'").run();
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('П', '+998 90 909 26 38', 'call', 'missed')").run();
+  assert.deepEqual(leadsForPhone(db, '+998 90 909 26 38', { open: true }), []);
+  assert.equal(openLeadForPhone(db, '+998 90 909 26 38'), null);
+  assert.equal(leadsForPhone(db, '+998 90 909 26 38')[0].stage_kind, 'lost');
+});

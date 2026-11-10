@@ -121,3 +121,19 @@ test('статистика: права — как у чтения перепис
   assert.ok(metaInboxStats(db, { days: 7 }, { id: 1, role: 'admin' }).totals);
   assert.equal(typeof getRpc('meta_inbox_stats'), 'function');
 });
+
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F4) — лид в открытой колонке «Не пришёл» считается потерянным, не открытым.
+test('CRM_NO_SHOW_ANY_COLUMN_V1: лид в открытой колонке «Не пришёл» — потерян, колонка в воронке — lost', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('missed','Не дошли','crit',4,1,'open')").run();
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'missed'").run();
+  const c2 = db.prepare("SELECT id FROM meta_comments WHERE comment_id = 'c2'").get().id;
+  assert.equal(toCrm(db, { kind: 'comment', id: c2, userId: 1 }).ok, true);
+  const rid = db.prepare('SELECT crm_request_id FROM meta_comments WHERE id = ?').get(c2).crm_request_id;
+  db.prepare("UPDATE crm_requests SET status = 'missed' WHERE id = ?").run(rid);
+  const s = inboxStats(db, { days: 7, nowMs: NOW });
+  assert.equal(s.leads.lost, 1);
+  assert.equal(s.leads.open, 0);
+  assert.equal(s.stages.find((x) => x.key === 'missed').kind, 'lost');
+});

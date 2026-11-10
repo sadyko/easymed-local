@@ -16,6 +16,7 @@
 import { bookedStageKey, confirmedStageKeyOf } from '../../../public/js/shared/crm-booked-stage.js';   // CRM_LINK_ALL_V1 — confirmedStageKeyOf
 // CRM_STAGE_ROLES_V1 — роли колонок (миграция 284): одно правило проверки с экраном.
 import { STAGE_ROLES, roleKey, withRole, roleRefusal, roleLeaving, conversionMove, roleProblem } from '../../../public/js/shared/crm-booked-stage.js';
+import { effectiveKind } from '../../../public/js/shared/crm-booked-stage.js';   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3)
 import { rpcT } from '../server-message.js';   // CRM_UNIFY_V1 — отказ с числом карточек переводится на экране
 import { apiSourceKey } from '../../../public/js/shared/api-connections.js';   // CLINIC_API_STEP7_V1
 
@@ -265,6 +266,19 @@ export function lostStageKeys(db) {
   const noShow = noShowStageKey(db);
   return noShow && !lost.includes(noShow) ? [...lost, noShow] : lost;
 }
+
+/**
+ * CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F3) — ВИД КОЛОНКИ ПО КЛЮЧУ ДЛЯ ВСЕХ, КТО ДЕЛИТ КАРТОЧКИ НА ЖИВЫЕ И
+ * ЗАКРЫТЫЕ: (key) → 'open' | 'won' | 'lost' | null (колонки нет). Колонка с ролью «не пришёл» — 'lost'
+ * (shared effectiveKind), как у openStageKeys / lostStageKeys. Не бросает.
+ */
+export function stageKindOf(db) {
+  let by = new Map();
+  let noShow = null;
+  try { by = new Map(listStages(db).map((s) => [s.key, s])); noShow = noShowStageKey(db); } catch { /* пусто */ }
+  return (key) => effectiveKind(by.get(key) || null, noShow);
+}
+export { effectiveKind };
 
 /** The one conversion column — schema-guaranteed unique, never undefined. */
 export function wonStageKey(db) {
