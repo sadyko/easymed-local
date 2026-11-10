@@ -18,6 +18,9 @@ const RE_PROMO_RATED = /^Промокод «(.*)» — по услугам \(п�
 const RE_PROMO_SUM = /^Промокод «(.*)» — (\d[\d\s ]*) сум$/;
 const RE_DESK = /^Касса: (.+?) — (?:(\d+(?:,\d+)?)% — )?(\d[\d\s ]*) сум( \(доля врача — от цены до скидки\))?$/;
 const MANUAL = /^Скидка вручную$/;
+// DISCOUNT_CHANGE_PAID_V1 — след «Изменить скидку» (rpc/billing.js discountChangeTx):
+// «Касса после оплаты: <причина> — было 20% (40 000 сум), стало 50% (100 000 сум)» и пометка доли врача.
+const RE_DESK_CHANGE = /^Касса после оплаты: (.+?) — было (\d+(?:,\d+)?)% \((\d[\d\s ]*) сум\), стало (\d+(?:,\d+)?)% \((\d[\d\s ]*) сум\)( \(доля врача — (частично )?от цены до скидки\))?$/;
 
 function piece(p) {
     let m;
@@ -27,6 +30,12 @@ function piece(p) {
     if ((m = RE_GROUP.exec(p))) return trf('Скидка группы «{name}» — {pct}%', { name: m[1], pct: m[2] });
     if ((m = RE_PROMO_PCT.exec(p))) return trf('Промокод «{name}» — {value}%', { name: m[1], value: m[2] });
     if ((m = RE_PROMO_SUM.exec(p))) return trf('Промокод «{name}» — {value} сум', { name: m[1], value: m[2].trim() });
+    if ((m = RE_DESK_CHANGE.exec(p))) {   // DISCOUNT_CHANGE_PAID_V1
+        const head = trf('Касса после оплаты: {reason} — было {wasPct}% ({wasSum} сум), стало {nowPct}% ({nowSum} сум)',
+            { reason: m[1], wasPct: m[2], wasSum: m[3].trim(), nowPct: m[4], nowSum: m[5].trim() });
+        if (!m[6]) return head;
+        return head + ' ' + (m[7] ? tr('(доля врача — частично от цены до скидки)') : tr('(доля врача — от цены до скидки)'));
+    }
     if ((m = RE_DESK.exec(p))) {
         const head = m[2] != null
             ? trf('Касса: {reason} — {pct}% — {sum} сум', { reason: m[1], pct: m[2], sum: m[3].trim() })

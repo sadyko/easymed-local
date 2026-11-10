@@ -83,3 +83,28 @@ test('пустой или сломанный список не роняет пе
     assert.deepStrictEqual(performersByItem(bad), {}, JSON.stringify(bad));
   }
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0) — квитанция «Изменение скидки»: скидка была и стала, причина,
+// сколько вернули и куда (каждый возврат своим способом), сумма счёта и оплачено после.
+import { slipData as slipDataDc } from '../views/receipt-print.js';
+test('DISCOUNT_CHANGE_PAID_V1: квитанция «Изменение скидки» — было/стало, причина, возвращено и куда', () => {
+  const d = slipDataDc({
+    kind: 'discount', invoice: { invoice_number: 'INV-A-26-00052', total_amount: 100000, paid_amount: 100000 },
+    patient: { full_name: 'Рахимов Жасур', mrn: 'A-26-00015' },
+    pctBefore: 20, sumBefore: 40000, pctAfter: 50, sumAfter: 100000, reason: 'акция', refunded: 60000,
+    plan: [{ refund_method: 'cash', amount: 40000 }, { to_balance: true, refund_method: 'wallet', amount: 20000 }], cashier: 'Кассир',
+  });
+  assert.equal(d.subtitle, 'Изменение скидки');
+  assert.equal(d.docNo, 'INV-A-26-00052');
+  const rows = Object.fromEntries(d.rows);
+  assert.equal(rows['Было'], 'Скидка 20% — 40 000 сум');
+  assert.equal(rows['Стало'], 'Скидка 50% — 100 000 сум');
+  assert.equal(rows['Причина'], 'акция');
+  assert.equal(d.amountLabel, 'Возвращено');
+  assert.equal(d.amount, 60000);
+  assert.equal(d.method, 'Наличные 40 000, На баланс пациента 20 000');
+  assert.deepEqual(d.afterRows, [['Сумма счёта', '100 000'], ['Оплачено', '100 000']]);
+  const none = slipDataDc({ kind: 'discount', invoice: {}, patient: {}, pctBefore: 20, sumBefore: 40000, pctAfter: 0, sumAfter: 0, refunded: 0, plan: [] });
+  assert.equal(Object.fromEntries(none.rows)['Стало'], 'Без скидки');
+  assert.ok(!Object.fromEntries(none.rows)['Причина'], 'без причины — строки нет');
+});

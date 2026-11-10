@@ -665,3 +665,37 @@ test('B3: строки окна возврата — в словаре на тр
         }
     }
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0) — «Изменить скидку» после оплаты: возврат разницы в «Возвратах и
+// отменах» назван «Изменение скидки» (сервер: пометка DISC#, вид 'discount'), а не «Возврат оплаты»;
+// окно «Платежи» счёта визита с деньгами — с «Изменить скидку».
+test('DISCOUNT_CHANGE_PAID_V1: «Возвраты и отмены» — «Изменение скидки»; «Платежи» — «Изменить скидку» у счёта визита', async () => {
+    asCashier();
+    const st = desk.__test_cardState;
+    const prev = st.refunds;
+    st.refunds = {
+        from: '2026-11-10', to: '2026-11-10', totals: { n: 1, refunded: 60000 },
+        rows: [{ invoice_id: 52, invoice_number: 'INV-A-26-00052', status: 'paid', patient_name: 'Рахимов Жасур', mrn: 'A-26-00015', visit_id: 77, patient_id: 3,
+            refunded_total: 60000, refunds: [{ amount: 60000, method: 'cash', kind: 'discount', at: '2026-11-10T07:00:00Z', who: 'Кассир', reason: 'Изменение скидки — возврат разницы: акция' }],
+            events: [{ action: 'discount_change', at: '2026-11-10T07:00:00Z', who: 'Кассир', reason: 'акция', notes: '' }], rebill_lines: [], can_rebill: false, total_amount: 100000, paid_amount: 100000 }],
+    };
+    const el = mkEl('div');
+    desk.__test_paintRefunds(el, mkEl('div'));
+    const row = byAttr(el, 'data-refund-row', '52');
+    assert.match(textOf(row), /Изменение скидки/);
+    assert.doesNotMatch(textOf(row), /Возврат оплаты/);
+    st.refunds = prev;
+    closeAll();
+    tables = { payments: [{ id: 91, invoice_id: 52, amount: 160000, method: 'cash', paid_at: '2026-11-10T06:00:00Z', notes: '' }], invoice_items: [] };
+    rpcAnswers = {};
+    await desk.__test_openInvoiceRefund({ ...TODAY_ROW, id: 52, invoice_number: 'INV-A-26-00052', visit_id: 77, subtotal: 200000, discount_amount: 40000, total_amount: 160000, paid_amount: 160000 }, mkEl('div'));
+    await tick();
+    const m = lastModal();
+    assert.ok(byAttr(m, 'data-discount-change', '52'), 'в «Платежах» нет «Изменить скидку»');
+    closeAll();
+    // Счёт без визита (стационар) — без «Изменить скидку»: скидку там дают при выписке.
+    await desk.__test_openInvoiceRefund({ ...TODAY_ROW, id: 53, invoice_number: 'INV-A-26-00053', visit_id: null, admission_id: 4 }, mkEl('div'));
+    await tick();
+    assert.equal(byAttr(lastModal(), 'data-discount-change', '53'), undefined);
+    closeAll();
+});

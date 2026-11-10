@@ -814,7 +814,10 @@ export function openLineEdit({ mode, visitId, invoiceId = null, item = null, lin
  * сразу открывает окно оплаты разницы; `printSlip(data)` — квитанция
  * «Возврат разницы».
  */
-export async function openLineFix(inv, { onChanged = null, onPayDue = null, printSlip = null } = {}) {
+// DISCOUNT_CHANGE_PAID_V1 — `discountChange` ({ allowed(inv), open(inv) }): «Изменить скидку» у итога
+// окна. Окно скидки живёт в кассе (cashier-desk.js openDiscountChange) — здесь его не импортируют,
+// касса передаёт его вместе с правилом, когда кнопка видна (cashierDiscountChangeAllowed).
+export async function openLineFix(inv, { onChanged = null, onPayDue = null, printSlip = null, discountChange = null } = {}) {
     const s = sheet(trf('Исправить услуги · {no}', { no: inv.invoice_number || ('#' + inv.id) }), 'Edit', 640);
     const intro = h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } });
     const table = h('div', { style: { display: 'grid', gap: '6px' } });
@@ -891,6 +894,12 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
         }
         // CASHIER_LINE_EDIT_V1 — к оплате — с учётом внесённого; скидка 100 % — словами.
         total.appendChild(h('span', { 'data-invoice-due': '' }, invoiceDueText(st.invoice)));
+        // DISCOUNT_CHANGE_PAID_V1 — у итога: «Изменить скидку» (оплаченный, частично, долг, скидка 100 %).
+        if (discountChange && typeof discountChange.allowed === 'function' && discountChange.allowed(current)) {
+            total.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-discount-change': String(current.id),
+                style: { marginLeft: '10px' }, onclick: () => discountChange.open(current) },
+                Icon('Coins', { size: 13 }), ' ', tr('Изменить скидку')));
+        }
     };
 
     // CASHIER_PAID_SWAP_V1 — после замены в оплаченном счёте: что стало с деньгами.

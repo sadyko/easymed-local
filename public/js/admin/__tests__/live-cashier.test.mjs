@@ -318,3 +318,23 @@ test('новое открытие кассы — прежняя подписка
     await desk.renderCashier(container);
     assert.equal(client.status().subscribers, 1);
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0) — окно «Изменить скидку» — такое же окно кассы: правило занятости
+// live.js его видит, и касса не перечитывается под ним (кассир считает возврат или доплату).
+test('DISCOUNT_CHANGE_PAID_V1: окно «Изменить скидку» видно правилу занятости live.js', async () => {
+    const body = document.body;
+    body.children.length = 0;
+    const matches = (n, part) => {
+        if (part[0] === '.') return String(n.className || '').split(/\s+/).includes(part.slice(1));
+        const m = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(part);
+        if (!m || !n.attrs || !Object.prototype.hasOwnProperty.call(n.attrs, m[1])) return false;
+        return m[2] === undefined || n.attrs[m[1]] === m[2];
+    };
+    const realDoc = { querySelector: (sel) => walk(body).slice(1).find((n) => sel.split(',').map((s) => s.trim()).some((p) => matches(n, p))) || null };
+    assert.equal(live.dialogOpen(realDoc), false);
+    desk.openDiscountChange({ ...inv(11, 'paid'), visit_id: 5, discount_amount: 10000, total_amount: 90000, paid_amount: 90000 }, mkEl('div'));
+    await tick(40);
+    assert.equal(live.dialogOpen(realDoc), true, 'окно скидки — «занят»');
+    assert.ok(calls.includes('cashier_invoice_discount_change_quote'), 'окно спросило нынешнюю скидку');
+    body.children.length = 0;
+});

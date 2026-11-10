@@ -640,6 +640,16 @@ export function canCashierDiscount() {
     return hasActorRole(['admin', 'cashier']);
 }
 
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0, решение владельца Q4) — «ИЗМЕНИТЬ СКИДКУ» ПОСЛЕ ОПЛАТЫ: та же
+// строка «Кассир может давать скидку» (новой строки роли нет) И денежная роль — кассир или
+// администратор: двигаются деньги (возврат разницы или доплата), как у замены услуги. Зеркало
+// сервера (rpc/billing.js requireDiscountChangeRight).
+export function canChangePaidDiscount() {
+    if (!canCashierDiscount()) return false;
+    if (_effective == null && !_preview) return true;
+    return hasActorRole(['admin', 'cashier']);
+}
+
 // CASHIER_HEAD_V1 (ревью) — «Закрыть смену» у ЧУЖОЙ смены. Зеркало сервера
 // (rpc/cashier.js headCashierLevel → roles.js explicitSectionLevel): раздел
 // «Старший кассир», записанный БЕЗ уровня (старый экран), — только просмотр;
