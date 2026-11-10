@@ -50,11 +50,16 @@ export function crmBookedText(days) {
   return first ? trf('Записан из заявки на {date}', { date: crmDayShort(first) }) : tr('Услуги из заявки');
 }
 
-/** Значок строки сметы из заявки. day — день строки заявки (или null). */
-export function crmLineBadge(day) {
+/**
+ * Значок строки сметы из заявки. day — день строки заявки (или null). wrap — значок стоит своей строкой
+ * под названием (смета каталога): узкая колонка (ярус цены справа) переносит подпись, а не вылезает за
+ * край (ревью потока E, badge-layout).
+ */
+export function crmLineBadge(day, { wrap = false } = {}) {
   return h('span', {
     class: 'tag', 'data-crm-line': crmDayShort(day) || '-',
-    style: { ...TEAL, flexShrink: 0, fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', verticalAlign: 'middle' },
+    style: { ...TEAL, flexShrink: 0, fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', verticalAlign: 'middle',
+      ...(wrap ? { maxWidth: '100%', whiteSpace: 'normal', height: 'auto', minHeight: '22px', lineHeight: 1.25, padding: '2px 8px' } : {}) },
   }, Icon('Headset', { size: 12 }), crmLineText(day));
 }
 
@@ -67,7 +72,9 @@ export function crmBookedBadge(days) {
   if (!text) return null;
   const first = earliestCrmDay(days);
   return h('div', {
-    'data-crm-booked': first ? crmDayShort(first) : '-', role: 'status',
+    // Ревью F7 — без role="status": значок рисуется при каждой перерисовке сметы, «живая область»
+    // заставляла бы читалку экрана повторять его.
+    'data-crm-booked': first ? crmDayShort(first) : '-',
     style: { ...TEAL, display: 'flex', alignItems: 'center', gap: '7px', margin: '8px 0 2px', padding: '7px 11px',
       border: '1px solid', borderColor: TEAL.borderColor, borderRadius: '10px',
       fontSize: '13.5px', fontWeight: 700, lineHeight: 1.3 },

@@ -2486,7 +2486,7 @@ export function openServicePickerModal({
                 rowsWrap.appendChild(h('div', { class: 'wzc-ln' },
                     h('div', { style: { minWidth: 0 } }, h('div', { style: { fontSize: '12.5px' } }, a.service.name),
                         // CRM_SMETA_BADGE_V1 — строка из заявки колл-центра: «из заявки · 10.11», как чип каталога.
-                        a.__fromCrm ? h('div', { style: { margin: '3px 0 2px' } }, crmLineBadge(a.__crmDay)) : null,
+                        a.__fromCrm ? h('div', { style: { margin: '3px 0 2px' } }, crmLineBadge(a.__crmDay, { wrap: true })) : null,
                         who),
                     h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flex: 'none' } },
                         // VISIT_TIER_PRICING_V1 — a quoted second/repeat visit shows its

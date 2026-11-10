@@ -143,10 +143,10 @@ function seed({ day = jsToday(), crm = true } = {}) {
   DB = db;
   SPM.forgetSlots();
 }
-async function open(cfg) {
+async function open(cfg, opts = {}) {
   seed(cfg);
   document.body.children.length = 0; TOASTS.length = 0; RPC.length = 0;
-  await openVisitWizard(() => {}, { id: 3, full_name: 'Тест-Пациент', phone: '+998901112233' }, {});
+  await openVisitWizard(() => {}, { id: 3, full_name: 'Тест-Пациент', phone: '+998901112233' }, opts);
   await flush(20); await wait(120); await flush(20);
   const ov = () => document.body.children.find(isWizard);
   assert.ok(ov(), 'мастер не открылся');
@@ -211,4 +211,19 @@ test('CRM_SMETA_BADGE_V1: мастер визита по-английски — 
     assert.equal(flat(head), 'Booked from request for ' + day);
     for (const n of [badge, head]) assert.doesNotMatch(flat(n), /[Ѐ-ӿ]/);
   } finally { setLang('ru'); }
+});
+
+// CRM_SMETA_BADGE_V1 (ревью потока E, F6) — карточка CRM открыла мастер с услугой заявки (presetServiceIds,
+// CRM_CONVERT_V1): строка уже в смете «из заявки», но без дня. Подстановка дня из заявки дописывает ей день —
+// значки говорят «из заявки · дд.мм» и «Записан из заявки на дд.мм», а не голое «из заявки».
+test('CRM_SMETA_BADGE_V1 (ревью F6): строка-пресет из карточки получает день строки заявки — значки с датой', async () => {
+  const ov = await open({}, { presetServiceIds: [41] });
+  const day = ddmm(jsToday());
+  const rows = walk(ov()).filter((n) => n.children && n.children.some((c) => c.tagName === 'SPAN' && flat(c) === 'Svc-АЧТВ')
+    && n.children.some((c) => c.tagName === 'BUTTON' && c.attrs.title === 'Убрать'));
+  assert.equal(rows.length, 1, 'строка заявки встала второй раз');
+  const badge = attrNodes(rows[0], 'data-crm-line')[0];
+  assert.ok(badge, 'у строки-пресета нет значка');
+  assert.equal(flat(badge), 'из заявки · ' + day, 'значок строки-пресета без дня заявки');
+  assert.equal(flat(attrNodes(ov(), 'data-crm-booked')[0]), 'Записан из заявки на ' + day);
 });

@@ -91,3 +91,19 @@ test('CRM_SMETA_BADGE_V1: en и uz — перевод, без кириллицы
     assert.equal(B.crmLineText('2026-11-10'), 'arizadan · 10.11');
   } finally { setLang('ru'); }
 });
+
+// CRM_SMETA_BADGE_V1 (ревью потока E, F7) — значок у пациента — не «живая область» (role="status"): он
+// рисуется при каждой перерисовке сметы, и читалка экрана повторяла бы его на каждое нажатие.
+test('CRM_SMETA_BADGE_V1 (ревью F7): значок у пациента без role="status"', () => {
+  const head = B.crmBookedBadge(['2026-11-10']);
+  assert.equal(head.attrs.role, undefined);
+});
+
+// Ревью потока E (badge-layout) — в смете каталога значок стоит своей строкой под названием: в узкой колонке
+// (ярус цены справа) подпись переносится, а не вылезает за край.
+test('CRM_SMETA_BADGE_V1: значок своей строкой (wrap) переносит подпись и не шире колонки', () => {
+  const w = B.crmLineBadge('2026-11-10', { wrap: true });
+  assert.equal(w.style.whiteSpace, 'normal');
+  assert.equal(w.style.maxWidth, '100%');
+  assert.equal(B.crmLineBadge('2026-11-10').style.whiteSpace, undefined, 'в строке мастера — как чип каталога');
+});

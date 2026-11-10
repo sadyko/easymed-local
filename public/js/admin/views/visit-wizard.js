@@ -1001,11 +1001,18 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             if (!lines.length) return;
 
             const names = [];
+            let dated = false;   // CRM_SMETA_BADGE_V1 (ревью F6)
             for (const ln of lines) {
                 if (!ln.service_id) continue;
                 const svc = wiz.services.find(sv => String(sv.id) === String(ln.service_id));
                 if (!svc) continue;                                  // услуга удалена из каталога после звонка
-                if (wiz.cart.some(c => String(c.svc.id) === String(svc.id))) continue;
+                const inCart = wiz.cart.find(c => String(c.svc.id) === String(svc.id));
+                if (inCart) {
+                    // CRM_SMETA_BADGE_V1 (ревью F6) — строка-пресет «из заявки» (карточка CRM открыла мастер с
+                    // услугой, CRM_CONVERT_V1) без дня: день — из строки заявки, значки сметы — с датой.
+                    if (inCart.fromCrm && !inCart.crmDay && ln.scheduled_date) { inCart.crmDay = ln.scheduled_date; dated = true; }
+                    continue;
+                }
                 if (wiz.bookedTodaySvc && wiz.bookedTodaySvc.has(Number(svc.id))) continue;   // CRM_LINK_ALL_V1 (ред. 2) — уже в визите записи
                 addToCart(svc);
                 const line = wiz.cart.find(c => c.svc.id === svc.id);
@@ -1023,7 +1030,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 }
                 names.push(svc.name);
             }
-            if (!names.length) return;
+            if (!names.length) { if (dated) paint(); return; }   // CRM_SMETA_BADGE_V1 (ревью F6) — день дописан пресету
             paint();
             toast(trf('Из заявки колл-центра на {date}: {names}', { date: dayIso.split('-').reverse().join('.'), names: names.join(', ') }), 'ok');
         } catch (e) {
