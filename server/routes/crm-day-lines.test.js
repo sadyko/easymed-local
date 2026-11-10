@@ -11,9 +11,16 @@
 // Воспроизведения расследования: scratchpad inv-crm/repro-item1b.mjs, repro-item1c.mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startCrmApp, addLead, localDay, at } from '../test-helpers/crm-unify-app.js';
+import { startCrmApp, addLead } from '../test-helpers/crm-unify-app.js';
 import { crmDayLines } from '../services/rpc/crm-day-lines.js';   // ревью — 403 у роли без доступа
+import { openDb } from '../db/connection.js';
 
+// Дни и время — по часам БАЗЫ (SQLite localtime): сервер считает местный день визита SQLite, и
+// проверка поздним вечером (сдвиг часового пояса JS) не должна разводить дни теста и сервера.
+const CLOCK = openDb(':memory:');
+const pad = (n) => String(n).padStart(2, '0');
+const localDay = (off = 0) => CLOCK.prepare("SELECT date('now', 'localtime', ?) AS d").get(off + ' days').d;
+const at = (day, hh, mm = 0) => CLOCK.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?, 'utc') AS t").get(day + ' ' + pad(hh) + ':' + pad(mm) + ':00').t;
 const today = localDay(0);
 const FIELDS = ['consultation_type_id', 'doctor_id', 'id', 'scheduled_date', 'service_id', 'visit_id'];
 const line = (db, rid, { svc = 40, day = today, doctor = null, visit = null, status = 'pending', note = null } = {}) =>
