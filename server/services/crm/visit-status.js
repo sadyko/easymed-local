@@ -392,7 +392,11 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false, fromVis
       // стоит в «Пришёл» и живой не считается — второй раз её не тронут.
       settleLineless(db, { patientId: visit.patient_id, day: visit.day, open, won, write,
         visitCreatedAt: visit.sync_origin == null ? visit.created_at : null });   // CRM_CARD_OWN_BOOKING_V1 (F3)
-      liftMissed(db, { patientId: visit.patient_id, day: visit.day, won, write });   // CRM_UNIFY_V1 (ревью, I-1)
+      // CRM_CARD_OWN_BOOKING_V1 (ревью 3.23.0; решение координатора) — у визита СВОЯ карточка
+      // (строки или привязка записи): приход по нему чужую «Не пришёл» не поднимает — опоздание на
+      // день (I-1, A-P5) — приход, только когда у визита своей карточки нет. Своя карточка в «Не
+      // пришёл» поднята выше (цикл по строкам и привязке).
+      if (!withLinked().length) liftMissed(db, { patientId: visit.patient_id, day: visit.day, won, write });   // CRM_UNIFY_V1 (ревью, I-1)
       return;
     }
 

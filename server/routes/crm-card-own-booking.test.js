@@ -222,3 +222,81 @@ test('окно 72 ч для звонка осталось: повторный з
     assert.deepEqual(t.db.prepare('SELECT id FROM crm_requests').all().map((r) => r.id), [A], 'звонок в окне завёл вторую карточку');
   } finally { t.close(); }
 });
+
+// ─── Ревью 3.23.0 (w23b) ───────────────────────────────────────────────────
+// F2 шире: своя запись карточки бывает и БЕЗ визита — анализ «на дату» (поток A записывает
+// анализы так) или карточка без строк с датой. Чужой визит такую карточку не закрывает.
+for (const [label, withLine] of [['анализ «на дату»', true], ['без строк, только дата карточки', false]]) {
+  for (const path of ['desk', 'wizard', 'calendar-arrived']) {
+    test(`F2 (ревью): у B свой день +3 без визита (${label}) — ${path} сегодня по записи A B не трогает`, async () => {
+      const t = await startCrmApp();
+      try {
+        const { A, vA } = await oldCardBookedToday(t);
+        const B = await newCard(t, { day: D, lines: withLine ? [{ service_id: 40, scheduled_date: D }] : [] });
+        if (path === 'desk') await deskRegister(t, 'reg', { items: [{ svc: 30, doctor: 10 }] });
+        if (path === 'wizard') {
+          const w = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: new Date().toISOString(), doctor_id: 10, visit_type: 'outpatient' });
+          assert.equal(w.status, 200, w.text);
+        }
+        if (path === 'calendar-arrived') {
+          const m = await t.rpc('calendar_book', 'reg', { visit_id: vA, start: at(today, 9), status: 'arrived' });
+          assert.equal(m.status, 200, m.text);
+        }
+        if (path !== 'wizard') assert.equal(st(t, A), 'came@' + today);
+        assert.equal(st(t, B), 'scheduled@' + D, 'визит A тронул карточку B с её собственным днём');
+        assert.notEqual((linkOf(t, vA) || {}).request_id, B, 'визит A привязан к B');
+      } finally { t.close(); }
+    });
+  }
+}
+
+// F3 на стойке: карточку без строк, заведённую ПОСЛЕ визита A (при пациенте), регистрация
+// сегодня по записи A не закрывает — ни окном 72 ч, ни как «без строк».
+test('F3 (ревью): стойка не закрывает карточку без строк, заведённую после визита', async () => {
+  const t = await startCrmApp();
+  try {
+    const { A } = await oldCardBookedToday(t);
+    const B = await newCard(t, {});
+    await deskRegister(t, 'reg', { items: [{ svc: 30, doctor: 10 }] });
+    assert.equal(st(t, A), 'came@' + today);
+    assert.equal(st(t, B), 'in_process@-', 'стойка закрыла обращение, заведённое после визита');
+  } finally { t.close(); }
+});
+
+// Решение координатора (2026-11-10): у визита есть своя карточка (строки или привязка записи) —
+// приход по нему НЕ поднимает ДРУГИЕ карточки из «Не пришёл» в «Пришёл»; опоздание на день
+// (A-P5, I-5) — только когда у визита своей карточки нет.
+async function missedYesterday(t) {
+  const y = localDay(-1);
+  const vY = Number(t.db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (77, 10, ?, 'scheduled', 3)").run(at(y, 9)).lastInsertRowid);
+  const A = addLead(t.db, { status: 'scheduled', date: y, name: 'Пациент Тест', updated: daysAgoIso(2) });
+  t.db.prepare("INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status, doctor_id, visit_id) VALUES (?,30,?,'pending',10,?)").run(A, y, vY);
+  crmNoShowSweep(t.db);
+  assert.equal(st(t, A), 'no_show@' + y);
+  return { A, y };
+}
+for (const path of ['calendar-arrived', 'desk']) {
+  test(`опоздание (ревью): A «Не пришёл» вчера; сегодня приход по записи своей карточки B (${path}) — A остаётся «Не пришёл»`, async () => {
+    const t = await startCrmApp();
+    try {
+      const { A, y } = await missedYesterday(t);
+      const B = await newCard(t, { day: today, lines: [{ service_id: 30, scheduled_date: today, doctor_id: 10 }] });
+      const vB = await bookCard(t, B, today, 15);
+      if (path === 'desk') await deskRegister(t, 'reg', { items: [{ svc: 30, doctor: 10 }] });
+      else {
+        const m = await t.rpc('calendar_book', 'reg', { visit_id: vB, start: at(today, 15), status: 'arrived' });
+        assert.equal(m.status, 200, m.text);
+      }
+      assert.equal(st(t, B).split('@')[0], 'came');
+      assert.equal(st(t, A), 'no_show@' + y, 'приход по записи B поднял чужую «Не пришёл»');
+    } finally { t.close(); }
+  });
+}
+test('опоздание (ревью, контроль): у визита своей карточки нет — «Не пришёл» вчера поднимается приходом сегодня', async () => {
+  const t = await startCrmApp();
+  try {
+    const { A } = await missedYesterday(t);
+    await deskRegister(t, 'reg', { items: [{ svc: 30, doctor: 10 }] });
+    assert.equal(st(t, A).split('@')[0], 'came', 'опоздание на день больше не приход');
+  } finally { t.close(); }
+});

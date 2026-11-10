@@ -304,14 +304,26 @@ export function waitsForDay(db, requestId, day, { undated = false, hours = windo
  * держит эта карточка: ждущей строкой или привязкой записи. Такую карточку посторонний визит
  * не берёт и не закрывает — у неё своя запись (владелец: новая карточка прыгала в «Пришёл»).
  */
+//
+// CRM_CARD_OWN_BOOKING_V1 (ревью 3.23.0) — «СВОЙ ДЕНЬ» БЫВАЕТ И БЕЗ ВИЗИТА: ждущая строка на
+// другой день сегодня или позже (анализ «на дату» — так поток записи ставит лабораторию, без
+// слота и визита), или карточка без строк с датой ПОСЛЕ дня этого визита. Такая карточка ждёт
+// свой день, и чужой визит её не берёт и не закрывает.
 function bookedElsewhereSql(alias = 'r') {
-  return `EXISTS (SELECT 1 FROM visits ob
+  return `(EXISTS (SELECT 1 FROM visits ob
                    WHERE ob.id <> @vid AND ob.patient_id = ${alias}.patient_id
                      AND ${localDate('ob.visit_date')} <> date(@day)
                      AND ${awaitingVisitSql('ob')}
                      AND (ob.id IN (SELECT visit_id FROM crm_request_services
                                      WHERE request_id = ${alias}.id AND status = 'pending' AND visit_id IS NOT NULL)
-                          OR ob.id IN (SELECT visit_id FROM crm_booking_links WHERE request_id = ${alias}.id)))`;
+                          OR ob.id IN (SELECT visit_id FROM crm_booking_links WHERE request_id = ${alias}.id)))
+       OR EXISTS (SELECT 1 FROM crm_request_services od
+                   WHERE od.request_id = ${alias}.id AND od.status = 'pending'
+                     AND od.scheduled_date IS NOT NULL AND od.scheduled_date <> ''
+                     AND date(od.scheduled_date) <> date(@day) AND date(od.scheduled_date) >= date('now', 'localtime'))
+       OR (NOT EXISTS (SELECT 1 FROM crm_request_services op WHERE op.request_id = ${alias}.id AND op.status = 'pending')
+           AND ${alias}.scheduled_date IS NOT NULL AND ${alias}.scheduled_date <> ''
+           AND date(${alias}.scheduled_date) > date(@day)))`;
 }
 
 /**
@@ -400,7 +412,16 @@ export function phoneLeadFor(db, patientId, open, day, { undated = false, accept
 // Владелец: новая карточка B, записанная на послезавтра, уезжала в «Пришёл», когда пациента
 // сегодня регистрировали по записи старой карточки A. Свой день — строка на день визита, дата
 // карточки, привязка к этому визиту — закрывает, как прежде.
-export function deskCloses(db, requestId, v, hours = windowHours(db)) {
+//
+// CRM_CARD_OWN_BOOKING_V1 (ревью 3.23.0):
+//   • F3 и здесь — окном, желанием без даты и опозданием стойка закрывает только карточку,
+//     заведённую не позже самого визита (новое обращение, заведённое при пациенте, — не это).
+//     В ту же секунду — закрывает: на стойке визит обычно заводится в этот самый миг
+//     (пришёл без записи), а звонок, который привёл пациента, был раньше;
+//   • решение координатора — у визита СВОЯ карточка (ownedVisit: его держат строки или привязка
+//     записи) — карточку в «Не пришёл» стойка этим визитом не поднимает (ни окном, ни опозданием):
+//     опоздание на день — приход, только когда у визита своей карточки нет.
+export function deskCloses(db, requestId, v, hours = windowHours(db), { ownedVisit = false } = {}) {
   return !!db.prepare(`
     SELECT 1 FROM crm_requests r
      WHERE r.id = @rid
@@ -409,13 +430,24 @@ export function deskCloses(db, requestId, v, hours = windowHours(db)) {
             OR date(r.scheduled_date) = date(@day)
             OR EXISTS (SELECT 1 FROM crm_booking_links b WHERE b.request_id = r.id AND b.visit_id = @vid)
             OR (NOT ${bookedElsewhereSql('r')}
+                AND (@vcreated IS NULL OR julianday(r.created_at) <= julianday(@vcreated))
+                ${ownedVisit ? 'AND r.status IS NOT @lateNoShow' : ''}
                 AND (EXISTS (SELECT 1 FROM crm_request_services l
                               WHERE l.request_id = r.id AND l.status = 'pending'
                                 AND (l.scheduled_date IS NULL OR l.scheduled_date = ''))
                      OR ${inWindowSql('r').replace('?', '@win')}
                      OR ${missedRecentlySql('r')})))`)   // CRM_UNIFY_V1 (ревью, I-5; финальное ревью) — опоздал на день: одно правило
     .get({ rid: requestId, day: v.day, vid: v.id, win: windowArg(hours),   // CRM_UNIFY_V1 (задача 6) — одно правило окна
+      vcreated: visitCreatedAt(db, v.id),   // CRM_CARD_OWN_BOOKING_V1 (ревью) — F3 на стойке
       ...missedRecentlyArgs(v.day, hours, noShowStageKey(db)) });   // CRM_STAGE_ROLES_V1 — колонка «Не пришёл» — роль
+}
+
+/** CRM_CARD_OWN_BOOKING_V1 (ревью) — когда заведён визит (null — не знаем: визит соседнего здания, старая база). */
+function visitCreatedAt(db, visitId) {
+  try {
+    const r = db.prepare("SELECT NULLIF(created_at, '') AS c, sync_origin FROM visits WHERE id = ?").get(visitId);
+    return r && r.sync_origin == null ? r.c : null;
+  } catch { return null; }
 }
 
 /**
@@ -652,12 +684,15 @@ function linkTx(db, v, user, { undated, arrived, desk, ownCard = null }) {
   //    шаг G переводит её в «Колонку записи». Давнюю — нет (колл-центру её
   //    возвращает в начало шаг E).
   const hours = windowHours(db);
-  const closes = (id) => deskCloses(db, id, v, hours);
+
   const rebook = !desk && v.day >= today(db);
   const missed = (r) => !!noShow && r.status === noShow && (desk || rebook);   // CRM_STAGE_ROLES_V1
   // CRM_CARD_OWN_BOOKING_V1 (F4) — вне стойки визит уже чей-то (строки этого дня, держатель):
   // других карточек шаг C не берёт; иначе — одну, двигавшуюся последней.
   const owned = [...touched.values()].some((via) => via === 'lines' || via === 'held');
+  // CRM_CARD_OWN_BOOKING_V1 (ревью; решение координатора) — у визита своя карточка: чужую «Не пришёл»
+  // стойка не поднимает (deskCloses ownedVisit).
+  const closes = (id) => deskCloses(db, id, v, hours, { ownedVisit: owned });
   const waiting = [];
   for (const r of mine) {
     if (touched.has(r.id) || (!open.includes(r.status) && !missed(r))) continue;
