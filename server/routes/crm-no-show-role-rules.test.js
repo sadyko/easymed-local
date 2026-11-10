@@ -59,3 +59,28 @@ test('F1: с открытой колонкой «Не пришёл» новая 
     assert.equal(t.lead(lead.json.data.id).patient_id, pat.json.data.id, 'новая заявка не нашла новую карту пациента');
   } finally { t.close(); }
 });
+
+// Проба probe-role-move.mjs — карточка, которую проход вчера поставил в «Не пришёл», после переноса роли
+// не теряется: она в новой колонке «Не пришёл», для повторного обращения и сметы дня — живая, как прежде.
+test('F2: перенос «не пришёл» в пустую открытую колонку — карточки прежней «Не пришёл» едут за ролью; в колонку с карточками — отказ', async () => {
+  const t = await startCrmApp();
+  try {
+    const yday = t.db.prepare("SELECT date('now','localtime','-1 day') d").get().d;
+    const missed = Number(t.db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, patient_id, scheduled_date, updated_at) VALUES ('Пациент Тест', '+998 90 909 26 38', 'call', 'no_show', 77, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 hour'))")
+      .run(yday).lastInsertRowid);
+    t.db.prepare("INSERT INTO crm_request_services (request_id, service_id, status) VALUES (?, 30, 'pending')").run(missed);
+    t.db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Другой', '+998 91 000 00 01', 'call', 'stopped')").run();
+    const busy = await saveRoles(t, { no_show: null, stopped: 'no_show' });
+    assert.equal(busy.status, 409, busy.text);
+    assert.equal(busy.json.error.message, 'В колонке «Обработка остановлена» есть карточки (1) — сначала перенесите их.');
+    assert.equal(t.lead(missed).status, 'no_show');
+    const ok = await saveRoles(t, { no_show: null, missed: 'no_show' }, [MISSED]);
+    assert.equal(ok.status, 200, ok.text);
+    assert.equal(t.lead(missed).status, 'missed', 'карточка прежней «Не пришёл» осталась в колонке без роли');
+    // Пациент перезвонил — та же карточка (живая), смета дня видит её строку.
+    const { contactDecision } = await import('../services/crm/contact-window.js');
+    const { stepACards } = await import('../services/crm/visit-link.js');
+    assert.equal(contactDecision(t.db, [missed]).action, 'same');
+    assert.deepEqual(stepACards(t.db, 77).map((r) => r.id), [missed]);
+  } finally { t.close(); }
+});

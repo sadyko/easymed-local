@@ -554,6 +554,36 @@ test('CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1): в открытую колон�
   db.close();
 });
 
+// CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F2, решение координатора) — РОЛЬ «НЕ ПРИШЁЛ» ПЕРЕЕЗЖАЕТ С КАРТОЧКАМИ, КАК
+// КОНВЕРСИЯ: новая колонка обязана быть пустой (иначе её живые карточки молча стали бы неявками), а
+// карточки прежней колонки «Не пришёл» переезжают в новую той же правкой, updated_at не меняется.
+test('CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F2): перенос «не пришёл» — колонка пустая, карточки прежней «Не пришёл» едут за ролью', () => {
+  const db = fresh();
+  withMissed(db);
+  const stale = '2026-01-01T00:00:00Z';
+  const ins = db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, updated_at) VALUES ('Л', '+998 90 000 00 09', 'call', ?, ?)");
+  const a = Number(ins.run('no_show', stale).lastInsertRowid);
+  const b = Number(ins.run('no_show', stale).lastInsertRowid);
+  const stop = Number(ins.run('stopped', stale).lastInsertRowid);
+  // Колонка с карточками — отказ 409 с числом; ничего не сдвинуто.
+  const before = JSON.stringify(listStages(db));
+  const e = refused(() => saveStages(db, withRoles(db, { no_show: null, stopped: 'no_show' })));
+  assert.equal(e.status, 409);
+  assert.equal(e.message, 'В колонке «Обработка остановлена» есть карточки (1) — сначала перенесите их.');
+  assert.equal(JSON.stringify(listStages(db)), before);
+  // Пустая — роль переезжает, карточки прежней «Не пришёл» — за ней, без движения updated_at.
+  saveStages(db, withRoles(db, { no_show: null, missed: 'no_show' }));
+  assert.equal(noShowStageKey(db), 'missed');
+  const st = (id) => db.prepare('SELECT status, updated_at FROM crm_requests WHERE id = ?').get(id);
+  assert.deepEqual([st(a), st(b)], [{ status: 'missed', updated_at: stale }, { status: 'missed', updated_at: stale }]);
+  assert.equal(st(stop).status, 'stopped', 'чужая проигрышная тронута');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM crm_requests WHERE status = 'no_show'").get().n, 0, 'прежняя «Не пришёл» не опустела');
+  // Роль сняли совсем — карточки остаются, где стоят.
+  saveStages(db, withRoles(db, { missed: null }));
+  assert.equal(st(a).status, 'missed');
+  db.close();
+});
+
 test('crm_settings.booked_stage больше не читается', () => {
   const db = fresh();
   db.prepare("UPDATE crm_settings SET booked_stage = 'recall' WHERE id = 1").run();

@@ -717,6 +717,22 @@ export function saveStages(db, stages) {
   const why = roleRefusal(wanted, prevStages, { routed: routedStageKeys(db) });   // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F1) — и правила звонков
   if (why) throw roleRefusalError(why);
 
+  // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F2, решение координатора) — РОЛЬ «НЕ ПРИШЁЛ» ПЕРЕЕЗЖАЕТ С КАРТОЧКАМИ,
+  // как конверсия (saveCrmSettings): новая колонка обязана быть ПУСТОЙ (любого вида) — иначе её карточки
+  // молча стали бы неявками (живые обратные звонки — «потеряно» в отчётах); карточки прежней колонки
+  // «Не пришёл» той же правкой переезжают в новую (updated_at не меняется — это не контакт), чтобы
+  // вчерашние неявки не застряли в колонке, которая больше ничего не значит.
+  const prevNoShow = roleKey(prevStages, 'no_show');
+  const nextNoShow = roleKey(wanted, 'no_show');
+  const noShowMoves = !!nextNoShow && nextNoShow !== prevNoShow;
+  if (noShowMoves) {
+    const n = leadCount.get(nextNoShow).n;
+    if (n) {
+      const label = (wanted.find((s) => s.key === nextNoShow) || {}).label || nextNoShow;
+      throw rpcT(CrmConfigError, 'В колонке «{label}» есть карточки ({n}) — сначала перенесите их.', { label, n }, 409);
+    }
+  }
+
   // CRM_UNIFY_V1 — kind пишется только у НОВОЙ строки; у существующей его не
   // трогает и правка (ON CONFLICT … без kind). Снимать won со всех колонок перед
   // записью (как раньше) больше незачем: здесь он не переезжает никогда.
@@ -744,6 +760,10 @@ export function saveStages(db, stages) {
     // CRM_STAGE_ROLES_V1 — роли колонок (прежде здесь стирался ставший недопустимым выбор
     // crm_settings.booked_stage; теперь такая правка — отказ выше, и выбор не читается).
     writeRoles(db, wanted);
+    // CRM_NO_SHOW_ANY_COLUMN_V1 (ревью F2) — карточки прежней «Не пришёл» — за ролью (updated_at прежний).
+    if (noShowMoves && prevNoShow && seen.has(prevNoShow)) {
+      db.prepare('UPDATE crm_requests SET status = ? WHERE status = ?').run(nextNoShow, prevNoShow);
+    }
   })();
 
   return listStages(db);
