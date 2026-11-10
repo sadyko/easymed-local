@@ -82,6 +82,7 @@ import { packageItemName, packageLabel, printInvoiceSheetById } from './receipt-
 import { invoiceAppendNote } from '../invoice-append.js';
 import { groupOf, discountChoiceOptions, defaultChoiceKey, keepChoice, choiceArgs, choiceReason, choiceToSend } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор
 import { discountValue, localYmd } from '../discount-rules.js';   // DISCOUNT_V2 — стоимость промокода на смете                      // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
+import { tierChipNodes } from './tier-chip.js';   // VISIT_TIER_SHOWN_CASHIER_V1 — «Второй визит» / «Повторный визит» у строки после записи
 import { ratedOutcome } from '../discount-rates.js';   // DISCOUNT_RATES_V1 — скидка по ставкам услуг, как посчитает счёт
 
 /** Разряды тысяч пробелом — так цену читают во всех экранах продукта. */
@@ -443,6 +444,26 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         return Number(row && row.service.price) || 0;
     }
 
+    /**
+     * VISIT_TIER_SHOWN_CASHIER_V1 — после записи строка второго / повторного визита
+     * говорит, почему цена ниже прайса: чип яруса (как в мастере визита), подсказка
+     * с днями и ценой первого визита и зачёркнутая цена первого визита. Ответ — в
+     * виде строки кассы (tier-chip.js). Цена первого визита — из котировки
+     * (base_price: своя цена врача или каталог) и только если счёт взял именно
+     * котировку: иначе к сумме строки она не относится, и чип остаётся без неё.
+     * Строка пакета — без чипа: её цену задаёт пакет.
+     */
+    function rowTier(i) {
+        const line = savedLine(i);
+        const row = state.rows[i];
+        if (!line || !line.tierQuote || (line.tier !== 'secondary' && line.tier !== 'repeat')) return null;
+        if (row && row.package && row.package.full != null && row.package.price != null) return null;
+        const price = rowPrice(i);
+        const q = line.tierQuote;
+        const same = q.price != null && Number.isFinite(Number(q.price)) && Math.abs(Number(q.price) - price) < 0.005;
+        return { tier: line.tier, price, quantity: 1, first_price: same ? q.first_price : null, days_since: q.days_since };
+    }
+
     // SERVICES_PACKAGES_V1 — до записи: скидка строк пакета (до цены в пакете) —
     // её даст счёт наверняка; скидку группы пациента посчитает сервер.
     function packageOffBefore() {
@@ -614,6 +635,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         }
         state.rows.forEach((row, i) => {
             const price = rowPrice(i);
+            const tierNodes = tierChipNodes(rowTier(i), fmtPrice);   // VISIT_TIER_SHOWN_CASHIER_V1
             const pkgName = packageLabel(row.package);   // CLINIC_API_FIX_V1 — правило бланка
             tbody.appendChild(h('tr', null,
                 h('td', { class: 'muted' }, String(i + 1)),
@@ -642,7 +664,10 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                     pkgName ? h('div', { 'data-package-line': String(row.package.id), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px' } },
                         row.package.price != null
                             ? trf('Пакет «{name}»: в пакете {sum} сум', { name: pkgName, sum: fmtPrice(row.package.price) })
-                            : trf('Пакет «{name}»', { name: pkgName })) : null),
+                            : trf('Пакет «{name}»', { name: pkgName })) : null,
+                    // VISIT_TIER_SHOWN_CASHIER_V1 — «Второй визит» / «Повторный визит» и зачёркнутая цена первого визита.
+                    tierNodes.length ? h('div', { 'data-tier-row': String(i), style: { fontWeight: '400', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+                        ...tierNodes) : null),
                 h('td', null, fmtPrice(netOfVat(price, row.service.tax_rate))),
                 h('td', { class: 'cell-strong' }, fmtPrice(price)),
                 doctorCell(row),

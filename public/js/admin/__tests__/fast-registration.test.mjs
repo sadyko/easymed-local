@@ -1701,3 +1701,108 @@ test('DISCOUNT_RATES_V1: группа «Сотрудники» со ставко
   assert.deepEqual([inv.body.discount_choice, inv.body.discount_amount], ['group', 0]);
   dlg.close();
 });
+
+// ===========================================================================
+// VISIT_TIER_SHOWN_CASHIER_V1 (2026-11-10) — ЧИП «ВТОРОЙ ВИЗИТ» В БЫСТРОЙ РЕГИСТРАЦИИ.
+//
+// Владелец: убедиться, что изменение цены по счёту визита видят касса и
+// регистратура. После записи таблица показывает цену счёта (тариф визита вернул
+// её построчно), но не говорила, ПОЧЕМУ она ниже прайса. Теперь у строки второго /
+// повторного визита — тот же чип, что в мастере (wzc-tier), подсказка с днями и
+// ценой первого визита и зачёркнутая цена первого визита. Проверка — на русском и
+// на английском экране.
+// ===========================================================================
+async function saveWithTier(dlg, { packaged = false } = {}) {
+  fillMinimum(dlg);
+  if (packaged) dlg.state.applyTemplate(OSEN(20));
+  else {
+    const row = dlg.state.addLine(SERVICES[0], null);
+    row.sel.value = '7';
+    row.sel.fireChange();
+    dlg.state.addLine(SERVICES[1], null);
+  }
+  if (packaged) { const row = dlg.state.rows[0]; row.sel.value = '7'; row.sel.fireChange(); }
+  dlg.saveBtn.click();
+  await tick(80);
+  assert.ok(dlg.state.result, 'регистрация не прошла — проверяется не то');
+}
+const tierChips = (root) => walk(root).filter((n) => n.className === 'wzc-tier');
+const tierStruck = (root) => walk(root).filter((n) => n.tagName === 'S' && n.attrs['data-tier-first'] !== undefined);
+const CYRILLIC = /[А-Яа-яЁё]/;
+
+for (const lang of ['ru', 'en']) {
+  test(`VISIT_TIER_SHOWN_CASHIER_V1 [${lang}]: после записи у строки второго визита — чип, подсказка и зачёркнутая цена первого визита; до записи и у первичной строки — ничего`, async () => {
+    reset();
+    globalThis.CustomEvent = globalThis.CustomEvent || class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } };
+    const { setLang } = await import('../i18n.js');
+    setLang(lang);
+    try {
+      quotes = { 1: { price: 60000, tier: 'secondary', base_price: 112000, days_since: 3 }, 2: { price: 40000, tier: 'primary', base_price: 40000 } };
+      invoiceTotal = 100000;
+      const dlg = openFastRegistrationDialog({});
+      await tick(40);
+      fillMinimum(dlg);
+      const row = dlg.state.addLine(SERVICES[0], null);
+      row.sel.value = '7';
+      row.sel.fireChange();
+      dlg.state.addLine(SERVICES[1], null);
+      assert.equal(tierChips(dlg.table).length, 0, 'до записи цены — каталог, чипа нет');
+      dlg.saveBtn.click();
+      await tick(80);
+      assert.ok(dlg.state.result, 'регистрация не прошла');
+
+      // Строки по порядку: названия услуг словарь тоже переводит.
+      const [consult, lab] = rowsOf(dlg);
+      const [chip] = tierChips(consult);
+      assert.ok(chip, 'нет чипа у строки второго визита');
+      assert.equal(textOf(chip).trim(), lang === 'ru' ? 'Второй визит' : 'Second visit');
+      assert.equal(chip.attrs.title, lang === 'ru'
+        ? 'Прошлый визит по этой услуге — 3 дн. назад. Цена первого визита: 112 000'
+        : 'Last visit for this service was 3 days ago. First-visit price: 112 000');
+      const [s] = tierStruck(consult);
+      assert.ok(s, 'нет зачёркнутой цены первого визита');
+      assert.equal(textOf(s).trim(), '112 000');
+      const cells = cellsOf(consult).map((c) => textOf(c).replace(/\s+/g, ' ').trim());
+      assert.equal(cells[3], '60 000', 'в «С НДС» — одна цена счёта: ' + cells[3]);
+      assert.equal(tierChips(lab).length, 0, 'у первичной строки чипа нет');
+      if (lang === 'en') assert.ok(!CYRILLIC.test(textOf(chip) + chip.attrs.title), 'кириллица на английском экране');
+      dlg.close();
+    } finally { setLang('ru'); }
+  });
+}
+
+test('VISIT_TIER_SHOWN_CASHIER_V1: счёт взял другую цену, чем котировка — чип остаётся, цену первого визита не зачёркиваем', async () => {
+  reset();
+  quotes = { 1: { price: 60000, tier: 'secondary', base_price: 112000, days_since: 3 }, 2: { price: 40000, tier: 'primary' } };
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  // Счёт сервера: у первой строки 70 000 (не котировка), у второй — 40 000.
+  holdRpc = null;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).startsWith('/api/rpc/create_invoice_for_visit')) {
+      calls.push({ kind: 'rpc', name: 'create_invoice_for_visit', body: JSON.parse(opts.body) });
+      return { ok: true, status: 200, json: async () => ({ data: { invoice: { id: 9, invoice_number: 'INV-9', total_amount: 110000 },
+        items: [{ id: 1, unit_price: 70000 }, { id: 2, unit_price: 40000 }] } }) };
+    }
+    return origFetch(url, opts);
+  };
+  try {
+    await saveWithTier(dlg);
+  } finally { globalThis.fetch = origFetch; }
+  const [consult] = rowsOf(dlg).filter((r) => textOf(r).includes('Приём терапевта'));
+  assert.equal(tierChips(consult).length, 1, 'чип остаётся: ярус записан в строке');
+  assert.equal(tierStruck(consult).length, 0, 'цена счёта не котировка — цена первого визита к ней не относится');
+  assert.ok(cellsOf(consult)[3] && textOf(cellsOf(consult)[3]).includes('70 000'));
+  dlg.close();
+});
+
+test('VISIT_TIER_SHOWN_CASHIER_V1: строка пакета — без чипа (её цену задаёт пакет, а не ярус)', async () => {
+  reset();
+  quotes = { 1: { price: 60000, tier: 'secondary', base_price: 112000, days_since: 3 } };
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  await saveWithTier(dlg, { packaged: true });
+  assert.equal(tierChips(dlg.table).length, 0, 'у строки пакета чипа нет');
+  dlg.close();
+});
