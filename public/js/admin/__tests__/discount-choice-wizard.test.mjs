@@ -339,4 +339,75 @@ test('ревью S1 L-3: группа не прочиталась, регист�
   assert.equal(money()[0].discount_amount, 0);
 });
 
+// DISCOUNT_HINT_TRUE_V1 (3.23.0, снимок 68) — ПОДСКАЗКА, ВЫБОР, ПОЛЕ И ИТОГ ГОВОРЯТ ОДНО. На снимке
+// «Скидка группы «vip» — 20% подставлена; можно изменить.» стояла под выбором «Без скидки», полем 0
+// и итогом 80 000: подсказку рисовали по группе пациента, не глядя на выбор. Числа владельца:
+// консультация 80 000, группа 20 % — со скидкой группы 64 000, без скидки 80 000.
+const categoryNote = () => { const el = byAttr(overlay(), 'data-category-note'); return el ? textOf(el).replace(/\s+/g, ' ').trim() : ''; };
+const discPctInput = () => walk(overlay()).find((n) => n.tagName === 'INPUT' && n.max === '100');
+const totalShown = () => { const el = walk(overlay()).find((n) => n.tagName === 'SPAN' && n.style && n.style.fontSize === '20px'); return el ? textOf(el).replace(/\s+/g, ' ').trim() : ''; };
+async function typeManual(v) {
+  const inp = discPctInput();
+  inp.value = String(v);
+  inp.dispatchEvent({ type: 'input', target: inp, currentTarget: inp });
+  await flush(5);
+}
+
+test('DISCOUNT_HINT_TRUE_V1: VIP 20 %, 80 000 — подсказка следует выбору: группа / «Без скидки» / своя / промокод / снова группа; счёт — по выбору', async () => {
+  seed({ todayOff: false, from: '00:00', to: '23:59' });
+  DB.prepare("INSERT INTO services (id, name, price, requires_doctor) VALUES (24,'Вторичная консультация невролога',80000,0)").run();
+  DB.prepare("INSERT INTO patient_discounts (name, kind, percent, amount, active) VALUES ('ЛЕТО', 'promo', 15, 0, 1)").run();
+  vipPatient(20);
+  await openWizard([24]);
+  // По умолчанию — скидка группы, и всё об этом.
+  assert.equal(choiceSel().value, 'group');
+  assert.equal(discPctInput().value, '20');
+  assert.equal(categoryNote(), 'Скидка группы «VIP» — 20% подставлена; можно изменить.');
+  assert.equal(totalShown(), '64 000 сум');
+
+  // «Без скидки» — поле 0, итог 80 000, и подсказка говорит, что скидка группы НЕ применена.
+  await choose('Без скидки');
+  assert.equal(choiceSel().value, 'none');
+  assert.equal(discPctInput().value, '0');
+  assert.equal(totalShown(), '80 000 сум');
+  assert.equal(categoryNote(), 'Скидка группы «VIP» (20%) не применена — выбрано «Без скидки».', 'подсказка спорит с выбором (снимок 68)');
+
+  // Своя скидка 5 % — счёт не даст меньше скидки группы: итог 64 000, подсказка об этом.
+  await typeManual(5);
+  assert.equal(choiceSel().value, 'manual');
+  assert.equal(totalShown(), '64 000 сум');
+  assert.equal(categoryNote(), 'Скидка группы «VIP» — 20%: меньше неё счёт не даст.');
+
+  // Промокод 15 % — одна скидка, группа не ложится: 68 000.
+  await choose('ЛЕТО');
+  assert.equal(totalShown(), '68 000 сум');
+  assert.equal(categoryNote(), 'Скидка группы «VIP» (20%) не применена — выбран промокод, скидки не складываются.');
+
+  // Снова группа.
+  await choose('Скидка группы');
+  assert.equal(discPctInput().value, '20');
+  assert.equal(totalShown(), '64 000 сум');
+  assert.equal(categoryNote(), 'Скидка группы «VIP» — 20% подставлена; можно изменить.');
+
+  // И «Без скидки» до конца: счёт без скидки, как обещали подсказка и итог.
+  await choose('Без скидки');
+  await pressUntilCreate();
+  assert.equal(invoiceCall().body.discount_choice, 'none');
+  const [inv] = money();
+  assert.deepEqual([inv.subtotal, inv.discount_amount, inv.total_amount, inv.discount_source], [80000, 0, 80000, 'none']);
+});
+
+test('DISCOUNT_HINT_TRUE_V1: подсказка после перерисовки (шаг «Далее» и обратно) — по сохранённому выбору', async () => {
+  seed({ todayOff: false, from: '00:00', to: '23:59' });
+  DB.prepare("INSERT INTO services (id, name, price, requires_doctor) VALUES (24,'Вторичная консультация невролога',80000,0)").run();
+  vipPatient(20);
+  await openWizard([24]);
+  await choose('Без скидки');
+  // Полная перерисовка окна (смена плательщика перерисовывает смету целиком).
+  const self = walk(overlay()).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Пациент'));
+  if (self) { self.click(); await flush(10); }
+  assert.equal(choiceSel().value, 'none');
+  assert.equal(categoryNote(), 'Скидка группы «VIP» (20%) не применена — выбрано «Без скидки».');
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });
