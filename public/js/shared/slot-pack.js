@@ -158,10 +158,18 @@ function hhmm(v) {
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;
 }
 
-/** Занятость {from:'ЧЧ:ММ', to:'ЧЧ:ММ'} → минуты; приём через полночь — до конца суток. */
+/**
+ * Занятость → минуты дня. SLOT_PACK_V1 (ревью L6) — сервер шлёт и минуты ЭТОГО дня
+ * (from_min / to_min, зажатые сутками): приём, начавшийся вчера в 23:40, занимает
+ * сегодня 00:00–00:10. Без них — ЧЧ:ММ; конец раньше начала — до конца суток.
+ */
 export function busyMinutes(list) {
   const out = [];
   for (const b of list || []) {
+    if (b && Number.isFinite(b.from_min) && Number.isFinite(b.to_min)) {
+      if (b.to_min > b.from_min) out.push({ from: b.from_min, to: b.to_min });
+      continue;
+    }
     const from = typeof (b && b.from) === 'number' ? b.from : hhmm(b && b.from);
     let to = typeof (b && b.to) === 'number' ? b.to : hhmm(b && b.to);
     if (from == null || to == null) continue;

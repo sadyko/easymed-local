@@ -188,14 +188,24 @@ export function dayVisitOf(db, patientId, day) {
 // Перенос на другое время — только book с другим временем, то есть явный выбор
 // «Перенести запись на …» в окне.
 
-/** args.join → { doctorId, startMs, addMin } или null (мусор — обычный ensure_visit без времени). */
+/**
+ * args.join → { doctorId, startMs, lines, explicit } или null (мусор — обычный
+ * ensure_visit без времени). lines — присоединяемые услуги по коду (ревью M2: длина
+ * записи считается из её строк, повтор не растит); duration_minutes без строк —
+ * длительность как есть.
+ */
 function parseJoin(join) {
   if (!join || typeof join !== 'object') return null;
   const doctorId = Number(join.doctor_id);
   const startMs = Date.parse(String(join.start || ''));
   if (!isPositiveInt(doctorId) || Number.isNaN(startMs)) return null;
+  const lines = (Array.isArray(join.lines) ? join.lines : []).slice(0, 50).map((l) => ({
+    serviceId: l && isPositiveInt(Number(l.service_id)) ? Number(l.service_id) : null,
+    consultationTypeId: l && !(isPositiveInt(Number(l.service_id))) && isPositiveInt(Number(l.consultation_type_id)) ? Number(l.consultation_type_id) : null,
+  })).filter((l) => l.serviceId || l.consultationTypeId);
   const dur = Math.round(Number(join.duration_minutes));
-  return { doctorId, startMs, addMin: Number.isFinite(dur) && dur > 0 ? Math.min(dur, 12 * 60) : 0 };
+  if (!lines.length && Number.isFinite(dur) && dur > 0) lines.push({ minutes: Math.min(dur, 12 * 60) });
+  return { doctorId, startMs, lines, explicit: true };
 }
 
 /** Запись, к которой присоединяют: визит того же врача, на ту же минуту, ещё до прихода (calendar.js). */
@@ -203,10 +213,24 @@ const isJoinTarget = (visit, { doctorId, startMs }) => isSameBooking(visit, doct
 
 /** Ответ ensure_visit на присоединение: тот же визит, время записи держит она сама. */
 async function finishJoin(db, user, out, join, { desk }) {
-  const ext = await extendBookingForJoin(db, user, out.visit, join.addMin);   // JOIN_EXTENDS_BOOKING_V1
+  const ext = await extendBookingForJoin(db, user, out.visit, join.lines);   // JOIN_EXTENDS_BOOKING_V1 · ревью M2
   const visit = ext.visit || out.visit;
   crmLinkVisit(db, visit.id, user, { undated: true, desk });   // CRM_UNIFY_V1 — как у ensure_visit без book
-  return { visit, created: false, booked: true, joined: true, extended: ext.extended, ends: ext.ends, next: ext.next };
+  return { visit, created: false, booked: true, joined: true, extended: ext.extended, ends: ext.ends, next: ext.next, until: ext.until };
+}
+
+/**
+ * CRM_JOIN_NOT_MOVE_V1 (ревью M4) — ЗАПИСЬ ИЗМЕНИЛАСЬ, ПОКА ОКНО БЫЛО ОТКРЫТО: окно
+ * присоединяло к записи, которой больше нет (отменили) или которая стоит на
+ * другом времени / у другого врача. Новый визит не заводится и чужое время не
+ * занимается — экран просит выбрать время ещё раз. Пришедший пациент (тот же врач
+ * и время) — не «изменилась»: услуга идёт в его визит дня, как прежде.
+ */
+function joinTargetGone(dayVisit, join) {
+  if (!dayVisit) return true;
+  if (Number(dayVisit.doctor_id) !== Number(join.doctorId)) return true;
+  const vMs = Date.parse(dayVisit.visit_date);
+  return !Number.isFinite(vMs) || Math.floor(vMs / 60000) !== Math.floor(join.startMs / 60000);
 }
 
 // args: { patient_id, date (ISO datetime or YYYY-MM-DD), doctor_id?,
@@ -293,9 +317,15 @@ export async function ensureVisit(db, args, user, internal = {}) {
   // время записи того же врача (до прихода). Такой book — не запись и не перенос.
   const joinAsk = parseJoin(args && args.join)
     || (bookAsked && isJoinTarget(dayVisitOf(db, patientId, day), bookAsked)
-      ? { doctorId: bookAsked.doctorId, startMs: bookAsked.startMs, addMin: bookAsked.durationMin || bookDuration(db, bookAsked.serviceId) }
+      ? { doctorId: bookAsked.doctorId, startMs: bookAsked.startMs,
+          lines: bookAsked.serviceId ? [{ serviceId: bookAsked.serviceId }] : [{ minutes: bookAsked.durationMin || bookDuration(db, null) }] }
       : null);
   const book = joinAsk ? null : bookAsked;
+  // ревью M4 — явная просьба присоединить, а записи (того врача, на то время) уже нет.
+  if (joinAsk && joinAsk.explicit && joinTargetGone(dayVisitOf(db, patientId, day), joinAsk)) {
+    // i18n-exempt: сообщение сервера; экран переводит его по коду join_target_gone.
+    throw new RpcError('Запись изменилась, пока окно было открыто — выберите время ещё раз.', 409, 'join_target_gone');
+  }
   // CRM_LINK_ALL_V1 (R3; решение D2) — мастер на сегодня «сейчас» шлёт desk и с
   // записью на время: верим, только если слот начинается не позже чем через
   // DESK_NOW_MINUTES минут (то же правило, что у экрана, wizard-desk.js).
@@ -440,13 +470,17 @@ export async function ensureVisit(db, args, user, internal = {}) {
       doctor_name: (wasDoctor && wasDoctor.full_name) || '',
     };
     try {
+      // JOIN_EXTENDS_BOOKING_V1 (ревью M3) — перенос записи сохраняет её полную длину:
+      // удлинённая присоединением запись не обрезается до длительности головной услуги.
+      const askedDur = book.durationMin || (out.created ? undefined : bookDuration(db, book.serviceId));
+      const bookDur = out.created || !askedDur ? askedDur : Math.max(askedDur, Number(out.visit.duration_minutes) || 0);
       const bk = await calendarBook(db, {
         visit_id: out.visit.id,
         doctor_id: book.doctorId,
         service_id: book.serviceId || undefined,
         room_id: book.roomId || undefined,
         start: new Date(book.startMs).toISOString(),
-        duration_minutes: book.durationMin || undefined,
+        duration_minutes: bookDur || undefined,
         emergency: book.emergency || undefined,
         emergency_reason: book.reason || undefined,
       }, user, { excludeHoldId });   // PUBLIC_API_V1

@@ -257,3 +257,14 @@ test('SLOT_PACK_V1: startFits — выбранное время помещает
   assert.equal(startFits({ segments: DAY_9_18, busy: OWNER_BUSY, durationMin: 30, startMin: hm('08:30') }), false, 'до начала приёма');
   assert.equal(startFits({ segments: DAY_9_18, busy: [], durationMin: 30, startMin: hm('10:00'), minStartMin: hm('10:10') }), false);
 });
+
+test('SLOT_PACK_V1 (ревью L6): busyMinutes экрана берёт минуты дня (from_min/to_min), если сервер их прислал', async () => {
+  const { busyMinutes, packedDayStarts } = await import('../../../public/js/shared/slot-pack.js');
+  assert.deepEqual(busyMinutes([{ from: '23:40', to: '00:10', from_min: 0, to_min: 10 }]), [{ from: 0, to: 10 }]);
+  assert.deepEqual(busyMinutes([{ from: '10:00', to: '10:30' }]), [{ from: 600, to: 630 }]);
+  const day = { window: { from: '00:00', to: '23:59', breaks: [] }, busy: [{ from: '23:40', to: '00:10', from_min: 0, to_min: 10 }],
+    slots: [{ start: '00:10' }], min_start: null };
+  const starts = packedDayStarts(day, 10, [{ from: 100, to: 110 }]);
+  assert.equal(starts[0], 10, 'приём через полночь закрыл не начало суток');
+  assert.ok(starts.includes(23 * 60 + 40), 'конец суток закрыт приёмом, который был вчера');
+});

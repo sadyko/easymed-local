@@ -85,7 +85,7 @@ test('CRM_JOIN_NOT_MOVE_V1: карточка CRM — ЭКГ к тому же в�
   const { vid: bid } = await crmCardBook(t, rid, D, 'cc', { hour: 10 });
   assert.equal(visitRow(bid).duration_minutes, 30);
   const ev = ok(await t.rpc('ensure_visit', 'cc', { patient_id: PID, date: at(D, 10), doctor_id: 10,
-    join: { doctor_id: 10, start: at(D, 10), duration_minutes: 30 } }), 'ensure_visit join');
+    join: { doctor_id: 10, start: at(D, 10), lines: [{ service_id: 31 }] } }), 'ensure_visit join');
   assert.equal(ev.visit.id, bid, 'услуга ушла не в визит записи');
   assert.equal(ev.joined, true, 'ответ не назвал присоединение');
   assert.ok(!ev.moved, 'запись перенесена');
@@ -114,7 +114,7 @@ test('JOIN_EXTENDS_BOOKING_V1: следующая запись раньше ко
   const { vid: bid } = await crmCardBook(t, rid, D, 'cc', { hour: 10 });
   otherBooking(D, 10, 40);
   const ev = ok(await t.rpc('ensure_visit', 'cc', { patient_id: PID, date: at(D, 10), doctor_id: 10,
-    join: { doctor_id: 10, start: at(D, 10), duration_minutes: 30 } }), 'ensure_visit join');
+    join: { doctor_id: 10, start: at(D, 10), lines: [{ service_id: 31 }] } }), 'ensure_visit join');
   assert.equal(ev.visit.id, bid);
   assert.equal(ev.joined, true);
   assert.equal(ev.extended, false);
@@ -134,14 +134,90 @@ test('CRM_JOIN_NOT_MOVE_V1: другое время того же врача —
   assert.equal(hm(visitRow(bid).visit_date), '09:30');
 });
 
-test('CRM_JOIN_NOT_MOVE_V1: join, а записи уже нет (отменили) — визит дня без времени, ничего не удлиняется', async () => {
+// CRM_JOIN_NOT_MOVE_V1 (ревью M4) — запись, к которой присоединяли, отменили или перенесли,
+// пока окно было открыто: отказ join_target_gone, без нового визита и без двойной записи.
+test('CRM_JOIN_NOT_MOVE_V1 (ревью M4): join, а записи уже нет (отменили, время занял другой) — отказ join_target_gone, визит не заводится', async () => {
   reset();
   const rid = seedS1(t);
   const { vid: bid } = await crmCardBook(t, rid, D, 'cc', { hour: 10 });
   t.db.prepare("UPDATE visits SET status = 'cancelled' WHERE id = ?").run(bid);
-  const ev = ok(await t.rpc('ensure_visit', 'cc', { patient_id: PID, date: at(D, 10), doctor_id: 10,
-    join: { doctor_id: 10, start: at(D, 10), duration_minutes: 30 } }), 'ensure_visit join без записи');
-  assert.notEqual(ev.visit.id, bid);
-  assert.ok(!ev.joined, 'присоединение к отменённой записи');
-  assert.equal(ev.booked, false);
+  otherBooking(D, 10);
+  const before = t.db.prepare('SELECT COUNT(*) n FROM visits').get().n;
+  const r = await t.rpc('ensure_visit', 'cc', { patient_id: PID, date: at(D, 10), doctor_id: 10,
+    join: { doctor_id: 10, start: at(D, 10), lines: [{ service_id: 31 }] } });
+  assert.equal(r.status, 409, r.text);
+  assert.equal(r.json.error.code, 'join_target_gone');
+  assert.equal(t.db.prepare('SELECT COUNT(*) n FROM visits').get().n, before, 'заведён визит при исчезнувшей записи');
+});
+
+test('CRM_JOIN_NOT_MOVE_V1 (ревью M4): запись перенесли на 11:00, окно присоединяет к 10:00 — join_target_gone, запись не тронута', async () => {
+  reset();
+  const rid = seedS1(t);
+  const { vid: bid } = await crmCardBook(t, rid, D, 'cc', { hour: 10 });
+  t.db.prepare('UPDATE visits SET visit_date = ? WHERE id = ?').run(at(D, 11), bid);
+  const r = await t.rpc('ensure_visit', 'cc', { patient_id: PID, date: at(D, 10), doctor_id: 10,
+    join: { doctor_id: 10, start: at(D, 10), lines: [{ service_id: 31 }] } });
+  assert.equal(r.status, 409, r.text);
+  assert.equal(r.json.error.code, 'join_target_gone');
+  assert.equal(hm(visitRow(bid).visit_date), '11:00');
+  assert.equal(visitRow(bid).duration_minutes, 30);
+});
+
+// ═══ ревью M2 — присоединение НЕ РАСТИТ запись от повторов: длина — из строк записи ═══
+test('JOIN_EXTENDS_BOOKING_V1 (ревью M2): тот же join трижды (повтор, сбой сети) — запись удлинилась один раз', async () => {
+  reset();
+  const rid = seedS1(t);
+  const { vid: bid } = await crmCardBook(t, rid, D, 'cc', { hour: 10 });
+  for (let i = 0; i < 3; i++) {
+    const { vid } = await (async () => {
+      const ev = ok(await t.rpc('ensure_visit', 'reg', { patient_id: PID, date: at(D, 10), doctor_id: 10,
+        join: { doctor_id: 10, start: at(D, 10), lines: [{ service_id: 31 }] } }), 'join #' + i);
+      if (i === 0) await addVisitLine(t, 'reg', ev.visit.id, { svc: 31, doctor: 10, scheduledAt: at(D, 10), status: true });
+      return { vid: ev.visit.id };
+    })();
+    assert.equal(vid, bid);
+  }
+  assert.equal(visitRow(bid).duration_minutes, 60, 'запись выросла от повторов');
+});
+
+test('JOIN_EXTENDS_BOOKING_V1 (ревью M2): book на время записи той же услугой, повторённый, — длина не растёт (услуга уже в записи)', async () => {
+  reset();
+  const rid = seedS1(t);
+  const { vid: bid } = await crmCardBook(t, rid, D, 'cc', { hour: 10 });
+  for (let i = 0; i < 3; i++) {
+    ok(await t.rpc('ensure_visit', 'cc', { patient_id: PID, date: at(D, 10), doctor_id: 10,
+      book: { doctor_id: 10, service_id: 30, start: at(D, 10), duration_minutes: 30 } }), 'book #' + i);
+  }
+  assert.equal(visitRow(bid).duration_minutes, 30, 'запись выросла от повторной той же услуги');
+});
+
+// ═══ ревью M3 — перенос сохраняет полную длину записи ═══
+test('JOIN_EXTENDS_BOOKING_V1 (ревью M3): запись удлинилась присоединением (60), затем явный перенос на 14:00 — длина остаётся 60', async () => {
+  reset();
+  const rid = seedS1(t);
+  const { vid: bid } = await crmCardBook(t, rid, D, 'cc', { hour: 10 });
+  ok(await t.rpc('ensure_visit', 'cc', { patient_id: PID, date: at(D, 10), doctor_id: 10,
+    join: { doctor_id: 10, start: at(D, 10), lines: [{ service_id: 31 }] } }), 'join');
+  assert.equal(visitRow(bid).duration_minutes, 60);
+  const mv = ok(await t.rpc('ensure_visit', 'cc', { patient_id: PID, date: at(D, 14), doctor_id: 10,
+    book: { doctor_id: 10, service_id: 30, start: at(D, 14), duration_minutes: 30 } }), 'перенос');
+  assert.equal(mv.moved, true);
+  assert.equal(hm(visitRow(bid).visit_date), '14:00');
+  assert.equal(visitRow(bid).duration_minutes, 60, 'перенос обрезал запись до 30 минут');
+});
+
+// ═══ ревью M5 — конец приёма врача назван (until), когда удлинить нельзя ═══
+test('JOIN_EXTENDS_BOOKING_V1 (ревью M5): запись 17:30–18:00, присоединение +30 — не удлиняется, ответ называет конец приёма врача', async () => {
+  reset();
+  const bk = ok(await t.rpc('calendar_book', 'reg', { patient_id: PID, doctor_id: 10, service_id: 30, start: at(D, 17, 30) }), 'запись 17:30');
+  const bid = bk.visit.id;
+  await addVisitLine(t, 'reg', bid, { svc: 30, doctor: 10, scheduledAt: at(D, 17, 30), status: true });
+  const ev = ok(await t.rpc('ensure_visit', 'cc', { patient_id: PID, date: at(D, 17, 30), doctor_id: 10,
+    join: { doctor_id: 10, start: at(D, 17, 30), lines: [{ service_id: 31 }] } }), 'join 17:30');
+  assert.equal(ev.joined, true);
+  assert.equal(ev.extended, false);
+  assert.equal(ev.ends, '18:30');
+  assert.equal(ev.next, null);
+  assert.equal(ev.until, '18:00');
+  assert.equal(visitRow(bid).duration_minutes, 30);
 });
