@@ -1492,7 +1492,7 @@ export function openServicePickerModal({
                 ),
                 h('button', {
                     class: 'x', type: 'button', title: 'Отвязать пациента',
-                    onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); resetQuotes(state.added); renderCalcBar(); },
+                    onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); forgetTierQuotes(); renderCalcBar(); },   // VISIT_TIER_QUOTE_SETTLE_V1 — ответ котировки в пути не ляжет
                 }, '×'),
             ));
             el.appendChild(h('button', {
@@ -2234,28 +2234,68 @@ export function openServicePickerModal({
     // самого визита не «прошлый визит» (как у кассы, billing.js quoteTier, и у
     // кабинета врача). Спрашивается заново, когда меняется пациент, набор услуг
     // или день визита; пациента отвязали — ответ забыт (привязали снова — спросим).
+    //
+    // VISIT_TIER_QUOTE_SETTLE_V1 (ревью потока G) — НЕ ПИСАТЬ СТРОКУ С ЯРУСОМ ЧУЖОГО ДНЯ.
+    // Подпись вопроса запоминалась ДО ответа и не забывалась при отказе, а запись строк
+    // ответа не ждала: день визита сменился («Ближайшее» — завтра), котировка на завтра
+    // не пришла или пришла поздно — смета и строка оставались с ярусом сегодня (прошлый
+    // УЗИ 5 дней назад: сегодня второй визит 20 000, завтра — окно 3–5 прошло, 80 000).
+    // Теперь: сменился пациент, день или визит — прежний ярус снимается до ответа (смета
+    // по каталогу); отказ — подпись забыта, спросим снова; ответ про отвязанного пациента
+    // не ложится; запись строк (wizSave, attachCartToVisit) ждёт котировку текущего дня
+    // (settleTierQuotes) — а не пришла и тогда — строка по каталогу, без яруса.
     let _tierSeq = 0;
-    let _tierSig = '';
-    async function refreshTierQuotes() {
+    let _tierSig = '';      // о чём спрошено: пациент | день | визит | услуги (ответ пришёл или в пути)
+    let _tierBase = '';     // пациент | день | визит последнего вопроса
+    let _tierPending = Promise.resolve();   // вопрос в пути
+    /** Забыть котировку: ответ в пути не ляжет, ярусы сняты (пациента отвязали). */
+    function forgetTierQuotes() {
+        _tierSeq++;
+        _tierSig = ''; _tierBase = '';
+        _tierPending = Promise.resolve();
+        resetQuotes(state.added);
+    }
+    function refreshTierQuotes() {
         const p = refs.attachedPatient;
-        if (!p || !p.id) { _tierSig = ''; resetQuotes(state.added); return; }
+        if (!p || !p.id) { if (_tierSig || _tierBase) forgetTierQuotes(); else resetQuotes(state.added); return _tierPending; }
         const ids = quotableIds(state.added);
-        if (!ids.length) { _tierSig = ''; return; }
+        if (!ids.length) { _tierSig = ''; return _tierPending; }
         const day = localDayOf(cartVisitDateIso());
         const onVisit = attachMode && visitId != null && visitId !== '' && Number(visitId) > 0 ? Number(visitId) : null;
-        const sig = [p.id, day, onVisit || '', [...ids].sort((a, b) => a - b).join(',')].join('|');
-        if (sig === _tierSig) return;
-        _tierSig = sig;
+        const base = [p.id, day, onVisit || ''].join('|');
+        const sig = base + '|' + [...ids].sort((a, b) => a - b).join(',');
+        if (sig === _tierSig) return _tierPending;
+        // Ярус другого дня (пациента, визита) про этот визит ничего не знает: смета — по
+        // каталогу, пока не придёт ответ (перерисовка — ниже, когда вопрос уже задан).
+        const stale = base !== _tierBase && state.added.some((a) => a && a.tier);
+        if (base !== _tierBase) resetQuotes(state.added);
+        _tierSig = sig; _tierBase = base;
         const seq = ++_tierSeq;
         const args = { patient_id: p.id, service_ids: ids };
         if (day) args.date = day;
         if (onVisit) args.visit_id = onVisit;
-        let res = null;
-        try { res = await supabase.rpc('service_price_quote', args); } catch (_) { return; }
-        if (seq !== _tierSeq) return;
-        if (!res || res.error || !res.data || !res.data.quotes) return;
-        applyQuotes(state.added, res.data.quotes);
-        if (catListEl) paintCatalog();
+        _tierPending = (async () => {
+            let res = null;
+            try { res = await supabase.rpc('service_price_quote', args); } catch (_) { res = null; }
+            if (seq !== _tierSeq) return;
+            if (!res || res.error || !res.data || !res.data.quotes) { _tierSig = ''; return; }   // спросим снова
+            const cur = refs.attachedPatient;
+            if (!cur || String(cur.id) !== String(p.id)) return;
+            applyQuotes(state.added, res.data.quotes);
+            if (catListEl) paintCatalog();
+        })();
+        const pending = _tierPending;
+        if (stale && catListEl) paintCatalog();   // снятый ярус не висит в смете (подпись уже та же — вопрос не повторится)
+        return pending;
+    }
+    /** Перед записью строк: котировка на текущий день визита пришла (не пришла — спрошена ещё раз). */
+    async function settleTierQuotes() {
+        for (let i = 0; i < 5; i++) {
+            const pending = refreshTierQuotes();
+            const seq = _tierSeq;
+            try { await pending; } catch (_) { /* без ответа — по каталогу */ }
+            if (seq === _tierSeq) return;   // пока ждали, нового вопроса не было
+        }
     }
     function paintCatCtx() {
         clear(catCtxEl);
@@ -2466,7 +2506,7 @@ export function openServicePickerModal({
                     h('div', { style: { fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, nm),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—')),
                 patient ? null : h('button', { class: 'x', type: 'button', title: 'Отвязать пациента',
-                    onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); resetQuotes(state.added); wiz.depositBalance = null; wiz.categoryPct = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.discountChoice = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
+                    onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); forgetTierQuotes(); wiz.depositBalance = null; wiz.categoryPct = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.discountChoice = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));   // VISIT_TIER_QUOTE_SETTLE_V1
         }
         // CRM_SMETA_BADGE_V1 — владелец: «its there in the smeta but its not prominent». Под пациентом
         // (окно без карточки пациента — под заголовком) — «Записан из заявки на 10.11», пока в смете
@@ -2599,8 +2639,9 @@ export function openServicePickerModal({
     // registrar can see what happened and retry.
     async function attachCartToVisit(btn) {
         if (!state.added.length || typeof onPick !== 'function') return;
-        const rows = state.added.slice();
         if (btn) { btn.disabled = true; btn.textContent = tr('Добавляем…'); }
+        await settleTierQuotes();   // VISIT_TIER_QUOTE_SETTLE_V1 — ярус и цена строк — по котировке текущего дня
+        const rows = state.added.slice();
         let added = 0, failed = 0, firstErr = '';   // LIVE_AUDIT_FIX_V1 — причина первого отказа
         const landed = [];   // CRM_LINKS_V1 — услуги, реально легшие в визит
         for (const a of rows) {
@@ -3311,6 +3352,7 @@ export function openServicePickerModal({
         if (!p || state.added.length === 0) { toast('Добавьте услуги и привяжите пациента.', 'fail'); return; }
         if (!wizStep2Valid()) { toast('Выберите плательщика.', 'fail'); wizGoto(1); return; }   // WIZ_4STEPS_V1 — payer выбирается в смете (шаг 1)
         if (btn) btn.disabled = true;
+        await settleTierQuotes();   // VISIT_TIER_QUOTE_SETTLE_V1 — ярус и цена строк (и счёт по ним) — по котировке дня визита
         const pm = wiz.payment;
         const isPatient = pm.mode === 'patient';
         try {

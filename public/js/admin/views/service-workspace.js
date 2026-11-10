@@ -444,6 +444,9 @@ function servicesCard(ctx) {
                 // смета считает срок пакета, как дверь /api/db и счёт (строка «Мои услуги»,
                 // consultation.js). Нет — каталог считает по сегодня (приём идёт сейчас).
                 packageDay:    ctx.patient?.__service?.visitDate || null,
+                // VISIT_TIER_ON_JOIN_V1 (ревью) — визит приёма: смета спрашивает цену визита
+                // на его день и без его же строк — как addOwnService и касса (quoteTier).
+                visitId:       ctx.visitId || null,
                 // BACKLOG_1011_V1 — строке без выбранного врача addOwnService ставит врача приёма
                 // (linePerformer): смета считает её цену по нему же, как строка и счёт.
                 defaultPerformerId: ctx.patient?.__service?.doctorId || null,
@@ -4737,6 +4740,17 @@ function paintOwnServices(ctx) {
 // а если его не выбирали — врач текущего приёма.
 // OWN_PRICE_REPEAT_V1 (ревью 1) — export только для поведенческой проверки
 // цены строки (picker-invoice.test.mjs); вызывающий на экране — каталог.
+// VISIT_TIER_ON_JOIN_V1 (ревью) — местный день визита 'YYYY-MM-DD' для котировки цены визита:
+// мгновение visit_date — в день клиники браузера, голая дата — как есть; '' — дня нет.
+function tierDayOf(v) {
+    const s = String(v || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const d = new Date(s);
+    if (!s || Number.isNaN(d.getTime())) return '';
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 // SERVICES_PACKAGES_V1 — pkg: пакет строки каталога (service-templates.js cartPackage);
 // строке ставится package_id, цену пакета запишет сервер (routes/db.js).
 export async function addOwnService(ctx, svc, doctor, pkg = null) {
@@ -4770,9 +4784,13 @@ export async function addOwnService(ctx, svc, doctor, pkg = null) {
             // OWN_PRICE_REPEAT_V1 — the line's performer rides along, so the
             // quote prices their own price as the invoice will
             // (OWN_PRICE_TIER_RATIO_V1: with the tier discount on a repeat visit).
+            // VISIT_TIER_ON_JOIN_V1 (ревью) — и на ДЕНЬ ВИЗИТА приёма: без дня сервер считал
+            // на сегодня, а смета каталога и касса — на день визита. Приём 3 дня назад,
+            // прошлый УЗИ 7 дней назад: смета и касса — второй визит 20 000, строка — 80 000.
             if (!svc.__consult && svc.id && ctx.patient?.id) {
                 try {
-                    const q = await supabase.rpc('service_price_quote', { patient_id: ctx.patient.id, service_ids: [svc.id], visit_id: ctx.visitId, ...(performer ? { doctor_id: performer } : {}) });
+                    const day = tierDayOf(ctx.patient?.__service?.visitDate);
+                    const q = await supabase.rpc('service_price_quote', { patient_id: ctx.patient.id, service_ids: [svc.id], visit_id: ctx.visitId, ...(performer ? { doctor_id: performer } : {}), ...(day ? { date: day } : {}) });
                     const quote = q && !q.error && q.data && q.data.quotes ? q.data.quotes[svc.id] : null;
                     if (quote && Number.isFinite(Number(quote.price))) { price = Number(quote.price); priceTier = quote.tier === 'secondary' || quote.tier === 'repeat' ? quote.tier : 'primary'; }
                 } catch (_) { /* old server — catalog price */ }
