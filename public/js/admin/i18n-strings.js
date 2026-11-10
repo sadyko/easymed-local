@@ -7469,6 +7469,9 @@ export const STRINGS = {
   "Записи колл-центра не загрузились ({msg}). Услуги можно добавить вручную.": {"en":"The call-centre bookings did not load ({msg}). The services can be added by hand.","ru":"Записи колл-центра не загрузились ({msg}). Услуги можно добавить вручную.","uz":"Call-markaz yozuvlari yuklanmadi ({msg}). Xizmatlarni qo'lda qo'shish mumkin."},
   "заявки: {msg}": {"en":"requests: {msg}","ru":"заявки: {msg}","uz":"arizalar: {msg}"},
   "из заявки": {"en":"from the request","ru":"из заявки","uz":"arizadan"},
+  "из заявки · {date}": {"en":"from request · {date}","ru":"из заявки · {date}","uz":"arizadan · {date}"},   // CRM_SMETA_BADGE_V1
+  "Записан из заявки на {date}": {"en":"Booked from request for {date}","ru":"Записан из заявки на {date}","uz":"Arizadan {date} sanasiga yozilgan"},   // CRM_SMETA_BADGE_V1
+  "Услуги из заявки": {"en":"Services from request","ru":"Услуги из заявки","uz":"Arizadagi xizmatlar"},   // CRM_SMETA_BADGE_V1
   "Из заявки колл-центра на {date}: {names}": {"en":"From the call-centre request for {date}: {names}","ru":"Из заявки колл-центра на {date}: {names}","uz":"{date} uchun call-markaz arizasidan: {names}"},
   "Каталог не загрузился: {msg}": {"en":"The catalogue did not load: {msg}","ru":"Каталог не загрузился: {msg}","uz":"Katalog yuklanmadi: {msg}"},
   "Каталог услуг пуст — добавьте услуги в настройках.": {"en":"The service catalogue is empty — add services in the settings.","ru":"Каталог услуг пуст — добавьте услуги в настройках.","uz":"Xizmatlar katalogi bo'sh — sozlamalarda xizmatlar qo'shing."},

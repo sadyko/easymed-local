@@ -351,6 +351,54 @@ test('перепривязка к другому пациенту убирает
         'заявка первого пациента закрыта визитом второго: он на этот приём не приходил');
 });
 
+// CRM_SMETA_BADGE_V1 (3.23.0) — владелец: «its there in the smeta but its not prominent». Строка из
+// заявки в смете — заметным значком «из заявки · 08.10», у пациента — «Записан из заявки на 08.10»;
+// строка, набранная руками, — без значка. На английском — по-английски.
+const attrNodes = (root, attr) => walk(root).filter((n) => n.attrs && Object.prototype.hasOwnProperty.call(n.attrs, attr));
+// Иконка (Icon → <template>) у стенда — узел SVG с разметкой в тексте: подпись читается без неё.
+const words = (e) => walk(e).filter((n) => n.tagName !== 'SVG').map((x) => x._text || '').join(' ').replace(/\s+/g, ' ').trim();
+test('CRM_SMETA_BADGE_V1: строка из заявки и пациент в смете — заметные значки с днём записи (ru, en)', async () => {
+    const { setLang } = await import('../i18n.js');
+    window.dispatchEvent = () => true;
+    globalThis.CustomEvent = globalThis.CustomEvent || class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } };
+    try {
+        for (const [lang, line, head] of [['ru', 'из заявки · 08.10', 'Записан из заявки на 08.10'],
+                                          ['en', 'from request · 08.10', 'Booked from request for 08.10']]) {
+            setLang(lang);
+            const box = await openFromCalendar();
+            addBtnFor(box, 'Приём терапевта').click();
+            await settle();
+            assert.equal(attrNodes(topOverlay(), 'data-crm-booked').length, 0, lang + ': значок у пациента до подстановки из заявки');
+            // «Привязать пациента» — по классу кнопки: на английском у неё английская подпись.
+            const attach = byClass(topOverlay(), 'wzc-attach')[0];
+            assert.ok(attach, lang + ': в смете нет кнопки «Привязать пациента»');
+            attach.click();
+            await settle(60);
+            byClass(topOverlay(), 'pk2-attach-row')[0].click();
+            await settle(60);
+            const crmRow = cartLines().find((l) => textOf(l).includes('УЗИ почек'));
+            assert.ok(crmRow, lang + ': услуга заявки не встала в смету');
+            const badge = attrNodes(crmRow, 'data-crm-line')[0];
+            assert.ok(badge, lang + ': у строки из заявки нет значка');
+            assert.equal(words(badge), line);
+            assert.equal(badge.attrs['data-crm-line'], '08.10');
+            const own = cartLines().find((l) => textOf(l).includes('Приём терапевта'));
+            assert.equal(attrNodes(own, 'data-crm-line').length, 0, lang + ': значок у строки, набранной руками');
+            const heads = attrNodes(topOverlay(), 'data-crm-booked');
+            assert.equal(heads.length, 1, lang + ': нет значка «записан из заявки» у пациента');
+            assert.equal(words(heads[0]), head);
+            // Значок у пациента — сразу под ним, в смете (а не где-то в каталоге).
+            const pat = byClass(topOverlay(), 'wzc-pat')[0];
+            const rail = pat && pat._parent;
+            assert.ok(rail && rail.children.indexOf(heads[0]) === rail.children.indexOf(pat) + 1, lang + ': значок не под пациентом');
+            // Строку из заявки убрали (крестик строки — последняя кнопка строки) — значков нет.
+            walk(crmRow).filter((n) => n.tagName === 'BUTTON').pop().click();
+            await settle(60);
+            assert.equal(attrNodes(topOverlay(), 'data-crm-booked').length, 0, lang + ': значок у пациента остался без строк из заявки');
+        }
+    } finally { setLang('ru'); }
+});
+
 // CRM_LINKS_V1 — ОДНО ЧТЕНИЕ «ЧТО ЖДЁТ ЭТОГО ПАЦИЕНТА В ЭТОТ ДЕНЬ».
 //
 // Двухшаговое чтение (заявки пациента → их строки на день) стояло КОПИЕЙ в

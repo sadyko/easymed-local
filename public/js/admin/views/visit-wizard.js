@@ -57,6 +57,7 @@ import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../s
 // CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
 // доказывает событие (отметка, платёж, начатая работа), и видит его сервер.
 import { pendingCrmLines } from '../crm-lines.js';
+import { crmLineBadge, crmBookedBadge } from './crm-smeta-badge.js';   // CRM_SMETA_BADGE_V1 — «из заявки» заметно в смете
 import { isDeskNow } from './wizard-desk.js';   // CRM_LINK_ALL_V1 (R3) — «сейчас» у стойки: одно правило с сервером
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin, localSlot, setLinePerformer } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»; localSlot — DOCTOR_REFERRAL_DESK_V1
 import { loadPatientBookings, bookedJoinFor, joinExtensionNote } from './booked-rows.js';   // JOIN_EXTENDS_BOOKING_V1 (ревью M5) — joinExtensionNote   // BOOKED_JOIN_V1 — услуга к записанному врачу — в его запись
@@ -1010,6 +1011,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const line = wiz.cart.find(c => c.svc.id === svc.id);
                 if (line) {
                     line.fromCrm = true;
+                    line.crmDay = ln.scheduled_date || null;   // CRM_SMETA_BADGE_V1 — день записи из заявки для значков сметы
                     // CRM_LINE_DOCTOR_V1 — врач, к которому записал колл-центр.
                     // Без него услуга с requires_doctor не попадает в СМЕТУ
                     // (visibleCart фильтрует именно по этому), и подстановка
@@ -2267,6 +2269,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 return h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13.5px', gap: '10px' } },
                     h('span', { style: { flex: 1, minWidth: 0 } },
                         h('span', null, c.svc.name),
+                        c.fromCrm ? h('span', { style: { marginLeft: '6px' } }, crmLineBadge(c.crmDay)) : null,   // CRM_SMETA_BADGE_V1 — и на подтверждении
                         sub ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + sub) : null),
                     tierChip(c),
                     h('span', { class: 'muted num' }, c.qty + ' ×'),
@@ -2742,6 +2745,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [patient.mrn, patient.phone].filter(Boolean).join(' · ')),
             ),
         ));
+        // CRM_SMETA_BADGE_V1 — владелец: «its there in the smeta but its not prominent». Под пациентом —
+        // «Записан из заявки на 10.11», пока в смете есть строка из заявки колл-центра.
+        const crmHead = crmBookedBadge(wiz.cart.filter((c) => c.fromCrm).map((c) => c.crmDay || null));
+        if (crmHead) railEl.appendChild(crmHead);
 
         const ordersBox = doctorOrdersRail();   // DOCTOR_REFERRAL_DESK_V1
         if (ordersBox) railEl.appendChild(ordersBox);
@@ -2768,6 +2775,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const dupHit = orderedFor(c);   // DUP_STOP_V1 (ревью M1) — строка на день визита, где услуга уже назначена
                 list.appendChild(h('div', { class: 'row', style: { gap: '8px', padding: '9px 0', borderBottom: '1px solid var(--ink-50)' } },
                     h('span', { style: { flex: 1, minWidth: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, c.svc.name),
+                    // CRM_SMETA_BADGE_V1 — строка из заявки колл-центра: «из заявки · 10.11», как чип каталога.
+                    c.fromCrm ? crmLineBadge(c.crmDay) : null,
                     // CRM_LINK_ALL_V1 (R7a) — строка уже в визите записи: подпись и статус записи.
                     // DOCTOR_REFERRAL_DESK_V1 — строка из рекомендации врача и строка направления врача.
                     c.fromRec ? h('span', { 'data-rec-line': String(c.fromRec.id), style: ORDER_CHIP_CSS },
@@ -2848,7 +2857,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     wait.appendChild(h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
                         h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)', overflowWrap: 'anywhere' } },
                             c.svc.name,
-                            c.fromCrm ? h('span', { style: { marginLeft: '6px', fontSize: '12.5px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-50, #e8f3f2)', borderRadius: '999px', padding: '1px 7px' } }, 'из заявки') : null),
+                            c.fromCrm ? h('span', { style: { marginLeft: '6px' } }, crmLineBadge(c.crmDay)) : null),   // CRM_SMETA_BADGE_V1 — тот же значок, что у строки сметы
                         sel));
                 }
                 railEl.appendChild(wait);

@@ -59,6 +59,7 @@ import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../s
 // CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
 // доказывает событие, и видит его сервер (crm/visit-status.js).
 import { pendingCrmLines } from '../crm-lines.js';
+import { crmLineBadge, crmBookedBadge } from './crm-smeta-badge.js';   // CRM_SMETA_BADGE_V1 — «из заявки» заметно в смете
 // MODAL_STACK_V1 — ESCAPE ПРИНАДЛЕЖИТ ВЕРХНЕМУ ОКНУ.
 //
 // Каталог услуг слушает Escape на document всё время, пока открыт. Но поверх
@@ -641,6 +642,7 @@ export function openServicePickerModal({
                 // услуги первого не должны достаться второму.
                 const item = state.added.find(x => x.service.id === svc.id);
                 if (item) item.__fromCrm = true;
+                if (item) item.__crmDay = line.scheduled_date || null;   // CRM_SMETA_BADGE_V1 — день записи из заявки для значков сметы
                 added.push({ line, svc });
             }
             if (!added.length) return;
@@ -2443,7 +2445,13 @@ export function openServicePickerModal({
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—')),
                 patient ? null : h('button', { class: 'x', type: 'button', title: 'Отвязать пациента',
                     onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); resetQuotes(state.added); wiz.depositBalance = null; wiz.categoryPct = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.discountChoice = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
-        } else if (!attachMode) {
+        }
+        // CRM_SMETA_BADGE_V1 — владелец: «its there in the smeta but its not prominent». Под пациентом
+        // (окно без карточки пациента — под заголовком) — «Записан из заявки на 10.11», пока в смете
+        // есть строка из заявки колл-центра.
+        const crmHead = crmBookedBadge(state.added.filter((a) => a.__fromCrm).map((a) => a.__crmDay || null));
+        if (crmHead) catRailEl.appendChild(crmHead);
+        if (!p && !attachMode) {
             // PICKER_CATALOG_EVERYWHERE_V1 — привязка пациента есть только у
             // мастера записи. В режиме привязки пациент либо уже известен (визит),
             // либо его заводит окно-хозяин (быстрая регистрация) — кнопка здесь
@@ -2476,7 +2484,10 @@ export function openServicePickerModal({
                 else if (a.__needsDoc) { const dp = defaultPerformerOf(a); who = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, dp && dp.full_name ? document.createTextNode(dp.full_name) : 'исполнитель не выбран'); }
                 else who = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'процедурный кабинет');
                 rowsWrap.appendChild(h('div', { class: 'wzc-ln' },
-                    h('div', { style: { minWidth: 0 } }, h('div', { style: { fontSize: '12.5px' } }, a.service.name), who),
+                    h('div', { style: { minWidth: 0 } }, h('div', { style: { fontSize: '12.5px' } }, a.service.name),
+                        // CRM_SMETA_BADGE_V1 — строка из заявки колл-центра: «из заявки · 10.11», как чип каталога.
+                        a.__fromCrm ? h('div', { style: { margin: '3px 0 2px' } }, crmLineBadge(a.__crmDay)) : null,
+                        who),
                     h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flex: 'none' } },
                         // VISIT_TIER_PRICING_V1 — a quoted second/repeat visit shows its
                         // tier and the crossed-out first-visit price, so the registrar sees
