@@ -24,7 +24,7 @@ import { localDate, localMonth, today } from '../domain/day.js';   // INVOICE_AP
 import { grantAllowsAdminOr, grantAllowsOr, isAdminUser } from '../grants.js';
 import { cashierDiscountByRole } from '../gate-fallbacks.js';   // CASHIER_DISCOUNT_V1 — прежнее правило строки «Кассир может давать скидку»
 import { floorApplies, groupNote, patientGroupDiscount, resolveDiscountChoice, restDiscountOf } from '../domain/discount-choice.js';   // DISCOUNT_V2
-import { ratedChoice, invoiceRateSource, rateInvoiceItems, invoiceFloorBase, deskPartOf, rerateChangedLine } from '../domain/discount-rates.js';   // DISCOUNT_RATES_V1; ревью S5 H-1
+import { ratedChoice, invoiceRateSource, rateInvoiceItems, invoiceFloorBase, deskPartOf, rerateChangedLine, rateReducesOf } from '../domain/discount-rates.js';   // DISCOUNT_RATES_V1; ревью S5 H-1; DISCOUNT_CHANGE_PAID_V1 — rateReducesOf
 import { requireServicesEdit, requireServicesDelete } from './patient-card.js';   // CASHIER_HEAD_V1 (ревью I2) — вкладка «Услуги» у регистратуры/администратора
 import { surgeryWithoutBedRefusal } from '../domain/surgery-bed.js';   // CASHIER_HEAD_V1 (ревью I4)
 // BILLING_AUDIT_FIX_V1 (B3) — тариф заменённой услуги спрашивается заново.
@@ -3353,10 +3353,14 @@ export function cashierInvoiceDiscount(db, args, user) {
 // вернувшимися деньгами. Теперь касса меняет скидку счёта и после оплаты — выше и ниже, 100 %
 // тоже (Q2), одной транзакцией вместе с деньгами, по образцу «Заменить услугу» (swapPaidLineTx).
 //
-// ЧТО МЕНЯЕТСЯ — скидка СЧЁТА: остаток скидки на строках без своей скидки (ручная, группы,
-// промокод, касса). Новая R′ — процент от суммы этих строк (база остатка) или сумма, не больше
-// базы; 0 — без скидки. Скидки строк — пакет, ставки по услугам («Сотрудники: консультация
-// 100 %»), часть кассы на строках по ставкам — не трогаются; окно это говорит. Скидка после
+// ЧТО МЕНЯЕТСЯ — скидка СЧЁТА (скидка кассы): остаток скидки на строках без своей скидки
+// (ручная, группы, промокод, касса) и часть кассы, которую «Скидка» до оплаты положила на строки
+// по ставкам сверх ставки (ревью R3). Новая R′ — процент от суммы к оплате без скидки кассы (та
+// же база, что у «Скидки» до оплаты, ревью R12) или сумма, не больше места на строках; 0 — без
+// скидки; та же скидка, введённая процентом с округлением или суммой с копейками, денег не
+// двигает (ревью R2). Ложится, как у «Скидки» до оплаты: на строки без своей скидки и сверх
+// ставки — пропорционально месту. Скидки строк — пакет и сами ставки по услугам («Сотрудники:
+// консультация 100 %») — не трогаются; окно это говорит. Скидка после
 // продажи (уступка деньгами, post_sale_discount) ложится снова в той же доле от новой суммы,
 // как у замены услуги: доля денег после неё (отчёты: POST_SALE_KEEP_SQL) не меняется. Счёт
 // запоминает ручную часть «как её дали» (manual_discount / manual_base — правка строк потом
@@ -3378,11 +3382,14 @@ export function cashierInvoiceDiscount(db, args, user) {
 //           закрытый на 0 скидкой 100 %, снова «Не оплачен», и его неначатые услуги снова ждут
 //           кассу (settleZeroTotal) — начатая и сделанная работа остаётся;
 //   счёт стал оплаченным — кэшбэк по обычному правилу (один раз за жизнь счёта).
-// Доля врача и вознаграждение — прежние формулы отчётов: возврат разницы, как у замены, долю
-// не режет (чистые деньги / min(получено, сумма) = 1), вознаграждение — от полной цены.
+// Доля врача и вознаграждение — формулы отчётов, и возврат разницы для них — СКИДКА, а не
+// возврат (reports.js DISC_REFUND_SQL, ревью R1/R11): 100 % после оплаты платит врачу как 100 %
+// до оплаты, доля не зависит от истории; вознаграждение — от полной цены.
 //
 // ОТКАЗ: счёт плательщику, депозит и продажа карты, счёт госпитализации (скидку там дают при
-// выписке), отменённый, чужого здания, закрытый месяц «Оплаты врачей» (как у замены услуги).
+// выписке), отменённый, чужого здания, закрытый месяц «Оплаты врачей» (как у замены услуги),
+// неоплаченный счёт без единого платежа — его скидку даёт «Скидка» окна оплаты (ревью R7);
+// счёт изменился, пока окно было открыто (expect_total_before / expect_paid_before, ревью R10).
 // КТО (Q4): «Кассир может давать скидку» (cashier.discount) и денежная роль — кассир или
 // администратор: двигаются деньги, как у замены. Журнал счёта — 'discount_change'.
 const DISCOUNT_CHANGE_REASON = 'Изменение скидки — возврат разницы';
@@ -3436,29 +3443,71 @@ function discountChangeTx(db, args, user, { rpc, dryRun = false }) {
   if (!inv) throw new RpcError('Счёт не найден.', 400);
   assertOwnBuilding(db, inv, 'Счёт');
   { const r = discountChangeRefusal(db, inv); if (r) throw new RpcError(r, 400); }
+  // Ревью R7 — неоплаченный счёт без единого платежа: скидку до оплаты даёт «Скидка» окна оплаты
+  // (cashier_invoice_discount). Долг (пациент ушёл), счёт на 0 со скидкой 100 % и счёт, по которому
+  // уже были платежи, — здесь.
+  if (inv.status === 'unpaid' && !((Number(inv.paid_amount) || 0) > 0)
+      && !db.prepare('SELECT 1 FROM payments WHERE invoice_id = ? LIMIT 1').get(inv.id)) {
+    throw new RpcError('По счёту ещё не принято денег — скидку до оплаты даёт «Скидка» в окне оплаты.', 409);
+  }
   assertVisitMonthOpen(db, inv.visit_id);
 
-  // 1. Нынешняя скидка счёта и её база.
+  // 1. Нынешняя скидка кассы и её база.
+  // Ревью R3 — скидка кассы — это остаток скидки на строках без своей скидки И часть, которую
+  // «Скидка» до оплаты положила на строки по ставкам сверх ставки (deskPartOf: скидка строки минус
+  // ставка × сумма). «Скидки строк», которые здесь не меняются, — пакет и сами ставки.
+  // Ревью R12 — процент — от той же базы, что у «Скидки» до оплаты: от суммы к оплате без скидки
+  // кассы (сумма строк минус скидки строк). 20 % до оплаты — 20 % и здесь.
   const subtotal = round2(Number(inv.subtotal) || 0);
-  const own = invoiceOwnDiscount(db, inv.id);   // скидки строк — не меняются
-  const base = invoiceRestBase(db, inv.id);     // строки без своей скидки
+  const ownAll = invoiceOwnDiscount(db, inv.id);   // все скидки строк, вместе с частью кассы на ставках
+  const base = invoiceRestBase(db, inv.id);        // строки без своей скидки
+  const group = patientGroupDiscount(db, inv.patient_id);
+  const rateShare = rateReducesOf(db, inv, group);
+  const rated = db.prepare(`SELECT id, total, discount_amount, discount_rate, discount_doctor_share FROM invoice_items
+                             WHERE invoice_id = ? AND discount_rate IS NOT NULL AND discount_amount > 0 ORDER BY id`).all(inv.id)
+    .map((r) => {
+      const total = Math.max(0, Number(r.total) || 0);
+      const byRate = round2(Math.min(total, total * Number(r.discount_rate) / 100));
+      return { ...r, byRate, desk: Math.max(0, round2(Number(r.discount_amount) - byRate)), room: Math.max(0, round2(total - byRate)) };
+    });
+  const deskOnLines = round2(rated.reduce((s, r) => s + r.desk, 0));
+  const lineOwned = round2(ownAll - deskOnLines);   // пакет и ставки — не меняются
+  const ratedRoom = round2(rated.reduce((s, r) => s + r.room, 0));
+  const room = round2(base + ratedRoom);           // куда скидка кассы может лечь
   const oldPostSale = round2(Number(inv.post_sale_discount) || 0);
   const oldTotal = round2(Number(inv.total_amount) || 0);
   const P = round2(Number(inv.paid_amount) || 0);
-  const R = Math.max(round2((Number(inv.discount_amount) || 0) - oldPostSale - own), 0);
+  const Rrest = Math.max(round2((Number(inv.discount_amount) || 0) - oldPostSale - ownAll), 0);
+  const R = round2(Rrest + deskOnLines);
+  const basis = round2(subtotal - lineOwned);       // сумма к оплате без скидки кассы
   const oldShare = inv.doctor_discount_share == null || !Number.isFinite(Number(inv.doctor_discount_share))
     ? 1 : Math.min(1, Math.max(0, Number(inv.doctor_discount_share)));
-  if (!(base > 0)) throw new RpcError('Скидке счёта класть не на что: у всех строк своя скидка (пакет или ставка по услуге) — её здесь не меняют.', 409);
-  const pctOf = (sum) => round2(sum * 100 / base);
+  if (!(room > 0) || !(basis > 0)) throw new RpcError('Скидке счёта класть не на что: у всех строк своя скидка (пакет или ставка по услуге) — её здесь не меняют.', 409);
+  const pctOf = (sum) => round2(sum * 100 / basis);
   const state = {
-    base, line_discounts: own, discount_before: R, pct_before: pctOf(R), share_before: oldShare,
+    basis, base, room, line_discounts: lineOwned, discount_before: R, pct_before: pctOf(R), share_before: oldShare,
     post_sale_before: oldPostSale, total_before: oldTotal, paid_before: P,
   };
+  // Ревью R10 — окно считало по старому счёту (второй кассир успел его изменить): сохранение
+  // несёт сумму и оплаченное из предпросмотра; не сходятся — отказ, деньги не двигаются.
+  const expect = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
+  const eT = expect(a.expect_total_before);
+  const eP = expect(a.expect_paid_before);
+  if (!dryRun && ((eT !== null && !(Math.abs(eT - oldTotal) < 0.005)) || (eP !== null && !(Math.abs(eP - P) < 0.005)))) {
+    const e = new RpcError('Счёт изменился, пока окно было открыто — проверьте сумму ещё раз.', 409);
+    e.code = 'invoice_changed';
+    throw e;
+  }
 
-  // 2. Новая скидка и доля врача.
-  const want = stateOnly ? R : (mode === 'pct' ? round2(base * value / 100) : round2(value));
-  const Rn = round2(Math.min(want, base));
-  const clamped = !stateOnly && want > base + 0.005;
+  // 2. Новая скидка и доля врача. Ревью R2 — та же скидка, введённая процентом (окно показывает
+  // его с двумя знаками) или суммой с копейками, — это прежняя сумма: деньги не двигаются.
+  let want = R;
+  if (!stateOnly) {
+    if (mode === 'pct') want = Math.abs(value - pctOf(R)) < 0.005 ? R : round2(basis * value / 100);
+    else want = Math.abs(value - R) < 0.5 ? R : round2(value);
+  }
+  const Rn = round2(Math.min(want, room));
+  const clamped = !stateOnly && want > room + 0.005;
   let share = reduces === null ? oldShare
     : Rn > R + 0.005 ? (R * oldShare + (Rn - R) * reduces) / Rn
       : reduces;
@@ -3467,13 +3516,28 @@ function discountChangeTx(db, args, user, { rpc, dryRun = false }) {
     return { changed: false, invoice: inv, mode, value, ...state, discount_after: R, pct_after: pctOf(R), share_after: oldShare,
       post_sale_after: oldPostSale, total_after: oldTotal, refunded: 0, due: 0, refund_plan: [], to_balance: false, clamped };
   }
+  // Раскладка — как у «Скидки» до оплаты: на строки без своей скидки и на строки по ставкам
+  // пропорционально месту на них; на строке по ставке — ставка плюс её часть кассы.
+  const toRest = ratedRoom > 0 ? round2(Rn * base / room) : Rn;
+  let left = round2(Rn - toRest);
+  const roomy = rated.filter((r) => r.room > 0);
+  const updRated = db.prepare('UPDATE invoice_items SET discount_amount = ?, discount_doctor_share = ? WHERE id = ?');
+  roomy.forEach((r, i) => {
+    const part = round2(Math.max(0, Math.min(i === roomy.length - 1 ? left : round2((Rn - toRest) * r.room / ratedRoom), r.room, left)));
+    left = round2(left - part);
+    const nd = round2(r.byRate + part);
+    if (Math.abs(nd - Number(r.discount_amount)) < 0.005 && Math.abs(share - oldShare) < 1e-6) return;
+    updRated.run(nd, nd > 0 ? Math.min(1, Math.max(0, (r.byRate * rateShare + part * share) / nd)) : r.discount_doctor_share, r.id);
+  });
+  const restNew = round2(toRest + left);   // хвост округления — на строки без своей скидки
+  const own = invoiceOwnDiscount(db, inv.id);
   // Пол группы пациента (как в repriceUnpaidInvoice): касса явно поставила меньше — «Без скидки».
   const catPct = floorApplies(inv) ? patientCategoryDiscount(db, inv.patient_id) : 0;
   const floor = round2(invoiceFloorBase(db, inv.id) * catPct / 100);
-  const source = catPct > 0 && Rn < floor - 0.005 ? 'none' : (inv.discount_source ?? null);
+  const source = catPct > 0 && restNew < floor - 0.005 ? 'none' : (inv.discount_source ?? null);
 
   // 3. Сумма счёта: скидки строк + новая скидка счёта, потом скидка после продажи в той же доле.
-  const discNoPs = Math.min(round2(own + Rn), subtotal);
+  const discNoPs = Math.min(round2(own + restNew), subtotal);
   const preTotal = round2(subtotal - discNoPs);
   const oldPreTotal = round2(oldTotal + oldPostSale);
   const ps = oldPostSale > 0 && oldPreTotal > 0 ? round2(Math.min(oldPostSale * preTotal / oldPreTotal, preTotal)) : 0;
@@ -3490,7 +3554,7 @@ function discountChangeTx(db, args, user, { rpc, dryRun = false }) {
   const note = parts.join('; ').slice(0, 500);
   db.prepare(`UPDATE invoices SET discount_amount = ?, total_amount = ?, post_sale_discount = ?, manual_discount = ?, manual_base = ?,
                      doctor_discount_share = ?, discount_source = ?, discount_note = ? WHERE id = ?`)
-    .run(discount, T, ps, Rn, base, share, source, note, inv.id);
+    .run(discount, T, ps, restNew, base, share, source, note, inv.id);   // ручная часть «как её дали» — остаток на строках без своей скидки
   // Счёт без денег: сумма 0 — закрыт, услуги в очередь; был закрыт на 0, стал с суммой — снова
   // «Не оплачен», неначатые услуги снова ждут кассу (начатая работа остаётся). С деньгами — не трогает.
   settleZeroTotal(db, inv.id);
@@ -3543,7 +3607,8 @@ function discountChangeTx(db, args, user, { rpc, dryRun = false }) {
 
 /**
  * cashier_invoice_discount_change({ invoice_id, mode: 'pct'|'abs', value ≥ 0, reason,
- *   reduces_doctor_share?, to_balance?, card_fallback?, idempotency_key? }) — изменить скидку
+ *   reduces_doctor_share?, to_balance?, card_fallback?, expect_total_before?, expect_paid_before?,
+ *   idempotency_key? }) — изменить скидку
  * счёта после оплаты (или скидку 100 %) с расчётом денег (см. шапку блока).
  */
 export function cashierInvoiceDiscountChange(db, args, user) {

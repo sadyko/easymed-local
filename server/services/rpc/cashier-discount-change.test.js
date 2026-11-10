@@ -30,6 +30,7 @@ const admin = { id: 1, role: 'admin', full_name: 'Админ' };
 const registrar = { id: 7, role: 'registrar', full_name: 'Регистратор' };
 const cashier = { id: 9, role: 'cashier', full_name: 'Кассир' };
 const DOC = 20;
+const FIXDOC = 22;   // фикс 50 000 за услугу
 const USG = 30;   // УЗИ 200 000
 const CONS = 31;  // Консультация 100 000
 const ECG = 32;   // ЭКГ 100 000
@@ -43,6 +44,7 @@ function seed() {
   u.run(7, 'reg', 'x', 'registrar', 'Регистратор', 0, '');
   u.run(9, 'cash', 'x', 'cashier', 'Кассир', 0, '');
   u.run(DOC, 'doc', 'x', 'doctor', 'Врач Узистов', 1, JSON.stringify([{ service_id: USG, pct: 30 }, { service_id: CONS, pct: 30 }, { service_id: ECG, pct: 30 }]));
+  u.run(FIXDOC, 'fdoc', 'x', 'doctor', 'Врач Фиксов', 1, JSON.stringify([{ service_id: USG, fix: 50000 }]));
   db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (30, 'УЗИ', 200000, 0, 'imaging'), (31, 'Консультация', 100000, 0, 'consultation'), (32, 'ЭКГ', 100000, 0, 'imaging')").run();
   const cat = db.prepare("INSERT INTO referral_source_categories (name, standard_percent) VALUES ('Партнёры', 10)").run().lastInsertRowid;
   const partner = Number(db.prepare("INSERT INTO referral_sources (name, code, category_id) VALUES ('Клиника Х', 'KX', ?)").run(cat).lastInsertRowid);
@@ -63,13 +65,13 @@ function setGrants(db, role, grants) {
 }
 
 // Визит со строками services (id услуг) пациента, направленного партнёром; счёт без скидки.
-function visit(db, { services = [USG], patient = null, category = null, partner = null } = {}) {
+function visit(db, { services = [USG], patient = null, category = null, partner = null, doctor = DOC } = {}) {
   const pid = patient || Number(db.prepare('INSERT INTO patients (full_name, category_id, referral_source_id) VALUES (?, ?, ?)').run('Пациент Тестов', category, partner).lastInsertRowid);
   const vid = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, ?, 'arrived')").run(pid, DAY).lastInsertRowid);
   const vs = services.map((sid) => {
     const price = db.prepare('SELECT price FROM services WHERE id = ?').get(sid).price;
     return Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, ?, ?, 1, ?, ?, 'added', 1)")
-      .run(vid, sid, DOC, price, price).lastInsertRowid);
+      .run(vid, sid, doctor, price, price).lastInsertRowid);
   });
   const invoice = call('create_invoice_for_visit', db, { visit_id: vid, visit_service_ids: vs, discount_amount: 0 }, admin).invoice;
   db.prepare('UPDATE invoices SET created_at = ? WHERE id = ?').run(DAY, invoice.id);   // период отчётов — по дате счёта
@@ -244,10 +246,10 @@ test('переключатель «Скидка уменьшает долю вр
   // Снизили и сказали явно «уменьшает» — вся оставшаяся скидка уменьшает долю врача.
   const r = change(db, v.id, { mode: 'pct', value: 20, reduces_doctor_share: true });
   assert.equal(inv(db, v.id).doctor_discount_share, 1);
-  // Прежнее правило отчётов (PAY_REFUND_V1): по счёту был возврат, и пока доплаты нет, доля
-  // врача — в доле оставшихся денег (100 000 из 160 000); доплатили — снова целиком.
+  // Возврат разницы — изменение скидки, а не возврат денег за услугу (отчёты не считают его
+  // возвратом): доля врача — та же, что у обычного счёта с той же скидкой и той же оплатой.
   assert.equal(r.due, 60000);
-  assert.equal(doctorFee(db), 30000);
+  assert.equal(doctorFee(db), 48000);
   call('record_payment', db, { invoice_id: v.id, amount: 60000, method: 'cash' });
   assert.equal(doctorFee(db), 48000);
 });
@@ -286,13 +288,24 @@ test('скидки строк не меняются: «Сотрудники» �
   assert.deepEqual([inv(db, v.id).discount_amount, inv(db, v.id).total_amount], [200000, 100000]);
 });
 
-test('все строки со своей скидкой (ставки по услугам) — скидке счёта класть не на что: отказ 409', () => {
+test('строки по ставкам: скидка кассы ложится сверх ставки, как у «Скидки» до оплаты; места нет ни на одной строке — отказ 409', () => {
   const { db } = seed();
   const staff = Number(db.prepare("INSERT INTO patient_categories (name, discount_percent, active, discount_rates) VALUES ('Сотрудники', 20, 1, ?)")
     .run(JSON.stringify({ g: { consultation: 100 } })).lastInsertRowid);
   const v = visit(db, { services: [CONS, USG], category: staff });
-  call('record_payment', db, { invoice_id: v.id, amount: inv(db, v.id).total_amount, method: 'cash' });
-  refused(() => change(db, v.id, { mode: 'pct', value: 50 }), /класть не на что/, 409);
+  assert.equal(inv(db, v.id).total_amount, 160000, 'консультация 100 %, УЗИ 20 %');
+  call('record_payment', db, { invoice_id: v.id, amount: 160000, method: 'cash' });
+  const st = quote(db, v.id, {});
+  assert.deepEqual([st.basis, st.discount_before, st.line_discounts], [160000, 0, 140000]);
+  const r = change(db, v.id, { mode: 'pct', value: 50 });
+  assert.deepEqual([r.discount_after, r.total_after, r.refunded], [80000, 80000, 80000], '50 % от 160 000 — на УЗИ сверх ставки');
+  assert.equal(db.prepare('SELECT discount_amount FROM invoice_items WHERE invoice_id = ? AND service_id = ?').get(v.id, USG).discount_amount, 120000);
+  // Все строки бесплатны по ставке (100 %) — скидке кассы класть не на что.
+  const free = Number(db.prepare("INSERT INTO patient_categories (name, discount_percent, active, discount_rates) VALUES ('Свои', 100, 1, ?)")
+    .run(JSON.stringify({ g: { consultation: 100 } })).lastInsertRowid);
+  const f = visit(db, { services: [CONS, USG], category: free });
+  assert.equal(inv(db, f.id).total_amount, 0);
+  refused(() => change(db, f.id, { mode: 'pct', value: 0 }), /класть не на что/, 409);
 });
 
 test('скидка после продажи (уступка деньгами) сохраняется в той же доле', () => {
@@ -412,4 +425,160 @@ test('скидка кассы до оплаты: у оплаченного сч�
   call('record_payment', db, { invoice_id: p.id, amount: 1000, method: 'cash' });
   assert.throws(() => call('cashier_invoice_discount', db, { invoice_id: p.id, mode: 'pct', value: 5, reason: 'x' }),
     (e) => e.status === 409 && /счёт уже оплачен частично/.test(e.message));
+});
+
+// Ревью денег (R1, R11) — изменение скидки — это СКИДКА, а не возврат: возврат разницы (пометка
+// DISC#) отчёты не считают возвратом (REFUND_AGG_SQL). Скидка 100 % после оплаты платит врачу ровно
+// как скидка 100 % до оплаты (переключатель решает; фикс — целиком); настоящий полный возврат — 0.
+const fixFee = (db) => Math.round(doctorPaySummary(db, { doctor_id: FIXDOC, ...RANGE }, admin).outpatient.fee * 100) / 100;
+test('ревью R1: 100 % после оплаты = 100 % до оплаты — врачу 60 000 (переключатель выключен), фикс 50 000; настоящий полный возврат — 0', () => {
+  const before = (() => {
+    const { db } = seed();
+    const v = visit(db);
+    call('cashier_invoice_discount', db, { invoice_id: v.id, mode: 'pct', value: 100, reason: 'благотворительность', reduces_doctor_share: false });
+    db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(v.vs[0]);
+    return doctorFee(db);
+  })();
+  const { db } = seed();
+  const v = visit(db);
+  call('record_payment', db, { invoice_id: v.id, amount: 200000, method: 'cash' });
+  db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(v.vs[0]);
+  change(db, v.id, { mode: 'pct', value: 100, reduces_doctor_share: false });
+  assert.deepEqual([inv(db, v.id).total_amount, inv(db, v.id).paid_amount], [0, 0]);
+  assert.equal(before, 60000, 'до оплаты: 30 % от цены до скидки');
+  assert.equal(doctorFee(db), 60000, 'после оплаты — то же');
+  const total = RPC.run_report(db, { kind: 'total_revenue', ...RANGE }, admin);
+  const col = (row, name) => row[total.columns.indexOf(name)];
+  assert.equal(col(total.rows.find((x) => col(x, 'Услуга') === 'УЗИ'), 'Доля врача'), 60000, '«Общая выручка» — то же');
+  // Фикс 50 000: до оплаты и после — целиком.
+  const fixBefore = (() => {
+    const { db: d } = seed();
+    const f = visit(d, { doctor: FIXDOC });
+    call('cashier_invoice_discount', d, { invoice_id: f.id, mode: 'pct', value: 100, reason: 'r' });
+    d.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(f.vs[0]);
+    return fixFee(d);
+  })();
+  const f = visit(db, { doctor: FIXDOC });
+  call('record_payment', db, { invoice_id: f.id, amount: 200000, method: 'cash' });
+  db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(f.vs[0]);
+  change(db, f.id, { mode: 'pct', value: 100 });
+  assert.deepEqual([fixBefore, fixFee(db)], [50000, 50000]);
+  // Настоящий полный возврат денег (счёт оставлен открытым или отменён) — врачу 0, как прежде.
+  for (const voidIt of [false, true]) {
+    const { db: d } = seed();
+    const g = visit(d);
+    call('record_payment', d, { invoice_id: g.id, amount: 200000, method: 'cash' });
+    d.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(g.vs[0]);
+    call('refund_payment', d, { payment_id: pays(d, g.id)[0].id, reason: 'x', void_when_zero: voidIt });
+    assert.equal(doctorFee(d), 0, 'полный возврат, отмена счёта: ' + voidIt);
+  }
+});
+
+test('ревью R11: та же итоговая картина — та же доля врача и то же вознаграждение, какой бы ни была история скидки', () => {
+  // X: оплачено 200 000, скидку подняли до 50 % (вернули 100 000), потом сняли до 0 % (к доплате 100 000).
+  const { db, partner } = seed();
+  const x = visit(db, { partner });
+  call('record_payment', db, { invoice_id: x.id, amount: 200000, method: 'cash' });
+  db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(x.vs[0]);
+  change(db, x.id, { mode: 'pct', value: 50 });
+  change(db, x.id, { mode: 'pct', value: 0 });
+  assert.deepEqual([inv(db, x.id).total_amount, inv(db, x.id).paid_amount, inv(db, x.id).status], [200000, 100000, 'partial']);
+  const xFee = doctorFee(db);
+  const xReward = partnerReward(db);
+  // Y: тот же счёт без скидки, просто оплачено 100 000 из 200 000.
+  const { db: d2, partner: p2 } = seed();
+  const y = visit(d2, { partner: p2 });
+  call('record_payment', d2, { invoice_id: y.id, amount: 100000, method: 'cash' });
+  d2.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(y.vs[0]);
+  assert.deepEqual([xFee, xReward], [doctorFee(d2), partnerReward(d2)]);
+  assert.deepEqual([xFee, xReward], [60000, 0], 'выполненная работа платится; частично оплаченный счёт вознаграждения не даёт');
+});
+
+// Ревью R2 — нетронутое значение денег не двигает: 300 000 со скидкой суммой 50 000 — это 16,67 %;
+// сохранить «16,67» (или ту же сумму с копейками) — прежние 50 000, а не 50 010 и возврат 10.
+test('ревью R2: та же скидка, введённая процентом с округлением или суммой, денег не двигает', () => {
+  const { db } = seed();
+  const v = visit(db, { services: [USG, CONS] });
+  call('cashier_invoice_discount', db, { invoice_id: v.id, mode: 'abs', value: 50000, reason: 'r' });
+  call('record_payment', db, { invoice_id: v.id, amount: 250000, method: 'cash' });
+  const st = quote(db, v.id, {});
+  assert.deepEqual([st.pct_before, st.discount_before], [16.67, 50000]);
+  assert.equal(quote(db, v.id, { mode: 'pct', value: 16.67 }).changed, false);
+  assert.equal(quote(db, v.id, { mode: 'abs', value: 50000.4 }).changed, false);
+  const r = change(db, v.id, { mode: 'pct', value: 16.67, reduces_doctor_share: false });
+  assert.deepEqual([r.changed, r.refunded, r.due, r.discount_after], [true, 0, 0, 50000], 'изменился только переключатель');
+  assert.equal(pays(db, v.id).filter((p) => p.amount < 0).length, 0);
+  assert.equal(inv(db, v.id).total_amount, 250000);
+});
+
+// Ревью R12 — процент — от той же базы, что у «Скидки» до оплаты: от суммы к оплате без скидки
+// кассы (сумма строк минус их собственные скидки — пакет, ставки). 20 % до оплаты — 20 % после.
+test('ревью R12: процент — от суммы к оплате, как у «Скидки» до оплаты: 20 % до оплаты видно как 20 %, «20» снова — ничего не меняет', () => {
+  const { db } = seed();
+  const v = visit(db, { services: [CONS, USG] });   // 300 000
+  // Строка с собственной скидкой (как у пакета): консультация −50 000.
+  const it = db.prepare('SELECT id FROM invoice_items WHERE invoice_id = ? AND service_id = ?').get(v.id, CONS);
+  db.prepare('UPDATE invoice_items SET discount_amount = 50000 WHERE id = ?').run(it.id);
+  db.prepare('UPDATE invoices SET discount_amount = 50000, total_amount = 250000 WHERE id = ?').run(v.id);
+  call('cashier_invoice_discount', db, { invoice_id: v.id, mode: 'pct', value: 20, reason: 'r' });
+  assert.equal(inv(db, v.id).total_amount, 200000, '20 % от 250 000');
+  call('record_payment', db, { invoice_id: v.id, amount: 200000, method: 'cash' });
+  const st = quote(db, v.id, {});
+  assert.deepEqual([st.pct_before, st.discount_before, st.line_discounts, st.basis], [20, 50000, 50000, 250000]);
+  assert.equal(quote(db, v.id, { mode: 'pct', value: 20 }).changed, false);
+  const q = quote(db, v.id, { mode: 'pct', value: 40 });
+  assert.deepEqual([q.discount_after, q.total_after, q.refunded], [100000, 150000, 50000], '40 % от 250 000');
+  const r = change(db, v.id, { mode: 'pct', value: 40, reason: 'акция' });
+  assert.match(inv(db, v.id).discount_note, /Касса после оплаты: акция — было 20% \(50 000 сум\), стало 40% \(100 000 сум\)$/);
+  assert.equal(r.refunded, 50000);
+});
+
+// Ревью R3 — часть скидки кассы, которую «Скидка» до оплаты положила на строки по ставкам
+// (ставка + часть кассы), — тоже скидка кассы: «Изменить скидку» меняет и её, а «скидками строк»
+// называет только ставку. «Сотрудники»: консультация 50 %; касса 20 % до оплаты; после — 0 %.
+test('ревью R3: часть кассы на строке по ставке меняется вместе со скидкой счёта; ставка остаётся', () => {
+  const { db } = seed();
+  const staff = Number(db.prepare("INSERT INTO patient_categories (name, discount_percent, active, discount_rates) VALUES ('Сотрудники', 0, 1, ?)")
+    .run(JSON.stringify({ g: { consultation: 50 } })).lastInsertRowid);
+  const v = visit(db, { services: [CONS, USG], category: staff });
+  assert.equal(inv(db, v.id).total_amount, 250000);
+  call('cashier_invoice_discount', db, { invoice_id: v.id, mode: 'pct', value: 20, reason: 'ошибка' });
+  assert.equal(inv(db, v.id).total_amount, 200000);
+  call('record_payment', db, { invoice_id: v.id, amount: 200000, method: 'cash' });
+  const st = quote(db, v.id, {});
+  assert.deepEqual([st.pct_before, st.discount_before, st.line_discounts], [20, 50000, 50000], 'скидка кассы — 50 000 (40 000 на УЗИ и 10 000 на консультации), ставка — 50 000');
+  const r = change(db, v.id, { mode: 'pct', value: 0, reason: 'скидка дана ошибочно' });
+  assert.deepEqual([inv(db, v.id).total_amount, r.due], [250000, 50000]);
+  const cons = db.prepare('SELECT discount_amount, discount_rate FROM invoice_items WHERE invoice_id = ? AND service_id = ?').get(v.id, CONS);
+  assert.deepEqual([cons.discount_amount, cons.discount_rate], [50000, 50], 'на консультации осталась только ставка');
+  // И обратно: 20 % — снова 200 000, та же раскладка.
+  change(db, v.id, { mode: 'pct', value: 20, reason: 'вернули' });
+  assert.equal(inv(db, v.id).total_amount, 200000);
+  assert.equal(db.prepare('SELECT discount_amount FROM invoice_items WHERE invoice_id = ? AND service_id = ?').get(v.id, CONS).discount_amount, 60000);
+});
+
+// Ревью R10 — окно считало по старому счёту: сохранение несёт то, что видел кассир (сумму и
+// оплаченное из предпросмотра); счёт изменился — отказ 409 словами, деньги не двигаются.
+test('ревью R10: счёт изменился, пока окно было открыто — отказ 409, деньги не двигаются', () => {
+  const { db } = seed();
+  const v = paid20(db);
+  const q = quote(db, v.id, { mode: 'pct', value: 30 });
+  change(db, v.id, { mode: 'pct', value: 50 }, admin);   // второй кассир
+  assert.throws(() => change(db, v.id, { mode: 'pct', value: 30, expect_total_before: q.total_before, expect_paid_before: q.paid_before }),
+    (e) => e.status === 409 && e.code === 'invoice_changed' && /Счёт изменился, пока окно было открыто/.test(e.message));
+  assert.deepEqual([inv(db, v.id).total_amount, inv(db, v.id).paid_amount], [100000, 100000], 'отказ ничего не тронул');
+  const q2 = quote(db, v.id, { mode: 'pct', value: 30 });
+  const r = change(db, v.id, { mode: 'pct', value: 30, expect_total_before: q2.total_before, expect_paid_before: q2.paid_before });
+  assert.equal(r.due, 40000);
+});
+
+// Ревью R7 — неоплаченный счёт без единого платежа: скидку до оплаты даёт «Скидка» окна оплаты.
+test('ревью R7: неоплаченный счёт без платежей — отказ (это дело «Скидки»); долг без денег и счёт со скидкой 100 % — можно', () => {
+  const { db } = seed();
+  const v = visit(db);
+  assert.throws(() => change(db, v.id, { mode: 'pct', value: 30 }), (e) => e.status === 409 && /«Скидка» в окне оплаты/.test(e.message));
+  assert.throws(() => quote(db, v.id, {}), (e) => e.status === 409);
+  const d = visit(db);
+  call('mark_invoice_debt', db, { invoice_id: d.id });
+  assert.equal(change(db, d.id, { mode: 'pct', value: 10 }).total_after, 180000, 'долг (пациент ушёл) — можно');
 });

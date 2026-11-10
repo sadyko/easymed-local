@@ -172,7 +172,7 @@ export function rateInvoiceItems(db, src, itemIds) {
 const shareOf = (v) => (v == null ? 1 : Math.min(1, Math.max(0, Number(v))));
 
 /** Переключатель «уменьшает долю врача» скидки, чьей ставкой посчитана строка счёта. */
-function rateReducesOf(db, inv, group) {
+export function rateReducesOf(db, inv, group) {   // DISCOUNT_CHANGE_PAID_V1 — и «Изменить скидку» (billing.js discountChangeTx)
   const s = String((inv && inv.discount_source) || '');
   if (s.startsWith('promo:')) {
     const row = db.prepare('SELECT reduces_doctor_share r FROM patient_discounts WHERE id = ?').get(Number(s.slice(6)));
