@@ -34,6 +34,8 @@ const READ_ONLY_RPCS = new Set([
   'cashier_refunds',
   // REFERRAL_BILL_V1 — «Ждут счёта» кассы: визиты со строками без счёта. Чистое чтение.
   'cashier_unbilled',
+  // VISIT_TIER_SHOWN_CASHIER_V1 — ярус цены («второй / повторный визит») у строк кассы. Чистое чтение.
+  'cashier_line_tiers',
   // REFUND_ANY_V1 — поиск счёта кассы за любой день (и один счёт по номеру). Чистое чтение.
   'cashier_invoice_search',
   // BUILDING_REPORTS_V1 — перечень зданий для выборки в «Отчётах». Чистое

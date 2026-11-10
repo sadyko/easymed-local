@@ -32,6 +32,7 @@ import { patientBotStatus, patientBotInvite, phoneBotStatus, phoneBotInvite } fr
 import { navVisibilityGet, navVisibilitySave } from './nav-visibility.js';   // NAV_VISIBILITY_V1 — видимость разделов меню для всей клиники
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice, cashierRefunds } from './cashier.js';   // cashierRefunds: CASHIER_PAID_SWAP_V1
 import { cashierUnbilled } from './cashier.js';   // REFERRAL_BILL_V1 — «Ждут счёта» кассы
+import { cashierLineTiers } from './cashier.js';   // VISIT_TIER_SHOWN_CASHIER_V1 — ярус цены у строк кассы
 import { cashierInvoiceSearch } from './cashier.js';   // REFUND_ANY_V1 — поиск счёта за любой день
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit, admissionReferralDefault,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue,
@@ -214,6 +215,7 @@ export const RPC = {
   cashier_line_rebill_quote:   (db, args, user) => rebillPaidLineQuote(db, args, user),
   cashier_refunds:             (db, args, user) => cashierRefunds(db, args, user),
   cashier_unbilled:            (db, args, user) => cashierUnbilled(db, args, user),   // REFERRAL_BILL_V1 — «Ждут счёта» кассы; только чтение
+  cashier_line_tiers:          (db, args, user) => cashierLineTiers(db, args, user),   // VISIT_TIER_SHOWN_CASHIER_V1 — «второй / повторный визит» у строк кассы; только чтение
   cashier_invoice_search:      (db, args, user) => cashierInvoiceSearch(db, args, user),   // REFUND_ANY_V1 — поиск счёта за любой день; только чтение
   refund_payment:           (db, args, user) => refundPayment(db, args, user),   // CASHIER_REFUND_V1 — возврат оплаты (отрицательный платёж)
   refund_invoice_line:      (db, args, user) => refundInvoiceLine(db, args, user),   // BILLING_AUDIT_FIX_V1 (B1) — вернуть одну услугу счёта
