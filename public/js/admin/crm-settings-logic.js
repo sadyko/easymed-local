@@ -38,6 +38,8 @@ import { fill } from './updates-logic.js';
 import { isNotImplemented } from './telephony-logic.js';
 // CRM_UNIFY_V1 — «Колонка записи»: одно правило с сервером (services/crm/config.js scheduledStageKey).
 import { bookedStageKey } from '../shared/crm-booked-stage.js';
+// CRM_STAGE_ROLES_V1 — роли колонок: та же проверка, что у сервера (services/crm/config.js saveStages).
+import { STAGE_ROLES, roleKey, hasStageRoles, roleRefusal, roleLeaving } from '../shared/crm-booked-stage.js';
 
 export { isNotImplemented };
 
@@ -134,16 +136,52 @@ export const LABEL_MAX = 64;
 // migration 077 seeds: this array's job is "what the board looked like before
 // any of this shipped". When the RPC answers, the seeded telephony source
 // arrives with it.
+// CRM_STAGE_ROLES_V1 — и роли, которые миграция 284 ставит сидовой воронке.
 export const DEFAULT_STAGES = [
-    { key: 'in_process',    label: 'В обработке',           color: 'info',   position: 1, is_active: 1, kind: 'open' },
-    { key: 'recall',        label: 'Перезвонить',           color: 'warn',   position: 2, is_active: 1, kind: 'open' },
-    { key: 'scheduled',     label: 'Записан',               color: 'purple', position: 3, is_active: 1, kind: 'open' },
-    { key: 'approved',      label: 'Подтверждён',           color: 'teal',   position: 4, is_active: 1, kind: 'open' },
-    { key: 'came',          label: 'Пришёл',                color: 'ok',     position: 5, is_active: 1, kind: 'won' },
-    { key: 'no_show',       label: 'Не пришёл',             color: 'crit',   position: 6, is_active: 1, kind: 'lost' },
-    { key: 'stopped',       label: 'Обработка остановлена', color: '',       position: 7, is_active: 1, kind: 'lost' },
-    { key: 'not_qualified', label: 'Нецелевой',             color: '',       position: 8, is_active: 1, kind: 'lost' },
+    { key: 'in_process',    label: 'В обработке',           color: 'info',   position: 1, is_active: 1, kind: 'open', role: null },
+    { key: 'recall',        label: 'Перезвонить',           color: 'warn',   position: 2, is_active: 1, kind: 'open', role: null },
+    { key: 'scheduled',     label: 'Записан',               color: 'purple', position: 3, is_active: 1, kind: 'open', role: 'booked' },
+    { key: 'approved',      label: 'Подтверждён',           color: 'teal',   position: 4, is_active: 1, kind: 'open', role: 'confirmed' },
+    { key: 'came',          label: 'Пришёл',                color: 'ok',     position: 5, is_active: 1, kind: 'won',  role: null },
+    { key: 'no_show',       label: 'Не пришёл',             color: 'crit',   position: 6, is_active: 1, kind: 'lost', role: 'no_show' },
+    { key: 'stopped',       label: 'Обработка остановлена', color: '',       position: 7, is_active: 1, kind: 'lost', role: null },
+    { key: 'not_qualified', label: 'Нецелевой',             color: '',       position: 8, is_active: 1, kind: 'lost', role: null },
 ];
+
+// ---------------------------------------------------------------------------
+// CRM_STAGE_ROLES_V1 (3.23.0) — роли колонок
+// ---------------------------------------------------------------------------
+// Владелец: «we need to add a booking tick (like conversion) so the system won't break».
+// Три колонки, на которые завязана автоматика, — отметки (crm_stages.role, миграция 284):
+//   booked    — «запись»: сюда переходит карточка, когда пациента записали;
+//   confirmed — «подтверждение»: сюда её ведёт отметка «Подтверждён» в календаре;
+//   no_show   — «не пришёл»: сюда её уводит неявка (проход наутро, отметка в календаре).
+// Бейджи — как «конверсия» (Tag), подписи — строки словаря (переводит h()).
+export const ROLE_BADGES = Object.freeze({
+    booked: Object.freeze({ label: 'запись', kind: 'purple' }),
+    confirmed: Object.freeze({ label: 'подтверждение', kind: 'teal' }),
+    no_show: Object.freeze({ label: 'не пришёл', kind: 'crit' }),
+});
+/** Какие роли можно отметить у колонки: открытой — запись и подтверждение, проигрышной — «не пришёл», конверсии — никакие. */
+export function roleOptionsFor(stage) {
+    const kind = stage && stage.kind;
+    if (kind === 'open') return ['booked', 'confirmed'];
+    if (kind === 'lost') return ['no_show'];
+    return [];
+}
+// Тексты отказов — те же фразы, что у сервера (services/crm/config.js ROLE_REFUSALS,
+// ROLE_LEAVING): экран отказывает до сервера, сервер — ещё раз.
+const ROLE_REFUSALS = {
+    role_twice: 'Каждую роль можно отметить только у одной колонки.',
+    booked_order: 'Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией.',
+    confirmed_order: 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.',
+    no_show_kind: 'Колонкой «Не пришёл» может быть только видимая проигрышная колонка.',
+};
+const ROLE_LEAVING = {
+    booked: 'Колонка «{label}» — колонка записи: сначала передайте роль другой колонке.',
+    confirmed: 'Колонка «{label}» — колонка подтверждения: сначала передайте роль другой колонке.',
+    no_show: 'Колонка «{label}» — колонка «Не пришёл»: сначала передайте роль другой колонке.',
+};
 export const DEFAULT_SOURCES = [
     { key: 'call',      label: 'Звонок',       position: 1, is_active: 1 },
     { key: 'instagram', label: 'Instagram',    position: 2, is_active: 1 },
@@ -279,7 +317,11 @@ export function truthy(v) {
 
 const KIND_VALUES = ['open', 'won', 'lost'];
 
-export function validateStages(stages, t = (s) => s) {
+/**
+ * CRM_STAGE_ROLES_V1 — `prev` (то, что последним отдал сервер): с ним проверяются и роли —
+ * колонку с ролью не скрыть и не удалить, не передав роль; правила ролей по воронке.
+ */
+export function validateStages(stages, t = (s) => s, prev = null) {
     const arr = Array.isArray(stages) ? stages : [];
     if (!arr.length) return { ok: false, error: 'Нужна хотя бы одна колонка канбана.' };
 
@@ -307,6 +349,14 @@ export function validateStages(stages, t = (s) => s) {
     if (wonCount === 0) return { ok: false, error: 'Нужна колонка конверсии — через неё регистрируется пациент.' };
     if (wonCount > 1) return { ok: false, error: 'Колонка конверсии должна быть ровно одна.' };
     if (!activeCount) return { ok: false, error: 'Хотя бы одна колонка должна быть видимой.' };
+    // CRM_STAGE_ROLES_V1 — роли колонок.
+    if (prev) {
+        // Ревью: экран шлёт роли — удалённая колонка уносит снятую роль (как «снять и скрыть»).
+        const leaving = roleLeaving(prev, arr, { deletions: false });
+        if (leaving) return { ok: false, error: fill(t(ROLE_LEAVING[leaving.role]), { label: leaving.label }) };
+    }
+    const why = roleRefusal(arr, prev);
+    if (why) return { ok: false, error: t(ROLE_REFUSALS[why]) };
     return { ok: true };
 }
 
@@ -475,7 +525,11 @@ export function shapeConfig(data) {
             // default — it neither claims the conversion flow nor counts as
             // a loss in the funnel.
             kind: KIND_VALUES.includes(r.kind) ? r.kind : 'open',
+            role: STAGE_ROLES.includes(r.role) ? r.role : null,   // CRM_STAGE_ROLES_V1
         })))),
+        // CRM_STAGE_ROLES_V1 — прислал ли сервер роли (запасная воронка — с ролями миграции 284).
+        // Нет — сервер старше экрана: доска угадывает колонку записи по-старому.
+        hasRoles: Array.isArray(raw.stages) && raw.stages.filter(usableRow).length ? hasStageRoles(raw.stages) : true,
         // CLINIC_API_STEP7_V1 — источник подключения API: чей и свой ли
         // (services/crm/config.js listSources). Своих экран не правит.
         sources: withPositions(sources.map((s) => norm(s, (r) => ({
@@ -546,6 +600,7 @@ export function boardConfig(data) {
         // CRM_UNIFY_V1 — «Колонка записи»: куда доска ставит заявку с датой записи.
         // То же правило, что у сервера; null — у воронки без открытой видимой
         // колонки до конверсии (доска тогда статус не трогает).
-        bookedStatus: bookedStageKey(cfg.stages, cfg.settings.booked_stage),
+        // CRM_STAGE_ROLES_V1 — колонка с ролью «запись»; сервер без ролей — прежняя догадка.
+        bookedStatus: cfg.hasRoles ? roleKey(cfg.stages, 'booked') : bookedStageKey(cfg.stages, cfg.settings.booked_stage),
     };
 }

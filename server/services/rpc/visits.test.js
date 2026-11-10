@@ -293,9 +293,13 @@ test('CRM_REAL_BOOKING_V1: заявка из СВОЕЙ колонки воро�
     'заявка из добавленной клиникой колонки не уехала в «Записан» — воронка настраивается только на вид');
 });
 
-test('CRM_REAL_BOOKING_V1: без колонки «Записан» заявка уезжает в последнюю открытую', async () => {
+test('CRM_REAL_BOOKING_V1: без колонки «Записан» заявка уезжает в колонку записи (роль)', async () => {
   const db = freshDb();
   db.prepare("DELETE FROM crm_stages WHERE key='scheduled'").run();
+  // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: колонка записи — роль колонки (галочка «запись»), а не догадка
+  // «последняя открытая»; клиника, убравшая «Записан», отмечает её у «Подтверждён».
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();
+  db.prepare("UPDATE crm_stages SET role = 'booked' WHERE key = 'approved'").run();
   const rid = addReq(db, { status: 'in_process' });
   addLine(db, rid, { date: '2026-08-09' });
 

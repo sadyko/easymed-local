@@ -22,6 +22,7 @@ test('конверсия «Подтверждён»: ровно одна won; к
   const t = await startCrmApp(seedOther);
   try {
     const old = addLead(t.db, { status: 'came', patient: 78, phone: '+998 91 111 22 33', name: 'Старая конверсия' });
+    t.db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
     const s = await t.rpc('crm_config_save', 'boss', { settings: { won_stage: 'approved' } });
     assert.equal(s.status, 200, s.text);
     assert.deepEqual(wonKeys(t.db), ['approved'], 'после сохранения конверсия ровно одна');
@@ -44,6 +45,7 @@ test('конверсия «Успешно» (своя колонка клини�
     db.prepare("INSERT INTO crm_stages (key, label, color, position, is_active, kind) VALUES ('uspeshno','Успешно','ok',9,1,'open')").run();
   });
   try {
+    t.db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью) — у «Подтверждён» роль подтверждения: сначала снята, иначе отказ
     const s = await t.rpc('crm_config_save', 'boss', { settings: { won_stage: 'uspeshno', booked_stage: 'approved' } });
     assert.equal(s.status, 200, s.text);
     assert.deepEqual(wonKeys(t.db), ['uspeshno']);
@@ -70,6 +72,7 @@ test('оператор и регистратура не меняют конве�
       const r = await t.rpc('crm_config_save', who, { settings: { won_stage: 'approved' } });
       assert.equal(r.status, 403, who + ': ' + r.text);
     }
+    t.db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
     for (const [settings, re] of [
       [{ won_stage: 'stopped' }, /Проигрышная колонка/],
       [{ won_stage: 'no_show' }, /Проигрышная колонка/],

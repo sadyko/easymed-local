@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { contactDecision, firstStageKey, reopenLead, leadInWindow, inWindowSql, windowArg } from './contact-window.js';
+import { liveKeys, missedRecentlySql, missedRecentlyArgs } from './contact-window.js';   // CRM_STAGE_ROLES_V1
 import { saveConfig } from './config.js';
 
 const iso = (hoursAgo) => new Date(Date.now() - hoursAgo * 3600 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -104,5 +105,24 @@ test('нет ни одной открытой видимой колонки — 
   const id = lead(db, 'recall', 500);
   assert.equal(reopenLead(db, id), false);
   assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(id).status, 'recall');
+  db.close();
+});
+
+// CRM_STAGE_ROLES_V1 (3.23.0) — «Не пришёл» живая для нового обращения — колонка с РОЛЬЮ «не
+// пришёл», а не ключ 'no_show'; без роли — только открытые. Опоздание на день — по той же колонке.
+test('живые колонки и опоздание — по роли «не пришёл»', () => {
+  const db = fresh();
+  assert.deepEqual(liveKeys(db), ['in_process', 'recall', 'scheduled', 'approved', 'no_show']);
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'no_show'").run();
+  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'stopped'").run();
+  assert.deepEqual(liveKeys(db), ['in_process', 'recall', 'scheduled', 'approved', 'stopped']);
+  const late = (status, noShow) => !!db.prepare(`SELECT 1 FROM crm_requests r WHERE r.id = @id AND ${missedRecentlySql('r')}`)
+    .get({ id: Number(db.prepare("INSERT INTO crm_requests (full_name, phone, status, scheduled_date) VALUES ('Л', 'x', ?, date('now','localtime','-1 day'))").run(status).lastInsertRowid),
+      ...missedRecentlyArgs(db.prepare("SELECT date('now','localtime') AS d").get().d, 72, noShow) });
+  assert.equal(late('stopped', 'stopped'), true, 'опоздание в колонке с ролью не узнано');
+  assert.equal(late('no_show', 'stopped'), false, 'ключ no_show без роли узнан как «Не пришёл»');
+  assert.equal(late('stopped', null), false, 'без роли опоздания нет');
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+  assert.deepEqual(liveKeys(db), ['in_process', 'recall', 'scheduled', 'approved']);
   db.close();
 });

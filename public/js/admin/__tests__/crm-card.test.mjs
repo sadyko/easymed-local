@@ -1422,6 +1422,8 @@ test('«Сохранить и записать» заводит визит дн�
   assert.strictEqual(ev.length, 1, 'на один день ушёл не один вызов ensure_visit: ' + JSON.stringify(ev.map((c) => c.body)));
   const b = ev[0].body;
   assert.strictEqual(b.patient_id, 7, 'визит заведён не на пациента заявки');
+  // CRM_BOOKING_OWN_CARD_V1 (3.23.0, F1) — запись называет свою карточку: сервер больше не угадывает её по пациенту.
+  assert.strictEqual(b.crm_request_id, 1, 'запись из карточки не назвала карточку');
   assert.ok(b.book, 'визит заведён БЕЗ просьбы занять слот — время врача так и осталось свободным');
   assert.strictEqual(b.book.doctor_id, DOCTOR.id);
   assert.strictEqual(b.book.service_id, DOC_SVC.id);

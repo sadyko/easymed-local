@@ -29,6 +29,12 @@ const wonKeys = (db) => db.prepare("SELECT key FROM crm_stages WHERE kind = 'won
 const OLD_UPDATED = daysAgoIso(200);
 const historyCard = (db, extra = {}) => addLead(db, { status: 'came', date: '2025-05-01', updated: OLD_UPDATED, name: 'История', ...extra });
 const moveTo = async (t, key) => {
+  // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ.
+  const cfg = (await t.rpc('crm_config_get', 'boss', {})).json.data;
+  if ((cfg.stages.find((x) => x.key === key) || {}).role) {
+    const u = await t.rpc('crm_config_save', 'boss', { stages: cfg.stages.map((x) => (x.key === key ? { ...x, role: null } : x)) });
+    assert.equal(u.status, 200, u.text);
+  }
   const s = await t.rpc('crm_config_save', 'boss', { settings: { won_stage: key } });
   assert.equal(s.status, 200, s.text);
 };
@@ -39,12 +45,15 @@ function assertHistory(db, id, won) {
   assert.equal(r.scheduled_date, '2025-05-01', 'дата карточки истории переписана');
   assert.equal(r.updated_at, OLD_UPDATED, 'карточка истории «ожила»: updated_at сдвинут');
 }
+// CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: воронка клиники с ролями, которые ей поставила бы миграция 284
+// (догадка 3.22.0 у этой воронки — колонка записи «Успешно», подтверждения нет). «Записан» с ролью
+// без передачи роли удалить нельзя — поэтому роли едут вместе с колонками.
 const CLINIC = (db) => {
-  const st = (key, label, kind) => ({ key, label, color: '', kind, is_active: 1 });
+  const st = (key, label, kind, role = null) => ({ key, label, color: '', kind, is_active: 1, role });
   saveStages(db, [
     st('in_process', 'Новый лид', 'open'), st('recall', 'Перезвонить', 'open'), st('dozhim', 'Дожим', 'open'),
     st('approved', 'Подтверждён (амбулатор)', 'open'), st('approved_in', 'Подтверждён (стационар)', 'open'),
-    st('no_show', 'Не пришёл', 'lost'), st('uspeshno', 'Успешно', 'open'), st('came', 'Пришёл', 'won'),
+    st('no_show', 'Не пришёл', 'lost', 'no_show'), st('uspeshno', 'Успешно', 'open', 'booked'), st('came', 'Пришёл', 'won'),
     st('stopped', 'Отказ', 'lost'),
   ]);
 };
@@ -82,6 +91,7 @@ for (const move of [false, true]) {
     // (за окном повторного обращения). Закрытая карточка В ОКНЕ новый лид не
     // заводит (Р5, lead-from-call.test.js).
     db.prepare("INSERT INTO crm_requests (full_name, phone, status, updated_at, created_at) VALUES ('История', '+998 90 909 26 38', 'came', ?, ?)").run(OLD_UPDATED, OLD_UPDATED);
+    if (move) db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
     if (move) saveConfig(db, { settings: { won_stage: 'approved' } });
     const cid = Number(db.prepare("INSERT INTO calls (general_call_id, started_at, disposition, external_number, call_type) VALUES ('X1','2026-10-09T08:00:00Z','ANSWER','998909092638',0)").run().lastInsertRowid);
     const created = leadFromCall(db, { id: cid, disposition: 'ANSWER', external_number: '998909092638', call_type: 0 });
@@ -99,7 +109,10 @@ test('R3 воронка клиники: без выбора записанные
   // Заметка выката: без явного выбора у клиники записанные по-прежнему уходят в
   // «Успешно» — администратор обязан выбрать «Колонку подтверждения».
   assert.equal(scheduledStageKey(db), 'uspeshno');
-  saveConfig(db, { settings: { won_stage: 'uspeshno' } });
+  // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: колонка записи — роль, конверсия её не пересчитывает; «Успешно»
+  // с ролью «запись» конверсией не станет — роль сначала передают («Подтверждён (стационар)»).
+  assert.throws(() => saveConfig(db, { settings: { won_stage: 'uspeshno' } }), /Колонка записи/);
+  saveConfig(db, { settings: { booked_stage: 'approved_in', won_stage: 'uspeshno' } });
   const cfg = crmConfig(db);
   assert.deepEqual(cfg.stages.filter((s) => s.kind === 'won').map((s) => s.key), ['uspeshno']);
   assert.equal(cfg.stages.find((s) => s.key === 'came').kind, 'open');
@@ -118,6 +131,9 @@ test('R4 отчёт колл-центра не проваливается, ко�
     const a = await rep();
     assert.equal(a.kpi.came, 5);
     assert.deepEqual(a.stale.oldest.map((x) => x.name), ['Живой застрявший']);
+    // CRM_STAGE_ROLES_V1 — роль «запись» сначала у «Подтверждён (стационар)» (R3).
+    const b0 = await t.rpc('crm_config_save', 'boss', { settings: { booked_stage: 'approved_in' } });
+    assert.equal(b0.status, 200, b0.text);
     await moveTo(t, 'uspeshno');
     for (const id of came) assert.equal(t.lead(id).status, 'uspeshno', 'конвертированная карточка не пошла за конверсией');
     const b = await rep();
@@ -171,6 +187,7 @@ test('новая колонка конверсии должна быть пус�
     const live = addLead(t.db, { status: 'approved', name: 'Живая в «Подтверждён»' });
     addLead(t.db, { status: 'approved', name: 'Вторая', patient: null });
     const hist = historyCard(t.db);
+    t.db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
     const r = await t.rpc('crm_config_save', 'boss', { settings: { won_stage: 'approved' } });
     assert.equal(r.status, 409, r.text);
     assert.match(r.json.error.message, /В колонке «Подтверждён» карточек: 2 — сначала перенесите их в другие колонки/);

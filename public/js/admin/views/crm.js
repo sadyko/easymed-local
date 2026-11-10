@@ -238,9 +238,10 @@ function ymdLocal(d) {
 // services/crm/contact-window.js liveKeys = открытые + 'no_show'). На доске
 // она как открытая: видна всегда, без периода и без 300 на колонку, число
 // полное — и в «Списке», и в Excel (всё это идёт отсюда).
-const SEED_NO_SHOW_STAGE = 'no_show';   // тот же ключ, что SEED_NO_SHOW_STAGE сервера
+// CRM_STAGE_ROLES_V1 (3.23.0) — «Не пришёл» — колонка с ролью «не пришёл» (STAGE_KEYS.noShow,
+// тот же ключ, что noShowStageKey сервера), а не ключ 'no_show'. Роли нет — все проигрышные закрытые.
 function closedKeys() {
-    return [STAGE_KEYS.won, ...STAGE_KEYS.lost].filter((k) => k && k !== SEED_NO_SHOW_STAGE);
+    return [STAGE_KEYS.won, ...STAGE_KEYS.lost].filter((k) => k && k !== STAGE_KEYS.noShow);
 }
 function inPeriod(r) {
     // CRM_PERIOD_ALL_COLUMNS_V1 (3.23.0, решение владельца Q1) — «Период» сужает
@@ -3265,6 +3266,10 @@ async function paint() {
                         date: liveQueueNowIso(),
                         doctor_id: Number(head.doctor_id),
                     };
+                    // CRM_BOOKING_OWN_CARD_V1 (3.23.0, F1) — запись называет свою карточку: сервер
+                    // сажает, привязывает и двигает только её, а не угадывает по пациенту (владелец:
+                    // новая карточка уезжала в «Пришёл» / «Не пришёл» из-за визита другой карточки).
+                    args.crm_request_id = Number(requestId);
                     let res = await supabase.rpc('ensure_visit', args);
                     // ЗАНЯТО — ЭТО ВОПРОС ЧЕЛОВЕКУ, А НЕ ГАЛОЧКА. Слова отказа
                     // и окно причины — те же, что у календаря и у мастера:

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { crmLinkVisit, patientIdsWithPhoneKey, phoneMatchKey, leadNameFits } from './visit-link.js';
+import { deskCloses, waitsForDay, bookingCardFor } from './visit-link.js';   // CRM_CARD_OWN_BOOKING_V1 · CRM_BOOKING_OWN_CARD_V1
 import { touchRequest } from './booking-mirror.js';
 import { localDay } from '../../test-helpers/crm-unify-app.js';
 
@@ -199,5 +200,72 @@ test('сверка зеркала (touchRequest): прошедшие строк�
   lineOn(db, r3, null);
   touchRequest(db, r3);
   assert.equal(date(r3), DD);
+  db.close();
+});
+
+// ─── CRM_BOOKING_OWN_CARD_V1 · CRM_CARD_OWN_BOOKING_V1 (3.23.0) ──────────────
+// Своя живая запись на другой день (F2) и номер карточки в записи (F1) — как функции.
+const today = localDay(0);
+const plus3 = localDay(3);
+
+test('F2: deskCloses и waitsForDay — карточку со своей живой записью на другой день окно 72 ч не берёт; свой день — берёт', () => {
+  const db = freshDb();
+  const vToday = visitOn(db, today);
+  const B = addReq(db, 'scheduled');   // свежая: двигалась в окне
+  lineOn(db, B, plus3, visitOn(db, plus3));
+  const v = { id: vToday, day: today };
+  assert.equal(deskCloses(db, B, v), false, 'стойка закрыла карточку с её собственной записью на +3');
+  assert.equal(waitsForDay(db, B, today, { undated: true, visitId: vToday }), false);
+  // Своя строка и на сегодня — тогда это и её визит.
+  lineOn(db, B, today);
+  assert.equal(deskCloses(db, B, v), true);
+  assert.equal(waitsForDay(db, B, today, { visitId: vToday }), true);
+  // Своя запись на +3 отменена — окно снова действует.
+  const C = addReq(db, 'scheduled');
+  const vC = visitOn(db, plus3, 'cancelled');
+  lineOn(db, C, plus3, vC);
+  db.prepare("UPDATE crm_request_services SET status = 'cancelled' WHERE request_id = ?").run(C);
+  assert.equal(deskCloses(db, C, v), true, 'отменённая запись — не своя живая запись');
+  db.close();
+});
+
+test('F1: номер карточки действует, только если она этого пациента и живая', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (78,'Другой','x')").run();
+  const mine = addReq(db, 'in_process');
+  const closed = addReq(db, 'came');
+  const foreign = Number(db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id) VALUES ('Лид','x','in_process',78)").run().lastInsertRowid);
+  const missed = addReq(db, 'no_show');
+  assert.equal(bookingCardFor(db, 77, mine), mine);
+  assert.equal(bookingCardFor(db, 77, String(mine)), mine);
+  assert.equal(bookingCardFor(db, 77, missed), missed, '«Не пришёл» (роль) — живая');
+  assert.equal(bookingCardFor(db, 77, closed), null, 'закрытая карточка');
+  assert.equal(bookingCardFor(db, 77, foreign), null, 'чужой пациент');
+  for (const bad of [null, '', 'x', -1, 9999]) assert.equal(bookingCardFor(db, 77, bad), null, String(bad));
+  db.close();
+});
+
+test('F1: запись с номером карточки двигает и привязывает только её; другая живая карточка того же дня не тронута', () => {
+  const db = freshDb();
+  const other = addReq(db, 'in_process');
+  const mine = addReq(db, 'in_process');
+  const vid = visitOn(db, plus3);
+  crmLinkVisit(db, vid, REG, { requestId: mine });
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(mine).status, 'scheduled');
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(other).status, 'in_process');
+  assert.equal(db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(vid).request_id, mine);
+  db.close();
+});
+
+test('F4: запись без номера карточки берёт ОДНУ карточку — двигавшуюся последней', () => {
+  const db = freshDb();
+  const older = addReq(db, 'in_process');
+  const newer = addReq(db, 'in_process');
+  db.prepare("UPDATE crm_requests SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','-2 hours') WHERE id = ?").run(older);
+  const vid = visitOn(db, plus3);
+  crmLinkVisit(db, vid, REG);
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(newer).status, 'scheduled');
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(older).status, 'in_process', 'запись утащила вторую карточку');
+  assert.equal(db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ?').get(vid).request_id, newer);
   db.close();
 });

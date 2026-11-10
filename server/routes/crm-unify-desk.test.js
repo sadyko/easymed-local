@@ -419,8 +419,11 @@ test('R5: стойка закрывает ждущие сегодня и жив�
     const st = (id) => t.lead(id).status;
     assert.deepEqual([st(recall21), st(new90), st(outside), st(approvedOld), st(schedPast)],
       ['recall', 'in_process', 'in_process', 'approved', 'scheduled'], 'стойка закрыла старую карточку, которая ждёт не сегодня');
-    assert.deepEqual([st(fresh), st(lineToday), st(undated), st(datedToday)], ['came', 'came', 'came', 'came'],
-      'стойка не закрыла карточку, ждущую сегодня или живую в окне');
+    // CRM_CARD_OWN_BOOKING_V1 (ревью 3.23.0) — ОБНОВЛЕНО НАМЕРЕННО: «Перезвонить» без строк с датой +5
+    // ждёт СВОЙ день (F2: своя дата после дня визита) — окно 72 ч его больше не закрывает (владелец:
+    // новая карточка уезжала в «Пришёл» из-за чужого визита).
+    assert.deepEqual([st(fresh), st(lineToday), st(undated), st(datedToday)], ['recall', 'came', 'came', 'came'],
+      'стойка не закрыла карточку, ждущую сегодня или живую в окне (или закрыла ждущую свой день)');
     assert.deepEqual([st(noShowOld), st(stopped)], ['no_show', 'stopped']);
   } finally { t.close(); }
 });

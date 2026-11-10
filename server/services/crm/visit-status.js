@@ -31,7 +31,9 @@
 // отметке прихода: воронка — это учёт работы колл-центра, а не условие приёма
 // пациента. Любая ошибка попадает в лог и там остаётся.
 
-import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, windowHours, SEED_NO_SHOW_STAGE, confirmedStageKey } from './config.js';   // CRM_UNIFY_V1 — windowHours · CRM_LINK_ALL_V1 — confirmedStageKey
+import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, windowHours, confirmedStageKey } from './config.js';   // CRM_UNIFY_V1 — windowHours · CRM_LINK_ALL_V1 — confirmedStageKey
+// CRM_STAGE_ROLES_V1 (3.23.0) — «Не пришёл», «Колонка записи» и «Колонка подтверждения» — роли
+// колонок (миграция 284): noShowStageKey / scheduledStageKey / confirmedStageKey читают роль.
 // CLINIC_DAY_V1 — «сегодня» и «день визита» — местные дни клиники, теми же
 // словами, какими их считают касса, дневник и документы.
 import { localDate, today } from '../domain/day.js';   // CRM_LINK_ALL_V1 (P-4) — today
@@ -146,8 +148,14 @@ function writeParent(stmt, parent, status, when) {
  * (результат анализа, порция соседнего здания, оплата долга — дни спустя), а
  * приход в тот день не может закрыть обращение, которого тогда ещё не было:
  * сегодняшний звонок про МРТ — не конверсия анализа четырёхдневной давности.
+ *
+ * CRM_CARD_OWN_BOOKING_V1 (3.23.0, F3) — и только карточку, заведённую РАНЬШЕ САМОГО ВИЗИТА
+ * (created_at карточки строго раньше created_at визита; в ту же секунду — не раньше). Пациент
+ * пришёл по записи старой карточки A, оператор при нём завёл карточку B о новом обращении —
+ * приход по визиту A её не закрывает (владелец: новая карточка уезжала в «Пришёл»). Визит без
+ * отметки о заведении (старые базы, порции соседнего здания) — прежнее правило.
  */
-function settleLineless(db, { patientId, day, open, won, write }) {
+function settleLineless(db, { patientId, day, open, won, write, visitCreatedAt = null }) {
   if (!patientId || !open.length) return;
   const holes = open.map(() => '?').join(',');
   const reqs = db.prepare(`
@@ -157,9 +165,10 @@ function settleLineless(db, { patientId, day, open, won, write }) {
        AND (date(r.scheduled_date) = date(?)
             OR ((r.scheduled_date IS NULL OR r.scheduled_date = '') AND ${inWindowSql('r')}))
        AND ${localDate('r.created_at')} <= date(?)
+       AND (? IS NULL OR julianday(r.created_at) < julianday(?))
        AND NOT EXISTS (SELECT 1 FROM crm_request_services l
                         WHERE l.request_id = r.id AND l.status = 'pending')
-  `).all(patientId, ...open, day, windowArg(windowHours(db)), day);   // CRM_UNIFY_V1 (задача 6) — одно правило окна; A-I3 — заведена до визита
+  `).all(patientId, ...open, day, windowArg(windowHours(db)), day, visitCreatedAt, visitCreatedAt);   // CRM_UNIFY_V1 (задача 6) — одно правило окна; A-I3 — заведена до визита; F3 — до самого визита
   for (const p of reqs) writeParent(write, p, won, p.scheduled_date);
 }
 
@@ -187,6 +196,8 @@ function settleLineless(db, { patientId, day, open, won, write }) {
  */
 function liftMissed(db, { patientId, day, won, write }) {
   if (!patientId) return;
+  const noShow = noShowStageKey(db);   // CRM_STAGE_ROLES_V1 — роли «не пришёл» нет — поднимать неоткуда
+  if (!noShow) return;
   const live = "v.status NOT IN ('cancelled', 'no_show')";
   let links = '';
   try { db.prepare('SELECT 1 FROM crm_booking_links LIMIT 1').get(); links = `
@@ -204,7 +215,7 @@ function liftMissed(db, { patientId, day, won, write }) {
             OR EXISTS (SELECT 1 FROM crm_request_services l JOIN visits v ON v.id = l.visit_id
                         WHERE l.request_id = r.id AND l.status <> 'cancelled' AND ${live}
                           AND ${localDate('v.visit_date')} = date(@day))${links})`)
-    .all({ pid: patientId, missed: SEED_NO_SHOW_STAGE, day, ...missedRecentlyArgs(day, windowHours(db)) });
+    .all({ pid: patientId, missed: noShow, day, ...missedRecentlyArgs(day, windowHours(db), noShow) });
   for (const p of reqs) writeParent(write, p, won, p.scheduled_date);
 }
 
@@ -285,7 +296,8 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false, fromVis
       -- отчёты): substr(visit_date, 1, 10) давал день по UTC, и приход после
       -- полуночи по местному закрывал вчерашние заявки вместо сегодняшних.
       SELECT id, patient_id, sync_origin, ${localDate('visit_date')} AS day,
-             (${localDate('visit_date')} > date('now','localtime')) AS future
+             (${localDate('visit_date')} > date('now','localtime')) AS future,
+             NULLIF(created_at, '') AS created_at
         FROM visits WHERE id = ?
     `).get(id);
     if (!visit) return;
@@ -347,6 +359,7 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false, fromVis
 
     if (ARRIVED_STATUSES.includes(now)) {
       const won = wonStageKey(db);
+      const noShowKey = noShowStageKey(db);   // CRM_STAGE_ROLES_V1 — и из колонки «Не пришёл»
       if (parents.length) {
         // CRM_UNIFY_V1 (проверка ревью задачи 3, N1/P2) — СНАЧАЛА УСЛУГИ:
         // строки, которые визит держит, а в визите их нет (взяли после прихода
@@ -372,13 +385,18 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false, fromVis
         // Р8): строки других дней остаются в карточке и в календаре как записи.
         // Закрываются живые колонки и сидовая «Не пришёл»; «Пришёл», «Отказ» и
         // прочие закрытые не меняются (решение 3).
-        if (!open.includes(p.status) && p.status !== SEED_NO_SHOW_STAGE) continue;
+        if (!open.includes(p.status) && (!noShowKey || p.status !== noShowKey)) continue;   // CRM_STAGE_ROLES_V1
         writeParent(write, p, won, p.scheduled_date);
       }
       // Строго ПОСЛЕ: заявка, у которой строки только что закрылись, уже
       // стоит в «Пришёл» и живой не считается — второй раз её не тронут.
-      settleLineless(db, { patientId: visit.patient_id, day: visit.day, open, won, write });
-      liftMissed(db, { patientId: visit.patient_id, day: visit.day, won, write });   // CRM_UNIFY_V1 (ревью, I-1)
+      settleLineless(db, { patientId: visit.patient_id, day: visit.day, open, won, write,
+        visitCreatedAt: visit.sync_origin == null ? visit.created_at : null });   // CRM_CARD_OWN_BOOKING_V1 (F3)
+      // CRM_CARD_OWN_BOOKING_V1 (ревью 3.23.0; решение координатора) — у визита СВОЯ карточка
+      // (строки или привязка записи): приход по нему чужую «Не пришёл» не поднимает — опоздание на
+      // день (I-1, A-P5) — приход, только когда у визита своей карточки нет. Своя карточка в «Не
+      // пришёл» поднята выше (цикл по строкам и привязке).
+      if (!withLinked().length) liftMissed(db, { patientId: visit.patient_id, day: visit.day, won, write });   // CRM_UNIFY_V1 (ревью, I-1)
       return;
     }
 
@@ -408,8 +426,10 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false, fromVis
       // noShowStageKey() отдаёт первую проигрышную колонку, и у клиники,
       // убравшей сидовую, неявка уносила бы заявку в «Обработка остановлена» —
       // совсем другой факт о ней.
+      // CRM_STAGE_ROLES_V1 — ПЕРЕПИСАНО: колонка с ролью «не пришёл» (отметка в «CRM-канбан»);
+      // запасной догадки больше нет. Роли нет — отметка «Не пришёл» карточку не двигает.
       const noShow = noShowStageKey(db);
-      if (noShow !== SEED_NO_SHOW_STAGE) return;
+      if (!noShow) return;
       // CRM_LINK_ALL_V1 (редакция 2б, P-4) — «НЕ ПРИШЁЛ» ТОЛЬКО БЕЗ ДРУГИХ ЗАПИСЕЙ:
       // карточка уходит в «Не пришёл» по этому визиту, только если у неё нет
       // другой живой записи на сегодня или позже — строкой или привязкой любого
@@ -423,11 +443,17 @@ export function crmVisitStatus(db, { visitId, from, to, catchUp = false, fromVis
                 OR x.id IN (SELECT visit_id FROM crm_booking_links WHERE request_id = @rid))
          LIMIT 1`);
       const dayNow = today(db);
+      // CRM_CARD_OWN_BOOKING_V1 (3.23.0, F4) — «Не пришёл» — только карточке, которую ЗАПИСАЛИ:
+      // из «Колонки записи» и дальше (то же правило, что у прохода наутро, no-show.js). Карточка
+      // до неё (её желание без даты село в чужой визит — сама она не записана) неявкой по чужой
+      // записи не уносится. Колонки записи нет (роль снята) — как прежде, любая открытая.
+      const bookedAt = scheduled ? open.indexOf(scheduled) : -1;
+      const waiting = bookedAt >= 0 ? open.slice(bookedAt) : open;
       for (const p of withLinked()) {   // CRM_UNIFY_V1 (Р9) — и привязанные записью
         // Только из ЖИВЫХ: уже закрытую заявку неявка не переписывает, а
         // дошедшую — тем более (пациент был, визит ему потом отменили —
         // конверсия от этого не исчезает).
-        if (!open.includes(p.status)) continue;
+        if (!waiting.includes(p.status)) continue;   // CRM_CARD_OWN_BOOKING_V1 — и только записанную
         // CRM_LINK_ALL_V1 (P-4) — другая живая запись впереди: ступень остаётся.
         // CRM_LINK_ALL_V1 (повторное ревью воронки, F-3) — а дата уходит с пропущенного визита
         // на живую запись (cardDateOf — то же правило, что у шага связи и отмены).

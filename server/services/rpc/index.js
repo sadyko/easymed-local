@@ -119,6 +119,7 @@ import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_
 import { roleEffectiveGrants } from './roles-effective.js';   // ROLES_SAVE_TRUTH_V1 — что у роли есть сейчас
 import { crmLeadsByPhone, crmSearch, crmVisitLinks } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
 import { crmCardBookings } from './crm-card-bookings.js';   // CRM_LINK_ALL_V1 (ред. 2) — «Записи пациента» карточки
+import { crmDayLines } from './crm-day-lines.js';   // CRM_DAY_LINES_V1 — что из заявок подставить в смету дня
 import { crmDuplicateGroups, crmMergeLeads } from './crm-merge.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { crmLinkNewPatient } from '../crm/new-patient-link.js';   // CRM_UNIFY_V1 — новая карта находит заявку колл-центра
 import { crmTaskAssignees } from '../crm/tasks-follow.js';   // CRM_UNIFY_V1 — кого можно назначить ответственным
@@ -891,6 +892,10 @@ export const RPC = {
   // CRM_LINK_ALL_V1 (редакция 2) — «Записи пациента» в карточке CRM: визиты карточки
   // (строкой или привязкой любого вида) с услугами, без цен; тому, кто видит карточку. Чтение.
   crm_card_bookings:        (db, args, user) => crmCardBookings(db, args, user),
+  // CRM_DAY_LINES_V1 (3.23.0) — смета регистратуры (мастер визита, каталог услуг): ждущие строки
+  // заявок пациента на день — правилом шага связи, без ограничения по хозяину; только услуга,
+  // врач и дата. Чтение (READ_ONLY_RPCS).
+  crm_day_lines:            (db, args, user) => crmDayLines(db, args, user),
   crm_merge_leads:          (db, args, user) => crmMergeLeads(db, args, user),
   // CRM_UNIFY_V1 — только что заведённая карта находит заявку колл-центра по
   // номеру: одну, только если номер у одной карты, только patient_id. Зовёт

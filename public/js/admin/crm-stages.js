@@ -20,9 +20,11 @@
 // же есть сеть. Разбор ответа остаётся там, у общего словаря воронки.
 import { supabase } from '../supabase.js';
 import { shapeConfig, FALLBACK_CONVERT_STAGE } from './crm-settings-logic.js?v=crmcfg1';
+import { roleKey } from '../shared/crm-booked-stage.js';   // CRM_STAGE_ROLES_V1
 
 // Сидовая колонка «Не пришёл» (миграция 077). Имя здесь — не поведение, а
 // предпочтение: если клиника её не трогала, автоматика попадает именно туда.
+// CRM_STAGE_ROLES_V1 — только для ответа сервера без ролей (старше экрана).
 const SEED_NO_SHOW = 'no_show';
 
 /**
@@ -33,7 +35,8 @@ const SEED_NO_SHOW = 'no_show';
  * @returns {{open: string[], won: string, lost: string[], noShow: string|null}}
  */
 export function stageKeysFrom(data) {
-    const stages = shapeConfig(data).stages;
+    const cfg = shapeConfig(data);
+    const stages = cfg.stages;
     const open = stages.filter((s) => s.kind === 'open').map((s) => s.key);
     const lost = stages.filter((s) => s.kind === 'lost').map((s) => s.key);
     const won = stages.find((s) => s.kind === 'won');
@@ -43,7 +46,9 @@ export function stageKeysFrom(data) {
         lost,
         // Своей колонки «Не пришёл» нет — берём первую проигрышную: угадывать
         // другую ПО ИМЕНИ хуже, чем назвать единственное, что известно.
-        noShow: lost.includes(SEED_NO_SHOW) ? SEED_NO_SHOW : (lost[0] || null),
+        // CRM_STAGE_ROLES_V1 — колонка с ролью «не пришёл» (null — роли нет); догадка выше —
+        // только у сервера без ролей.
+        noShow: cfg.hasRoles ? roleKey(stages, 'no_show') : (lost.includes(SEED_NO_SHOW) ? SEED_NO_SHOW : (lost[0] || null)),
     };
 }
 

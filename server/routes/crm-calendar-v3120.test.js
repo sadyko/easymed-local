@@ -177,11 +177,15 @@ test('MAJOR: отчёт колл-центра не считает снятые �
     const lab = rep.json.data.byServiceType.find((x) => x.name === 'Лаборатория');
     assert.equal(lab && lab.count, 1, JSON.stringify(rep.json.data.byServiceType));
 
-    // Клиника убрала колонку «Записан»: запись двигает заявку в последнюю
-    // живую колонку (scheduledStageKey) — KPI считает её же, а не ноль.
+    // Клиника убрала колонку «Записан»: запись двигает заявку в колонку записи
+    // (scheduledStageKey) — KPI считает её же, а не ноль.
     t.db.prepare("DELETE FROM crm_stages WHERE key = 'scheduled'").run();
     const open = t.db.prepare("SELECT key FROM crm_stages WHERE kind = 'open' ORDER BY position, key").all().map((x) => x.key);
     const booked = open[open.length - 1];
+    // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: колонка записи — роль колонки (её ставит администратор
+    // галочкой «запись»), а не догадка «последняя открытая»; здесь роль передана «Подтверждён».
+    t.db.prepare('UPDATE crm_stages SET role = NULL WHERE key = ?').run(booked);
+    t.db.prepare("UPDATE crm_stages SET role = 'booked' WHERE key = ?").run(booked);
     t.db.prepare('UPDATE crm_requests SET status = ? WHERE id = ?').run(booked, r);
     const rep2 = await t.rpc('callcenter_report', 'boss', {});
     assert.equal(rep2.json.data.kpi.scheduled, 1, 'KPI «Записано» смотрит на зашитый ключ scheduled');

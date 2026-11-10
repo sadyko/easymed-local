@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { saveConfig } from './config.js';
+import { saveConfig, saveStages, listStages } from './config.js';   // CRM_STAGE_ROLES_V1 — saveStages, listStages
 import { crmVisitStatus } from './visit-status.js';
 import { crmNoShowSweep, scheduleCrmNoShow, crmArrivalCatchUp } from './no-show.js';   // CRM_UNIFY_V1 (2026-10-10) — догоняющий проход
 
@@ -248,6 +248,7 @@ test('карточка «на дату»: визит того дня без до
 
 test('«Колонка записи» — выбор клиники: до неё ничего не трогается', () => {
   const db = freshDb();
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью) — у «Подтверждён» роль подтверждения: сначала снята, иначе отказ
   saveConfig(db, { settings: { booked_stage: 'approved' } });
   const before = lead(db, { status: 'scheduled', date: Y }); line(db, before, visit(db, Y), Y);
   const from = lead(db, { status: 'approved', date: Y }); line(db, from, visit(db, Y), Y);
@@ -259,11 +260,39 @@ test('смена «Колонки конверсии»: история идёт 
   const db = freshDb();
   const hist = lead(db, { status: 'came', date: Y2 }); line(db, hist, visit(db, Y2), Y2);
   const histDated = lead(db, { status: 'came', date: Y2 });
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
   saveConfig(db, { settings: { won_stage: 'approved' } });
   assert.deepEqual([st(db, hist), st(db, histDated)], ['approved', 'approved'], 'история не пошла за ролью');
   assert.deepEqual(crmNoShowSweep(db), []);
   assert.deepEqual([st(db, hist), st(db, histDated)], ['approved', 'approved']);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM crm_requests WHERE status = 'came'").get().n, 0);
+});
+
+// ─── CRM_STAGE_ROLES_V1 — «НЕ ПРИШЁЛ» — РОЛЬ КОЛОНКИ ───────────────────────
+// Владелец: «a booking tick (like conversion) so the system won't break». Колонка «Не пришёл» —
+// отметка в «CRM-канбан» (миграция 284), а не ключ 'no_show': проход ставит карточку в колонку
+// с ролью; роли нет — проход выключен (раньше без сидовой колонки он тоже молчал, но любая
+// колонка с ключом no_show работала, как бы она ни называлась).
+const roles = (db, map) => listStages(db).map((s) => (Object.prototype.hasOwnProperty.call(map, s.key) ? { ...s, role: map[s.key] } : s));
+
+test('роль «не пришёл» у своей колонки клиники — проход ставит карточку туда', () => {
+  const db = freshDb();
+  saveStages(db, roles(db, { no_show: null, stopped: 'no_show' }));
+  const vid = visit(db, Y); const rid = lead(db, { date: Y }); line(db, rid, vid, Y);
+  assert.deepEqual(crmNoShowSweep(db), [rid]);
+  assert.equal(st(db, rid), 'stopped');
+  // Самоисправление поднимает из неё же.
+  crmVisitStatus(db, { visitId: vid, from: null, to: 'arrived' });
+  assert.equal(st(db, rid), 'came');
+});
+
+test('роли «не пришёл» нет — проход выключен; колонка с ключом no_show ничем не особенная', () => {
+  const db = freshDb();
+  saveStages(db, roles(db, { no_show: null }));
+  const vid = visit(db, Y); const rid = lead(db, { date: Y }); line(db, rid, vid, Y);
+  const dated = lead(db, { date: Y });
+  assert.deepEqual(crmNoShowSweep(db), []);
+  assert.deepEqual([st(db, rid), st(db, dated)], ['scheduled', 'scheduled']);
 });
 
 // ─── САМОИСПРАВЛЕНИЕ: ДОКАЗАТЕЛЬСТВО, ПРИШЕДШЕЕ ПОЗЖЕ ─────────────────────

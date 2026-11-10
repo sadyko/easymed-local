@@ -13,51 +13,44 @@
 // остаться удалённым: вернувшись, он станет ВТОРЫМ писателем одной таблицы, а
 // два писателя дают заявке две разные истории — молча.
 //
-// Стенд: настоящий модуль за фальшивым fetch. DOM не нужен вовсе — модуль о
-// экранах не знает (в этом и был смысл его выделения).
+// CRM_DAY_LINES_V1 (3.23.0) — ПЕРЕПИСАНО НАМЕРЕННО. Чтение больше не идёт двумя запросами
+// /api/db (там действует ограничение CRM по хозяину: карточку, взятую оператором «в работу», и
+// карточку в «Не пришёл» регистратура не видела, а сервер их строки в визит сажал). Модуль
+// спрашивает RPC crm_day_lines — правило шага связи сервера; выбор строк этого приёма и «одна
+// услуга — одна строка» теперь общие (public/js/shared/crm-day-lines.test.js), а сервер
+// проверен в server/routes/crm-day-lines.test.js.
+//
+// Стенд: настоящий модуль за фальшивым fetch. DOM не нужен вовсе.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const CALLS = [];
-let STAGES = { stages: [
-  { key: 'in_process', label: 'В обработке', position: 1, is_active: 1, kind: 'open' },
-  { key: 'scheduled',  label: 'Записан',     position: 2, is_active: 1, kind: 'open' },
-  { key: 'came',       label: 'Пришёл',      position: 3, is_active: 1, kind: 'won' },
-  { key: 'no_show',    label: 'Не пришёл',   position: 4, is_active: 1, kind: 'lost' },
-], sources: [], routing: [] };
-let REQUESTS = [{ id: 501 }];
 let LINES = [];
-let FAIL = null;   // 'requests' | 'lines' — пусть сервер откажет
+let FAIL = false;
 
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   const ok = (data) => ({ ok: true, json: async () => ({ data }) });
   const bad = (message) => ({ ok: false, json: async () => ({ error: { message } }) });
-  if (u.startsWith('/api/rpc/crm_config_get')) return ok(STAGES);
-  if (u.startsWith('/api/rpc/')) return ok({});
-  if (u === '/api/db') {
-    CALLS.push(body);
-    if (body.table === 'crm_requests') {
-      return FAIL === 'requests' ? bad('заявки не отданы') : ok(REQUESTS);
-    }
-    if (body.table === 'crm_request_services') {
-      return FAIL === 'lines' ? bad('строки не отданы') : ok(LINES);
-    }
-  }
+  CALLS.push({ url: u, body });
+  if (u.startsWith('/api/rpc/crm_day_lines')) return FAIL ? bad('строки не отданы') : ok(LINES);
+  if (u.startsWith('/api/rpc/crm_config_get')) return ok({ stages: [], sources: [], routing: [] });
   return ok([]);
 };
 
 const mod = await import('../crm-lines.js');
 const { pendingCrmLines } = mod;
-const { invalidateCrmStages } = await import('../crm-stages.js');
+const { stageKeysFrom } = await import('../crm-stages.js');
 
 const DAY = '2026-10-05';
 const lineOf = (over) => Object.assign(
-  { id: 901, request_id: 501, service_id: 10, scheduled_date: DAY, status: 'pending', doctor_id: null, visit_id: null },
+  { id: 901, service_id: 10, consultation_type_id: null, scheduled_date: DAY, doctor_id: null, visit_id: null },
   over,
 );
-const reset = () => { CALLS.length = 0; FAIL = null; invalidateCrmStages(); };
+const reset = () => { CALLS.length = 0; FAIL = false; };
+const dbCalls = () => CALLS.filter((c) => c.url === '/api/db');
+const dayCalls = () => CALLS.filter((c) => c.url.startsWith('/api/rpc/crm_day_lines'));
 
 test('закрытия строк в модуле больше нет — приход объявляет сервер', () => {
   assert.equal(mod.closeCrmLines, undefined,
@@ -68,113 +61,53 @@ test('закрытия строк в модуле больше нет — при
     'у модуля появился новый экспорт — проверьте, не переехало ли закрытие обратно: ' + Object.keys(mod).join(', '));
 });
 
-test('спрашиваются ЖДУЩИЕ строки этого пациента именно на этот день', async () => {
+test('CRM_DAY_LINES_V1: один вызов crm_day_lines с пациентом, днём и визитом — и ни одного /api/db', async () => {
   reset();
-  LINES = [lineOf({})];
-  const out = await pendingCrmLines(7, DAY);
-  assert.equal(out.length, 1);
-
-  const reqQ = CALLS.find((c) => c.table === 'crm_requests');
-  assert.ok(reqQ, 'живые заявки пациента не спрошены вовсе');
-  assert.deepEqual((reqQ.filters || []).find((f) => f.col === 'patient_id'), { col: 'patient_id', op: 'eq', val: 7 });
-
-  const lineQ = CALLS.find((c) => c.table === 'crm_request_services');
-  assert.ok(lineQ, 'строки заявок не спрошены');
-  assert.deepEqual((lineQ.filters || []).find((f) => f.col === 'scheduled_date'), { col: 'scheduled_date', op: 'eq', val: DAY });
-  assert.deepEqual((lineQ.filters || []).find((f) => f.col === 'status'), { col: 'status', op: 'eq', val: 'pending' });
-  // CRM_LINE_DOCTOR_V1 — без doctor_id услуга с requires_doctor не доходит до
-  // сметы; CRM_REAL_BOOKING_V1 — без visit_id нельзя выбрать строки ЭТОГО приёма.
-  assert.ok(String(lineQ.columns).includes('doctor_id'), 'из выборки пропал врач строки');
-  assert.ok(String(lineQ.columns).includes('visit_id'), 'из выборки пропал визит строки');
+  LINES = [lineOf({ id: 901, doctor_id: 3, visit_id: 555 })];
+  const out = await pendingCrmLines(7, DAY + 'T10:00:00Z', 555);
+  assert.deepEqual(out, LINES, 'ответ сервера изменён по дороге');
+  assert.deepEqual(dayCalls().map((c) => c.body), [{ patient_id: 7, day: DAY, visit_id: 555 }]);
+  assert.deepEqual(dbCalls(), [], 'строки заявок снова читаются через /api/db — там ограничение по хозяину');
+  // CRM_LINE_DOCTOR_V1 — без doctor_id услуга с requires_doctor не доходит до сметы;
+  // CRM_REAL_BOOKING_V1 — без visit_id нельзя выбрать строки ЭТОГО приёма.
+  assert.equal(out[0].doctor_id, 3);
+  assert.equal(out[0].visit_id, 555);
 });
 
-test('без дня не спрашиваем ничего: сверять дату строки не с чем', async () => {
+test('визит не назван — уходит visit_id: null', async () => {
   reset();
-  LINES = [lineOf({})];
+  LINES = [];
+  await pendingCrmLines(7, DAY);
+  assert.deepEqual(dayCalls().map((c) => c.body), [{ patient_id: 7, day: DAY, visit_id: null }]);
+});
+
+test('без дня или пациента не спрашиваем ничего: сверять дату строки не с чем', async () => {
+  reset();
   assert.deepEqual(await pendingCrmLines(7, ''), []);
+  assert.deepEqual(await pendingCrmLines(null, DAY), []);
   assert.deepEqual(CALLS, [], 'ушёл запрос, на который нечем ответить');
-});
-
-// CRM_REAL_BOOKING_V1 — окно, открытое НА КОНКРЕТНОМ визите, подставляет строки
-// ИМЕННО этого приёма. У пациента, записанного в один день к двум врачам, визит
-// дня один, а строк две: вторая ждёт своей сметы, а не этой.
-test('визит известен — берутся строки ЭТОГО приёма, а не весь день пациента', async () => {
-  reset();
-  LINES = [lineOf({ id: 901, visit_id: 555 }), lineOf({ id: 902, service_id: 11, visit_id: 777 })];
-  const out = await pendingCrmLines(7, DAY, 555);
-  assert.deepEqual(out.map((l) => l.id), [901],
-    'в смету одного приёма подставились строки другого: пациент заплатит за услугу, которую ждёт в другом кабинете');
-});
-
-test('визит известен, но ни одна строка на него не ссылается — отдаём весь день', async () => {
-  reset();
-  LINES = [lineOf({ id: 901 }), lineOf({ id: 902, service_id: 11 })];
-  const out = await pendingCrmLines(7, DAY, 555);
-  assert.deepEqual(out.map((l) => l.id), [901, 902],
-    'сузили до пустоты: строку, записанную без слота, регистратура не увидит никогда');
-});
-
-test('визит не назван — день целиком, как и было до слотов', async () => {
-  reset();
-  LINES = [lineOf({ id: 901, visit_id: 555 }), lineOf({ id: 902, service_id: 11, visit_id: 777 })];
-  const out = await pendingCrmLines(7, DAY);
-  assert.deepEqual(out.map((l) => l.id), [901, 902]);
 });
 
 // Пустая смета неотличима от «записей нет» — и именно это стоило трёх кругов
 // отладки. Отказ обязан быть слышен, и обязан назвать, ЧТО отказало.
 test('отказ сервера бросается и называет, что именно не ответило', async () => {
   reset();
-  FAIL = 'requests';
-  await assert.rejects(() => pendingCrmLines(7, DAY), (e) => e.where === 'requests');
-
-  reset();
-  FAIL = 'lines';
-  await assert.rejects(() => pendingCrmLines(7, DAY), (e) => e.where === 'lines');
+  FAIL = true;
+  await assert.rejects(() => pendingCrmLines(7, DAY), (e) => e.where === 'lines' && /строки не отданы/.test(e.message));
   reset();
 });
 
-// V3120_FIX — две карточки одного человека на одну консультацию у одного врача:
-// в смету подставляется ОДНА строка (было две — двойной счёт 200 000 вместо
-// 100 000). Из одинаковых остаётся строка этого приёма.
-test('одинаковые строки двух карточек (услуга + врач) — в смету одна', async () => {
-  reset();
-  LINES = [
-    lineOf({ id: 901, request_id: 501, service_id: 10, doctor_id: 3, visit_id: null }),
-    lineOf({ id: 902, request_id: 502, service_id: 10, doctor_id: 3, visit_id: 555 }),
-    lineOf({ id: 903, request_id: 502, service_id: 10, doctor_id: 4, visit_id: 555 }),   // другой врач — другая услуга
-    lineOf({ id: 904, request_id: 502, service_id: 20, doctor_id: null, visit_id: null }),
+// CRM_STAGE_ROLES_V1 — «Не пришёл» доски — колонка с ролью; сервер без ролей — прежняя догадка.
+test('CRM_STAGE_ROLES_V1: stageKeysFrom — «Не пришёл» по роли колонки', () => {
+  const stages = [
+    { key: 'in_process', label: 'Новый', kind: 'open', position: 1, is_active: 1, role: null },
+    { key: 'scheduled', label: 'Записан', kind: 'open', position: 2, is_active: 1, role: 'booked' },
+    { key: 'came', label: 'Пришёл', kind: 'won', position: 3, is_active: 1, role: null },
+    { key: 'no_show', label: 'Не пришёл', kind: 'lost', position: 4, is_active: 1, role: null },
+    { key: 'gone', label: 'Не дошёл', kind: 'lost', position: 5, is_active: 1, role: 'no_show' },
   ];
-  assert.deepEqual((await pendingCrmLines(7, DAY)).map((l) => l.id), [901, 903, 904]);
-  assert.deepEqual((await pendingCrmLines(7, DAY, 555)).map((l) => l.id), [902, 903],
-    'из двух одинаковых должна остаться строка ЭТОГО приёма');
-});
-
-// V3120_FINAL — консультация по виду приёма (service_id NULL) тоже одна в смете.
-test('две карточки «приём у Иванова» по виду приёма — в смете одна строка', async () => {
-    reset();
-    LINES = [
-        lineOf({ id: 911, service_id: null, consultation_type_id: 5, doctor_id: 10 }),
-        lineOf({ id: 912, request_id: 502, service_id: null, consultation_type_id: 5, doctor_id: 10 }),
-        lineOf({ id: 913, service_id: null, consultation_type_id: 6, doctor_id: 10 }),
-    ];
-    const out = await pendingCrmLines(7, DAY);
-    assert.deepEqual(out.map((l) => l.id).sort(), [911, 913]);
-    const q = CALLS.find((c) => c.table === 'crm_request_services');
-    assert.match(String(q.columns || q.select || ''), /consultation_type_id/, 'вид приёма не спрошен');
-});
-
-// CRM_UNIFY_V1 (ревью задачи 3, R3) — подстановка в смету берёт ждущие строки
-// ОТКРЫТЫХ и закрытых в конверсию («Пришёл») карточек: первый приход закрывает
-// карточку, а строка другого дня остаётся записью и должна дойти до сметы
-// своего дня. Проигрышные («Отказ», «Не пришёл») — никогда.
-test('ждущие строки берутся у открытых и у «Пришёл», но не у проигрышных', async () => {
-  reset();
-  LINES = [lineOf({})];
-  await pendingCrmLines(7, DAY);
-  const reqQ = CALLS.find((c) => c.table === 'crm_requests');
-  const st = (reqQ.filters || []).find((f) => f.col === 'status');
-  assert.ok(st && st.op === 'in', 'ступени заявок не отобраны: ' + JSON.stringify(reqQ.filters));
-  assert.deepEqual([...st.val].sort(), ['came', 'in_process', 'scheduled'],
-    'строка карточки «Пришёл» на другой день не дойдёт до сметы своего дня (или в смету попал «Отказ»)');
+  assert.equal(stageKeysFrom({ stages }).noShow, 'gone');
+  assert.equal(stageKeysFrom({ stages: stages.map((s) => ({ ...s, role: null })) }).noShow, null, 'без роли «Не пришёл» колонки нет');
+  assert.equal(stageKeysFrom({ stages: stages.map(({ role, ...s }) => s) }).noShow, 'no_show', 'сервер без ролей — сидовый ключ');
+  assert.equal(stageKeysFrom(null).noShow, 'no_show', 'запасная воронка — роли миграции 284');
 });

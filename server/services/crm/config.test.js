@@ -14,6 +14,7 @@ import {
   saveStages, saveSources, saveRouting, saveConfig, CrmConfigError,
   openStageKeys, wonStageKey, lostStageKeys, noShowStageKey, scheduledStageKey,
   readCrmSettings,   // CRM_UNIFY_V1
+  confirmedStageKey,   // CRM_STAGE_ROLES_V1
   apiSourceUse, ensureApiSource, renameApiSource, archiveApiSource,   // CLINIC_API_STEP7_V1
 } from './config.js';
 import { insertConnectionRow } from '../../test-helpers/api-connection-row.js';   // CLINIC_API_STEP7_V1
@@ -43,7 +44,8 @@ test('crmConfig answers the board and the settings screen in one call', () => {
   // CRM_HEAD_MERGE_TAGS_V1 — и метки карточек (миграция 150); у свежей базы их нет.
   // CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО: и настройки «CRM-канбан» (crm_settings, мигр. 237).
   assert.deepEqual(Object.keys(cfg).sort(), ['routing', 'settings', 'sources', 'stages', 'tags']);
-  assert.deepEqual(cfg.settings, { booked_stage: null, window_hours: 72, booked_effective: 'scheduled' });
+  // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО НАМЕРЕННО: booked_stage — колонка с ролью «запись», не выбор crm_settings.
+  assert.deepEqual(cfg.settings, { booked_stage: 'scheduled', window_hours: 72, booked_effective: 'scheduled' });
   assert.deepEqual(cfg.tags, []);
   assert.equal(cfg.stages.length, 8);
   assert.equal(cfg.sources.length, 8);
@@ -51,7 +53,7 @@ test('crmConfig answers the board and the settings screen in one call', () => {
   // is_active comes back as a boolean, not SQLite's 0/1 — the screens compare
   // it directly and the shim's JSON has no integer/boolean distinction to lean on.
   assert.equal(cfg.stages[0].is_active, true);
-  assert.deepEqual(cfg.stages[0], { key: 'in_process', label: 'В обработке', color: 'info', position: 1, is_active: true, kind: 'open' });
+  assert.deepEqual(cfg.stages[0], { key: 'in_process', label: 'В обработке', color: 'info', position: 1, is_active: true, kind: 'open', role: null });   // CRM_STAGE_ROLES_V1 — и роль
 });
 
 test('hidden columns still come back, flagged — the screen must be able to unhide them', () => {
@@ -165,8 +167,9 @@ test('saveStages will not leave the board with nothing visible', () => {
 
 test('a column with leads may be hidden but NOT deleted', () => {
   const db = fresh();
-  lead(db, { status: 'no_show' });
-  const without = asInput(listStages(db)).filter((s) => s.key !== 'no_show');
+  // CRM_STAGE_ROLES_V1 — «Обработка остановлена», а не «Не пришёл»: у той роль, и её скрытие — другой отказ.
+  lead(db, { status: 'stopped' });
+  const without = asInput(listStages(db)).filter((s) => s.key !== 'stopped');
   const e = refused(() => saveStages(db, without));
   assert.ok(e instanceof CrmConfigError);
   assert.equal(e.status, 409);
@@ -176,9 +179,9 @@ test('a column with leads may be hidden but NOT deleted', () => {
   // Hiding the same column is fine, and the lead keeps a status that still
   // resolves to a label.
   const hidden = asInput(listStages(db));
-  hidden.find((s) => s.key === 'no_show').is_active = false;
+  hidden.find((s) => s.key === 'stopped').is_active = false;
   saveStages(db, hidden);
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM crm_requests WHERE status='no_show'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM crm_requests WHERE status='stopped'").get().n, 1);
 });
 
 test('an empty column can be deleted', () => {
@@ -246,8 +249,9 @@ test('the plan\'s «none» colour is accepted as the empty token the board draws
 
 test('deleting a column switches the telephony rules that fed it off', () => {
   const db = fresh();
-  saveRouting(db, [{ disposition: 'ANSWER', action: 'create', stage_key: 'scheduled' }]);
-  const without = asInput(listStages(db)).filter((s) => s.key !== 'scheduled');
+  // CRM_STAGE_ROLES_V1 — «Перезвонить»: у «Записан» роль, её удаление — другой отказ.
+  saveRouting(db, [{ disposition: 'ANSWER', action: 'create', stage_key: 'recall' }]);
+  const without = asInput(listStages(db)).filter((s) => s.key !== 'recall');
   saveStages(db, without);
   const rule = listRouting(db).find((r) => r.disposition === 'ANSWER');
   // Not a foreign-key error and not a rule aiming at nothing: the rule
@@ -357,9 +361,9 @@ test('saveRouting refuses a rule that names no column, a missing column, or a hi
   ]), /дважды/);
 
   const next = asInput(listStages(db));
-  next.find((s) => s.key === 'scheduled').is_active = false;
+  next.find((s) => s.key === 'recall').is_active = false;   // CRM_STAGE_ROLES_V1 — колонка без роли
   saveStages(db, next);
-  assert.throws(() => saveRouting(db, [{ disposition: 'ANSWER', action: 'create', stage_key: 'scheduled' }]), /скрыта/);
+  assert.throws(() => saveRouting(db, [{ disposition: 'ANSWER', action: 'create', stage_key: 'recall' }]), /скрыта/);
 });
 
 // --------------------------------------------------------------------------
@@ -433,82 +437,165 @@ test('скрытая колонка остаётся ступенью: в ней
     'спрятанная колонка выпала из живых ступеней — лежащие в ней заявки перестали закрываться визитом');
 });
 
-test('колонка «не пришёл» — сидовая, если она есть, иначе первая проигрышная', () => {
+// CRM_STAGE_ROLES_V1 (3.23.0) — ПЕРЕПИСАНО НАМЕРЕННО. «Не пришёл», «Колонка записи» и
+// «Колонка подтверждения» больше не угадываются (сидовый ключ, первая проигрышная, «Записан»,
+// последняя открытая видимая до конверсии, выбор crm_settings.booked_stage, первая после
+// записи) — это роли колонок (crm_stages.role, миграция 284). Владелец: «we need to add a
+// booking tick (like conversion) so the system won't break». Прежние тесты догадки — в
+// 284.test.js: миграция заполнила роли ровно ею.
+const rolesOf = (db) => Object.fromEntries(listStages(db).filter((s) => s.role).map((s) => [s.role, s.key]));
+/** Сохранить колонки как есть, с ролями из карты { key: role|null } поверх нынешних. */
+const withRoles = (db, map, edit = (s) => s) => asInput(listStages(db))
+  .map((s) => (Object.prototype.hasOwnProperty.call(map, s.key) ? { ...s, role: map[s.key] } : s)).map(edit);
+
+test('роли колонок: сидовая воронка — «Записан», «Подтверждён», «Не пришёл»; роль едет в ответе', () => {
   const db = fresh();
+  assert.deepEqual(rolesOf(db), { booked: 'scheduled', confirmed: 'approved', no_show: 'no_show' });
+  assert.equal(scheduledStageKey(db), 'scheduled');
+  assert.equal(confirmedStageKey(db), 'approved');
   assert.equal(noShowStageKey(db), 'no_show');
-  db.prepare("DELETE FROM crm_stages WHERE key = 'no_show'").run();
-  assert.equal(noShowStageKey(db), 'stopped', 'без сидовой колонки берётся первая проигрышная');
-});
-
-// CRM_REAL_BOOKING_V1 — «ЗАПИСАН» СПРАШИВАЕТСЯ ТАК ЖЕ, КАК «НЕ ПРИШЁЛ».
-//
-// Владелец развёл запись и приход: у заявки, держащей настоящий слот, своя
-// колонка. Сидовая — «Записан»; клиника вправе её переименовать или убрать.
-//
-// CRM_UNIFY_V1 — ПЕРЕПИСАНО НАМЕРЕННО: «Колонка записи» — одно правило с экраном
-// (public/js/shared/crm-booked-stage.js): открытая ВИДИМАЯ колонка ДО «Пришёл».
-// Раньше сервер брал последнюю открытую по порядку, даже стоящую ПОСЛЕ
-// конверсии (здесь — «Ждёт оплаты» на 9-м месте), а экран — первую видимую:
-// у клиники записанные уезжали в «Успешно».
-test('колонка записи: «Записан», если видна; без неё — последняя открытая видимая ДО «Пришёл»', () => {
-  const db = fresh();
-  assert.equal(scheduledStageKey(db), 'scheduled');
-
-  // Своя колонка ПОСЛЕ «Записан» ничего не меняет: сидовая жива.
-  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('waiting_pay','Ждёт оплаты','info',9,1,'open')").run();
-  assert.equal(scheduledStageKey(db), 'scheduled');
-
-  // Клиника убрала сидовую — берётся последняя открытая видимая ДО «Пришёл»;
-  // «Ждёт оплаты» стоит после конверсии и записанных не принимает.
-  db.prepare("DELETE FROM crm_stages WHERE key = 'scheduled'").run();
-  assert.equal(scheduledStageKey(db), 'approved');
-});
-
-// CRM_UNIFY_V1 — ЗАМЕНЁН НАМЕРЕННО (был «скрытая колонка «Записан» всё равно та
-// самая»): скрытая колонка не может принимать записанных — их там не видно.
-test('колонка записи: скрытая «Записан» не принимает записанных — последняя открытая видимая до «Пришёл»', () => {
-  const db = fresh();
-  db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'scheduled'").run();
-  assert.equal(scheduledStageKey(db), 'approved', 'скрытая колонка не может принимать записанных — их не видно');
-});
-
-// CRM_UNIFY_V1 — «Колонка записи» — явная настройка «CRM-канбан» (crm_settings, мигр. 237).
-test('колонка записи: выбор администратора и его проверка при сохранении', () => {
-  const db = fresh();
-  saveConfig(db, { settings: { booked_stage: 'approved' } });
-  assert.equal(scheduledStageKey(db), 'approved');
-  assert.equal(crmConfig(db).settings.booked_stage, 'approved');
-  assert.equal(crmConfig(db).settings.booked_effective, 'approved');
-  assert.throws(() => saveConfig(db, { settings: { booked_stage: 'came' } }), /Колонка записи/);
-  assert.throws(() => saveConfig(db, { settings: { booked_stage: 'no_show' } }), /Колонка записи/);
-  assert.equal(readCrmSettings(db).booked_stage, 'approved', 'отказ ничего не записал');
-  saveConfig(db, { settings: { booked_stage: null } });
-  assert.equal(scheduledStageKey(db), 'scheduled');
-  // Р10: выбор, ставший недопустимым (колонку скрыли), молча заменяется правилом.
-  saveConfig(db, { settings: { booked_stage: 'recall' } });
-  db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'recall'").run();
-  assert.equal(scheduledStageKey(db), 'scheduled');
   db.close();
 });
 
-// CRM_UNIFY_V1 (ревью задачи 4) — ставший недопустимым выбор не возвращается
-// сам: колонку скрыли — выбор стирается при этом же сохранении колонок или при
-// следующем сохранении настроек, и повторный показ колонки его не оживит.
-test('колонка записи: недопустимый выбор стирается — и при сохранении колонок, и при сохранении настроек', () => {
+test('роли читаются по отметке, не по названию, ключу или порядку', () => {
+  const db = fresh();
+  saveStages(db, withRoles(db, {}, (s) => ({ ...s, label: s.key === 'recall' ? 'Записан' : s.label + ' (х)' }))
+    .sort((a, b) => (a.key === 'approved' ? -1 : b.key === 'approved' ? 1 : 0)).map((s) => (s.key === 'approved' ? { ...s, role: null } : s)));
+  assert.equal(scheduledStageKey(db), 'scheduled', 'переименование или порядок сдвинули колонку записи');
+  assert.equal(confirmedStageKey(db), null, 'подтверждение снято');
+  saveStages(db, withRoles(db, { recall: 'booked', scheduled: null }));
+  assert.equal(scheduledStageKey(db), 'recall');
+  db.close();
+});
+
+test('«Не пришёл» — только роль: без неё автоматика выключена; ключ no_show ничего не значит', () => {
+  const db = fresh();
+  saveStages(db, withRoles(db, { no_show: null }));
+  assert.equal(noShowStageKey(db), null, 'без роли «Не пришёл» — колонки нет (первая проигрышная больше не угадывается)');
+  saveStages(db, withRoles(db, { stopped: 'no_show' }));
+  assert.equal(noShowStageKey(db), 'stopped');
+  // Ручная правка базы мимо экрана: роль на открытой колонке не действует.
+  db.prepare("UPDATE crm_stages SET role = NULL WHERE role = 'no_show'").run();
+  db.prepare("UPDATE crm_stages SET role = 'no_show' WHERE key = 'recall'").run();
+  assert.equal(noShowStageKey(db), null);
+  db.close();
+});
+
+test('crm_settings.booked_stage больше не читается', () => {
+  const db = fresh();
+  db.prepare("UPDATE crm_settings SET booked_stage = 'recall' WHERE id = 1").run();
+  assert.equal(scheduledStageKey(db), 'scheduled');
+  assert.equal(crmConfig(db).settings.booked_stage, 'scheduled', 'ответ называет колонку с ролью');
+  db.close();
+});
+
+test('сохранение колонок: роли едут вместе с колонками; без поля role (экран старше сервера) — не трогаются', () => {
+  const db = fresh();
+  const old = asInput(listStages(db)).map(({ role, ...s }) => s);
+  saveStages(db, old.map((s) => (s.key === 'recall' ? { ...s, label: 'Перезвон' } : s)));
+  assert.deepEqual(rolesOf(db), { booked: 'scheduled', confirmed: 'approved', no_show: 'no_show' });
+  saveStages(db, withRoles(db, { recall: 'booked', scheduled: 'confirmed', approved: null, stopped: 'no_show', no_show: null }));
+  assert.deepEqual(rolesOf(db), { booked: 'recall', confirmed: 'scheduled', no_show: 'stopped' });
+  db.close();
+});
+
+test('сохранение колонок: отказы ролей — 409 понятной фразой; ничего не записано', () => {
+  const db = fresh();
+  const before = JSON.stringify(listStages(db));
+  const cases = [
+    [withRoles(db, { stopped: 'booked', scheduled: null }), 'Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией.'],
+    [withRoles(db, {}, (s) => (s.key === 'scheduled' ? { ...s, is_active: true } : s)).map((s) => (s.key === 'recall' ? { ...s, is_active: false, role: 'booked' } : (s.key === 'scheduled' ? { ...s, role: null } : s))),
+      'Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией.'],
+    [withRoles(db, {}).map((s) => (s.key === 'scheduled' ? { ...s, position: 99 } : s)).sort((a, b) => a.position - b.position)
+      .map((s, i) => ({ ...s, position: i + 1 })), 'Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией.'],
+    [withRoles(db, { recall: 'confirmed', approved: null }), 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.'],
+    [withRoles(db, { scheduled: null }), 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.'],
+    [withRoles(db, { recall: 'no_show', no_show: null }), 'Колонкой «Не пришёл» может быть только видимая проигрышная колонка.'],
+    [withRoles(db, { stopped: 'no_show', no_show: null }, (s) => (s.key === 'stopped' ? { ...s, is_active: false } : s)),
+      'Колонкой «Не пришёл» может быть только видимая проигрышная колонка.'],
+  ];
+  for (const [stages, msg] of cases) {
+    const e = refused(() => saveStages(db, stages));
+    assert.ok(e instanceof CrmConfigError);
+    assert.equal(e.status, 409, msg);
+    assert.equal(e.message, msg);
+  }
+  const twice = refused(() => saveStages(db, withRoles(db, { recall: 'booked' })));
+  assert.equal(twice.status, 409);
+  assert.equal(twice.message, 'Каждую роль можно отметить только у одной колонки.');
+  const bad = refused(() => saveStages(db, withRoles(db, { recall: 'boss' })));
+  assert.equal(bad.status, 400);
+  assert.equal(bad.message, 'Неизвестная роль у колонки «recall».');
+  assert.equal(JSON.stringify(listStages(db)), before, 'отказ что-то записал');
+  db.close();
+});
+
+test('роль на колонке конверсии отбрасывается, как и присланный вид (устаревшая вкладка)', () => {
+  const db = fresh();
+  saveStages(db, withRoles(db, { came: 'confirmed', approved: null }));
+  assert.equal(listStages(db).find((s) => s.key === 'came').role, null);
+  assert.equal(confirmedStageKey(db), null);
+  db.close();
+});
+
+test('колонку с ролью нельзя скрыть или удалить, пока роль не передана: «сначала передайте роль другой колонке»', () => {
+  const db = fresh();
+  const cases = [
+    [withRoles(db, {}, (s) => (s.key === 'scheduled' ? { ...s, is_active: false } : s)), 'Колонка «Записан» — колонка записи: сначала передайте роль другой колонке.',
+      'Колонка «{label}» — колонка записи: сначала передайте роль другой колонке.'],
+    // Ревью: удаление с ролями в правке снимает роль (см. ниже); удаление экраном без ролей — отказ.
+    [asInput(listStages(db)).map(({ role, ...s }) => s).filter((s) => s.key !== 'approved'), 'Колонка «Подтверждён» — колонка подтверждения: сначала передайте роль другой колонке.',
+      'Колонка «{label}» — колонка подтверждения: сначала передайте роль другой колонке.'],
+    [withRoles(db, {}, (s) => (s.key === 'no_show' ? { ...s, is_active: false } : s)), 'Колонка «Не пришёл» — колонка «Не пришёл»: сначала передайте роль другой колонке.',
+      'Колонка «{label}» — колонка «Не пришёл»: сначала передайте роль другой колонке.'],
+    // Экран старше сервера (без поля role) удаляет колонку записи — тот же отказ.
+    [asInput(listStages(db)).map(({ role, ...s }) => s).filter((s) => s.key !== 'scheduled'), 'Колонка «Записан» — колонка записи: сначала передайте роль другой колонке.',
+      'Колонка «{label}» — колонка записи: сначала передайте роль другой колонке.'],
+  ];
+  for (const [stages, msg, template] of cases) {
+    const e = refused(() => saveStages(db, stages));
+    assert.equal(e.status, 409, msg);
+    assert.equal(e.message, msg);
+    assert.equal(e.template, template);
+  }
+  // Роль передана в той же правке — удалить можно; снята — скрыть можно.
+  saveStages(db, withRoles(db, { recall: 'booked', scheduled: null, approved: null }).filter((s) => s.key !== 'scheduled'));
+  assert.deepEqual(rolesOf(db), { booked: 'recall', no_show: 'no_show' });
+  saveStages(db, withRoles(db, { no_show: null }, (s) => (s.key === 'no_show' ? { ...s, is_active: false } : s)));
+  assert.equal(noShowStageKey(db), null);
+  db.close();
+});
+
+test('скрытая «Не пришёл» с ролью (так её оставила миграция 284) не мешает сохранять колонки', () => {
+  const db = fresh();
+  db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'no_show'").run();
+  saveStages(db, withRoles(db, {}, (s) => (s.key === 'recall' ? { ...s, label: 'Перезвон' } : s)));
+  assert.equal(noShowStageKey(db), 'no_show');
+  db.close();
+});
+
+test('настройки (экран старше сервера): booked_stage передаёт роль «запись»; пусто — ничего не меняет', () => {
   const db = fresh();
   saveConfig(db, { settings: { booked_stage: 'recall' } });
-  const hide = (on) => saveStages(db, asInput(listStages(db)).map((s) => (s.key === 'recall' ? { ...s, is_active: on } : s)));
-  hide(false);
-  assert.equal(readCrmSettings(db).booked_stage, null, 'скрытая колонка осталась выбором');
-  hide(true);
-  assert.equal(scheduledStageKey(db), 'scheduled', 'выбор ожил вместе с колонкой');
-
-  saveConfig(db, { settings: { booked_stage: 'recall' } });
-  db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'recall'").run();   // мимо saveStages
-  saveConfig(db, { settings: { window_hours: 48 } });
-  assert.equal(readCrmSettings(db).booked_stage, null, 'сохранение настроек не стёрло недопустимый выбор');
-  db.prepare("UPDATE crm_stages SET is_active = 1 WHERE key = 'recall'").run();
-  assert.equal(scheduledStageKey(db), 'scheduled');
+  assert.equal(scheduledStageKey(db), 'recall');
+  assert.equal(crmConfig(db).settings.booked_stage, 'recall');
+  assert.equal(crmConfig(db).settings.booked_effective, 'recall');
+  for (const key of ['came', 'nope']) {
+    const e = refused(() => saveConfig(db, { settings: { booked_stage: key } }));
+    assert.equal(e.status, 409, key);
+    assert.match(e.message, /Колонка записи/);
+  }
+  // Ревью: колонка с другой ролью (подтверждение, «Не пришёл») — отказ: роль не снимается молча.
+  for (const [key, msg] of [['approved', 'Колонка «Подтверждён» — колонка подтверждения: сначала передайте роль другой колонке.'],
+    ['no_show', 'Колонка «Не пришёл» — колонка «Не пришёл»: сначала передайте роль другой колонке.']]) {
+    const e = refused(() => saveConfig(db, { settings: { booked_stage: key } }));
+    assert.equal(e.status, 409, key);
+    assert.equal(e.message, msg);
+  }
+  assert.equal(confirmedStageKey(db), 'approved');
+  saveConfig(db, { settings: { booked_stage: null } });
+  assert.equal(scheduledStageKey(db), 'recall', 'пустой выбор снял роль');
+  assert.equal(db.prepare('SELECT booked_stage FROM crm_settings').get().booked_stage, null, 'старая настройка снова пишется');
   db.close();
 });
 
@@ -551,6 +638,7 @@ test('конверсия: перенос won одной транзакцией �
   db.prepare("UPDATE crm_requests SET updated_at = '2025-05-01T10:00:00Z' WHERE id = ?").run(inCame);
   const inRecall = lead(db, { status: 'recall' });
   const recallBefore = row(db, inRecall);
+  saveStages(db, withRoles(db, { approved: null }));   // CRM_STAGE_ROLES_V1 — роль подтверждения сначала снята (решение координатора)
   const out = saveConfig(db, { settings: { won_stage: 'approved' } });
   assert.deepEqual(wonKeys(db), ['approved']);
   assert.equal(wonStageKey(db), 'approved');
@@ -562,7 +650,7 @@ test('конверсия: перенос won одной транзакцией �
   assert.equal(db.prepare("SELECT COUNT(*) n FROM crm_requests WHERE status = 'came'").get().n, 0);
   assert.deepEqual(db.prepare('SELECT moved_by, from_stage, to_stage, cards_moved FROM crm_conversion_log').all(),
     [{ moved_by: null, from_stage: 'came', to_stage: 'approved', cards_moved: 1 }]);
-  // Колонка записи по умолчанию считается от новой конверсии.
+  // CRM_STAGE_ROLES_V1 — колонка записи — своя роль, конверсия её не трогает.
   assert.equal(scheduledStageKey(db), 'scheduled');
   db.close();
 });
@@ -572,6 +660,7 @@ test('конверсия: колонка с карточками — отказ 
   const live = lead(db, { status: 'approved' });
   lead(db, { status: 'approved' });
   lead(db, { status: 'came' });
+  saveStages(db, withRoles(db, { approved: null }));   // CRM_STAGE_ROLES_V1
   const e = refused(() => saveConfig(db, { settings: { won_stage: 'approved' } }));
   assert.ok(e instanceof CrmConfigError);
   assert.equal(e.status, 409);
@@ -587,9 +676,12 @@ test('конверсия: колонка с карточками — отказ 
 
 test('конверсия: правила звонков, кормившие новую колонку конверсии, выключаются — звонок не рождает конверсию', () => {
   const db = fresh();
-  saveRouting(db, [{ disposition: 'NOANSWER', action: 'create', stage_key: 'recall' }]);
-  saveConfig(db, { settings: { won_stage: 'recall' } });
-  assert.deepEqual(wonKeys(db), ['recall']);
+  // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: «Перезвонить» стоит перед колонкой записи и конверсией
+  // стать не может (запись оказалась бы после конверсии) — берётся «Подтверждён».
+  saveRouting(db, [{ disposition: 'NOANSWER', action: 'create', stage_key: 'approved' }]);
+  saveStages(db, withRoles(db, { approved: null }));   // CRM_STAGE_ROLES_V1 — роль подтверждения сначала снята
+  saveConfig(db, { settings: { won_stage: 'approved' } });
+  assert.deepEqual(wonKeys(db), ['approved']);
   const r = listRouting(db).find((x) => x.disposition === 'NOANSWER');
   assert.deepEqual([r.action, r.stage_key], ['ignore', null]);
   db.close();
@@ -599,10 +691,13 @@ test('конверсия: ровно одна won после любой цепо
   const db = fresh();
   const one = () => assert.equal(wonKeys(db).length, 1);
   lead(db, { status: 'came' });
+  saveStages(db, withRoles(db, { approved: null }));   // CRM_STAGE_ROLES_V1 — роль подтверждения сначала снята
   saveConfig(db, { settings: { won_stage: 'approved' } }); one();
   saveStages(db, asInput(listStages(db)).map((s) => ({ ...s, kind: s.key === 'came' ? 'won' : 'open' }))); one();
   assert.deepEqual(wonKeys(db), ['approved'], 'сохранение колонок сдвинуло конверсию');
   assert.throws(() => saveConfig(db, { settings: { won_stage: 'stopped' } })); one();
+  assert.throws(() => saveConfig(db, { settings: { won_stage: 'scheduled' } }), /Колонка записи/); one();   // CRM_STAGE_ROLES_V1
+  saveStages(db, withRoles(db, { recall: 'booked', scheduled: null }));
   saveConfig(db, { settings: { won_stage: 'scheduled' } }); one();
   saveConfig(db, { settings: { won_stage: 'came' } }); one();
   assert.deepEqual(wonKeys(db), ['came']);
@@ -616,10 +711,12 @@ test('конверсия: отказ для проигрышной, «Не пр�
   assert.throws(() => saveConfig(db, { settings: { won_stage: 'no_show' } }), /Проигрышная колонка|«Не пришёл»/);
   db.prepare("UPDATE crm_stages SET kind = 'open' WHERE key = 'no_show'").run();
   assert.throws(() => saveConfig(db, { settings: { won_stage: 'no_show' } }), /«Не пришёл» не может быть колонкой конверсии/);
+  db.prepare("UPDATE crm_stages SET kind = 'lost' WHERE key = 'no_show'").run();   // CRM_STAGE_ROLES_V1 — назад: открытая «Не пришёл» ломала бы любые роли
   db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'approved'").run();
   assert.throws(() => saveConfig(db, { settings: { won_stage: 'approved' } }), /Скрытая колонка/);
   db.prepare("UPDATE crm_stages SET is_active = 1 WHERE key = 'approved'").run();
   assert.throws(() => saveConfig(db, { settings: { won_stage: 'nope' } }), /нет в воронке/);
+  saveStages(db, withRoles(db, { approved: null }));   // CRM_STAGE_ROLES_V1 — «Подтверждён» без роли подтверждения: может стать колонкой записи
   // Колонка записи «Подтверждён» и конверсия «Записан» — запись после конверсии.
   assert.throws(() => saveConfig(db, { settings: { booked_stage: 'approved', won_stage: 'scheduled' } }), /Колонка записи/);
   // Сохранённый выбор тоже проверяется: «Подтверждён» стоит после новой «Записан».
@@ -627,15 +724,17 @@ test('конверсия: отказ для проигрышной, «Не пр�
   assert.throws(() => saveConfig(db, { settings: { won_stage: 'scheduled' } }), /Колонка записи/);
   // Запись = конверсия.
   assert.throws(() => saveConfig(db, { settings: { booked_stage: 'approved', won_stage: 'approved' } }), /Колонка записи/);
-  // Перед конверсией не осталось ни одной колонки для записанных.
-  assert.throws(() => saveConfig(db, { settings: { booked_stage: null, won_stage: 'in_process' } }), /Перед колонкой конверсии/);
+  // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: колонка записи — роль («Подтверждён»), и конверсия перед
+  // ней — тот же отказ «Колонка записи…» (прежде — «Перед колонкой конверсии…» правила по умолчанию).
+  assert.throws(() => saveConfig(db, { settings: { booked_stage: null, won_stage: 'in_process' } }), /Колонка записи/);
   assert.deepEqual(wonKeys(db), ['came'], 'ни один отказ не сдвинул конверсию');
-  assert.equal(readCrmSettings(db).booked_stage, 'approved', 'ни один отказ не изменил колонку записи');
+  assert.equal(scheduledStageKey(db), 'approved', 'ни один отказ не изменил колонку записи');
   db.close();
 });
 
 test('конверсия и запись одной правкой: пара проверяется по новой воронке', () => {
   const db = fresh();
+  saveStages(db, withRoles(db, { approved: null }));   // CRM_STAGE_ROLES_V1 — роль подтверждения сначала снята
   saveConfig(db, { settings: { booked_stage: 'scheduled', won_stage: 'approved' } });
   assert.deepEqual(wonKeys(db), ['approved']);
   assert.equal(scheduledStageKey(db), 'scheduled');
@@ -643,6 +742,57 @@ test('конверсия и запись одной правкой: пара п�
   saveConfig(db, { settings: { booked_stage: null, won_stage: 'came' } });
   assert.deepEqual(wonKeys(db), ['came']);
   assert.equal(listStages(db).find((s) => s.key === 'approved').kind, 'open');
+  db.close();
+});
+
+// CRM_STAGE_ROLES_V1 (ревью; решение координатора 2026-11-10) — ОБНОВЛЕНО: роль «подтверждение»
+// не снимается переносом конверсии — отказ 409 с названием колонки; колонку записи перенос
+// тоже не трогает — отказ (400, как прежние отказы конверсии).
+test('конверсия и роли: на колонку подтверждения или перед ней — отказ 409; на колонку записи — отказ 400', () => {
+  const db = fresh();
+  const e1 = refused(() => saveConfig(db, { settings: { won_stage: 'approved' } }));
+  assert.equal(e1.status, 409);
+  assert.equal(e1.message, 'Колонка «Подтверждён» — колонка подтверждения: сначала передайте роль другой колонке.');
+  assert.equal(e1.template, 'Колонка «{label}» — колонка подтверждения: сначала передайте роль другой колонке.');
+  saveStages(db, [...withRoles(db, {})].flatMap((s) => (s.key === 'approved' ? [{ key: 'mid', label: 'Между', color: '', kind: 'open', is_active: true, role: null }, s] : [s])));
+  const e2 = refused(() => saveConfig(db, { settings: { won_stage: 'mid' } }));
+  assert.equal(e2.status, 409, 'подтверждение оказалось бы после конверсии');
+  assert.deepEqual([wonKeys(db), confirmedStageKey(db)], [['came'], 'approved'], 'отказ сдвинул конверсию или снял роль');
+  const e = refused(() => saveConfig(db, { settings: { won_stage: 'scheduled' } }));
+  assert.equal(e.status, 400);
+  assert.equal(e.message, 'Колонка записи должна быть открытой видимой колонкой перед колонкой-конверсией.');
+  db.close();
+});
+
+// CRM_STAGE_ROLES_V1 (ревью) — недопустимая роль, оставшаяся в базе мимо экрана (ручная правка,
+// откат версии), читается как неотмеченная и не блокирует другие правки колонок.
+test('роль на скрытой колонке или после конверсии не действует и не мешает сохранять колонки', () => {
+  const db = fresh();
+  db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'scheduled'").run();
+  assert.equal(scheduledStageKey(db), null, 'запись в скрытую колонку');
+  assert.equal(confirmedStageKey(db), null, 'подтверждение без действующей колонки записи');
+  saveStages(db, withRoles(db, {}, (s) => (s.key === 'recall' ? { ...s, label: 'Перезвон' } : s)));
+  assert.equal(listStages(db).find((s) => s.key === 'recall').label, 'Перезвон');
+  saveStages(db, withRoles(db, { scheduled: null, in_process: 'booked', approved: 'confirmed' }));
+  assert.equal(scheduledStageKey(db), 'in_process');
+  assert.equal(confirmedStageKey(db), 'approved');
+  const e = refused(() => saveStages(db, withRoles(db, { in_process: null, recall: 'booked' }, (s) => (s.key === 'recall' ? { ...s, is_active: false } : s))));
+  assert.equal(e.status, 409, 'роль перенесли на скрытую колонку');
+  db.close();
+});
+
+// CRM_STAGE_ROLES_V1 (ревью) — снять галочку и удалить колонку одной правкой можно (как снять и скрыть).
+test('снять роль и удалить колонку одной правкой — можно; удалить, не снимая, экраном старше сервера — нельзя', () => {
+  const db = fresh();
+  const s = asInput(listStages(db));
+  s.splice(4, 0, { key: 'agreed', label: 'Согласовано', color: '', kind: 'open', is_active: true, role: 'confirmed' });
+  s.find((x) => x.key === 'approved').role = null;
+  saveStages(db, s);
+  const old = asInput(listStages(db)).map(({ role, ...x }) => x).filter((x) => x.key !== 'agreed');
+  assert.equal(refused(() => saveStages(db, old)).status, 409);
+  saveStages(db, asInput(listStages(db)).filter((x) => x.key !== 'agreed'));
+  assert.equal(confirmedStageKey(db), null);
+  assert.ok(!listStages(db).some((x) => x.key === 'agreed'));
   db.close();
 });
 

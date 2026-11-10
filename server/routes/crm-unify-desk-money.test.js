@@ -383,8 +383,10 @@ test('C4a: стойка — границы окна (71 ч / 73 ч), дата с
     addLine(t.db, freshD, { svc: 40, day: D });
     const r = await t.rpc('ensure_visit', 'reg', { patient_id: 77, date: nowIso(), doctor_id: 10, desk: true });
     assert.equal(r.status, 200, r.text);
+    // CRM_CARD_OWN_BOOKING_V1 (ревью 3.23.0) — ОБНОВЛЕНО НАМЕРЕННО: свежая карточка с анализом «на дату» D
+    // ждёт свой день (F2) — стойка сегодня её не закрывает.
     assert.deepEqual([h71, h73, today30d, und30d, freshD].map((id) => t.lead(id).status),
-      ['came', 'in_process', 'came', 'came', 'came']);
+      ['came', 'in_process', 'came', 'came', 'approved']);
     assertInvariant(t.db, 'C4a');
   } finally { t.close(); }
 });

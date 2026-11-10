@@ -52,18 +52,23 @@ test('без смены конверсии: карточка «Пришёл» н
 });
 
 test('сидовая воронка, конверсия — «Подтверждён»: история переехала в неё и под обход не попадает', async () => {
-  const s = serverState((db) => saveConfig(db, { settings: { won_stage: 'approved' } }));
+  const s = serverState((db) => {
+    db.prepare("UPDATE crm_stages SET role = NULL WHERE key = 'approved'").run();   // CRM_STAGE_ROLES_V1 (ревью; решение координатора) — роль подтверждения сначала снята: конверсия на ней — отказ
+    saveConfig(db, { settings: { won_stage: 'approved' } });
+  });
   assert.equal(s.card.status, 'approved', 'конвертированная карточка не пошла за конверсией');
   assertNotSwept(await boardSweep(s), s.card);
 });
 
 test('воронка клиники, конверсия — «Успешно»: история переехала в неё и под обход не попадает', async () => {
-  const st = (key, label, kind) => ({ key, label, color: '', kind, is_active: 1 });
+  // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: роли едут с колонками («Записан» с ролью «запись» без передачи
+  // роли не удалить); колонка записи — «Подтверждён (стационар)», до конверсии «Успешно».
+  const st = (key, label, kind, role = null) => ({ key, label, color: '', kind, is_active: 1, role });
   const s = serverState((db) => {
     saveStages(db, [
       st('in_process', 'Новый лид', 'open'), st('recall', 'Перезвонить', 'open'), st('dozhim', 'Дожим', 'open'),
-      st('approved', 'Подтверждён (амбулатор)', 'open'), st('approved_in', 'Подтверждён (стационар)', 'open'),
-      st('no_show', 'Не пришёл', 'lost'), st('uspeshno', 'Успешно', 'open'), st('came', 'Пришёл', 'won'),
+      st('approved', 'Подтверждён (амбулатор)', 'open'), st('approved_in', 'Подтверждён (стационар)', 'open', 'booked'),
+      st('no_show', 'Не пришёл', 'lost', 'no_show'), st('uspeshno', 'Успешно', 'open'), st('came', 'Пришёл', 'won'),
       st('stopped', 'Отказ', 'lost'),
     ]);
     saveConfig(db, { settings: { won_stage: 'uspeshno' } });

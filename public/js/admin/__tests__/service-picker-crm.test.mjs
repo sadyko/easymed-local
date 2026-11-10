@@ -115,6 +115,7 @@ let FAIL_LINES = false;
 let CONSULT_ON = false;
 const RPCS = [];
 const RPC_BODIES = [];
+const DAY_LINE_CALLS = [];   // CRM_DAY_LINES_V1
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     let body = {}; try { body = JSON.parse(opts.body || '{}'); } catch { /* не наш запрос */ }
@@ -144,6 +145,9 @@ globalThis.fetch = async (url, opts = {}) => {
         return ok([]);
     }
     if (u.startsWith('/api/rpc/')) { RPCS.push(decodeURIComponent(u.slice('/api/rpc/'.length))); RPC_BODIES.push(body); }
+    // CRM_DAY_LINES_V1 — строки заявок дня отдаёт сервер (rpc/crm-day-lines.js): заявки принадлежат
+    // ПАЦИЕНТУ — у второго их нет, и подстановке после перепривязки взять неоткуда.
+    if (u.startsWith('/api/rpc/crm_day_lines')) { DAY_LINE_CALLS.push(body); return ok(String(body.patient_id) !== '3' || !CRM_REQS.length ? [] : CRM_LINES); }
     // CRM_CALENDAR_MIRROR_V1 — узкая дверь сервера для строк записи колл-центра.
     if (u.startsWith('/api/rpc/booking_lines_add')) return ok({ visit_id: 'v-1', added: (body.lines || []).map((l, i) => ({ id: 'vs-' + i, service_id: l.service_id ?? null, consultation_type_id: l.consultation_type_id ?? null, unit_price: 1 })), skipped: [] });
     if (u.startsWith('/api/rpc/calendar_book')) return ok({ visit: { id: 'v-1', visit_number: 'V-1', branch_id: null, visit_date: DAY_ISO } });
@@ -165,6 +169,7 @@ const addBtnFor = (box, name) => byClass(box, 'wzc-svc')
 async function openFromCalendar(extra = {}) {
     BODY.children.length = 0;
     CALLS = [];
+    DAY_LINE_CALLS.length = 0;   // CRM_DAY_LINES_V1
     CRM_REQS = [{ id: 501 }];
     CRM_LINES = [{ id: 901, request_id: 501, service_id: 20, scheduled_date: DAY, status: 'pending', doctor_id: null }];
     openServicePickerModal(Object.assign({
@@ -212,7 +217,8 @@ async function removeFromCart(name) {
     await settle(60);
 }
 
-const lineSelects = () => CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'select');
+// CRM_DAY_LINES_V1 — ОБНОВЛЕНО: строки заявок дня — один вызов RPC crm_day_lines (не /api/db).
+const lineSelects = () => DAY_LINE_CALLS;
 const lineUpdates = () => CALLS.filter((c) => c.table === 'crm_request_services' && c.op === 'update');
 const filterOf = (call, col) => (call.filters || []).find((f) => f.col === col);
 
@@ -232,10 +238,10 @@ test('пациента привязали ПОСЛЕ открытия — усл
 
     const sel = lineSelects()[0];
     assert.ok(sel, 'после привязки пациента строки заявки колл-центра так и не спрошены: запись из календаря заявку не видит');
-    assert.deepEqual(filterOf(sel, 'scheduled_date'), { col: 'scheduled_date', op: 'eq', val: DAY },
+    assert.equal(sel.day, DAY,
         'строки заявки спрошены не на день записи — мастер открыт без дня');
-    assert.deepEqual(filterOf(sel, 'status'), { col: 'status', op: 'eq', val: 'pending' },
-        'спрошены и уже закрытые строки заявки');
+    assert.equal(String(sel.patient_id), '3', 'строки заявки спрошены не о привязанном пациенте');
+    assert.ok(!CALLS.some((c) => c.table === 'crm_request_services' && c.op === 'select'), 'строки заявок снова читаются через /api/db');
 
     const rail = topOverlay();
     assert.ok(byClass(rail, 'wzc-ln').some((l) => textOf(l).includes('УЗИ почек')),

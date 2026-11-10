@@ -333,8 +333,9 @@ test('маршрут звонков уехал в «Телефонию» — н�
   // CRM_UNIFY_V1 — ОБНОВЛЕНО НАМЕРЕННО: выпадающие списки на экране снова есть,
   // но только два — «Колонка записи» и «Колонка конверсии» карточки «Запись и
   // повторные обращения». Ни один из них не пишет routing.
+  // CRM_STAGE_ROLES_V1 — ОБНОВЛЕНО: «Колонка записи» стала галочкой колонки; список один.
   assert.deepStrictEqual(findSelects(root).map((s) => Object.keys(s.attrs).filter((k) => k.startsWith('data-crm-')).join()),
-    ['data-crm-booked-stage', 'data-crm-won-stage'], 'на экране появился выпадающий список маршрута звонков');
+    ['data-crm-won-stage'], 'на экране появился выпадающий список маршрута звонков');
   assert.strictEqual(findAllButtons(root).filter((b) => /маршрут|телефон/i.test(textOf(b))).length, 0,
     'и ни одной кнопки, которая писала бы routing');
 });
@@ -440,53 +441,115 @@ const wonSel = (root) => walk(root).find((n) => n.tagName === 'SELECT' && 'data-
 const optionValues = (sel) => walk(sel).filter((n) => n.tagName === 'OPTION').map((o) => o.value);
 const change = (sel, value) => { sel.value = value; sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel }); };
 
-test('CRM_UNIFY_V1: колонка записи — только открытые видимые до «Пришёл»; сохранение шлёт settings', async () => {
+// CRM_STAGE_ROLES_V1 (3.23.0) — ПЕРЕПИСАНО НАМЕРЕННО. Здесь было поле «Колонка подтверждения
+// (запись)» (подписано неверно — это колонка записи; хранилось в crm_settings.booked_stage).
+// Владелец: «we need to add a booking tick (like conversion) so the system won't break».
+// Теперь роли — галочки у колонок («запись», «подтверждение», «не пришёл») со значками, как
+// «конверсия»; уходят вместе с колонками. Проверки выбора колонки записи (два теста здесь и
+// два «S3» ниже) заменены проверками галочек.
+const ROLED_CONFIG = {
+  ...FULL_CONFIG,
+  stages: [
+    { key: 'in_process',    label: 'В обработке', color: 'info',   position: 1, is_active: 1, kind: 'open', role: null },
+    { key: 'recall',        label: 'Перезвонить', color: 'warn',   position: 2, is_active: 1, kind: 'open', role: 'booked' },
+    { key: 'approved',      label: 'Подтверждён', color: 'teal',   position: 3, is_active: 1, kind: 'open', role: 'confirmed' },
+    { key: 'came',          label: 'Пришёл',      color: 'ok',     position: 4, is_active: 1, kind: 'won',  role: null },
+    { key: 'no_show',       label: 'Не пришёл',   color: 'crit',   position: 5, is_active: 1, kind: 'lost', role: 'no_show' },
+    { key: 'not_qualified', label: 'Нецелевой',   color: '',       position: 6, is_active: 0, kind: 'lost', role: null },
+  ],
+};
+const roleBoxes = (root) => walk(root).filter((n) => n.tagName === 'INPUT' && 'data-crm-role' in n.attrs);
+const roleBox = (root, key, role) => roleBoxes(root).find((n) => n.attrs['data-crm-role-of'] === key && n.attrs['data-crm-role'] === role);
+const tickRole = (root, key, role, on = true) => { const cb = roleBox(root, key, role); cb.checked = on; cb.dispatchEvent({ type: 'change', target: cb, currentTarget: cb }); };
+const rolesSent = (body) => Object.fromEntries(body.stages.filter((s) => s.role).map((s) => [s.role, s.key]));
+
+test('CRM_STAGE_ROLES_V1: галочки ролей у колонок и значки; поля «Колонка подтверждения (запись)» больше нет', async () => {
   resetServer();
+  getRespond = () => jsonOk(JSON.parse(JSON.stringify(ROLED_CONFIG)));
   const root = await render();
-  assert.ok(textOf(root).includes('Запись и повторные обращения'), 'нет карточки настроек записи');
-  const sel = bookedSel(root);
-  assert.ok(sel, 'нет поля «Колонка записи»');
-  assert.deepStrictEqual(optionValues(sel), ['', 'in_process', 'recall'],
-    'в выборе колонка после «Пришёл», скрытая или проигрышная');
-  assert.ok(textOf(sel).includes('По умолчанию — «Перезвонить»'));
-  assert.strictEqual(sel.value, '', 'выбор не сделан — стоит правило по умолчанию');
-  change(sel, 'in_process');
-  assert.ok(textOf(root).includes('Изменения не сохранены'), 'выбор сделан, а экран молчит, что его надо сохранить');
-  findButtonByText(root, /Сохранить настройки/).click();
-  await tick();
-  // CRM_UNIFY_V1 (задача 6) — ОБНОВЛЕНО НАМЕРЕННО: окно повторного обращения
-  // уходит с каждым сохранением карточки (72 — значение по умолчанию).
-  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: 'in_process', window_hours: 72 } },
-    'конверсию не меняли — её и не шлём');
-  assert.strictEqual(lastToast(), 'Настройки сохранены.');
+  assert.ok(!bookedSel(root), 'осталось прежнее поле колонки записи');
+  assert.ok(!textOf(root).includes('Колонка подтверждения (запись)'), 'неверная подпись осталась');
+  // Открытым — «запись» и «подтверждение», проигрышным — «не пришёл», конверсии — ничего.
+  assert.strictEqual(roleBoxes(root).length, 3 * 2 + 2);
+  assert.deepStrictEqual(roleBoxes(root).filter((n) => 'checked' in n.attrs).map((n) => [n.attrs['data-crm-role-of'], n.attrs['data-crm-role']]),
+    [['recall', 'booked'], ['approved', 'confirmed'], ['no_show', 'no_show']]);
+  // Ревью: имя галочки называет и колонку — читалка экрана различает строки.
+  assert.strictEqual(roleBox(root, 'recall', 'booked').attrs['aria-label'], 'Колонка записи — Перезвонить');
+  assert.strictEqual(roleBox(root, 'no_show', 'no_show').attrs['aria-label'], 'Колонка «Не пришёл» — Не пришёл');
+  const text = textOf(root);
+  for (const w of ['запись', 'подтверждение', 'не пришёл', 'конверсия']) assert.ok(text.includes(w), 'нет значка ' + w);
+  assert.ok(text.includes('«Запись» — сюда переходит карточка, когда пациента записали на приём.'), 'нет подсказки о ролях');
+  assert.ok(text.includes('Колонки записи, подтверждения и «Не пришёл» отмечаются галочками'), 'карточка записи не говорит, где теперь колонка записи');
+  // Колонку с ролью не скрыть и не удалить: «Видна» заблокирована, «Удалить» нет.
+  const locked = findCheckboxes(root).filter((b) => !('data-crm-role' in b.attrs) && 'disabled' in b.attrs);
+  assert.deepStrictEqual(locked.map((b) => b.attrs.title).sort(),
+    ['Колонку конверсии нельзя скрыть', 'Сначала передайте роль другой колонке', 'Сначала передайте роль другой колонке', 'Сначала передайте роль другой колонке']);
+  assert.strictEqual(findButtonByAria(root, 'Удалить').length, 1, 'удалить предлагается только колонку без роли («Нецелевой»)');
+  assert.ok(text.includes('Колонку с ролью нельзя скрыть или удалить'));
 });
 
-test('CRM_UNIFY_V1: колонка конверсии — без проигрышных, скрытых и без колонки, перед которой некуда записывать', async () => {
+test('CRM_STAGE_ROLES_V1: галочка «запись» у другой колонки переносит роль; роли уходят с колонками', async () => {
   resetServer();
+  getRespond = () => jsonOk(JSON.parse(JSON.stringify(ROLED_CONFIG)));
+  saveRespond = () => jsonOk(JSON.parse(JSON.stringify(ROLED_CONFIG)));
+  const root = await render();
+  tickRole(root, 'in_process', 'booked');
+  assert.ok('checked' in roleBox(root, 'in_process', 'booked').attrs);
+  assert.ok(!('checked' in roleBox(root, 'recall', 'booked').attrs), 'роль у двух колонок');
+  assert.ok(textOf(root).includes('Изменения не сохранены'), 'роль сменили, а экран молчит');
+  saveStagesBtn(root).click();
+  await tick();
+  assert.strictEqual(saveCalls, 1);
+  assert.deepStrictEqual(Object.keys(lastSaveBody), ['stages']);
+  assert.deepStrictEqual(rolesSent(lastSaveBody), { booked: 'in_process', confirmed: 'approved', no_show: 'no_show' });
+  assert.ok(lastSaveBody.stages.every((s) => 'role' in s), 'строка без поля role — сервер счёл бы роли не присланными');
+});
+
+test('CRM_STAGE_ROLES_V1: отказ ролей — до сервера, той же фразой, что у сервера', async () => {
+  for (const [act, msg] of [
+    [(root) => tickRole(root, 'recall', 'booked', false), 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.'],
+    [(root) => tickRole(root, 'in_process', 'confirmed'), 'Колонка подтверждения должна быть открытой видимой колонкой после колонки записи и перед колонкой-конверсией.'],
+  ]) {
+    resetServer();
+    getRespond = () => jsonOk(JSON.parse(JSON.stringify(ROLED_CONFIG)));
+    const root = await render();
+    act(root);
+    saveStagesBtn(root).click();
+    await tick();
+    assert.strictEqual(saveCalls, 0, 'ушло на сервер: ' + msg);
+    assert.strictEqual(lastToast(), msg);
+  }
+});
+
+test('CRM_STAGE_ROLES_V1: роль сняли — колонку можно скрыть; скрытая «Не пришёл» с ролью (после обновления) — показать можно', async () => {
+  resetServer();
+  const cfg = JSON.parse(JSON.stringify(ROLED_CONFIG));
+  cfg.stages.find((s) => s.key === 'no_show').is_active = 0;
+  getRespond = () => jsonOk(JSON.parse(JSON.stringify(cfg)));
+  const root = await render();
+  const visibleOf = (key) => findCheckboxes(root).filter((b) => !('data-crm-role' in b.attrs))[cfg.stages.findIndex((s) => s.key === key)];
+  assert.ok(!('disabled' in visibleOf('no_show').attrs), 'скрытую с ролью нельзя показать');
+  tickRole(root, 'approved', 'confirmed', false);
+  assert.ok(!('disabled' in visibleOf('approved').attrs), 'роль снята, а «Видна» всё ещё заблокирована');
+});
+
+test('CRM_UNIFY_V1 · CRM_STAGE_ROLES_V1: колонка конверсии — без проигрышных, скрытых и без колонок записи и подтверждения', async () => {
+  resetServer();
+  const cfg = JSON.parse(JSON.stringify(ROLED_CONFIG));
+  cfg.stages.find((s) => s.key === 'approved').role = null;
+  getRespond = () => jsonOk(JSON.parse(JSON.stringify(cfg)));
   const root = await render();
   const won = wonSel(root);
   assert.ok(won, 'нет поля «Колонка конверсии»');
-  // «В обработке» — первая: перед ней нет колонки для записанных. «Нецелевой» — проигрышная и скрытая.
-  assert.deepStrictEqual(optionValues(won), ['recall', 'came']);
+  // «В обработке» — колонка записи стала бы после конверсии; «Перезвонить» — сама колонка записи;
+  // «Не пришёл» и «Нецелевой» — проигрышные.
+  assert.deepStrictEqual(optionValues(won), ['approved', 'came']);
   assert.strictEqual(won.value, 'came', 'поле не показывает нынешнюю конверсию');
-  // CRM_UNIFY_V1 (ревью задачи 4) — новая колонка пустая, история переезжает в неё.
   assert.ok(textOf(root).includes('Выбрать можно только пустую колонку'), 'нет подсказки о правиле переноса конверсии');
-
-  // Конверсия «Перезвонить»: колонка записи пересчитана от неё.
-  const booked = bookedSel(root);
-  change(booked, 'recall');
-  change(won, 'recall');
-  assert.deepStrictEqual(optionValues(bookedSel(root)), ['', 'in_process'], 'колонка записи предлагается на месте конверсии или после неё');
-  assert.strictEqual(bookedSel(root).value, '', 'выбор «Перезвонить» стал недопустимым и не сброшен');
-  assert.ok(textOf(bookedSel(root)).includes('По умолчанию — «В обработке»'));
-  assert.ok(textOf(root).includes('до «Перезвонить»'), 'подсказка колонки записи не знает новой конверсии');
+  change(won, 'approved');
   findButtonByText(root, /Сохранить настройки/).click();
   await tick();
-  // CRM_UNIFY_V1 (задача 6) — ОБНОВЛЕНО НАМЕРЕННО: и окно повторного обращения.
-  // CRM_UNIFY_V1 (итоговое ревью, S3) — ОБНОВЛЕНО НАМЕРЕННО: колонка записи
-  // уходит, только если её действительно сменили; здесь сохранённое «по
-  // умолчанию» так и осталось «по умолчанию» — слать null незачем.
-  assert.deepStrictEqual(lastSaveBody, { settings: { window_hours: 72, won_stage: 'recall' } });
+  assert.deepStrictEqual(lastSaveBody, { settings: { window_hours: 72, won_stage: 'approved' } }, 'колонка записи ушла из настроек');
 });
 
 test('CRM_UNIFY_V1: отказ сервера — его фраза, экран не перерисован догадкой', async () => {
@@ -549,50 +612,6 @@ test('CRM_UNIFY_V1: окно не целое или вне 1–720 — отка�
     assert.strictEqual(saveCalls, 0, 'ушло на сервер: ' + JSON.stringify(bad));
     assert.strictEqual(lastToast(), 'Окно повторного обращения — целое число часов от 1 до 720.', JSON.stringify(bad));
   }
-});
-
-// CRM_UNIFY_V1 (итоговое ревью, S3) — конверсию сменили туда и обратно: выбор
-// колонки записи, сделанный человеком, помнится; сохранение одного окна не
-// сбрасывает колонку записи в «по умолчанию».
-test('CRM_UNIFY_V1 S3: конверсия туда и обратно — выбор колонки записи на месте; правка окна не шлёт booked_stage', async () => {
-  resetServer();
-  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'in_process', window_hours: 72 } });
-  saveRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'in_process', window_hours: 48 } });
-  const root = await render();
-  assert.strictEqual(bookedSel(root).value, 'in_process');
-  change(wonSel(root), 'recall');
-  assert.strictEqual(bookedSel(root).value, 'in_process', 'выбор «В обработке» до «Перезвонить» допустим и пропал');
-  // выбор пользователя — «Перезвонить», затем конверсия «Перезвонить» делает его недопустимым
-  change(wonSel(root), 'came');
-  change(bookedSel(root), 'recall');
-  change(wonSel(root), 'recall');
-  assert.strictEqual(bookedSel(root).value, '', 'недопустимый выбор показан');
-  change(wonSel(root), 'came');
-  assert.strictEqual(bookedSel(root).value, 'recall', 'конверсию вернули — выбор человека забыт');
-  // вернули всё как было — экран не просит сохранить
-  change(bookedSel(root), 'in_process');
-  assert.ok(!textOf(root).includes('Изменения не сохранены'), 'всё как было, а экран просит сохранить');
-  typeHours(hoursInput(root), '48');
-  findButtonByText(root, /Сохранить настройки/).click();
-  await tick();
-  assert.deepStrictEqual(lastSaveBody, { settings: { window_hours: 48 } }, 'правка окна сбросила колонку записи');
-});
-
-test('CRM_UNIFY_V1 S3: человек сам выбрал «по умолчанию» — уходит null; выбор стал недопустимым — уходит null', async () => {
-  resetServer();
-  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'recall', window_hours: 72 } });
-  let root = await render();
-  change(bookedSel(root), '');
-  findButtonByText(root, /Сохранить настройки/).click();
-  await tick();
-  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 72 } });
-  resetServer();
-  getRespond = () => jsonOk({ ...JSON.parse(JSON.stringify(FULL_CONFIG)), settings: { booked_stage: 'recall', window_hours: 72 } });
-  root = await render();
-  change(wonSel(root), 'recall');
-  findButtonByText(root, /Сохранить настройки/).click();
-  await tick();
-  assert.deepStrictEqual(lastSaveBody, { settings: { booked_stage: null, window_hours: 72, won_stage: 'recall' } });
 });
 
 
