@@ -147,3 +147,19 @@ test('после скидки кассы касса убирает услугу 
   const after = inv(db, i.id);
   assert.deepEqual([after.subtotal, after.discount_amount, after.total_amount], [100000, 20000, 80000]);
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0) — отказ скидки до оплаты называет статус как есть: у
+// оплаченного счёта прежде было «оплачен (частично)»; и говорит, где скидку меняют после оплаты.
+test('DISCOUNT_CHANGE_PAID_V1: отказ «до оплаты» — «оплачен» / «оплачен частично» / «переведён в долг» и «Изменить скидку»', () => {
+  const db = seed();
+  const { inv: full } = bill(db);
+  call('record_payment', db, { invoice_id: full.id, amount: 100000, method: 'cash' }, cashier);
+  const { inv: part } = bill(db);
+  call('record_payment', db, { invoice_id: part.id, amount: 10000, method: 'cash' }, cashier);
+  const { inv: debt } = bill(db);
+  call('mark_invoice_debt', db, { invoice_id: debt.id }, cashier);
+  const said = (id) => { try { call('cashier_invoice_discount', db, { invoice_id: id, mode: 'pct', value: 5, reason: 'x' }, cashier); } catch (e) { return [e.status, e.message]; } return null; };
+  assert.deepEqual(said(full.id), [409, 'Скидку дают до оплаты: счёт уже оплачен. После оплаты скидку меняют кнопкой «Изменить скидку».']);
+  assert.match(said(part.id)[1], /счёт уже оплачен частично\./);
+  assert.match(said(debt.id)[1], /счёт уже переведён в долг\./);
+});

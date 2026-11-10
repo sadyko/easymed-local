@@ -101,3 +101,29 @@ test('«Общая выручка»: переключатель включён �
   const col = (row, name) => row[r.columns.indexOf(name)];
   assert.equal(col(r.rows.find((x) => col(x, 'Услуга') === 'Консультация'), 'Доля врача'), 27000);
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0) — «Изменить скидку» после оплаты: доля врача — по тем же
+// формулам отчётов. VIP 10 % оплачен (90 000); касса подняла скидку до 40 % с выключенным
+// «Скидка уменьшает долю врача»: добавленные 30 000 берёт клиника (доля скидки для врача
+// 10 000 из 40 000 = 0,25) — врачу прежние 27 000, пациенту вернули 30 000; с включённым
+// переключателем — 30 % от 60 000 = 18 000. «Общая выручка» говорит то же.
+test('DISCOUNT_CHANGE_PAID_V1: скидку подняли после оплаты — переключатель выключен: врачу 27 000; включён: 18 000', () => {
+  for (const [reduces, fee] of [[false, 27000], [undefined, 18000]]) {
+    const { db, vid, vs } = seed({ reduces: 1 });
+    const inv = RPC.create_invoice_for_visit(db, { visit_id: vid, visit_service_ids: [vs], discount_amount: 0 }, admin).invoice;
+    RPC.record_payment(db, { invoice_id: inv.id, amount: 90000, method: 'cash' }, cashier);
+    const r = RPC.cashier_invoice_discount_change(db, { invoice_id: inv.id, mode: 'pct', value: 40, reason: 'жалоба',
+      ...(reduces === undefined ? {} : { reduces_doctor_share: reduces }) }, cashier);
+    assert.deepEqual([r.refunded, r.total_after], [30000, 60000]);
+    assert.equal(r.share_after, reduces === false ? 0.25 : 1);
+    perform(db, vs);
+    const l = lineOf(db);
+    assert.equal(round(l.doctor_fee), fee, 'переключатель: ' + reduces);
+    assert.deepEqual([round(l.amount), round(l.discount), round(l.net)], [100000, 40000, 60000], 'деньги отчёта — деньги счёта');
+    const rep = RPC.run_report(db, { kind: 'total_revenue', from: DAY, to: DAY }, admin);
+    const col = (row, name) => row[rep.columns.indexOf(name)];
+    const row = rep.rows.find((x) => col(x, 'Услуга') === 'Консультация');
+    assert.equal(col(row, 'Скидка'), 40000);
+    assert.equal(col(row, 'Доля врача'), fee);
+  }
+});

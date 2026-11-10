@@ -30,6 +30,7 @@ import { migrate } from '../../db/migrate.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';
 import { runReport, doctorPaySummary, doctorReferralReward, payPeriodClose } from './reports.js';
 import { createInvoiceForVisit, createInvoiceForAdmission, recordPayment, refundPayment } from './billing.js';
+import { cashierInvoiceDiscountChange } from './billing.js';   // DISCOUNT_CHANGE_PAID_V1
 import { voidInvoice } from './cashier.js';
 import { referralsDoctorDetail } from './referrals.js';
 import { today } from '../domain/day.js';
@@ -428,4 +429,36 @@ test('примечания «Рефералов» о базе вознаграж
       if (t && t.template) assert.ok(e[lang].includes('{date}'), lang + ': в переводе потерян {date}');
     }
   }
+});
+
+// ─── DISCOUNT_CHANGE_PAID_V1 (3.23.0) — «ИЗМЕНИТЬ СКИДКУ» ПОСЛЕ ОПЛАТЫ ────────
+// Числа владельца: УЗИ 200 000, скидка 20 % оплачена (160 000), касса меняет скидку на 50 %:
+// пациенту возвращают 60 000 — это возврат РАЗНИЦЫ, не возврат услуги: вознаграждение — по
+// прежнему правилу от полной цены, 20 000 партнёру и 10 000 своему врачу; скидка 100 % после
+// оплаты (вернули всё) — как скидка 100 % при выставлении: 20 000; сняли скидку — пока счёт
+// не доплачен, ничего; доплатили — 20 000.
+test('DISCOUNT_CHANGE_PAID_V1: скидку изменили после оплаты — вознаграждение от полной цены не меняется (20 000 / 10 000)', () => {
+  const c = clinic();
+  const { cur } = months(c.db);
+  const at = cur + '-04T09:00:00Z';
+  const a = c.paidWith20(at, 1);
+  const b = c.paidWith20(at, 2);
+  const r = cashierInvoiceDiscountChange(c.db, { invoice_id: a.inv.id, mode: 'pct', value: 50, reason: 'акция' }, admin);
+  assert.deepEqual([r.refunded, r.total_after], [60000, 100000]);
+  cashierInvoiceDiscountChange(c.db, { invoice_id: b.inv.id, mode: 'pct', value: 50, reason: 'акция' }, admin);
+  let rows = refRows(c.db, range(cur));
+  assert.equal(rewardOf(rows, 'Клиника Х'), 20000, 'партнёру — 10 % от 200 000 и после изменения скидки');
+  assert.equal(rows.find((o) => o['Источник'] === 'Клиника Х')['Сумма услуг'], 100000, 'деньги строки — после новой скидки');
+  assert.equal(rewardOf(rows, 'Направляев Н.'), 10000);
+  assert.equal(doctorPaySummary(c.db, { doctor_id: 2, ...range(cur) }, admin).referral.reward, 10000);
+  // 100 % после оплаты: вернули всё — вознаграждение как у скидки 100 % при выставлении.
+  cashierInvoiceDiscountChange(c.db, { invoice_id: a.inv.id, mode: 'pct', value: 100, reason: 'благотворительность' }, admin);
+  rows = refRows(c.db, range(cur));
+  assert.equal(rewardOf(rows, 'Клиника Х'), 20000);
+  // Скидку сняли: к доплате 200 000 — пока не оплачен, ничего; оплатили — 20 000.
+  const z = cashierInvoiceDiscountChange(c.db, { invoice_id: a.inv.id, mode: 'pct', value: 0, reason: 'ошибка' }, admin);
+  assert.equal(z.due, 200000);
+  assert.equal(rewardOf(refRows(c.db, range(cur)), 'Клиника Х'), 0, 'неоплаченный счёт принёс вознаграждение');
+  c.pay(c.db.prepare('SELECT * FROM invoices WHERE id = ?').get(a.inv.id), 200000);
+  assert.equal(rewardOf(refRows(c.db, range(cur)), 'Клиника Х'), 20000);
 });

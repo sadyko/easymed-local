@@ -95,3 +95,22 @@ test('повтор той же формы (idempotency_key) второй стр�
   assert.equal(refundRows(f.db, f.inv.id).length, 1, 'отказ записал строку');
   ledgerOk(f.db, f.inv.id);
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0) — «Изменить скидку» после оплаты возвращает разницу своей
+// строкой журнала ('discount_change': было, стало, сколько и куда вернули), а не строкой
+// «возврат оплаты»; сумма платежей = оплачено; повтор той же формы второй строки не пишет.
+test('DISCOUNT_CHANGE_PAID_V1: возврат разницы при изменении скидки — одна строка «discount_change», не «refunded»', async () => {
+  const f = seed();
+  const { RPC } = await import('./index.js');
+  const args = { invoice_id: f.inv.id, mode: 'pct', value: 30, reason: 'жалоба', idempotency_key: 'disc-change-log-1' };
+  const a = RPC.cashier_invoice_discount_change(f.db, args, cashier);
+  const b = RPC.cashier_invoice_discount_change(f.db, args, cashier);
+  assert.equal(a.refunded, 30000);
+  assert.equal(b.repeated, true);
+  ledgerOk(f.db, f.inv.id);
+  assert.equal(refundRows(f.db, f.inv.id).length, 0, 'изменение скидки записалось возвратом оплаты');
+  const rows = f.db.prepare("SELECT * FROM invoice_audit_log WHERE invoice_id = ? AND action = 'discount_change'").all(f.inv.id);
+  assert.equal(rows.length, 1, 'строк журнала: ' + rows.length);
+  assert.deepEqual([rows[0].visit_id, rows[0].refund_amount, rows[0].reason], [f.vid, 30000, 'жалоба']);
+  assert.match(rows[0].notes, /было 0% \(0 сум\), стало 30% \(30 000 сум\) · возвращено 30 000 \(наличными 30 000\)/);
+});

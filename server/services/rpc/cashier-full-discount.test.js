@@ -89,3 +89,22 @@ test('ревью S1 L-1: группа 100 % — счёт регистратур�
   // Деньги смены — прежние: платежей нет.
   assert.equal(RPC.shift_report(db, {}, cashier).totals.total, 0);
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0) — у счёта со скидкой 100 % есть «Изменить скидку»: скидку
+// сняли — счёт снова к оплате на всю сумму, в «Приёме оплат» он «Не оплачен», а в отчёте смены
+// больше не числится закрытым скидкой 100 %; неначатая услуга снова ждёт кассу.
+test('DISCOUNT_CHANGE_PAID_V1: скидка 100 % снята до 0 % — счёт «Не оплачен» на всю сумму, в отчёте смены его больше нет', () => {
+  const db = seed();
+  RPC.open_cash_shift(db, { opening_float: 0 }, cashier);
+  const full = bill(db, 30, { discount_amount: 100000, discount_choice: 'manual' });
+  assert.deepEqual(RPC.shift_report(db, {}, cashier).full_discount, { n: 1, discount: 100000 });
+  const vs = db.prepare('SELECT vs.id, vs.status FROM visit_services vs JOIN invoice_items ii ON ii.id = vs.invoice_item_id WHERE ii.invoice_id = ?').get(full.id);
+  assert.equal(vs.status, 'queued');
+  const r = RPC.cashier_invoice_discount_change(db, { invoice_id: full.id, mode: 'pct', value: 0, reason: 'скидка дана ошибочно' }, cashier);
+  assert.deepEqual([r.refunded, r.due], [0, 100000]);
+  const row = RPC.cashier_invoices(db, {}, cashier).rows.find((x) => x.id === full.id);
+  assert.ok(row, 'счёт пропал из «Приёма оплат»');
+  assert.deepEqual([row.status, row.total_amount, row.paid_amount, row.discount_amount], ['unpaid', 100000, 0, 0]);
+  assert.deepEqual(RPC.shift_report(db, {}, cashier).full_discount, { n: 0, discount: 0 });
+  assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = ?').get(vs.id).status, 'added', 'неначатая услуга снова ждёт кассу');
+});

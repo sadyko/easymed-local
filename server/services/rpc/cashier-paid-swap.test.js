@@ -405,3 +405,25 @@ test('«Выставить заново»: отменённые строки м�
   recordPayment(db, { invoice_id: created.invoice.id, amount: 80000, method: 'cash' }, cashier);
   assert.equal(inv(db, created.invoice.id).status, 'paid');
 });
+
+// DISCOUNT_CHANGE_PAID_V1 (3.23.0) — «Заменить услугу» и «Изменить скидку» возвращают разницу
+// одним циклом (billing.js refundOverpaid), но «Возвраты и отмены» различают их по пометке:
+// SWAP#<позиция> — «Замена услуги», DISC#<счёт> — «Изменение скидки».
+test('DISCOUNT_CHANGE_PAID_V1: замена и изменение скидки в одном счёте — два вида возврата в «Возвратах и отменах»', () => {
+  const { db, pid, CONS, USG } = clinic();
+  const today = db.prepare("SELECT date('now', 'localtime') d").get().d;
+  const a = billed(db, pid, CONS, DOC);
+  recordPayment(db, { invoice_id: a.invoiceId, amount: 150000, method: 'cash' }, cashier);
+  const s = call('cashier_line_swap_paid', db, { visit_service_id: a.vs, new_service_id: USG }, cashier);
+  assert.equal(s.refunded, 70000);
+  const d = call('cashier_invoice_discount_change', db, { invoice_id: a.invoiceId, mode: 'pct', value: 25, reason: 'жалоба' }, cashier);
+  assert.equal(d.refunded, 20000, '25 % от 80 000');
+  assert.deepEqual([inv(db, a.invoiceId).total_amount, inv(db, a.invoiceId).paid_amount], [60000, 60000]);
+  const row = call('cashier_refunds', db, { from: today, to: today }, plain).rows.find((r) => r.invoice_id === a.invoiceId);
+  assert.deepEqual(row.refunds.map((x) => [x.kind, x.amount]), [['swap', 70000], ['discount', 20000]]);
+  assert.match(row.refunds[1].reason, /^Изменение скидки — возврат разницы: жалоба$/);
+  assert.deepEqual(row.events.map((e) => e.action), ['line_swap_paid', 'discount_change']);
+  // Скидка счёта переживает следующую замену в той же доле (ручная часть «как её дали»).
+  call('cashier_line_swap_paid', db, { visit_service_id: a.vs, new_service_id: CONS }, cashier);
+  assert.deepEqual([inv(db, a.invoiceId).discount_amount, inv(db, a.invoiceId).total_amount], [20000, 130000], 'цена DOC 150 000; скидка — прежние 20 000 (база выросла — не больше данной суммы)');
+});
