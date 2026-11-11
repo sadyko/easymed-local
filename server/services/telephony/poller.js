@@ -23,7 +23,7 @@ import { leadFromCall } from '../crm/lead-from-call.js';
 // TELEPHONY_PROVIDERS_V1 — остальные провайдеры (onlinePBX) опрашиваются тем же
 // тиком, каждый своим клиентом, и складываются в ТУ ЖЕ таблицу звонков тем же
 // recordCall'ом: журнал, пациент по номеру и «звонок → заявка» одни на всех.
-import { pbxHistory, normalizePbxCall } from './onlinepbx.js';
+import { pbxHistoryByEnd, normalizePbxCall } from './onlinepbx.js';   // PBX_END_CURSOR_V1 — история по окончанию звонка
 import { mzListCalls, normalizeMzCall, normalizeMzDomain } from './moizvonki.js';   // MOIZVONKI_V2 — история «Моих Звонков»
 import { ensureMoizvonkiRouting } from './moizvonki-routing.js';   // MOIZVONKI_V2 — свои правила «звонок → заявка»
 import { pbxOptions, recordProviderPoll, noteProviderCall, providerKind, providerConfig, providerSecrets,
@@ -71,7 +71,11 @@ export function callList(data) {
 // UNIQUE(general_call_id) + DO NOTHING make that race harmless: first writer
 // wins, the second changes nothing (both carry the same unified structure —
 // which is also why the plan's "upsert" needs no UPDATE branch).
-export function recordCall(db, d, source, provider = null) {
+// PBX_END_CURSOR_V1 — `{ lead: false }`: звонок ложится в журнал, но карточку
+// CRM не заводит и не будит. Так подшиваются звонки прошлой недели, добранные
+// разово после обновления: это история (в карточке номера они видны и так —
+// «Звонки по этому номеру» ищет по номеру), а не новые обращения.
+export function recordCall(db, d, source, provider = null, { lead = true } = {}) {
   if (!d || typeof d !== 'object') return false;
   const n = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
   // TELEPHONY_PROVIDERS_V1 — строка либо сырая Binotel (generalCallID/startTime),
@@ -164,7 +168,7 @@ export function recordCall(db, d, source, provider = null) {
     // routing table must never cost the clinic the fact that the phone rang —
     // and on the webhook path a throw here would answer 500 to Binotel, which
     // then retries the same already-filed call seven times over 38 hours.
-    try {
+    if (lead) try {
       leadFromCall(db, {
         id: info.lastInsertRowid,
         disposition: row.disposition,
@@ -257,10 +261,94 @@ async function pollBinotel(db, { fetchImpl, timeoutMs, maxBytes } = {}) {
   recordPoll(db, { ok: !failure, error: failure });
 }
 
+// PBX_END_CURSOR_V1 (2026-11-11, владелец: «recordings more than 3 minutes are
+// not fetched») — КУРСОР onlinePBX ПО ОКОНЧАНИЮ ЗВОНКА.
+//
+// Было: «самое позднее НАЧАЛО звонка в журнале минус 2 минуты». Станция
+// показывает звонок только после того, как он закончился (и до минуты позже —
+// так в описании API). Длинный разговор, пока шёл, обгоняли чужие короткие:
+// их начало сдвигало курсор за начало длинного, и, закончившись, длинный
+// оказывался раньше курсора навсегда. На станции клиники 09–10.11 из звонков
+// дольше 5 минут в журнал не попали 21 из 25 — и «Прослушать» им взять неоткуда.
+//
+// Стало: станцию спрашивают по ОКОНЧАНИЮ (pbxHistoryByEnd), курсор — самое
+// позднее окончание из ответа станции минус те же 2 минуты (запас вдвое больше
+// минутной задержки станции), хранится у подключения (saveProviderCursor) и
+// двигается только вперёд и только после удачного ответа. Часы — станционные:
+// курсор берётся из её end_stamp, не из наших часов.
+//
+// Разовый ДОБОР НЕДЕЛИ: у подключения, которое работало до этой правки (звонки
+// в журнале есть, курсора по окончанию нет), первый проход начинается неделей
+// назад — больше станция за запрос не отдаёт — и идёт по суткам, по куску за
+// тик. Добранные звонки, закончившиеся до начала добора, в журнал ложатся БЕЗ
+// карточки CRM (recordCall { lead: false }): это история, а не новые обращения.
+// Новое подключение — как раньше: сутки назад, с карточками.
+export const PBX_CHUNK_SEC = 24 * 60 * 60;
+export const PBX_CATCHUP_SEC = 7 * 24 * 60 * 60 - 300;
+// Кусок прошлого спрашивается с правой границей, только когда она точно позади
+// (с запасом на расхождение наших часов и станционных); иначе — живой хвост.
+const PBX_PAST_MARGIN_SEC = 10 * 60;
+
+function pbxEndOf(c) {
+  const end = Number(c && c.end_stamp);
+  if (Number.isFinite(end) && end > 0) return end;
+  const start = Number(c && c.start_stamp);
+  return Number.isFinite(start) && start > 0 ? start + (Number(c.duration) || 0) : 0;
+}
+
+async function pollOnlinePbx(db, p, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImpl = pbxHistoryByEnd, now = Date.now } = {}) {
+  const o = pbxOptions(db, p, { fetchImpl, timeoutMs, maxBytes });
+  if (!o.domain || (!o.authKey && !o.creds)) { recordProviderPoll(db, p.id, { ok: false, error: 'bad_credentials' }); return; }
+  const nowSec = Math.floor(now() / 1000);
+  const floor = nowSec - PBX_CATCHUP_SEC;
+  const saved = providerCursor(p);
+  const mine = saved && saved.domain === o.domain && Number.isFinite(saved.end_from) && saved.end_from > 0 ? saved : null;
+  let from;
+  let catchupUntil = 0;
+  if (mine) {
+    from = Math.max(Math.floor(mine.end_from), floor);
+    catchupUntil = Number(mine.catchup_until) || 0;
+  } else {
+    // Курсора по окончанию нет. Звонки в журнале есть — подключение работало до
+    // обновления: добор недели. Граница «истории» — место, до которого дошёл
+    // прежний опрос (самое позднее начало звонка в журнале) минус то же
+    // перекрытие: закончившиеся раньше и не попавшие в журнал — потерянные им
+    // длинные разговоры. Всё, что позже, прежний опрос взял бы сам на
+    // следующем тике (компьютер был выключен, сервер перезапускался ради
+    // обновления) и завёл бы карточку — значит, заводит и новый.
+    const horizon = unixFromIso(db.prepare('SELECT MAX(started_at) AS m FROM calls WHERE provider_id = ?').get(p.id).m || '');
+    if (horizon) {
+      from = floor;
+      catchupUntil = horizon - OVERLAP_SEC;
+    } else {
+      from = nowSec - FIRST_WINDOW_SEC;
+    }
+  }
+  const chunkEnd = from + PBX_CHUNK_SEC;
+  const past = chunkEnd <= nowSec - PBX_PAST_MARGIN_SEC;
+  const r = await pbxHistoryImpl(o.domain, { endFrom: from, endTo: past ? chunkEnd : null }, o);
+  if (!r.ok) { recordProviderPoll(db, p.id, { ok: false, error: r.reason }); return; }
+  let maxEnd = 0;
+  for (const c of (Array.isArray(r.data) ? r.data : [])) {
+    const norm = normalizePbxCall(c);
+    if (!norm) continue;
+    const end = pbxEndOf(c);
+    if (end > maxEnd) maxEnd = end;
+    const history = catchupUntil > 0 && end > 0 && end < catchupUntil;
+    try { recordCall(db, norm, 'poll', { id: p.id, kind: providerKind(p) }, { lead: !history }); }
+    catch (e) { console.warn('[telephony] onlinepbx call not recorded:', e && e.message); }
+  }
+  const next = past ? chunkEnd - OVERLAP_SEC : Math.max(from, maxEnd ? maxEnd - OVERLAP_SEC : from);
+  const cursor = { domain: o.domain, end_from: next };
+  if (catchupUntil && next < catchupUntil) cursor.catchup_until = catchupUntil;
+  saveProviderCursor(db, p.id, cursor);
+  recordProviderPoll(db, p.id, { ok: true });
+}
+
 // TELEPHONY_PROVIDERS_V1 — каждый включённый провайдер опрашивается своим
-// курсором: MAX(started_at) ЕГО звонков минус перекрытие. Отказ одного
-// провайдера — его last_error; соседям и Binotel он не мешает.
-async function pollProviders(db, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImpl = pbxHistory, mzListImpl = mzListCalls } = {}) {
+// курсором. Отказ одного провайдера — его last_error; соседям и Binotel он не
+// мешает. onlinePBX — по окончанию звонков (pollOnlinePbx, PBX_END_CURSOR_V1).
+async function pollProviders(db, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImpl = pbxHistoryByEnd, mzListImpl = mzListCalls, now = Date.now } = {}) {
   let rows = [];
   try { rows = db.prepare('SELECT * FROM telephony_providers WHERE enabled = 1 ORDER BY id').all(); } catch { return; }
   for (const p of rows) {
@@ -272,20 +360,7 @@ async function pollProviders(db, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImp
     if (providerKind(p) === 'moizvonki') { await pollMoizvonki(db, p, { fetchImpl, timeoutMs, maxBytes, mzListImpl }); continue; }
     if (providerKind(p) !== 'onlinepbx') continue;
     try {
-      const o = pbxOptions(db, p, { fetchImpl, timeoutMs, maxBytes });
-      if (!o.domain || (!o.authKey && !o.creds)) { recordProviderPoll(db, p.id, { ok: false, error: 'bad_credentials' }); continue; }
-      const maxStarted = db.prepare('SELECT MAX(started_at) AS m FROM calls WHERE provider_id = ?').get(p.id).m;
-      const maxUnix = maxStarted ? unixFromIso(maxStarted) : null;
-      const since = maxUnix ? maxUnix - OVERLAP_SEC : Math.floor(Date.now() / 1000) - FIRST_WINDOW_SEC;
-      const r = await pbxHistoryImpl(o.domain, since, o);
-      if (!r.ok) { recordProviderPoll(db, p.id, { ok: false, error: r.reason }); continue; }
-      for (const c of (Array.isArray(r.data) ? r.data : [])) {
-        const norm = normalizePbxCall(c);
-        if (!norm) continue;
-        try { recordCall(db, norm, 'poll', { id: p.id, kind: providerKind(p) }); }
-        catch (e) { console.warn('[telephony] onlinepbx call not recorded:', e && e.message); }
-      }
-      recordProviderPoll(db, p.id, { ok: true });
+      await pollOnlinePbx(db, p, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImpl, now });
     } catch (e) {
       // One provider's surprise costs that provider's tick, never the loop.
       console.warn('[telephony] provider poll failed:', p.id, e && e.message);
