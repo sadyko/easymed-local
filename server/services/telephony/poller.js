@@ -27,7 +27,7 @@ import { pbxHistoryByEnd, normalizePbxCall } from './onlinepbx.js';   // PBX_END
 import { mzListCalls, normalizeMzCall, normalizeMzDomain } from './moizvonki.js';   // MOIZVONKI_V2 — история «Моих Звонков»
 import { ensureMoizvonkiRouting } from './moizvonki-routing.js';   // MOIZVONKI_V2 — свои правила «звонок → заявка»
 import { pbxOptions, recordProviderPoll, noteProviderCall, providerKind, providerConfig, providerSecrets,
-         providerCursor, saveProviderCursor } from './providers.js';   // FIX_318_V1 (C6) — свой курсор у подключения
+         providerCursor, saveProviderCursor, getProviderRow } from './providers.js';   // FIX_318_V1 (C6) — свой курсор у подключения
 import { recordingUrlOf } from './recording.js';   // CALL_RECORDING_V1
 import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';   // UZ_PHONE_V1
 
@@ -283,9 +283,11 @@ async function pollBinotel(db, { fetchImpl, timeoutMs, maxBytes } = {}) {
 // звонка в журнале минус 2 минуты (станционные часы), — и идёт каждый тик
 // как обычно. Добор — ОТДЕЛЬНЫЙ запрос (окно [неделя без суток назад; то
 // место]), одним куском (на станции клиники: 6 дней = 1,7 МБ за 5 с), со своим
-// сроком ответа и до PBX_CATCHUP_MAX_TRIES попыток: его отказ не держит живой
-// журнал. Шесть дней, а не семь — сутки запаса до недельного предела станции,
-// даже если часы компьютера отстают.
+// сроком ответа и до PBX_CATCHUP_MAX_TRIES попыток (считаются только тики, в
+// которые станция ответила живому запросу); его отказ не держит живой журнал,
+// а оставленный добор помечается в подключении (catchup_dropped). Шесть дней,
+// а не семь — сутки запаса до недельного предела станции, даже если часы
+// компьютера отстают.
 //
 // Карточки CRM: добранный звонок, закончившийся раньше суток назад, ложится в
 // журнал БЕЗ карточки (recordCall { lead: false }) — это история, а не новое
@@ -347,30 +349,45 @@ async function pollOnlinePbx(db, p, { fetchImpl, timeoutMs, maxBytes, pbxHistory
     }
   }
 
-  // Живой опрос — первым и каждый тик.
-  const r = await pbxHistoryImpl(o.domain, { endFrom, endTo: null }, o);
+  // Живой опрос — первым и каждый тик. Окно, уходящее назад больше чем на час
+  // (простой компьютера, первый тик после обновления), бывает большим, как
+  // добор, — и срок ответа у него тот же (ревью 2).
+  const longWait = (opts) => ({ ...opts, timeoutMs: Math.max(Number(opts.timeoutMs) || 0, PBX_CATCHUP_TIMEOUT_MS) });
+  const r = await pbxHistoryImpl(o.domain, { endFrom, endTo: null }, endFrom < nowSec - 3600 ? longWait(o) : o);
   let next = endFrom;
   if (r.ok) {
     const maxEnd = filePbxCalls(db, p, r.data, { nowSec });
     if (maxEnd) next = Math.max(endFrom, maxEnd - OVERLAP_SEC);
   }
 
-  // Добор — пока не удался или не исчерпал попытки.
-  if (catchup) {
-    const rc = await pbxHistoryImpl(o.domain, { endFrom: Number(catchup.from), endTo: Number(catchup.to) },
-      { ...o, timeoutMs: Math.max(Number(o.timeoutMs) || 0, PBX_CATCHUP_TIMEOUT_MS) });
+  // Добор — только в тик, когда станция ответила живому запросу (ревью 2,
+  // находка 1): без сети, с негодным ключом или при «не чаще» попытки не
+  // тратятся, и добор не теряется из-за того, что компьютер включился раньше
+  // сети. Подключение перечитывается: живой запрос мог получить новый ключ.
+  let dropped = null;
+  if (catchup && r.ok) {
+    const oc = pbxOptions(db, getProviderRow(db, p.id) || p, { fetchImpl, timeoutMs, maxBytes });
+    const rc = await pbxHistoryImpl(oc.domain, { endFrom: Number(catchup.from), endTo: Number(catchup.to) }, longWait(oc));
     if (rc.ok) {
       filePbxCalls(db, p, rc.data, { nowSec, quietBefore: Number(catchup.quiet_before) || 0 });
       catchup = null;
     } else {
       const tries = (Number(catchup.tries) || 0) + 1;
       console.warn('[telephony] onlinepbx: добор звонков за неделю не удался (попытка ' + tries + '):', rc.reason);
-      catchup = tries >= PBX_CATCHUP_MAX_TRIES ? null : { ...catchup, tries };
+      if (tries >= PBX_CATCHUP_MAX_TRIES) {
+        // След в подключении: почему недобранные звонки так и не пришли.
+        dropped = { at: isoFromUnix(nowSec), reason: String(rc.reason || ''), from: catchup.from, to: catchup.to };
+        catchup = null;
+      } else {
+        catchup = { ...catchup, tries };
+      }
     }
   }
 
   const cursor = { domain: o.domain, end_from: next };
   if (catchup) cursor.catchup = catchup;
+  const droppedBefore = mine && mine.catchup_dropped && typeof mine.catchup_dropped === 'object' ? mine.catchup_dropped : null;
+  if (dropped || droppedBefore) cursor.catchup_dropped = dropped || droppedBefore;
   saveProviderCursor(db, p.id, cursor);
   recordProviderPoll(db, p.id, r.ok ? { ok: true } : { ok: false, error: r.reason });
 }

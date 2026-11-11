@@ -24,9 +24,10 @@ const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
 const DAY = 86400;
 
 function station(calls, { delay = 5, fail = () => false } = {}) {
-  const st = { now: 0, skew: 0, asked: [] };
-  st.impl = async (domain, win) => {
+  const st = { now: 0, skew: 0, asked: [], waits: [] };
+  st.impl = async (domain, win, o) => {
     st.asked.push(win);
+    st.waits.push(o && o.timeoutMs);
     if (fail(win, st)) return { ok: false, reason: 'bad_response' };
     const visible = calls.filter((c) => (c.visibleAt ?? c.end + delay) <= st.now);
     const rows = typeof win === 'number'
@@ -175,12 +176,44 @@ test('добор, который станция не отдаёт, не держ
   assert.equal(getProviderRow(db, p.id).last_error, '', 'отказ добора — не ошибка подключения');
   assert.equal(providerCursor(getProviderRow(db, p.id)).catchup.tries, 1);
   for (let i = 1; i < PBX_CATCHUP_MAX_TRIES; i++) { st.now += 30; await tick(db, st); }
-  assert.equal(providerCursor(getProviderRow(db, p.id)).catchup, undefined, 'после попыток добор оставлен');
+  const cur = providerCursor(getProviderRow(db, p.id));
+  assert.equal(cur.catchup, undefined, 'после попыток добор оставлен');
+  assert.equal(cur.catchup_dropped.reason, 'bad_response', 'и в подключении остался след — почему');
   const asked = st.asked.length;
   st.now += 30;
   await tick(db, st);
   assert.equal(st.asked.length, asked + 1, 'дальше — только живой опрос');
   assert.equal(ids(db).includes('onlinepbx:lost-3d'), false);
+});
+
+test('компьютер включился раньше сети: пока станция недоступна, попытки добора не тратятся', async () => {
+  const db = fresh();
+  const p = onlinePbx(db);
+  const NOW = Math.floor(Date.now() / 1000);
+  hadCall(db, p, NOW - 1800);
+  let online = false;
+  const st = station([{ uuid: 'lost-3d', start: NOW - 3 * DAY, end: NOW - 3 * DAY + 900 }], { fail: () => !online });
+  st.now = NOW;
+  for (let i = 0; i < PBX_CATCHUP_MAX_TRIES + 5; i++) { await tick(db, st); st.now += 30; }
+  assert.equal(getProviderRow(db, p.id).last_error, 'bad_response');
+  assert.equal(providerCursor(getProviderRow(db, p.id)).catchup.tries, 0, 'сети нет — попытки не считаются');
+  online = true;
+  await tick(db, st);
+  assert.ok(ids(db).includes('onlinepbx:lost-3d'), 'сеть появилась — добор пришёл');
+  assert.equal(providerCursor(getProviderRow(db, p.id)).catchup, undefined);
+});
+
+test('живое окно назад больше часа ждёт ответа дольше; обычный тик — обычный срок', async () => {
+  const db = fresh();
+  onlinePbx(db);
+  const NOW = Math.floor(Date.now() / 1000);
+  const st = station([{ uuid: 'a', start: NOW - 200, end: NOW - 100 }]);
+  st.now = NOW;
+  await tick(db, st);                       // новое подключение: окно — сутки назад
+  assert.ok(st.waits[0] >= 60_000, 'большое окно — долгий срок ответа');
+  st.now = NOW + 30;
+  await tick(db, st);                       // курсор у последнего звонка — окно маленькое
+  assert.equal(st.waits[1], undefined, 'обычный тик — обычный срок');
 });
 
 test('время окончания из будущего (миллисекунды) не запирает курсор', async () => {
