@@ -29,7 +29,12 @@ export function snapshotFixture(at = NOW) {
         experience_years: 6, languages: ['ru', 'uz'], photo: null, branch_ids: [1], reception: 'booking', booking_days: 14,
         consultations: [{ type: 'initial', name: t3('Первичный приём', 'Birlamchi qabul'), price: 150000, minutes: 30 },
           { type: 'repeat', name: t3('Повторный приём', 'Takroriy qabul'), price: 98000, minutes: 15 }],
-        services: [{ service_id: 301, price: 45000 }] },
+        services: [{ service_id: 301, price: 45000 }],
+        // SYMPTEX_FIELDS_V1 — ссылки и списки профиля (у врача 8 их нет: снимок клиники старой версии)
+        instagram: 'https://instagram.com/dr.petrov', telegram: 'javascript:alert(1)',
+        education: [{ name: t3('ТашПМИ', 'ToshPTI'), title: 'Педиатрия', year_from: 2008, year_to: 2014 }, { name: t3('Ординатура'), title: '', year_from: 'x', year_to: null }],
+        experience: [{ name: t3('Клиника «Шифо»', 'Shifo klinikasi'), title: 'Педиатр', year_from: 2014, year_to: null }],
+        certificates: [{ name: t3('Неонатология', 'Neonatologiya'), year: 2020 }], training: [{ name: t3('Курс УЗИ'), year: 2023 }] },
       { id: 8, name: t3('Каримова Нигора'), title: t3(''), bio: t3(''), specialties: ['terapevt'], experience_years: null, languages: ['ru'],
         photo: null, branch_ids: [2], reception: 'live_queue', booking_days: 14, consultations: [], services: [] },
     ],

@@ -122,6 +122,45 @@ function branchesPart(db) {
   });
 }
 
+// SYMPTEX_FIELDS_V1 — ссылки врача и списки его профиля. Колонки миграции 159
+// (DOCTOR_PUBLIC_PROFILE_V1) заводились «for building a proper API for
+// partners», карточка врача их заполняет, а снимок до сих пор их не брал:
+// Instagram и Telegram врача, образование и опыт работы не доходили ни до
+// одного партнёра (Symptex: проверка healpoint 2026-11-12).
+//   • ссылка — только http(s), как её принимает карточка (rpc/doctor-profile.js
+//     URL_KEYS), не длиннее 2000 знаков; иное — пустая строка;
+//   • запись списка — название на трёх языках, год (годы «с» и «по» у
+//     образования и опыта, одна строка «должность / квалификация» у них же);
+//     запись без названия ни на одном языке не уходит; год — целый 1900..2100,
+//     иначе null; не больше 50 записей (MAX_ENTRIES карточки); название — до 300
+//     знаков на язык, title — до 200 (снимок не дальше 4 МБ сервера).
+export const PROFILE_LIST_MAX = 50;
+const YEAR_MIN = 1900;
+const YEAR_MAX = 2100;
+export function profileLink(v) {
+  const s = text(v);
+  if (!s || s.length > 2000) return '';
+  try { const u = new URL(s); return u.protocol === 'https:' || u.protocol === 'http:' ? s : ''; } catch { return ''; }
+}
+const yearOf = (v) => { const n = Number(v); return v !== null && v !== '' && Number.isInteger(n) && n >= YEAR_MIN && n <= YEAR_MAX ? n : null; };
+/** users.*_entries → записи для партнёров; range — образование и опыт (годы «с»/«по» и строка title). */
+export function profileEntries(raw, { range = false } = {}) {
+  let list = [];
+  try { list = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { list = []; }
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const e of list) {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) continue;
+    const name = tri(e.ru, e.uz, e.en);
+    if (!name.ru && !name.uz && !name.en) continue;
+    out.push(range
+      ? { name, title: text(e.title).slice(0, 200), year_from: yearOf(e.year_from != null ? e.year_from : e.year), year_to: yearOf(e.year_to) }
+      : { name, year: yearOf(e.year) });
+    if (out.length >= PROFILE_LIST_MAX) break;
+  }
+  return out;
+}
+
 /** Показанные партнёрам врачи (решение шага 5), как их читает /doctors. */
 export function publicDoctors(db) {
   const branches = new Map(db.prepare('SELECT id, active, show_public FROM branches').all().map((b) => [Number(b.id), b]));
@@ -148,6 +187,10 @@ function doctorsPart(db, storageDir, media, now) {
         type: c.api_kind || '', name: c.name, price: Math.round(Number(c.price) || 0), minutes: c.minutes,
       })),
       services: doctorConsultServices(db, u.id).filter((s) => s.online).map((s) => ({ service_id: s.service_id, price: Math.round(Number(s.price) || 0) })),
+      // SYMPTEX_FIELDS_V1 — см. profileLink / profileEntries выше
+      instagram: profileLink(u.instagram_url), telegram: profileLink(u.telegram_url),
+      education: profileEntries(u.education_entries, { range: true }), experience: profileEntries(u.experience_entries, { range: true }),
+      certificates: profileEntries(u.certifications_entries), training: profileEntries(u.prof_dev_entries),
     };
   });
 }

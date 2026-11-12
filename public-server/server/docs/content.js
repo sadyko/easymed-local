@@ -136,9 +136,9 @@ export const ENDPOINTS = Object.freeze([
       'Kalit kerak emas: rasmni saytingizda brauzer o‘zi yuklaydi. Kesh — {{mediaCacheHours:hour}}; yangi fayl — yangi havola.',
       'No key needed: the browser loads the picture on your site by itself. Cached for {{mediaCacheHours:hour}}; a new file gets a new link.')] },
   { id: 'doctors', section: 'doctors', method: 'GET', path: '/doctors', scopes: ['doctors'], examples: ['doctors'],
-    summary: L('Врачи, которых клиника показывает: ФИО, должность, о враче, специальности, стаж, языки приёма, фото, филиалы, как принимает и цены.',
-      'Klinika ko‘rsatadigan shifokorlar: F.I.Sh., lavozimi, shifokor haqida, mutaxassisliklari, tajribasi, qabul tillari, fotosi, filiallari, qanday qabul qilishi va narxlar.',
-      'The doctors the clinic shows: full name, title, about, specialties, experience, languages, photo, branches, how they see patients and prices.'),
+    summary: L('Врачи, которых клиника показывает: ФИО, должность, о враче, специальности, стаж, языки приёма, фото, филиалы, как принимает, цены, соцсети, образование и опыт.',
+      'Klinika ko‘rsatadigan shifokorlar: F.I.Sh., lavozimi, shifokor haqida, mutaxassisliklari, tajribasi, qabul tillari, fotosi, filiallari, qanday qabul qilishi, narxlar, ijtimoiy tarmoqlar, ta’lim va tajriba.',
+      'The doctors the clinic shows: full name, title, about, specialties, experience, languages, photo, branches, how they see patients, prices, social links, education and work history.'),
     params: [
       { name: 'branch_id', in: 'query', req: false, value: L('номер филиала из `/branches`', '`/branches` dagi filial raqami', 'a branch number from `/branches`') },
       { name: 'specialty', in: 'query', req: false, value: L('код специальности из `/reference/specialties`', '`/reference/specialties` dagi mutaxassislik kodi', 'a specialty code from `/reference/specialties`') },
@@ -151,7 +151,14 @@ export const ENDPOINTS = Object.freeze([
       L('`booking_days` — на сколько дней вперёд открыта запись: {{bookingDays|or}}.', '`booking_days` — yozilish necha kun oldinga ochiq: {{bookingDays|or}}.', '`booking_days` — how many days ahead booking is open: {{bookingDays|or}}.'),
       L('`consultations` — виды приёма `initial` (первичный) и `repeat` (повторный) с ценой и длительностью в минутах; `services` — услуги группы «Консультации», которые ведёт врач, с его ценой.',
         '`consultations` — `initial` (birlamchi) va `repeat` (takroriy) qabul turlari narxi va daqiqalardagi davomiyligi bilan; `services` — shifokor olib boradigan «Konsultatsiyalar» guruhi xizmatlari uning narxi bilan.',
-        '`consultations` — the visit types `initial` and `repeat` with price and length in minutes; `services` — services of the “Consultations” group the doctor provides, at the doctor’s price.')] },
+        '`consultations` — the visit types `initial` and `repeat` with price and length in minutes; `services` — services of the “Consultations” group the doctor provides, at the doctor’s price.'),
+      // SYMPTEX_FIELDS_V1 — ссылки врача и списки профиля
+      L('`instagram`, `telegram` — ссылки врача (`https://…`) или пустая строка.',
+        '`instagram`, `telegram` — shifokorning havolalari (`https://…`) yoki bo‘sh qator.',
+        '`instagram`, `telegram` — the doctor’s links (`https://…`) or an empty string.'),
+      L('`education` и `experience` — образование и опыт работы: `name` (учреждение), `title` (квалификация или должность), `year_from`, `year_to`; `certificates` и `training` — сертификаты и повышение квалификации: `name`, `year`. Год — число или `null`; списка нет — `[]`.',
+        '`education` va `experience` — ta’lim va ish tajribasi: `name` (muassasa), `title` (malaka yoki lavozim), `year_from`, `year_to`; `certificates` va `training` — sertifikatlar va malaka oshirish: `name`, `year`. Yil — son yoki `null`; ro‘yxat bo‘lmasa — `[]`.',
+        '`education` and `experience` — education and work history: `name` (the institution), `title` (qualification or position), `year_from`, `year_to`; `certificates` and `training` — certificates and professional development: `name`, `year`. A year is a number or `null`; no list — `[]`.')] },
   { id: 'slots', section: 'doctors', method: 'GET', path: '/slots', scopes: ['slots'], examples: ['slots-day', 'slots-fit', 'slots-days', 'slots-live'],
     summary: L('Свободное время врача: окна по {{slotMin:min}}.', 'Shifokorning bo‘sh vaqti: {{slotMin:min}}lik oynalar.', 'A doctor’s free time in {{slotMin}}-minute windows.'),
     params: [

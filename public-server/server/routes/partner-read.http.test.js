@@ -43,6 +43,28 @@ test('клиника, филиалы, врачи, услуги, пакеты: ?l
   assert.equal((await s.get('/shifo/v1/doctors?lang=de')).status, 400);
 });
 
+// SYMPTEX_FIELDS_V1 — Instagram и Telegram врача, образование, опыт, сертификаты и
+// повышение квалификации доходят до партнёра (Symptex: у healpoint их не было);
+// ссылка не http(s) — пусто; снимок клиники старой версии — поля есть, пустые.
+test('врачи: ссылки и списки профиля — ?lang, годы, только http(s); старый снимок — пусто', async (t) => {
+  const s = await partnerStand();
+  t.after(s.close);
+  const uz = (await json(await s.get('/shifo/v1/doctors?lang=uz'))).body.doctors;
+  const petrov = uz.find((d) => d.id === 7);
+  assert.equal(petrov.instagram, 'https://instagram.com/dr.petrov');
+  assert.equal(petrov.telegram, '', 'javascript: — не ссылка');
+  assert.deepEqual(petrov.education, [
+    { name: 'ToshPTI', title: 'Педиатрия', year_from: 2008, year_to: 2014 },
+    { name: 'Ординатура', title: '', year_from: null, year_to: null }], 'пустой узбекский — русский; год не число — null');
+  assert.deepEqual(petrov.experience, [{ name: 'Shifo klinikasi', title: 'Педиатр', year_from: 2014, year_to: null }]);
+  assert.deepEqual(petrov.certificates, [{ name: 'Neonatologiya', year: 2020 }]);
+  assert.deepEqual(petrov.training, [{ name: 'Курс УЗИ', year: 2023 }]);
+  const all = (await json(await s.get('/shifo/v1/doctors'))).body.doctors;
+  assert.deepEqual(all.find((d) => d.id === 7).education[0].name, { ru: 'ТашПМИ', uz: 'ToshPTI', en: 'ТашПМИ' });
+  const old = all.find((d) => d.id === 8);
+  assert.deepEqual([old.instagram, old.telegram, old.education, old.experience, old.certificates, old.training], ['', '', [], [], [], []]);
+});
+
 test('свободное время: окна дня, приём N окон подряд, без даты — все дни, живая очередь, stale через 10 минут', async (t) => {
   const s = await partnerStand();
   t.after(s.close);

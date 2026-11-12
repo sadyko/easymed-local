@@ -41,7 +41,9 @@ const ALLOWED = new Set(['version', 'generated_at', 'slug', 'clinic', 'name', 'r
   'street', 'phone', 'site', 'telegram_bot', 'telegram_channel', 'instagram', 'logo', 'square', 'portrait', 'map_url', 'route_url',
   'branches', 'id', 'landmark', 'hours', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'open_24_7', 'doctors', 'title', 'bio',
   'specialties', 'experience_years', 'languages', 'photo', 'branch_ids', 'reception', 'booking_days', 'consultations', 'type', 'price',
-  'minutes', 'services', 'service_id', 'group', 'packages', 'price_full', 'discount_percent', 'valid_until', 'items']);
+  'minutes', 'services', 'service_id', 'group', 'packages', 'price_full', 'discount_percent', 'valid_until', 'items',
+  // SYMPTEX_FIELDS_V1 — ссылки врача и списки профиля
+  'telegram', 'education', 'experience', 'certificates', 'training', 'year', 'year_from', 'year_to']);
 function keysOf(v, out = new Set()) {
   if (Array.isArray(v)) { for (const x of v) keysOf(x, out); return out; }
   if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (!/^\d+$/.test(k)) out.add(k); keysOf(x, out); }
@@ -73,6 +75,30 @@ test('снимок: клиника, показанные здания, врач�
   assert.ok(media.every((m) => m.bytes > 0 && m.type === 'image/png' && fs.existsSync(m.file)));
   s.db.prepare('UPDATE users SET is_public = 0 WHERE id = 8').run();
   assert.deepEqual(buildSnapshot(s.db, { storageDir: s.storage, now: NOW }).snapshot.doctors.map((d) => d.id), [7]);
+});
+
+// SYMPTEX_FIELDS_V1 — проверка healpoint 2026-11-12: Instagram и Telegram врача и
+// его образование были в карточке, но не в снимке — партнёры их не получали.
+test('снимок: ссылки врача и списки профиля — только http(s), записи с названием, годы целые, старые строки «year»', () => {
+  const s = clinic();
+  s.db.prepare(`UPDATE users SET instagram_url = 'https://www.instagram.com/dr.petrov/', telegram_url = 'tg://resolve?domain=x',
+    education_entries = ?, experience_entries = ?, certifications_entries = ?, prof_dev_entries = ? WHERE id = 7`).run(
+    JSON.stringify([{ ru: 'ТашПМИ', uz: 'ToshPTI', en: '', title: 'Бакалавр', year_from: 2013, year_to: 2019 },
+      { ru: '', uz: '', en: '', title: 'без названия', year_from: 2000 }, { ru: 'Ординатура', year: 2021 }]),
+    JSON.stringify([{ ru: 'Медион', uz: 'Medion', en: 'Medion', title: 'врач', year_from: 2019, year_to: 'потом' }]),
+    JSON.stringify([{ ru: 'Сертификат', uz: 'Sertifikat', en: 'Certificate', year: 2022 }]),
+    'не json');
+  const d = buildSnapshot(s.db, { storageDir: s.storage, now: NOW }).snapshot.doctors.find((x) => x.id === 7);
+  assert.equal(d.instagram, 'https://www.instagram.com/dr.petrov/');
+  assert.equal(d.telegram, '', 'не http(s) — пусто');
+  assert.deepEqual(d.education, [
+    { name: { ru: 'ТашПМИ', uz: 'ToshPTI', en: '' }, title: 'Бакалавр', year_from: 2013, year_to: 2019 },
+    { name: { ru: 'Ординатура', uz: '', en: '' }, title: '', year_from: 2021, year_to: null }], 'запись без названия не уходит; прежняя «year» — год «с»');
+  assert.deepEqual(d.experience, [{ name: { ru: 'Медион', uz: 'Medion', en: 'Medion' }, title: 'врач', year_from: 2019, year_to: null }]);
+  assert.deepEqual(d.certificates, [{ name: { ru: 'Сертификат', uz: 'Sertifikat', en: 'Certificate' }, year: 2022 }]);
+  assert.deepEqual(d.training, [], 'испорченный список — пусто');
+  const other = buildSnapshot(s.db, { storageDir: s.storage, now: NOW }).snapshot.doctors.find((x) => x.id === 8);
+  assert.deepEqual([other.instagram, other.telegram, other.education], ['', '', []]);
 });
 
 test('снимок и время: только поля белого списка; ни пациентов, ни сотрудников, ни их телефонов и почты, ни заявок', () => {

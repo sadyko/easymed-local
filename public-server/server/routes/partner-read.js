@@ -51,6 +51,22 @@ function hours(h) {
   return out;
 }
 
+// SYMPTEX_FIELDS_V1 — ссылка врача (Instagram, Telegram): только http(s), иначе ''.
+function httpLink(v) {
+  const s = str(v).trim();
+  if (!s || s.length > 2000) return '';
+  try { const u = new URL(s); return u.protocol === 'https:' || u.protocol === 'http:' ? s : ''; } catch { return ''; }
+}
+const yearOrNull = (v) => (Number.isInteger(v) && v >= 1900 && v <= 2100 ? v : null);
+// SYMPTEX_FIELDS_V1 — образование, опыт, сертификаты, повышение квалификации:
+// название по ?lang (без него — три языка), годы — целые или null; range —
+// образование и опыт (title, year_from, year_to), иначе одна строка year.
+function entries(list, lang, range) {
+  return (Array.isArray(list) ? list : []).filter((e) => e && typeof e === 'object' && e.name).map((e) => (range
+    ? { name: tri(e.name, lang), title: str(e.title), year_from: yearOrNull(e.year_from), year_to: yearOrNull(e.year_to) }
+    : { name: tri(e.name, lang), year: yearOrNull(e.year) }));
+}
+
 function namesDeep(v, lang) {
   if (Array.isArray(v)) return v.map((x) => namesDeep(x, lang));
   if (v && typeof v === 'object') {
@@ -133,6 +149,11 @@ export function readRoutes(r, ctx) {
         consultations: (d.consultations || []).filter((c) => CONSULT_API_KINDS.includes(c.type))
           .map((c) => ({ type: c.type, name: tri(c.name, lang), price: int(c.price), minutes: int(c.minutes) })),
         services: (d.services || []).map((x) => ({ service_id: int(x.service_id), price: int(x.price) })),
+        // SYMPTEX_FIELDS_V1 — ссылки врача и списки профиля; снимок клиники старой
+        // версии их не несёт — пустая строка и [] (поле есть всегда)
+        instagram: httpLink(d.instagram), telegram: httpLink(d.telegram),
+        education: entries(d.education, lang, true), experience: entries(d.experience, lang, true),
+        certificates: entries(d.certificates, lang, false), training: entries(d.training, lang, false),
       })),
       as_of: asOf(req.clinic),
     });
