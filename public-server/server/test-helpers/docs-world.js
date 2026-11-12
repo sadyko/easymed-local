@@ -48,7 +48,7 @@ export function docsSnapshot(at = NOW) {
         consultations: [{ type: 'initial', name: t3('Первичный приём', 'Birlamchi qabul', 'First visit'), price: 150000, minutes: 30 }],
         services: [{ service_id: 303, price: 80000 }],
         // SYMPTEX_FIELDS_V1 — ссылки врача и списки профиля
-        instagram: 'https://instagram.example/dr.karimov', telegram: 'https://t.example/dr_karimov',
+        instagram: 'https://instagram.com/dr.karimov.example', telegram: 'https://t.me/dr_karimov_example',
         education: [{ name: t3('Ташкентский педиатрический медицинский институт', 'Toshkent pediatriya tibbiyot instituti', 'Tashkent Paediatric Medical Institute'),
           title: 'Педиатрия', year_from: 2006, year_to: 2012 }],
         experience: [{ name: t3('Клиника «Шифо»', '«Shifo» klinikasi', 'Shifo Clinic'), title: 'Педиатр', year_from: 2012, year_to: null }],

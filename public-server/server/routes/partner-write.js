@@ -189,9 +189,10 @@ export function writeRoutes(r, ctx) {
     // так же, как запись: клиника получает appointment.cancel (её приём очереди
     // отменяет визит любой заявки). Было 404 not_found — Symptex считал запись
     // «исчезнувшей у клиники», а визит оставался в календаре. Звонок, ещё не
-    // ставший записью, — 409 not_cancellable (отменять у клиники нечего).
+    // ставший записью, — 409 not_cancellable с причиной callback_not_booked и
+    // своим текстом (ревью M7: отменять у клиники нечего, клиника перезвонит).
     const row = own(req);
-    if (row.kind === 'request' && !['booked', 'cancelled'].includes(row.status)) return sendError(req, res, 'not_cancellable');
+    if (row.kind === 'request' && !['booked', 'cancelled'].includes(row.status)) return sendError(req, res, 'not_cancellable', { reason: 'callback_not_booked' });
     const out = partnerCancel(ctx.db, row, ctx.now());
     return out.error ? sendError(req, res, out.error) : res.json(publicRequest(out.row, ctx.offsetMin));
   }));

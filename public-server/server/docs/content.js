@@ -153,12 +153,12 @@ export const ENDPOINTS = Object.freeze([
         '`consultations` — `initial` (birlamchi) va `repeat` (takroriy) qabul turlari narxi va daqiqalardagi davomiyligi bilan; `services` — shifokor olib boradigan «Konsultatsiyalar» guruhi xizmatlari uning narxi bilan.',
         '`consultations` — the visit types `initial` and `repeat` with price and length in minutes; `services` — services of the “Consultations” group the doctor provides, at the doctor’s price.'),
       // SYMPTEX_FIELDS_V1 — ссылки врача и списки профиля
-      L('`instagram`, `telegram` — ссылки врача (`https://…`) или пустая строка.',
-        '`instagram`, `telegram` — shifokorning havolalari (`https://…`) yoki bo‘sh qator.',
-        '`instagram`, `telegram` — the doctor’s links (`https://…`) or an empty string.'),
-      L('`education` и `experience` — образование и опыт работы: `name` (учреждение), `title` (квалификация или должность), `year_from`, `year_to`; `certificates` и `training` — сертификаты и повышение квалификации: `name`, `year`. Год — число или `null`; списка нет — `[]`.',
-        '`education` va `experience` — ta’lim va ish tajribasi: `name` (muassasa), `title` (malaka yoki lavozim), `year_from`, `year_to`; `certificates` va `training` — sertifikatlar va malaka oshirish: `name`, `year`. Yil — son yoki `null`; ro‘yxat bo‘lmasa — `[]`.',
-        '`education` and `experience` — education and work history: `name` (the institution), `title` (qualification or position), `year_from`, `year_to`; `certificates` and `training` — certificates and professional development: `name`, `year`. A year is a number or `null`; no list — `[]`.')] },
+      L('`instagram`, `telegram` — ссылки врача: Instagram — на instagram.com, Telegram — на t.me или telegram.me, всегда `https://…` в разобранном виде; другая ссылка — пустая строка.',
+        '`instagram`, `telegram` — shifokorning havolalari: Instagram — instagram.com ga, Telegram — t.me yoki telegram.me ga, doim tahlil qilingan `https://…` ko‘rinishida; boshqa havola — bo‘sh qator.',
+        '`instagram`, `telegram` — the doctor’s links: Instagram on instagram.com, Telegram on t.me or telegram.me, always a parsed `https://…` URL; any other link is an empty string.'),
+      L('`education` и `experience` — образование и опыт работы: `name` (учреждение), `title` (квалификация или должность — одна строка, как её ввела клиника, без перевода), `year_from`, `year_to`; `certificates` и `training` — сертификаты и повышение квалификации: `name`, `year`. Год — число или `null`; списка нет — `[]`.',
+        '`education` va `experience` — ta’lim va ish tajribasi: `name` (muassasa), `title` (malaka yoki lavozim — klinika kiritgan bitta qator, tarjimasiz), `year_from`, `year_to`; `certificates` va `training` — sertifikatlar va malaka oshirish: `name`, `year`. Yil — son yoki `null`; ro‘yxat bo‘lmasa — `[]`.',
+        '`education` and `experience` — education and work history: `name` (the institution), `title` (qualification or position — one string as the clinic typed it, not translated), `year_from`, `year_to`; `certificates` and `training` — certificates and professional development: `name`, `year`. A year is a number or `null`; no list — `[]`.')] },
   { id: 'slots', section: 'doctors', method: 'GET', path: '/slots', scopes: ['slots'], examples: ['slots-day', 'slots-fit', 'slots-days', 'slots-live'],
     summary: L('Свободное время врача: окна по {{slotMin:min}}.', 'Shifokorning bo‘sh vaqti: {{slotMin:min}}lik oynalar.', 'A doctor’s free time in {{slotMin}}-minute windows.'),
     params: [
@@ -252,9 +252,9 @@ export const ENDPOINTS = Object.freeze([
         'A booked one stays `booked` with `cancel_requested: true` until the clinic cancels the visit: then `cancelled` and the `appointment.cancelled` notification. If the patient is already at the clinic, the clinic decides.'),
       L('Повтор отмены — тот же ответ; из других статусов — `409 not_cancellable`.', 'Bekor qilishni takrorlash — o‘sha javob; boshqa holatlardan — `409 not_cancellable`.', 'Repeating a cancellation gives the same answer; from other statuses — `409 not_cancellable`.'),
       // SYMPTEX_FIELDS_V1 — отмена звонка, ставшего записью
-      L('Так же отменяется обратный звонок (`type: "request"`), на который клиника уже записала пациента (`booked`); звонок до записи — `409 not_cancellable`.',
-        'Klinika bemorni allaqachon yozib qo‘ygan (`booked`) qayta qo‘ng‘iroq so‘rovi (`type: "request"`) ham shunday bekor qilinadi; yozilishdan oldingi so‘rov — `409 not_cancellable`.',
-        'A call-back request (`type: "request"`) the clinic has already booked (`booked`) is cancelled the same way; a call-back not yet booked gives `409 not_cancellable`.')] },
+      L('Так же отменяется обратный звонок (`type: "request"`), на который клиника уже записала пациента (`booked`). Звонок до записи — `409 not_cancellable` с `reason: "callback_not_booked"`: отменять в клинике нечего, клиника перезвонит пациенту, и он скажет, что запись не нужна.',
+        'Klinika bemorni allaqachon yozib qo‘ygan (`booked`) qayta qo‘ng‘iroq so‘rovi (`type: "request"`) ham shunday bekor qilinadi. Yozilishdan oldingi so‘rov — `reason: "callback_not_booked"` bilan `409 not_cancellable`: klinikada bekor qiladigan narsa yo‘q, klinika bemorga qo‘ng‘iroq qiladi va u yozilish kerak emasligini aytadi.',
+        'A call-back request (`type: "request"`) the clinic has already booked (`booked`) is cancelled the same way. A call-back not yet booked gives `409 not_cancellable` with `reason: "callback_not_booked"`: there is nothing to cancel at the clinic; the clinic will call the patient, who can tell them the visit is not needed.')] },
 ]);
 
 // ---- примеры: запросы (ответы — docs/generated.js) ---------------------------------------

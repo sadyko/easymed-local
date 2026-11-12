@@ -354,8 +354,8 @@ export const RESPONSES = {
                 "price": 80000
               }
             ],
-            "instagram": "https://instagram.example/dr.karimov",
-            "telegram": "https://t.example/dr_karimov",
+            "instagram": "https://instagram.com/dr.karimov.example",
+            "telegram": "https://t.me/dr_karimov_example",
             "education": [
               {
                 "name": "Ташкентский педиатрический медицинский институт",
@@ -931,8 +931,8 @@ export const RESPONSES = {
                 "price": 80000
               }
             ],
-            "instagram": "https://instagram.example/dr.karimov",
-            "telegram": "https://t.example/dr_karimov",
+            "instagram": "https://instagram.com/dr.karimov.example",
+            "telegram": "https://t.me/dr_karimov_example",
             "education": [
               {
                 "name": "Toshkent pediatriya tibbiyot instituti",
@@ -1508,8 +1508,8 @@ export const RESPONSES = {
                 "price": 80000
               }
             ],
-            "instagram": "https://instagram.example/dr.karimov",
-            "telegram": "https://t.example/dr_karimov",
+            "instagram": "https://instagram.com/dr.karimov.example",
+            "telegram": "https://t.me/dr_karimov_example",
             "education": [
               {
                 "name": "Tashkent Paediatric Medical Institute",

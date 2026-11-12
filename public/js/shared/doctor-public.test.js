@@ -90,3 +90,20 @@ test('каждое сообщение и подпись заполненност
     assert.ok(e && e.ru && e.uz && e.en, 'нет статьи словаря: ' + m);
   }
 });
+
+// SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M2) — ссылки врача для партнёров: своя сеть, https, разобранный вид.
+test('doctorSocialLink: только instagram.com / t.me / telegram.me, всегда https и URL.href; кавычки и пробелы не проходят как есть', async () => {
+  const { doctorSocialLink } = await import('./doctor-public.js');
+  assert.equal(doctorSocialLink('instagram', 'https://www.instagram.com/Flutter.Deviser/?igshid=1'), 'https://www.instagram.com/Flutter.Deviser/?igshid=1');
+  assert.equal(doctorSocialLink('instagram', 'http://instagram.com/dr.aziz'), 'https://instagram.com/dr.aziz', 'http — тот же адрес по https');
+  assert.equal(doctorSocialLink('telegram', 'https://t.me/BotFather'), 'https://t.me/BotFather');
+  assert.equal(doctorSocialLink('telegram', 'https://telegram.me/dr_aziz'), 'https://telegram.me/dr_aziz');
+  const injected = doctorSocialLink('instagram', 'https://instagram.com/x" onmouseover="alert(1)');
+  assert.ok(!/["\s<>]/.test(injected), injected);
+  assert.equal(injected, 'https://instagram.com/x%22%20onmouseover=%22alert(1)');
+  for (const [kind, bad] of [['instagram', 'http://evil.example/phish'], ['instagram', 'https://t.me/x'], ['telegram', 'https://instagram.com/x'],
+    ['telegram', 'tg://resolve?domain=x'], ['instagram', 'javascript:alert(1)'], ['instagram', 'https://user:pw@instagram.com/x'],
+    ['instagram', 'https://instagram.com:8443/x'], ['telegram', 'https://t.me.evil.example/x'], ['telegram', '@dr_aziz'], ['instagram', ''], ['vk', 'https://vk.com/x']]) {
+    assert.equal(doctorSocialLink(kind, bad), '', kind + ' ' + bad);
+  }
+});

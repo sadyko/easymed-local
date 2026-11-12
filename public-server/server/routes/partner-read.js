@@ -13,6 +13,7 @@
 import { composeAddress } from '../../../public/js/shared/clinic-profile.js';
 import { API_GROUPS } from '../../../public/js/shared/service-public.js';
 import { CONSULT_API_KINDS } from '../../../public/js/shared/consultation-price.js';
+import { doctorSocialLink } from '../../../public/js/shared/doctor-public.js';   // SYMPTEX_FIELDS_V1 (ревью M2)
 import { snapshotOf, slotsOf } from '../store/clinics.js';
 import { countryRow, regionRow, districtRow, geoReference, specialtiesReference } from '../lib/reference.js';
 import { dayWindows, windowsNeeded, SLOT_MIN } from '../lib/slot-check.js';
@@ -51,20 +52,23 @@ function hours(h) {
   return out;
 }
 
-// SYMPTEX_FIELDS_V1 — ссылка врача (Instagram, Telegram): только http(s), иначе ''.
-function httpLink(v) {
-  const s = str(v).trim();
-  if (!s || s.length > 2000) return '';
-  try { const u = new URL(s); return u.protocol === 'https:' || u.protocol === 'http:' ? s : ''; } catch { return ''; }
-}
 const yearOrNull = (v) => (Number.isInteger(v) && v >= 1900 && v <= 2100 ? v : null);
 // SYMPTEX_FIELDS_V1 — образование, опыт, сертификаты, повышение квалификации:
 // название по ?lang (без него — три языка), годы — целые или null; range —
 // образование и опыт (title, year_from, year_to), иначе одна строка year.
+// Ревью M4: запись без названия на запрошенном языке (и на русском — его
+// подставляет tri) не уходит; без ?lang — без названия ни на одном языке.
 function entries(list, lang, range) {
-  return (Array.isArray(list) ? list : []).filter((e) => e && typeof e === 'object' && e.name).map((e) => (range
-    ? { name: tri(e.name, lang), title: str(e.title), year_from: yearOrNull(e.year_from), year_to: yearOrNull(e.year_to) }
-    : { name: tri(e.name, lang), year: yearOrNull(e.year) }));
+  const out = [];
+  for (const e of Array.isArray(list) ? list : []) {
+    if (!e || typeof e !== 'object') continue;
+    const name = tri(e.name, lang);
+    if (lang ? !name : !(name.ru || name.uz || name.en)) continue;
+    out.push(range
+      ? { name, title: str(e.title), year_from: yearOrNull(e.year_from), year_to: yearOrNull(e.year_to) }
+      : { name, year: yearOrNull(e.year) });
+  }
+  return out;
 }
 
 function namesDeep(v, lang) {
@@ -151,7 +155,7 @@ export function readRoutes(r, ctx) {
         services: (d.services || []).map((x) => ({ service_id: int(x.service_id), price: int(x.price) })),
         // SYMPTEX_FIELDS_V1 — ссылки врача и списки профиля; снимок клиники старой
         // версии их не несёт — пустая строка и [] (поле есть всегда)
-        instagram: httpLink(d.instagram), telegram: httpLink(d.telegram),
+        instagram: doctorSocialLink('instagram', d.instagram), telegram: doctorSocialLink('telegram', d.telegram),
         education: entries(d.education, lang, true), experience: entries(d.experience, lang, true),
         certificates: entries(d.certificates, lang, false), training: entries(d.training, lang, false),
       })),

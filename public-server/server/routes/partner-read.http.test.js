@@ -55,12 +55,17 @@ test('врачи: ссылки и списки профиля — ?lang, год�
   assert.equal(petrov.telegram, '', 'javascript: — не ссылка');
   assert.deepEqual(petrov.education, [
     { name: 'ToshPTI', title: 'Педиатрия', year_from: 2008, year_to: 2014 },
-    { name: 'Ординатура', title: '', year_from: null, year_to: null }], 'пустой узбекский — русский; год не число — null');
+    { name: 'Ординатура', title: '', year_from: null, year_to: null },
+    { name: 'Faqat oʻzbekcha', title: '', year_from: 2020, year_to: 2021 }], 'пустой узбекский — русский; год не число — null');
+  // ревью M4: запись только по-узбекски не приходит пустой строкой по ?lang=ru
+  const ru = (await json(await s.get('/shifo/v1/doctors?lang=ru'))).body.doctors.find((d) => d.id === 7);
+  assert.deepEqual(ru.education.map((e) => e.name), ['ТашПМИ', 'Ординатура']);
   assert.deepEqual(petrov.experience, [{ name: 'Shifo klinikasi', title: 'Педиатр', year_from: 2014, year_to: null }]);
   assert.deepEqual(petrov.certificates, [{ name: 'Neonatologiya', year: 2020 }]);
   assert.deepEqual(petrov.training, [{ name: 'Курс УЗИ', year: 2023 }]);
   const all = (await json(await s.get('/shifo/v1/doctors'))).body.doctors;
   assert.deepEqual(all.find((d) => d.id === 7).education[0].name, { ru: 'ТашПМИ', uz: 'ToshPTI', en: 'ТашПМИ' });
+  assert.deepEqual(all.find((d) => d.id === 7).education[2].name, { ru: '', uz: 'Faqat oʻzbekcha', en: '' }, 'без ?lang — запись с названием хоть на одном языке');
   const old = all.find((d) => d.id === 8);
   assert.deepEqual([old.instagram, old.telegram, old.education, old.experience, old.certificates, old.training], ['', '', [], [], [], []]);
 });

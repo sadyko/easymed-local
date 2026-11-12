@@ -134,7 +134,9 @@ test('отмена обратного звонка: до записи — 409 no
   t.after(s.close);
   const id = (await json(await s.send('POST', '/shifo/v1/requests', { name: 'ИМЯ_ПАЦИЕНТА', phone: '+998901234567', doctor_id: 7, external_id: 'cb-9' }))).body.request_id;
   const early = await json(await s.send('DELETE', '/shifo/v1/appointments/' + id));
-  assert.deepEqual([early.status, early.body.error.code], [409, 'not_cancellable']);
+  assert.deepEqual([early.status, early.body.error.code, early.body.error.reason], [409, 'not_cancellable', 'callback_not_booked']);
+  assert.match(early.body.error.message, /^Это заявка «перезвоните», а не запись/, 'ревью M7: свой текст — отменять в клинике нечего');
+  assert.match((await json(await s.send('DELETE', '/shifo/v1/appointments/' + id + '?lang=en'))).body.error.message, /^This is a call-back request, not a booking/);
   applyEvents(s.db, s.clinicId, [{ seq: 1, event: 'appointment.created', status: 'booked', webhook_url: '', signature: '',
     body: JSON.stringify({ event_id: 'ev_1', event: 'appointment.created', request_id: id, external_id: 'cb-9', status: 'booked', start: '2030-03-12T09:00:00+05:00', occurred_at: isoOf(NOW) }) }], NOW);
   assert.equal((await json(await s.get('/shifo/v1/requests/' + id))).body.status, 'booked');

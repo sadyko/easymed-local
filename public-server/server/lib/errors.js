@@ -27,7 +27,13 @@ export const ERRORS = Object.freeze({
   slot_taken:         { status: 409, ru: 'Это время уже занято — запросите /slots заново.', uz: 'Bu vaqt band — /slots ni qayta so‘rang.', en: 'This time is already taken — request /slots again.' },
   media_quota:        { status: 409, ru: 'У клиники слишком много файлов на сервере — файл не принят.', uz: 'Klinikaning serverdagi fayllari juda ko‘p — fayl qabul qilinmadi.', en: 'The clinic has too many files on the server — the file was not accepted.' },
   slug_taken:         { status: 409, ru: 'Это имя в адресе занято другой клиникой.', uz: 'Manzildagi bu nom boshqa klinika tomonidan band.', en: 'This address name is taken by another clinic.' },
-  not_cancellable:    { status: 409, ru: 'Эту запись отменить уже нельзя.', uz: 'Bu yozuvni endi bekor qilib bo‘lmaydi.', en: 'This appointment can no longer be cancelled.' },
+  not_cancellable:    { status: 409, ru: 'Эту запись отменить уже нельзя.', uz: 'Bu yozuvni endi bekor qilib bo‘lmaydi.', en: 'This appointment can no longer be cancelled.',
+    // SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M7): код тот же (договор), причина и текст — свои: это не запись
+    reasons: {
+      callback_not_booked: { ru: 'Это заявка «перезвоните», а не запись: клиника ещё не записала пациента, отменять в клинике нечего. Клиника перезвонит пациенту — он скажет, что запись не нужна.',
+        uz: 'Bu yozuv emas, «qayta qo‘ng‘iroq» arizasi: klinika bemorni hali yozmagan, klinikada bekor qiladigan narsa yo‘q. Klinika bemorga qo‘ng‘iroq qiladi — u yozilish kerak emasligini aytadi.',
+        en: 'This is a call-back request, not a booking: the clinic has not booked the patient yet, so there is nothing to cancel at the clinic. The clinic will call the patient, who can tell them the visit is not needed.' },
+    } },
   not_offered:        { status: 409, ru: 'Клиника не предлагала другое время по этой записи.', uz: 'Klinika bu yozuv bo‘yicha boshqa vaqt taklif qilmagan.', en: 'The clinic has not offered another time for this appointment.' },
   offer_changed:      { status: 409, ru: 'Клиника уже предложила другое время — запросите заявку заново.', uz: 'Klinika allaqachon boshqa vaqt taklif qildi — arizani qayta so‘rang.', en: 'The clinic has already offered a different time — request the appointment again.' },
   offer_expired:      { status: 409, ru: 'Срок ответа на предложенное время истёк.', uz: 'Taklif qilingan vaqtga javob berish muddati tugagan.', en: 'The time to answer the offered slot has passed.' },
@@ -55,7 +61,9 @@ export function sendError(req, res, code, extra = {}, headers = {}) {
   const e = ERRORS[code] || ERRORS.internal;
   const lang = langOf(req) || 'ru';
   for (const [k, v] of Object.entries(headers)) res.set(k, String(v));
-  return res.status(e.status).json({ error: { code: ERRORS[code] ? code : 'internal', message: e[lang], ...extra } });
+  // SYMPTEX_FIELDS_V1 (ревью M7): у причины может быть свой текст (ERRORS[code].reasons)
+  const own = extra && extra.reason && e.reasons && e.reasons[extra.reason];
+  return res.status(e.status).json({ error: { code: ERRORS[code] ? code : 'internal', message: own ? own[lang] : e[lang], ...extra } });
 }
 
 /** Стек без первой строки: сообщение ошибки может нести кусок присланного. */
