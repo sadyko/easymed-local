@@ -250,7 +250,11 @@ export const ENDPOINTS = Object.freeze([
       L('Записанная (`booked`) остаётся `booked` с `cancel_requested: true`, пока клиника не отменит визит: тогда `cancelled` и уведомление `appointment.cancelled`. Если пациент уже в клинике, решает клиника.',
         'Yozilgan (`booked`) yozuv klinika tashrifni bekor qilmaguncha `cancel_requested: true` bilan `booked` bo‘lib qoladi: shunda `cancelled` va `appointment.cancelled` bildirishnomasi. Bemor allaqachon klinikada bo‘lsa, klinika hal qiladi.',
         'A booked one stays `booked` with `cancel_requested: true` until the clinic cancels the visit: then `cancelled` and the `appointment.cancelled` notification. If the patient is already at the clinic, the clinic decides.'),
-      L('Повтор отмены — тот же ответ; из других статусов — `409 not_cancellable`.', 'Bekor qilishni takrorlash — o‘sha javob; boshqa holatlardan — `409 not_cancellable`.', 'Repeating a cancellation gives the same answer; from other statuses — `409 not_cancellable`.')] },
+      L('Повтор отмены — тот же ответ; из других статусов — `409 not_cancellable`.', 'Bekor qilishni takrorlash — o‘sha javob; boshqa holatlardan — `409 not_cancellable`.', 'Repeating a cancellation gives the same answer; from other statuses — `409 not_cancellable`.'),
+      // SYMPTEX_FIELDS_V1 — отмена звонка, ставшего записью
+      L('Так же отменяется обратный звонок (`type: "request"`), на который клиника уже записала пациента (`booked`); звонок до записи — `409 not_cancellable`.',
+        'Klinika bemorni allaqachon yozib qo‘ygan (`booked`) qayta qo‘ng‘iroq so‘rovi (`type: "request"`) ham shunday bekor qilinadi; yozilishdan oldingi so‘rov — `409 not_cancellable`.',
+        'A call-back request (`type: "request"`) the clinic has already booked (`booked`) is cancelled the same way; a call-back not yet booked gives `409 not_cancellable`.')] },
 ]);
 
 // ---- примеры: запросы (ответы — docs/generated.js) ---------------------------------------

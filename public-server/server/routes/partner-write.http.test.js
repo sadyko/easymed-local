@@ -106,6 +106,25 @@ test('статус, отмена, другое время — только св�
   assert.equal(no.status, 404);
 });
 
+// SYMPTEX_FIELDS_V1 — сверка контракта с Symptex 2026-11-12: отмена звонка, на
+// который клиника записала, отвечала 404 — Symptex считал запись пропавшей у
+// клиники, визит оставался в календаре.
+test('отмена обратного звонка: до записи — 409 not_cancellable; записанный клиникой — как запись (booked + cancel_requested)', async (t) => {
+  const s = await partnerStand();
+  t.after(s.close);
+  const id = (await json(await s.send('POST', '/shifo/v1/requests', { name: 'ИМЯ_ПАЦИЕНТА', phone: '+998901234567', doctor_id: 7, external_id: 'cb-9' }))).body.request_id;
+  const early = await json(await s.send('DELETE', '/shifo/v1/appointments/' + id));
+  assert.deepEqual([early.status, early.body.error.code], [409, 'not_cancellable']);
+  applyEvents(s.db, s.clinicId, [{ seq: 1, event: 'appointment.created', status: 'booked', webhook_url: '', signature: '',
+    body: JSON.stringify({ event_id: 'ev_1', event: 'appointment.created', request_id: id, external_id: 'cb-9', status: 'booked', start: '2030-03-12T09:00:00+05:00', occurred_at: isoOf(NOW) }) }], NOW);
+  assert.equal((await json(await s.get('/shifo/v1/requests/' + id))).body.status, 'booked');
+  const del = await json(await s.send('DELETE', '/shifo/v1/appointments/' + id));
+  assert.deepEqual([del.status, del.body.type, del.body.status, del.body.cancel_requested], [200, 'request', 'booked', true]);
+  assert.deepEqual(s.db.prepare('SELECT type FROM inbox ORDER BY cursor').all().map((r) => r.type), ['request.new', 'appointment.cancel']);
+  const again = await json(await s.send('DELETE', '/shifo/v1/appointments/' + id));
+  assert.deepEqual([again.status, again.body.cancel_requested], [200, true], 'повтор — тот же ответ');
+});
+
 test('права записи: без «Отмена записи» — 403; лимит записей 30 в минуту — 429', async (t) => {
   const s = await partnerStand({ scopes: ['clinic', 'slots', 'requests', 'appointments'], connection: { rate_limit: 300 } });
   t.after(s.close);

@@ -87,6 +87,25 @@ test('заявка «перезвоните»: оператор записал �
   assert.match(body.start, /^2030-03-12T10:00:00\+/);
 });
 
+// SYMPTEX_FIELDS_V1 — публичный сервер теперь пропускает отмену звонка, ставшего
+// записью (DELETE /appointments/{id}): клиника отменяет визит так же, как у записи.
+test('заявка «перезвоните», записанная клиникой: отмена партнёра отменяет визит — «appointment.cancelled»', async () => {
+  const s = bookingSeed();
+  const r = await ingestItem(s.db, { ...apptItem({ connId: s.connId, publicId: 'rq_call0002', startMs: START, receivedMs: NOW }), type: 'request.new',
+    data: { external_id: 'cb-2', service_id: 301 } }, { now: NOW });
+  const card = one(s.db, 'SELECT crm_request_id AS c FROM api_requests WHERE id = ?', r.id).c;
+  s.db.prepare("INSERT INTO patients (id, mrn, full_name, phone) VALUES (1, 'P-1', 'Абдурахмонов Фаррух', '+998901234567')").run();
+  s.db.prepare('UPDATE crm_requests SET patient_id = 1 WHERE id = ?').run(card);
+  s.db.prepare("UPDATE crm_request_services SET scheduled_date = '2030-03-12', doctor_id = 7 WHERE request_id = ?").run(card);
+  const ev = await ensureVisit(s.db, { patient_id: 1, date: '2030-03-12', book: { doctor_id: 7, start: new Date(START).toISOString(), duration_minutes: 15, service_id: 301 } }, s.cc);
+  syncVisitOutcomes(s.db, { now: NOW, kekPath: s.kekPath });
+  assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', r.id).status, 'confirmed');
+  const out = await ingestItem(s.db, { type: 'appointment.cancel', cursor: '9', public_id: 'rq_call0002', connection_id: s.connId }, { now: NOW, kekPath: s.kekPath });
+  assert.deepEqual([out.applied, out.status], [true, 'cancelled']);
+  assert.equal(one(s.db, 'SELECT status FROM visits WHERE id = ?', ev.visit.id).status, 'cancelled');
+  assert.deepEqual([last(s)[0], last(s)[1].status], ['appointment.cancelled', 'cancelled']);
+});
+
 // ─── РЕВЬЮ 8a, I1: «ПРИШЁЛ» — ТОЛЬКО ПОДПИСАННОМУ ПАРТНЁРУ И НЕ РАНЬШЕ ДНЯ ВИЗИТА ─
 
 test('I1: партнёр, включивший «пришёл», получает appointment.arrived; не включивший — ничего', async () => {

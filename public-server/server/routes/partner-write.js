@@ -171,7 +171,15 @@ export function writeRoutes(r, ctx) {
   r.get('/requests/:id', scope('requests', 'appointments'), handle((req, res) => res.json(publicRequest(own(req), ctx.offsetMin))));
 
   r.delete('/appointments/:id', scope('cancel'), handle((req, res) => {
-    const out = partnerCancel(ctx.db, own(req, 'appointment'), ctx.now());
+    // SYMPTEX_FIELDS_V1 (сверка контракта с Symptex, 2026-11-12) — звонок, на
+    // который клиника уже записала пациента (type request, booked), отменяется
+    // так же, как запись: клиника получает appointment.cancel (её приём очереди
+    // отменяет визит любой заявки). Было 404 not_found — Symptex считал запись
+    // «исчезнувшей у клиники», а визит оставался в календаре. Звонок, ещё не
+    // ставший записью, — 409 not_cancellable (отменять у клиники нечего).
+    const row = own(req);
+    if (row.kind === 'request' && !['booked', 'cancelled'].includes(row.status)) return sendError(req, res, 'not_cancellable');
+    const out = partnerCancel(ctx.db, row, ctx.now());
     return out.error ? sendError(req, res, out.error) : res.json(publicRequest(out.row, ctx.offsetMin));
   }));
 
