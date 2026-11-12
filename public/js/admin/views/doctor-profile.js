@@ -13,7 +13,7 @@ import { SPECIALTY_ROWS, canonicalSpecialty, sortByShownLabel } from '../../shar
 import { specialtyLabel } from '../specialties.js?v=spec2';
 import { profileLinkProblem, PROFILE_LINK_KEYS } from './doctor-public-pane.js';   // DOCTOR_PROFILE_V1 — ссылки соцсетей: правило сервера (ревью №11)
 import { fieldErr } from './company-fields.js';   // DOCTOR_PROFILE_V1 — отказ под полем ссылки   // DOCTOR_PROFILE_V1 — название из справочника, как в карточке сотрудника (ревью №10)
-import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1
+import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince, DOCTOR_PUBLIC_MESSAGES } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1; SYMPTEX_FIELDS_V1 — socialsPublic
 // PATIENT_PHOTO_V1 — те же правила и то же уменьшение, что в окне заведения
 // пациента: один набор на оба виджета фото и на сервер.
 import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
@@ -267,7 +267,9 @@ export async function renderDoctorProfile(container, doctorId) {
         h('div', { class: 'docprof-contacts' },
             field('Телефон', phoneInp, 'изменяется в карточке сотрудника'),
             igField,
-            tgField)));
+            tgField),
+        // SYMPTEX_FIELDS_V1 (ревью M10) — что из этого видят пациенты у партнёров
+        h('p', { class: 'cpf-hint', 'data-socials-public': '' }, DOCTOR_PUBLIC_MESSAGES.socialsPublic)));
 
     // ----- Bio (trilingual long-text) -----
     for (const [base, label] of TRI_TEXT) {

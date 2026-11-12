@@ -322,6 +322,8 @@ export function doctorPublicPane(ctx) {
     const entryLine = (e) => [e && (e.ru || e.title || ''), e && (e.year || [e.year_from, e.year_to].filter(Boolean).join('–'))].filter(Boolean).join(' · ');
     root.appendChild(section('Соцсети, образование и опыт', '',
         h('div', { class: 'dpp-grid2' }, linkField('instagram_url', 'Instagram', 'https://instagram.com/…'), linkField('telegram_url', 'Telegram', 'https://t.me/…')),
+        // SYMPTEX_FIELDS_V1 (ревью M10) — ссылки уходят партнёрам, телефон — нет
+        h('p', { class: 'cpf-hint', 'data-socials-public': '' }, DOCTOR_PUBLIC_MESSAGES.socialsPublic),
         ...LISTS.map(([k, label]) => {
             const list = Array.isArray(pp[k]) ? pp[k] : [];
             return field(label, list.length

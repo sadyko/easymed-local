@@ -618,3 +618,10 @@ test('DOCTOR_PROFILE_V1: «Мой профиль» — отказ сервера
     assert.equal(tg.attrs['aria-invalid'], 'true');
     assert.ok(!toastText().includes(MSG), 'отказ ушёл тостом: ' + toastText());
 });
+
+// SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M10) — врач видит, что его Instagram и Telegram уходят пациентам партнёров, а телефон — нет.
+test('«Мой профиль»: под ссылками — что их видят пациенты на сайтах партнёров, а телефон партнёрам не передаётся', async () => {
+    const s = await openProfile();
+    const { DOCTOR_PUBLIC_MESSAGES } = await import('../../shared/doctor-public.js');
+    assert.ok(s.container.textContent.includes(DOCTOR_PUBLIC_MESSAGES.socialsPublic), 'нет пометки о показе ссылок');
+});

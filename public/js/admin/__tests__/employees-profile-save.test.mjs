@@ -556,3 +556,10 @@ test('DOCTOR_PROFILE_V1: сетки полей карточки — auto-fill (�
     assert.ok(grids.some((g) => g.style.gridTemplateColumns === RULE), label + ': нет сетки auto-fill');
   }
 });
+
+// SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M10) — та же пометка в карточке врача у администратора.
+test('карточка врача: под Instagram и Telegram — их видят пациенты на сайтах партнёров, телефон не передаётся', async () => {
+  const s = await openProfileTab('dr.karimov');
+  const { DOCTOR_PUBLIC_MESSAGES } = await import('../../shared/doctor-public.js');
+  assert.ok(textOf(s.card).includes(DOCTOR_PUBLIC_MESSAGES.socialsPublic), 'нет пометки о показе ссылок');
+});

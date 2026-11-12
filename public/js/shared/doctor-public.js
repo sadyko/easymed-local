@@ -32,6 +32,8 @@ export const DOCTOR_PUBLIC_MESSAGES = Object.freeze({
   since:       'Год начала работы врачом — от 1940 до текущего года.',
   bookingDays: 'Запись открывается на 7, 14 или 30 дней вперёд.',
   flag:        'Отметка записана неверно: нужно «да» или «нет».',
+  // SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M10) — ссылки врача уходят партнёрам (snapshot.js), телефон — никогда
+  socialsPublic: 'Instagram и Telegram видят пациенты на сайтах партнёров клиники. Телефон партнёрам не передаётся.',
 });
 
 const yearOf = (now) => (now instanceof Date ? now : new Date(now == null ? Date.now() : now)).getFullYear();
