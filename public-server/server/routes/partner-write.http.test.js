@@ -30,6 +30,26 @@ test('онлайн-запись: 201 pending без hold_until; пациент �
   assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 1);
 });
 
+// SYMPTEX_FIELDS_V1 — повтор потерянного ответа после того, как клиника скрыла врача
+// и время прошло: та же заявка (200), а не 404/400 — партнёр не считает её потерянной.
+test('повтор external_id — та же заявка (200), даже если врача уже нет в снимке и время прошло', async (t) => {
+  const s = await partnerStand();
+  t.after(s.close);
+  const first = await json(await s.send('POST', '/shifo/v1/appointments', appt({ external_id: 'sx-1-abcdef01' })));
+  const cb = await json(await s.send('POST', '/shifo/v1/requests', { name: 'Имя', phone: '+998901234567', doctor_id: 7, external_id: 'sx-2-abcdef02' }));
+  assert.deepEqual([first.status, cb.status], [201, 201]);
+  const snap = JSON.parse(s.db.prepare('SELECT snapshot FROM clinics').get().snapshot);
+  snap.doctors = snap.doctors.filter((d) => d.id !== 7);
+  s.db.prepare('UPDATE clinics SET snapshot = ?').run(JSON.stringify(snap));
+  s.setClock(NOW + 2 * 86400000);
+  const again = await json(await s.send('POST', '/shifo/v1/appointments', appt({ external_id: 'sx-1-abcdef01' })));
+  assert.deepEqual([again.status, again.body.request_id], [200, first.body.request_id]);
+  const cbAgain = await json(await s.send('POST', '/shifo/v1/requests', { name: 'Имя', phone: '+998901234567', doctor_id: 7, external_id: 'sx-2-abcdef02' }));
+  assert.deepEqual([cbAgain.status, cbAgain.body.request_id], [200, cb.body.request_id]);
+  const fresh = await json(await s.send('POST', '/shifo/v1/appointments', appt({ external_id: 'sx-3-abcdef03' })));
+  assert.deepEqual([fresh.status, fresh.body.error.field], [404, 'doctor_id'], 'новая — по-прежнему проверяется');
+});
+
 test('время: занятое в присланном — 409; своё ждущее — 409; рядом свободное — 201; прошедшее, вне сетки, вне срока записи — 400', async (t) => {
   const s = await partnerStand();
   t.after(s.close);

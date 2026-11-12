@@ -104,9 +104,20 @@ export function writeRoutes(r, ctx) {
     return s;
   };
   const created = (res, out, row) => res.status(out.created ? 201 : 200).json(publicRequest(row, ctx.offsetMin));
+  // SYMPTEX_FIELDS_V1 (сверка контракта с Symptex, 2026-11-12) — повтор с тем же
+  // external_id ищется ДО проверок снимка: партнёр повторяет запрос, ответ на
+  // который потерял (тайм-аут), а клиника тем временем скрыла врача, услугу или
+  // вид приёма — раньше повтор получал 400/404, и партнёр считал запись
+  // непринятой, хотя она уже в очереди клиники. Тот же номер — та же заявка (200).
+  const repeated = (req, b) => {
+    const ext = str(b.external_id);
+    return ext && EXTERNAL_RE.test(ext) ? requestByExternal(ctx.db, req.clinic.clinic_id, req.conn.id, ext) : null;
+  };
 
   r.post('/requests', scope('requests'), handle((req, res) => {
     const b = bodyOf(req);
+    const again = repeated(req, b);
+    if (again) return res.status(200).json(publicRequest(again, ctx.offsetMin));
     const s = snap(req);
     const p = b.patient && typeof b.patient === 'object' ? b.patient : b;
     const patient = patientOf({ name: p.name, phone: p.phone, comment: p.comment ?? b.comment }, b.patient ? 'patient.' : '');
@@ -119,6 +130,8 @@ export function writeRoutes(r, ctx) {
   r.post('/appointments', scope('appointments'), handle((req, res) => {
     const now = ctx.now();
     const b = bodyOf(req);
+    const again = repeated(req, b);
+    if (again) return res.status(200).json(publicRequest(again, ctx.offsetMin));
     const s = snap(req);
     const c = common(b, s);
     if (!c.doctorId) throw field('doctor_id', 'required');
