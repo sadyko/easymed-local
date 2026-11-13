@@ -304,3 +304,16 @@ test('отказ включения у роли с «Компания: Изме�
     }
   } finally { perms.setFullAccess('Admin'); }
 });
+
+// SYMPTEX_FIELDS_V1 (владелец 2026-11-13) — карточка включённого подключения говорит, каких
+// данных клиники оно не получает, и где это включить.
+test('карточка: «Не передаётся: Филиалы, Пакеты услуг. Включить — на вкладке «Доступ».»; выключенное — без строки', async () => {
+  reset();
+  const { m } = open();
+  const note = byAttr(m, 'data-apic-miss', '')[0];
+  assert.ok(note, 'нет строки «Не передаётся»');
+  assert.ok(textOf(note).endsWith('>Не передаётся: Филиалы, Пакеты услуг. Включить — на вкладке «Доступ».'), textOf(note));   // перед текстом — значок
+  reset();
+  const off = open({}, { ...P, active: false });
+  assert.equal(byAttr(off.m, 'data-apic-miss', '').length, 0);
+});

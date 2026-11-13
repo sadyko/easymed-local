@@ -19,6 +19,13 @@ export const KIND_INFO = Object.freeze({
 export const READ_SCOPES = Object.freeze(['clinic', 'branches', 'doctors', 'services', 'packages', 'slots']);
 export const WRITE_SCOPES = Object.freeze(['requests', 'appointments', 'cancel']);
 export const SCOPES = Object.freeze([...READ_SCOPES, ...WRITE_SCOPES]);
+// SYMPTEX_FIELDS_V1 (владелец 2026-11-13) — ЧЕГО ПОДКЛЮЧЕНИЕ НЕ ПОЛУЧАЕТ: данные клиники
+// (права чтения), не выданные ключу. У «symptex» 04.11 сняли «Филиалы», и восемь дней
+// никто не видел, что Symptex остался без адресов: теперь экран называет это прямо.
+export function missingReadScopes(scopes) {
+  const list = Array.isArray(scopes) ? scopes : [];
+  return READ_SCOPES.filter((k) => !list.includes(k));
+}
 export const SCOPE_INFO = Object.freeze({
   clinic:       { label: 'О клинике', desc: 'Название, описание, логотипы, контакты, соцсети, карта' },
   branches:     { label: 'Филиалы', desc: 'Город и район (коды из справочника), адрес на трёх языках, телефоны, часы, маршрут' },

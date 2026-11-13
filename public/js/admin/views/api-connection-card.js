@@ -11,7 +11,7 @@ import { h, Icon, Tag, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { KIND_INFO, KEY_TTL_LABEL, normalizeConnection, connectionProblems, orderedScopes, orderedEvents, normalizeIpList } from '../../shared/api-connections.js';
 import { rpc, secretField, section, basicsFields, accessSections, hooksSection, securityFields, activeField, openModal,
-  openModalByKey, addressBlock, isAddressRefusal, journalTable, expiryTag } from './api-ui.js';
+  openModalByKey, addressBlock, isAddressRefusal, journalTable, expiryTag, missingNote } from './api-ui.js';   // SYMPTEX_FIELDS_V1 — missingNote
 import { openHandover } from './api-connection-new.js';
 
 const TABS = [['main', 'Основное'], ['access', 'Доступ'], ['hooks', 'Уведомления'], ['key', 'Ключ'], ['log', 'Журнал']];
@@ -87,6 +87,9 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
         'delete-yes', tr('Удалить'), remove));
     }
     body.appendChild(activeField(d, { disabled: !can.edit, ready: settings.partner_address_missing.length === 0 || c.active }));
+    // SYMPTEX_FIELDS_V1 — чего это подключение не получает (по сохранённому доступу)
+    const miss = missingNote(c, { inCard: true });
+    if (miss) body.appendChild(miss);
     const K = KIND_INFO[c.kind] || KIND_INFO.partner;
     body.appendChild(section('Основное', '',
       h('dl', { class: 'apic-kv' },

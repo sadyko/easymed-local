@@ -13914,4 +13914,7 @@ export const STRINGS = {
   "Взрослых и детей": {"en":"Adults and children","ru":"Взрослых и детей","uz":"Kattalar va bolalarni"},   // SYMPTEX_FIELDS_V1
   "Это видят пациенты на сайтах партнёров клиники.": {"en":"Patients see this on the clinic’s partner sites.","ru":"Это видят пациенты на сайтах партнёров клиники.","uz":"Buni bemorlar klinika hamkorlari saytlarida ko‘radi."},   // SYMPTEX_FIELDS_V1
   "Кого принимает врач — взрослых, детей или взрослых и детей — или не указано.": {"en":"Who the doctor sees — adults, children, or adults and children — or not set.","ru":"Кого принимает врач — взрослых, детей или взрослых и детей — или не указано.","uz":"Shifokor kimlarni qabul qiladi — kattalarni, bolalarni yoki kattalar va bolalarni — yoki ko‘rsatilmagan."},   // SYMPTEX_FIELDS_V1
+  // SYMPTEX_FIELDS_V1 — «Настройки → API»: чего подключение не получает
+  "Не передаётся: {list}": {"en":"Not shared: {list}","ru":"Не передаётся: {list}","uz":"Berilmaydi: {list}"},   // SYMPTEX_FIELDS_V1
+  "Включить — на вкладке «Доступ».": {"en":"Turn it on in the “Access” tab.","ru":"Включить — на вкладке «Доступ».","uz":"Yoqish — «Kirish» yorlig‘ida."},   // SYMPTEX_FIELDS_V1
 };
