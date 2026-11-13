@@ -38,17 +38,32 @@ export const DOCTOR_PUBLIC_MESSAGES = Object.freeze({
 
 const yearOf = (now) => (now instanceof Date ? now : new Date(now == null ? Date.now() : now)).getFullYear();
 
-// SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M2) — Instagram и Telegram врача для
-// партнёров. Карточка принимает любую http(s)-ссылку (rpc/doctor-profile.js
-// URL_KEYS); наружу уходит только ссылка на свою сеть: Instagram — instagram.com
-// (www., m.), Telegram — t.me или telegram.me (www.). Всегда https и всегда в
-// разобранном виде (URL.href): кавычка или пробел в присланном не доходят до
-// партнёра как есть (на его странице это была бы готовая инъекция в атрибут).
-// Без логина, пароля и порта; иное — пустая строка.
+// SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M2; повторное ревью 2026-11-13, N1/N2) —
+// Instagram и Telegram врача для партнёров. Карточка принимает любую
+// http(s)-ссылку (rpc/doctor-profile.js URL_KEYS); наружу уходит только ссылка
+// на ПРОФИЛЬ в своей сети:
+//   • адрес — http(s), хост своей сети (Instagram — instagram.com, www., m.;
+//     Telegram — t.me, telegram.me, www.), без логина, пароля и порта;
+//   • путь — ровно одно имя (и, может быть, «/» после него): имя по правилам
+//     сети (Instagram — буквы, цифры, «.» и «_», до 30, без точки в начале, в
+//     конце и двух подряд; Telegram — 5–32 знака, буквы, цифры и «_», с буквы)
+//     и не служебный адрес (приглашения «+…» и joinchat, share, proxy, socks,
+//     login, addstickers, accounts, explore…);
+//   • ссылка собирается заново только из имени: https://instagram.com/<имя>,
+//     https://t.me/<имя> — без запроса и якоря. Кавычки, пробелы и «<>» в неё
+//     попасть не могут (в имени их нет).
+// Иное — пустая строка. То же правило у Symptex (src/clinicdata/socials.js).
 export const SOCIAL_LINK_HOSTS = Object.freeze({
   instagram: Object.freeze(['instagram.com', 'www.instagram.com', 'm.instagram.com']),
   telegram: Object.freeze(['t.me', 'www.t.me', 'telegram.me', 'www.telegram.me']),
 });
+const SOCIAL_HANDLE = Object.freeze({ instagram: /^[A-Za-z0-9._]{1,30}$/, telegram: /^[A-Za-z][A-Za-z0-9_]{4,31}$/ });
+const SOCIAL_RESERVED = Object.freeze({
+  instagram: new Set(['explore', 'p', 'reel', 'reels', 'stories', 'accounts', 'direct', 'tv', 'about', 'developer', 'legal', 'privacy', 'web', 'challenge']),
+  telegram: new Set(['joinchat', 'addstickers', 'addemoji', 'addtheme', 'addlist', 'share', 'proxy', 'socks', 'login', 'setlanguage',
+    'confirmphone', 'invoice', 'giftcode', 'boost', 'contact', 'iv']),
+});
+const SOCIAL_BASE = Object.freeze({ instagram: 'https://instagram.com/', telegram: 'https://t.me/' });
 export function doctorSocialLink(kind, v) {
   const hosts = SOCIAL_LINK_HOSTS[kind];
   const s = String(v == null ? '' : v).trim();
@@ -57,8 +72,12 @@ export function doctorSocialLink(kind, v) {
   try { u = new URL(s); } catch { return ''; }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return '';
   if (u.username || u.password || u.port || !hosts.includes(u.hostname.toLowerCase())) return '';
-  u.protocol = 'https:';
-  return u.href;
+  const m = /^\/([^/]+)\/?$/.exec(u.pathname);
+  if (!m) return '';
+  const handle = m[1];
+  if (!SOCIAL_HANDLE[kind].test(handle) || SOCIAL_RESERVED[kind].has(handle.toLowerCase())) return '';
+  if (kind === 'instagram' && (handle.startsWith('.') || handle.endsWith('.') || handle.includes('..'))) return '';
+  return SOCIAL_BASE[kind] + handle;
 }
 
 /** Языки → ['ru','uz','en'] в этом порядке, без повторов; не список или чужой код → null. */

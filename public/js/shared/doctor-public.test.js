@@ -92,18 +92,43 @@ test('каждое сообщение и подпись заполненност
 });
 
 // SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M2) — ссылки врача для партнёров: своя сеть, https, разобранный вид.
-test('doctorSocialLink: только instagram.com / t.me / telegram.me, всегда https и URL.href; кавычки и пробелы не проходят как есть', async () => {
+test('doctorSocialLink: только профиль на instagram.com / t.me / telegram.me, ссылка собрана из имени — без запроса, якоря, кавычек и пробелов', async () => {
   const { doctorSocialLink } = await import('./doctor-public.js');
-  assert.equal(doctorSocialLink('instagram', 'https://www.instagram.com/Flutter.Deviser/?igshid=1'), 'https://www.instagram.com/Flutter.Deviser/?igshid=1');
-  assert.equal(doctorSocialLink('instagram', 'http://instagram.com/dr.aziz'), 'https://instagram.com/dr.aziz', 'http — тот же адрес по https');
-  assert.equal(doctorSocialLink('telegram', 'https://t.me/BotFather'), 'https://t.me/BotFather');
-  assert.equal(doctorSocialLink('telegram', 'https://telegram.me/dr_aziz'), 'https://telegram.me/dr_aziz');
-  const injected = doctorSocialLink('instagram', 'https://instagram.com/x" onmouseover="alert(1)');
-  assert.ok(!/["\s<>]/.test(injected), injected);
-  assert.equal(injected, 'https://instagram.com/x%22%20onmouseover=%22alert(1)');
-  for (const [kind, bad] of [['instagram', 'http://evil.example/phish'], ['instagram', 'https://t.me/x'], ['telegram', 'https://instagram.com/x'],
-    ['telegram', 'tg://resolve?domain=x'], ['instagram', 'javascript:alert(1)'], ['instagram', 'https://user:pw@instagram.com/x'],
-    ['instagram', 'https://instagram.com:8443/x'], ['telegram', 'https://t.me.evil.example/x'], ['telegram', '@dr_aziz'], ['instagram', ''], ['vk', 'https://vk.com/x']]) {
-    assert.equal(doctorSocialLink(kind, bad), '', kind + ' ' + bad);
-  }
+  // принятые: имя из пути, ссылка заново — https, свой хост, без запроса и якоря
+  for (const [kind, v, want] of [
+    ['instagram', 'https://www.instagram.com/Flutter.Deviser/?igshid=1', 'https://instagram.com/Flutter.Deviser'],
+    ['instagram', 'https://www.instagram.com/dr.petrov/', 'https://instagram.com/dr.petrov'],
+    ['instagram', 'http://instagram.com/dr.aziz', 'https://instagram.com/dr.aziz'],
+    ['instagram', 'https://m.instagram.com/dr_aziz#top', 'https://instagram.com/dr_aziz'],
+    ['instagram', 'https://INSTAGRAM.COM/X', 'https://instagram.com/X'],
+    // the URL parser reads a percent-encoded dot in the host as a dot: this is instagram.com itself
+    ['instagram', 'https://instagram%2ecom/x', 'https://instagram.com/x'],
+    // and «%2e%2e» in the path as «..»: the profile the browser would open too
+    ['instagram', 'https://instagram.com/%2e%2e/evil', 'https://instagram.com/evil'],
+    // a fragment is never kept: the link is the handle's alone
+    ['instagram', "https://instagram.com/x#'><img src=x onerror=alert(1)>", 'https://instagram.com/x'],
+    ['instagram', ' https://instagram.com/x\t\n', 'https://instagram.com/x'],
+    ['telegram', 'https://t.me/BotFather', 'https://t.me/BotFather'],
+    ['telegram', 'https://t.me/BotFather?start=x', 'https://t.me/BotFather'],
+    ['telegram', 'https://telegram.me/dr_aziz', 'https://t.me/dr_aziz'],
+    ['telegram', 'https://www.t.me/dr_karimov', 'https://t.me/dr_karimov'],
+  ]) assert.equal(doctorSocialLink(kind, v), want, kind + ' ' + v);
+  // повторное ревью 2026-11-13 (N1, N2) и проба probe-social.mjs: всё это — пустая строка
+  const IG = ['javascript:alert(1)', 'JAVASCRIPT://instagram.com/%0aalert(1)', 'data:text/html,x', 'ftp://instagram.com/x',
+    'https://user:pw@instagram.com/x', 'https://instagram.com@evil.com/x', 'https://evil.com#@instagram.com', 'https://evil.com?@instagram.com',
+    'https://instagram.com:8443/x', 'http://instagram.com:443/x', 'https://instagram.com.evil.com/x', 'https://evil-instagram.com/x',
+    'https://instagram.com./x', 'https://іnstagram.com/x', 'https://xn--nstagram-5zg.com/x', 'https://instagram.com%2eevil.com/x',
+    'https://instagram.com/../../evil/x', "https://instagram.com/x'onmouseover='alert(1)",
+    'https://instagram.com/x" onmouseover="alert(1)', 'https://instagram.com/x<script>',
+    "https://instagram.com/?q='x", 'https://instagram.com/x`y', 'https://instagram.com/', 'https://instagram.com', 'https://instagram.com/accounts/logout/',
+    'https://instagram.com/accounts', 'https://instagram.com/explore', 'https://instagram.com/p/Cx1', 'https://instagram.com/.dr', 'https://instagram.com/dr..x',
+    'https://l.instagram.com/?u=https%3A%2F%2Fevil.com', 'https://instagram.com/x\u0000y', 'https://t.me/dr_aziz', '@dr.aziz', ''];
+  const TG = ['https://t.me/+AbCdEf', 'https://t.me/joinchat/AbCdEf', 'https://t.me/joinchat', 'https://t.me/share/url?url=https://evil.com&text=pay',
+    'https://t.me/share', 'tg://resolve?domain=x', 'https://t.me.evil.com/x', 'https://telegram.org/x', 'https://web.telegram.org/k/#@x', 'https://t.me/s/channel',
+    'https://t.me/iv?url=https://evil.com&rhash=1', 'https://t.me/x/../../joinchat/y', 'https://t.me/login/123', 'https://t.me/login',
+    'https://t.me/proxy?server=evil&port=1&secret=x', 'https://t.me/socks?server=evil&port=1', 'https://t.me/addstickers/x', 'https://t.me/addstickers',
+    'https://t.me/', 'https://t.me/abc', 'https://t.me/1doctor', "https://t.me/dr_aziz'x", 'https://instagram.com/dr_aziz', '@dr_aziz', ''];
+  for (const v of IG) assert.equal(doctorSocialLink('instagram', v), '', 'instagram ' + v);
+  for (const v of TG) assert.equal(doctorSocialLink('telegram', v), '', 'telegram ' + v);
+  assert.equal(doctorSocialLink('vk', 'https://vk.com/x'), '');
 });

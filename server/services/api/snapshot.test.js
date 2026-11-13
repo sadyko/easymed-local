@@ -89,13 +89,13 @@ test('снимок: ссылки врача и списки профиля — �
     JSON.stringify([{ ru: 'Сертификат', uz: 'Sertifikat', en: 'Certificate', year: 2022 }]),
     'не json');
   const d = buildSnapshot(s.db, { storageDir: s.storage, now: NOW }).snapshot.doctors.find((x) => x.id === 7);
-  assert.equal(d.instagram, 'https://www.instagram.com/dr.petrov/');
+  assert.equal(d.instagram, 'https://instagram.com/dr.petrov', 'повторное ревью N1: ссылка собрана из имени');
   assert.equal(d.telegram, '', 'не http(s) — пусто');
   // ревью M2: чужой сайт и вставка в атрибут не уходят как есть; ревью M3: название — до 300 знаков на язык
   s.db.prepare(`UPDATE users SET instagram_url = 'https://instagram.com/x" onmouseover="alert(1)', telegram_url = 'http://evil.example/phish',
     certifications_entries = ? WHERE id = 7`).run(JSON.stringify([{ ru: 'Я'.repeat(5000), uz: 'U'.repeat(301), en: 'E', year: 2022 }]));
   const d2 = buildSnapshot(s.db, { storageDir: s.storage, now: NOW }).snapshot.doctors.find((x) => x.id === 7);
-  assert.equal(d2.instagram, 'https://instagram.com/x%22%20onmouseover=%22alert(1)');
+  assert.equal(d2.instagram, '', 'повторное ревью N1/N2: не имя профиля — пусто');
   assert.equal(d2.telegram, '', 'не t.me / telegram.me — пусто');
   assert.deepEqual([d2.certificates[0].name.ru.length, d2.certificates[0].name.uz.length, d2.certificates[0].name.en], [300, 300, 'E']);
   assert.deepEqual(d.education, [
