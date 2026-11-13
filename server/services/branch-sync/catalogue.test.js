@@ -1340,3 +1340,29 @@ test('главная старой версии (без ключей назван
   const row = dst.prepare("SELECT name_uz, online_booking, price FROM services WHERE code = 'S-CARD'").get();
   assert.deepEqual({ ...row }, { name_uz: 'Kardiolog qabuli', online_booking: 1, price: 250000 }, 'цена — из главной, название и показ — свои');
 });
+
+// SYMPTEX_FIELDS_V1 (мигр. 285; ревью M1) — тип клиники и «Принимает» едут из главного
+// здания, как название и языки приёма. Главная старше (ключа нет) — местное остаётся;
+// главная новее со словом, которого эта версия не знает, — слово не пишется, а
+// остальной справочник принимается (CHECK миграции 285 не откатывает его целиком).
+test('SYMPTEX_FIELDS_V1: тип клиники и «Принимает» едут; ключа нет — местное; незнакомое слово не валит справочник', () => {
+  const db = openDb(':memory:'); migrate(db);
+  // главная шлёт известные слова — они приезжают
+  commitCatalogue(db, { doc_settings: { clinic_name: 'Шифо', clinic_type: 'children' },
+    users: [{ id: 501, username: 'drx', full_name: 'Врач Икс', role: 'doctor', is_doctor: 1, password_hash: 'h', patients_age: 'children' }] });
+  assert.equal(db.prepare('SELECT clinic_type FROM doc_settings WHERE id = 1').get().clinic_type, 'children');
+  assert.equal(db.prepare("SELECT patients_age FROM users WHERE username = 'drx'").get().patients_age, 'children');
+  // главная старше: ключей нет — местное не трогается
+  commitCatalogue(db, { doc_settings: { clinic_name: 'Шифо-2' },
+    users: [{ id: 501, username: 'drx', full_name: 'Врач Икс', role: 'doctor', is_doctor: 1, password_hash: 'h' }] });
+  assert.equal(db.prepare('SELECT clinic_type FROM doc_settings WHERE id = 1').get().clinic_type, 'children');
+  assert.equal(db.prepare("SELECT patients_age FROM users WHERE username = 'drx'").get().patients_age, 'children');
+  // главная новее: незнакомое слово — местное остаётся, остальное принято
+  commitCatalogue(db, { doc_settings: { clinic_name: 'Шифо-3', clinic_type: 'dental' },
+    users: [{ id: 501, username: 'drx', full_name: 'Врач Игрек', role: 'doctor', is_doctor: 1, password_hash: 'h', patients_age: 'teens' },
+      { id: 502, username: 'dry', full_name: 'Врач Зет', role: 'doctor', is_doctor: 1, password_hash: 'h', patients_age: 'teens' }] });
+  const ds = db.prepare('SELECT clinic_name, clinic_type FROM doc_settings WHERE id = 1').get();
+  assert.deepEqual([ds.clinic_name, ds.clinic_type], ['Шифо-3', 'children'], 'название принято, тип — местный');
+  assert.deepEqual(db.prepare("SELECT full_name, patients_age FROM users WHERE username = 'drx'").get(), { full_name: 'Врач Игрек', patients_age: 'children' });
+  assert.equal(db.prepare("SELECT patients_age FROM users WHERE username = 'dry'").get().patients_age, '', 'новый сотрудник — «не указано»');
+});

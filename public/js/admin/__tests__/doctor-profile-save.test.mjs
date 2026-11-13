@@ -640,3 +640,12 @@ test('«Мой профиль»: под ссылками — что их вид�
     const { DOCTOR_PUBLIC_MESSAGES } = await import('../../shared/doctor-public.js');
     assert.ok(s.container.textContent.includes(DOCTOR_PUBLIC_MESSAGES.socialsPublic), 'нет пометки о показе ссылок');
 });
+
+// SYMPTEX_FIELDS_V1 (ревью L3) — сохранённое «Принимает» показано при открытии; без правки не уходит.
+test('«Мой профиль»: сохранённое «Детей» показано в поле; без правки — «Нет изменений»', async () => {
+    const s = await openProfile({ user: { ...DOC_ROW, patients_age: 'children' } });
+    const sel = tagsOf(s.container, 'select').find((x) => x.attrs['aria-label'] === 'Принимает');
+    assert.equal(sel.value, 'children');
+    await s.save();
+    assert.equal(rpcCalls.length, 0, 'без правки ушло: ' + JSON.stringify(rpcCalls[0]));
+});

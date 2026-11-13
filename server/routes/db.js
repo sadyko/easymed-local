@@ -966,7 +966,7 @@ function isSecondary(db) {
 
 // CLINIC_PROFILE_V1 — общее для клиники в «Компании» филиала не меняется
 // (см. вызов в POST). null — запись можно выполнять.
-const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон и почта для документов этого здания.';   // BRANCH_PROFILE_V1 — текст
+const COMPANY_MAIN_ONLY = 'Название, описание, тип клиники, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон и почта для документов этого здания.';   // BRANCH_PROFILE_V1 — текст
 function companyBranchRefusal(db, meta, body) {
   if (!meta || meta.table !== 'doc_settings' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;
   if (!isSecondary(db)) return null;

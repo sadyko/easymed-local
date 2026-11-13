@@ -88,7 +88,7 @@ export function openConnectionCard({ settings, connection: c, onChanged = null, 
     }
     body.appendChild(activeField(d, { disabled: !can.edit, ready: settings.partner_address_missing.length === 0 || c.active }));
     // SYMPTEX_FIELDS_V1 — чего это подключение не получает (по сохранённому доступу)
-    const miss = missingNote(c, { inCard: true });
+    const miss = missingNote(c, { inCard: true, canGrant: !!can.admin });
     if (miss) body.appendChild(miss);
     const K = KIND_INFO[c.kind] || KIND_INFO.partner;
     body.appendChild(section('Основное', '',

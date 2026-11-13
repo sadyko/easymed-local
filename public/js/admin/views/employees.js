@@ -1305,7 +1305,8 @@ function openEditor(user, root) {
             }
             // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — отказ сервера, названный полем
             // «Публичного профиля» (ссылки соцсетей), — под этим полем, не тостом.
-            if (e && emp.is_doctor && PROFILE_LINK_KEYS.includes(e.field)) {
+            // SYMPTEX_FIELDS_V1 (ревью L2) — и «Принимает».
+            if (e && emp.is_doctor && (PROFILE_LINK_KEYS.includes(e.field) || e.field === 'patients_age')) {
                 paneErrors[e.field] = e.message;
                 active = 'profile'; renderRail(); renderBody();
                 return;

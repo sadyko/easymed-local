@@ -253,8 +253,10 @@ export async function renderDoctorProfile(container, doctorId) {
         ...PATIENTS_AGES.map((a) => h('option', { value: a }, PATIENTS_AGE_LABELS[a])));
     ageSel.value = patientsAgeOf(st.user.patients_age);
     scalarInputs.patients_age = ageSel;
+    const ageErr = fieldErr(ageSel);   // ревью L2 — отказ сервера — под выбором
+    ageSel.addEventListener('change', () => ageErr.set(''));
     idFields.appendChild(h('div', { class: 'field' }, h('label', null, 'Принимает'), ageSel,
-        h('div', { class: 'docprof-hint' }, 'Это видят пациенты на сайтах партнёров клиники.')));
+        h('div', { class: 'docprof-hint' }, 'Это видят пациенты на сайтах партнёров клиники.'), ageErr.node));
 
     root.appendChild(card('Фото и личные данные', 'User',
         h('div', { class: 'docprof-idrow' }, photoBlock(), idFields)));
@@ -402,6 +404,7 @@ export async function renderDoctorProfile(container, doctorId) {
         } catch (e) {
             // DOCTOR_PROFILE_V1 (ревью шага 5, №11) — отказ сервера с полем ссылки — под полем.
             if (e && PROFILE_LINK_KEYS.includes(e.field)) { linkErr[e.field].set(e.message); contactInputs[e.field].focus(); return; }
+            if (e && e.field === 'patients_age') { ageErr.set(e.message); ageSel.focus(); return; }   // SYMPTEX_FIELDS_V1 (ревью L2)
             // CLINIC_API_FIX_V1 — причина отказа (например, «Профиль врача
             // меняется в главном здании.») — тоже на языке экрана.
             toast(trf('Не удалось сохранить: {msg}', { msg: tr(String((e && e.message) || e)) }), 'fail');

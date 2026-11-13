@@ -27,6 +27,8 @@ import { BRANCH_SYNC_COLUMNS, syncableBranchValue, overlayOwnBuilding } from '..
 // нет: services/auth.js и то, что он импортирует, этот файл не импортируют.
 import { clearLoginLocks } from '../auth.js';
 import { liveBump } from '../live/bus.js';   // LIVE_REFRESH_V1 — принятый справочник будит экраны
+import { clinicTypeOf } from '../../../public/js/shared/clinic-profile.js';   // SYMPTEX_FIELDS_V1 (ревью M1)
+import { patientsAgeOf } from '../../../public/js/shared/doctor-public.js';   // SYMPTEX_FIELDS_V1 (ревью M1)
 
 // Колонки doc_settings, которые описывают КЛИНИКУ, а не ЗДАНИЕ.
 //
@@ -669,6 +671,10 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
         // пока не обновится. Колонка приедет со следующей синхронизацией, когда
         // миграция здесь применится.
         if (!(col in local)) continue;
+        // SYMPTEX_FIELDS_V1 (ревью M1) — тип клиники, которого эта версия не знает (главная
+        // новее, список Symptex вырос): местное значение остаётся. Иначе CHECK миграции
+        // 285 откатил бы весь приём справочника — и прайс, и людей — до обновления.
+        if (col === 'clinic_type' && payload.doc_settings[col] !== clinicTypeOf(payload.doc_settings[col])) continue;
         if (!sameValue(payload.doc_settings[col], local[col])) changes[col] = payload.doc_settings[col];
       }
       const keys = Object.keys(changes);
@@ -1068,6 +1074,12 @@ export function applyCatalogue(db, payload, { dryRun = false, passwordSetFor: pa
           && (!localRow || !sameValue(values.experience_years, localRow.experience_years))) {
         present.push('practice_since');
         values.practice_since = practiceSinceFromYears(values.experience_years);
+      }
+      // SYMPTEX_FIELDS_V1 (ревью M1) — «Принимает»: слово, которого эта версия не знает,
+      // не пишется (у новой строки — «не указано», у старой — местное): CHECK миграции
+      // 285 иначе откатил бы весь справочник вместе с прайсом.
+      if (spec.name === 'users' && present.includes('patients_age') && values.patients_age !== patientsAgeOf(values.patients_age)) {
+        present.splice(present.indexOf('patients_age'), 1);
       }
 
       // --- LAB_PANEL_DEDUP_V1 (ревью H2): занятая уникальная ссылка ---------

@@ -873,7 +873,7 @@ test('филиал: названия, описание, лицензия, цве
     }
     const note = descendants(root).find((n) => n.attrs && n.attrs.role === 'note');
     assert.ok(note, 'нет заметки филиала');
-    assert.match(textOf(note), /^Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании\./);
+    assert.match(textOf(note), /^Название, описание, тип клиники, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании\./);
     assert.match(textOf(root), /Адрес этого здания/);
 
     // Своё у здания — открыто и сохраняется; уходит только своё у здания
@@ -1306,4 +1306,18 @@ test('подключения выключили на другом компьют
         globalThis.window.CLINIC = clinic;
         clinic.api_address_required = false;
     }
+});
+
+// SYMPTEX_FIELDS_V1 (ревью L3) — сохранённый тип показывается при открытии (ключ
+// applyStateToControls и предпросмотр — те же, что у сохранения); в филиале поле выключено.
+test('тип клиники: сохранённый «Лаборатория» показан в поле и в предпросмотре; в филиале поле выключено', async () => {
+    const typeSel = (root) => descendants(root).find((n) => n.tagName === 'SELECT' && textOf(n).includes('Детская клиника'));
+    const root = await open({ clinic_type: 'lab' });
+    assert.equal(typeSel(root).value, 'lab');
+    assert.ok(descendants(root).some((n) => n.className === 'cpf-psub' && textOf(n) === 'Лаборатория'), 'предпросмотр не показал тип');
+    await save(root);
+    assert.equal(lastUpdate, null, 'без правки ничего не уходит');
+    const branch = await openAs('secondary', { clinic_type: 'lab' });
+    assert.equal(typeSel(branch).value, 'lab');
+    assert.ok(isOff(typeSel(branch)), 'в филиале тип клиники не правится');
 });

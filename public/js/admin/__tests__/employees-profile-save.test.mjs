@@ -575,3 +575,17 @@ test('карточка врача: под Instagram и Telegram — их вид�
   const { DOCTOR_PUBLIC_MESSAGES } = await import('../../shared/doctor-public.js');
   assert.ok(textOf(s.card).includes(DOCTOR_PUBLIC_MESSAGES.socialsPublic), 'нет пометки о показе ссылок');
 });
+
+// SYMPTEX_FIELDS_V1 (ревью L3) — сохранённое «Принимает» показано в карточке врача.
+test('«Принимает»: сохранённое «Взрослых» показано в поле; без правки public_profile не уходит', async () => {
+  const before = DOC.public_profile;
+  DOC.public_profile = { ...PROFILE, patients_age: 'adults' };
+  try {
+    const s = await openProfileTab('dr.karimov');
+    const sel = tags(s.card, 'select').find((x) => String(x.attrs.id || '').startsWith('dpp-age-'));
+    assert.equal(sel.value, 'adults');
+    type(s.bio.uz, 'Kardiolog!');
+    await save(s.card);
+    assert.deepEqual(onlyWrite().public_profile, { bio_uz: 'Kardiolog!' }, '«Принимает» без правки не уходит');
+  } finally { DOC.public_profile = before; }
+});

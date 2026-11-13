@@ -355,14 +355,14 @@ test('API_DOCS_V1, телефон: шапка экрана переносит «
 // SYMPTEX_FIELDS_V1 (владелец 2026-11-13) — у «symptex» 04.11 сняли «Филиалы», и восемь
 // дней никто не видел, что партнёр остался без адресов. Строка подключения называет,
 // каких данных клиники включённое подключение не получает; выключенное и полное — молчат.
-test('подключение без части данных: «Не передаётся: Филиалы, Пакеты услуг»; выключенное и полное — без строки', async () => {
+test('подключение без части данных: «Не передаются: Филиалы, Пакеты услуг»; выключенное и полное — без строки', async () => {
   reset();
   const root = await open();
   const notes = byAttr(root, 'data-apic-miss', '');
   assert.equal(notes.length, 1, 'строка — только у включённого med24.uz без части данных');
-  assert.equal(textOf(notes[0]), 'Не передаётся: Филиалы, Пакеты услуг');
+  assert.equal(textOf(notes[0]), 'Не передаются: Филиалы, Пакеты услуг');
   const row = byAttr(root, 'data-apic-conn', '3')[0];
-  assert.ok(textOf(row).includes('Не передаётся: Филиалы, Пакеты услуг'), 'строка не в своём подключении');
+  assert.ok(textOf(row).includes('Не передаются: Филиалы, Пакеты услуг'), 'строка не в своём подключении');
   reset();
   const full = await open({ connections: settingsFixture().connections.map((c) => ({ ...c, scopes: ['clinic', 'branches', 'doctors', 'services', 'packages', 'slots', 'requests'] })) });
   assert.equal(byAttr(full, 'data-apic-miss', '').length, 0, 'все данные — строки нет');

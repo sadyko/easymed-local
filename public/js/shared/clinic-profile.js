@@ -238,8 +238,9 @@ export function storedProfileProblems(values) {
   }
   // SYMPTEX_FIELDS_V1 — тип клиники: ровно одно из слов списка или ''. CHECK
   // миграции 285 — запасной замок; отказ здесь — с понятным текстом.
-  if (given('clinic_type')) {
-    const s = text('clinic_type');
+  // Ревью L4: null здесь тоже понятный отказ, а не «Не заполнено обязательное поле doc_settings.clinic_type».
+  if (Object.prototype.hasOwnProperty.call(values, 'clinic_type')) {
+    const s = typeof values.clinic_type === 'string' ? values.clinic_type : null;
     if (s === null || (s !== '' && !CLINIC_TYPES.includes(s))) p.clinic_type = PROFILE_MESSAGES.clinicType;
   }
   return p;

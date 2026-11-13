@@ -107,7 +107,7 @@ test('/api/db: тип клиники — слово списка или пуст
       assert.equal(res.status, 200, v + ': ' + JSON.stringify(await res.clone().json()));
       assert.equal(t.db.prepare('SELECT clinic_type FROM doc_settings WHERE id = 1').get().clinic_type, v);
     }
-    for (const bad of ['hospital', 'Клиника', ' lab']) {
+    for (const bad of ['hospital', 'Клиника', ' lab', null, 3]) {   // null и число — тоже понятный отказ (ревью L4)
       const res = await save({ clinic_type: bad });
       assert.equal(res.status, 400, JSON.stringify(bad));
       const { error } = await res.json();

@@ -172,14 +172,16 @@ export function permChips(scopes) {
  * клиники включённое подключение не получает с выданным доступом. Выключенное не
  * получает ничего — строки нет. inCard — в карточке подключения, с подсказкой, где включить.
  */
-export function missingNote(c, { inCard = false } = {}) {
+export function missingNote(c, { inCard = false, canGrant = false } = {}) {
   if (!c || !c.active) return null;
   const miss = missingReadScopes(c.scopes);
   if (!miss.length) return null;
-  const text = trf('Не передаётся: {list}', { list: miss.map((k) => tr(SCOPE_INFO[k].label)).join(', ') });
-  if (!inCard) return h('span', { class: 'apic-sub', 'data-apic-miss': '' }, text);
-  return h('p', { class: 'apic-note', 'data-apic-miss': '' }, Icon('Info', { size: 16 }),
-    h('span', null, text, '. ', tr('Включить — на вкладке «Доступ».')));
+  const text = trf('Не передаются: {list}', { list: miss.map((k) => tr(SCOPE_INFO[k].label)).join(', ') });
+  if (!inCard) return h('span', { class: 'apic-miss', 'data-apic-miss': '' }, text);
+  // ревью L5 — где выдать, говорится только тому, кто может выдать (вкладку «Доступ»
+  // правит администратор; остальным она только для чтения).
+  return h('p', { class: 'apic-note warn', 'data-apic-miss': '' }, Icon('Warning', { size: 16 }),
+    h('span', null, text, canGrant ? ['. ', tr('Выдать доступ — на вкладке «Доступ».')] : null));
 }
 /** Метка срока ключа: за 14 дней — «истекает», после — «истёк». */
 export function expiryTag(c, now = Date.now()) {
