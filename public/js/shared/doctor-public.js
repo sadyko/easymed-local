@@ -34,7 +34,18 @@ export const DOCTOR_PUBLIC_MESSAGES = Object.freeze({
   flag:        'Отметка записана неверно: нужно «да» или «нет».',
   // SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M10) — ссылки врача уходят партнёрам (snapshot.js), телефон — никогда
   socialsPublic: 'Instagram и Telegram видят пациенты на сайтах партнёров клиники. Телефон партнёрам не передаётся.',
+  // SYMPTEX_FIELDS_V1 (мигр. 285) — «Принимает»
+  patientsAge: 'Кого принимает врач — взрослых, детей или взрослых и детей — или не указано.',
 });
+
+// SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13: «add to the doctor the
+// children/adult option») — КОГО ПРИНИМАЕТ ВРАЧ. '' — «Не указано»: так у каждого
+// врача после обновления, и партнёры получают то же, что до него. Подписи — ключи
+// словаря (i18n-strings.js).
+export const PATIENTS_AGES = Object.freeze(['adults', 'children', 'all']);
+export const PATIENTS_AGE_LABELS = Object.freeze({ adults: 'Взрослых', children: 'Детей', all: 'Взрослых и детей' });
+/** Сохранённое значение или '' — всё прочее читается как «не указано». */
+export const patientsAgeOf = (v) => (PATIENTS_AGES.includes(String(v == null ? '' : v).trim()) ? String(v).trim() : '');
 
 const yearOf = (now) => (now instanceof Date ? now : new Date(now == null ? Date.now() : now)).getFullYear();
 

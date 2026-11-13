@@ -19,7 +19,18 @@ export const COMPANY_CLINIC_WIDE = Object.freeze([
   'clinic_name', 'name_uz', 'name_en', 'about_ru', 'about_uz', 'about_en',
   'license', 'accent_color', 'logo_data_url', 'logo_square_path', 'logo_portrait_path',
   'website', 'telegram_bot', 'telegram_channel', 'instagram',
+  'clinic_type',   // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники для партнёров
 ]);
+
+// SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13) — ТИП КЛИНИКИ для партнёров,
+// слова Symptex. '' — «Не указан» (так у каждой клиники после обновления: партнёры
+// получают то же, что до него). Подписи — ключи словаря (i18n-strings.js).
+export const CLINIC_TYPES = Object.freeze(['clinic', 'diagnostics', 'lab', 'children']);
+export const CLINIC_TYPE_LABELS = Object.freeze({
+  clinic: 'Клиника', diagnostics: 'Диагностический центр', lab: 'Лаборатория', children: 'Детская клиника',
+});
+/** Сохранённый тип или '' — всё прочее читается как «не указан». */
+export const clinicTypeOf = (v) => (CLINIC_TYPES.includes(String(v == null ? '' : v).trim()) ? String(v).trim() : '');
 // СВОЁ У ЗДАНИЯ — как address/phone/email с самого начала (catalogue.js).
 // address — то, что печатается на бланках этого здания (вписан руками).
 // BRANCH_PROFILE_V1 (шаг 4) — СВОЁ У ЗДАНИЯ делится на две части:
@@ -51,6 +62,8 @@ export const PROFILE_MESSAGES = Object.freeze({
   // CLINIC_API_STEP7_V1 — решение владельца 11 (2026-10-10): адрес для партнёров
   // обязателен, пока включено хоть одно подключение API.
   partnerAddress: 'Пока включены подключения API, адрес для партнёров обязателен: город или область, район и улица на русском.',
+  // SYMPTEX_FIELDS_V1 — отказ видит только тот, кто пишет в /api/db в обход экрана.
+  clinicType: 'Тип клиники — один из списка: Клиника, Диагностический центр, Лаборатория, Детская клиника — или не указан.',
 });
 
 // CLINIC_PROFILE_V1 (ревью I2) — ХВОСТ ССЫЛКИ (путь, запрос, якорь): без
@@ -175,6 +188,7 @@ export function normalizeProfile(v) {
   for (const k of ['telegram_bot', 'telegram_channel', 'instagram']) out[k] = normalizeHandle(v[k]);
   for (const k of ['clinic_name', 'name_uz', 'name_en', 'about_ru', 'about_uz', 'about_en',
     'street_ru', 'street_uz', 'street_en', 'maps_url']) out[k] = String(v[k] == null ? '' : v[k]).trim();
+  if ('clinic_type' in v) out.clinic_type = clinicTypeOf(v.clinic_type);   // SYMPTEX_FIELDS_V1
   return out;
 }
 export function companyProblems(v, geo = {}) {
@@ -221,6 +235,12 @@ export function storedProfileProblems(values) {
     if (!given(k)) continue;
     const s = text(k);
     if (s === null || (s !== '' && !re.test(s))) p[k] = PROFILE_MESSAGES.logoPath;
+  }
+  // SYMPTEX_FIELDS_V1 — тип клиники: ровно одно из слов списка или ''. CHECK
+  // миграции 285 — запасной замок; отказ здесь — с понятным текстом.
+  if (given('clinic_type')) {
+    const s = text('clinic_type');
+    if (s === null || (s !== '' && !CLINIC_TYPES.includes(s))) p.clinic_type = PROFILE_MESSAGES.clinicType;
   }
   return p;
 }

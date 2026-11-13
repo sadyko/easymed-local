@@ -35,7 +35,8 @@
 import { hasAnyRole } from '../roles.js';
 import { rpcT } from '../server-message.js';   // V3120_I18N
 import { SPECIALTY_ROWS } from '../../../public/js/shared/specialty-list.js';
-import { languagesProblem, normalizeLanguages, readLanguages, cleanPracticeSince, withExperience, publicationProblem } from '../../../public/js/shared/doctor-public.js';   // DOCTOR_PROFILE_V1
+import { languagesProblem, normalizeLanguages, readLanguages, cleanPracticeSince, withExperience, publicationProblem,
+  PATIENTS_AGES, DOCTOR_PUBLIC_MESSAGES } from '../../../public/js/shared/doctor-public.js';   // DOCTOR_PROFILE_V1; SYMPTEX_FIELDS_V1 — «Принимает»
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -53,7 +54,9 @@ const URL_KEYS = ['instagram_url', 'telegram_url', 'photo_url'];
 // профиля: их правят и «Мой профиль», и карточка сотрудника (одно правило).
 // Показ врача (is_public) сюда НЕ входит — его меняет только администратор
 // (routes/users.js); прислать его в профиле — отказ, как любой чужой ключ.
-const PUBLIC_KEYS = ['languages', 'practice_since'];
+// SYMPTEX_FIELDS_V1 (мигр. 285) — «Принимает» (взрослых / детей / всех) — тоже
+// часть профиля: одно правило для «Моего профиля» и карточки сотрудника.
+const PUBLIC_KEYS = ['languages', 'practice_since', 'patients_age'];
 export const PROFILE_KEYS = Object.freeze([...TEXT_KEYS, ...ENTRY_KEYS, 'experience_years', ...URL_KEYS, ...PUBLIC_KEYS]);
 export const PROFILE_ENTRY_KEYS = Object.freeze([...ENTRY_KEYS]);
 
@@ -109,6 +112,16 @@ function cleanValue(key, v, ownerId) {
     const c = cleanPracticeSince(v);
     if (c.problem) throw new RpcError(c.problem, 400);
     return c.value;
+  }
+  // SYMPTEX_FIELDS_V1 — «Принимает»: одно из слов списка; пусто — «не указано».
+  if (key === 'patients_age') {
+    if (v == null) return '';
+    if (typeof v !== 'string' || (v.trim() !== '' && !PATIENTS_AGES.includes(v.trim()))) {
+      const err = new RpcError(DOCTOR_PUBLIC_MESSAGES.patientsAge, 400);
+      err.field = key;
+      throw err;
+    }
+    return v.trim();
   }
   if (key === 'experience_years') {
     if (v == null || v === '') return null;

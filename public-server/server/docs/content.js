@@ -117,7 +117,11 @@ export const ENDPOINTS = Object.freeze([
       'Klinika kartochkasi: nomi, tavsifi, bosh bino manzili (mamlakat, shahar va tuman — ma’lumotnoma kodlari, to‘liq manzil — satr), telefon, sayt, Telegram, Instagram, logotiplar, xarita va yo‘nalish.',
       'The clinic card: name, description, main building address (country, city and district as reference codes, the full address as a string), phone, website, Telegram, Instagram, logos, map and directions.'),
     params: [qLang],
-    notes: [L('`logo.square` и `logo.portrait` — ссылки на файлы или `null`, если логотипа нет.', '`logo.square` va `logo.portrait` — fayllarga havolalar yoki logotip bo‘lmasa `null`.', '`logo.square` and `logo.portrait` are file links, or `null` when there is no logo.')] },
+    notes: [L('`logo.square` и `logo.portrait` — ссылки на файлы или `null`, если логотипа нет.', '`logo.square` va `logo.portrait` — fayllarga havolalar yoki logotip bo‘lmasa `null`.', '`logo.square` and `logo.portrait` are file links, or `null` when there is no logo.'),
+      // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники
+      L('`type` — тип клиники: `clinic` (клиника), `diagnostics` (диагностический центр), `lab` (лаборатория), `children` (детская клиника); клиника тип не указала — пустая строка.',
+        '`type` — klinika turi: `clinic` (klinika), `diagnostics` (diagnostika markazi), `lab` (laboratoriya), `children` (bolalar klinikasi); klinika turini ko‘rsatmagan bo‘lsa — bo‘sh qator.',
+        '`type` — the kind of clinic: `clinic` (a clinic), `diagnostics` (a diagnostic centre), `lab` (a laboratory), `children` (a children’s clinic); an empty string when the clinic has not set it.')] },
   { id: 'branches', section: 'clinic', method: 'GET', path: '/branches', scopes: ['branches'], examples: ['branches'],
     summary: L('Филиалы: название, город и район кодами, улица и ориентир, полный адрес, телефон, часы работы, карта и маршрут.',
       'Filiallar: nomi, shahar va tuman kodlari, ko‘cha va mo‘ljal, to‘liq manzil, telefon, ish soatlari, xarita va yo‘nalish.',
@@ -158,7 +162,11 @@ export const ENDPOINTS = Object.freeze([
         '`instagram`, `telegram` — links to the doctor’s profile, rebuilt from the handle: `https://instagram.com/<handle>`, `https://t.me/<handle>` (no query, no fragment); a link that is not a profile (an invite, a share link, a service address, another site) is an empty string.'),
       L('`education` и `experience` — образование и опыт работы: `name` (учреждение), `title` (квалификация или должность — одна строка, как её ввела клиника, без перевода), `year_from`, `year_to`; `certificates` и `training` — сертификаты и повышение квалификации: `name`, `year`. Год — число или `null`; списка нет — `[]`.',
         '`education` va `experience` — ta’lim va ish tajribasi: `name` (muassasa), `title` (malaka yoki lavozim — klinika kiritgan bitta qator, tarjimasiz), `year_from`, `year_to`; `certificates` va `training` — sertifikatlar va malaka oshirish: `name`, `year`. Yil — son yoki `null`; ro‘yxat bo‘lmasa — `[]`.',
-        '`education` and `experience` — education and work history: `name` (the institution), `title` (qualification or position — one string as the clinic typed it, not translated), `year_from`, `year_to`; `certificates` and `training` — certificates and professional development: `name`, `year`. A year is a number or `null`; no list — `[]`.')] },
+        '`education` and `experience` — education and work history: `name` (the institution), `title` (qualification or position — one string as the clinic typed it, not translated), `year_from`, `year_to`; `certificates` and `training` — certificates and professional development: `name`, `year`. A year is a number or `null`; no list — `[]`.'),
+      // SYMPTEX_FIELDS_V1 (мигр. 285) — «Принимает»
+      L('`patients` — кого принимает врач: `adults` (взрослых), `children` (детей), `all` (взрослых и детей); клиника не указала — пустая строка.',
+        '`patients` — shifokor kimlarni qabul qiladi: `adults` (kattalarni), `children` (bolalarni), `all` (kattalar va bolalarni); klinika ko‘rsatmagan bo‘lsa — bo‘sh qator.',
+        '`patients` — who the doctor sees: `adults`, `children` or `all` (adults and children); an empty string when the clinic has not set it.')] },
   { id: 'slots', section: 'doctors', method: 'GET', path: '/slots', scopes: ['slots'], examples: ['slots-day', 'slots-fit', 'slots-days', 'slots-live'],
     summary: L('Свободное время врача: окна по {{slotMin:min}}.', 'Shifokorning bo‘sh vaqti: {{slotMin:min}}lik oynalar.', 'A doctor’s free time in {{slotMin}}-minute windows.'),
     params: [

@@ -13,7 +13,8 @@ import { SPECIALTY_ROWS, canonicalSpecialty, sortByShownLabel } from '../../shar
 import { specialtyLabel } from '../specialties.js?v=spec2';
 import { profileLinkProblem, PROFILE_LINK_KEYS } from './doctor-public-pane.js';   // DOCTOR_PROFILE_V1 — ссылки соцсетей: правило сервера (ревью №11)
 import { fieldErr } from './company-fields.js';   // DOCTOR_PROFILE_V1 — отказ под полем ссылки   // DOCTOR_PROFILE_V1 — название из справочника, как в карточке сотрудника (ревью №10)
-import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince, DOCTOR_PUBLIC_MESSAGES } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1; SYMPTEX_FIELDS_V1 — socialsPublic
+import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince, DOCTOR_PUBLIC_MESSAGES,
+    PATIENTS_AGES, PATIENTS_AGE_LABELS, patientsAgeOf } from '../../shared/doctor-public.js';   // DOCTOR_PROFILE_V1; SYMPTEX_FIELDS_V1 — socialsPublic
 // PATIENT_PHOTO_V1 — те же правила и то же уменьшение, что в окне заведения
 // пациента: один набор на оба виджета фото и на сервер.
 import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
@@ -127,7 +128,8 @@ export async function renderDoctorProfile(container, doctorId) {
                 + 'bio_ru, bio_uz, bio_en, education_entries, experience_entries, certifications_entries, prof_dev_entries, '
                 + 'experience_years, instagram_url, telegram_url, photo_url, '
                 + 'is_local, '   // CLINIC_API_FIX_V1 — 0: строка из главного здания, здесь только просмотр
-                + 'languages, practice_since, is_public')   // DOCTOR_PROFILE_V1 — языки, «работает с», показ (только видно)
+                + 'languages, practice_since, is_public, '
+                + 'patients_age')   // SYMPTEX_FIELDS_V1 (мигр. 285) — «Принимает»   // DOCTOR_PROFILE_V1 — языки, «работает с», показ (только видно)
             .eq('id', doctorId).single();
         st.user = data || {};
     } catch (e) { st.user = {}; }
@@ -244,6 +246,15 @@ export async function renderDoctorProfile(container, doctorId) {
     }
     idFields.appendChild(h('div', { class: 'field' }, h('label', null, 'Языки приёма'), langBox,
         h('div', { class: 'docprof-hint' }, 'На каких языках врач говорит с пациентом.')));
+    // SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13) — кого принимает врач. После
+    // обновления у всех «Не указано»: партнёры получают то же, что до него.
+    const ageSel = h('select', { class: 'docprof-in', 'aria-label': 'Принимает' },
+        h('option', { value: '' }, 'Не указано'),
+        ...PATIENTS_AGES.map((a) => h('option', { value: a }, PATIENTS_AGE_LABELS[a])));
+    ageSel.value = patientsAgeOf(st.user.patients_age);
+    scalarInputs.patients_age = ageSel;
+    idFields.appendChild(h('div', { class: 'field' }, h('label', null, 'Принимает'), ageSel,
+        h('div', { class: 'docprof-hint' }, 'Это видят пациенты на сайтах партнёров клиники.')));
 
     root.appendChild(card('Фото и личные данные', 'User',
         h('div', { class: 'docprof-idrow' }, photoBlock(), idFields)));
@@ -422,6 +433,7 @@ export async function renderDoctorProfile(container, doctorId) {
         const yrs = scalarInputs.practice_since.value.trim();
         p.practice_since = yrs === '' ? null : Number(yrs);
         p.languages = [...(st.languages || [])];
+        p.patients_age = scalarInputs.patients_age.value;   // SYMPTEX_FIELDS_V1
         p.instagram_url = (contactInputs.instagram_url.value || '').trim();
         p.telegram_url = (contactInputs.telegram_url.value || '').trim();
         const specialties = st.specSlugs.filter(Boolean).slice(0, 4);

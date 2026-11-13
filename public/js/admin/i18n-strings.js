@@ -13901,4 +13901,17 @@ export const STRINGS = {
   "Врач не направляет сам к себе — эту услугу он и выполняет.": {"en":"A doctor cannot refer to themselves — they perform this service.","ru":"Врач не направляет сам к себе — эту услугу он и выполняет.","uz":"Shifokor o'ziga o'zi yo'llamaydi — bu xizmatni o'zi bajaradi."},
   // REFERRAL_LINE_EXTERNAL_GUARD_V1 (3.22.0, ревью) — второй внешний партнёр на строке не оплачивается
   "Направивший визита — внешний партнёр, и за эту услугу платят ему. Чтобы платить другому партнёру, смените направившего в окне визита.": {"en":"The visit's referrer is an external partner, and this service is paid to them. To pay a different partner, change the referrer in the visit window.","ru":"Направивший визита — внешний партнёр, и за эту услугу платят ему. Чтобы платить другому партнёру, смените направившего в окне визита.","uz":"Tashrif yo'llovchisi — tashqi hamkor, bu xizmat uchun unga to'lanadi. Boshqa hamkorga to'lash uchun yo'llovchini tashrif oynasida o'zgartiring."},
+  // SYMPTEX_FIELDS_V1 — тип клиники («Компания») и «Принимает» у врача (мигр. 285)
+  "Тип клиники": {"en":"Type of clinic","ru":"Тип клиники","uz":"Klinika turi"},   // SYMPTEX_FIELDS_V1
+  "Диагностический центр": {"en":"Diagnostic centre","ru":"Диагностический центр","uz":"Diagnostika markazi"},   // SYMPTEX_FIELDS_V1
+  "Детская клиника": {"en":"Children’s clinic","ru":"Детская клиника","uz":"Bolalar klinikasi"},   // SYMPTEX_FIELDS_V1
+  "Его получают сайт клиники, Symptex и партнёры. На бланках не печатается.": {"en":"The clinic website, Symptex and partners receive it. It is not printed on forms.","ru":"Его получают сайт клиники, Symptex и партнёры. На бланках не печатается.","uz":"Uni klinika sayti, Symptex va hamkorlar oladi. Blankalarda chop etilmaydi."},   // SYMPTEX_FIELDS_V1
+  "Тип клиники — один из списка: Клиника, Диагностический центр, Лаборатория, Детская клиника — или не указан.": {"en":"The type of clinic is one from the list: Clinic, Diagnostic centre, Laboratory, Children’s clinic — or not set.","ru":"Тип клиники — один из списка: Клиника, Диагностический центр, Лаборатория, Детская клиника — или не указан.","uz":"Klinika turi — ro‘yxatdagilardan biri: Klinika, Diagnostika markazi, Laboratoriya, Bolalar klinikasi — yoki ko‘rsatilmagan."},   // SYMPTEX_FIELDS_V1
+  "Не указано": {"en":"Not set","ru":"Не указано","uz":"Ko‘rsatilmagan"},   // SYMPTEX_FIELDS_V1
+  "Принимает": {"en":"Sees","ru":"Принимает","uz":"Qabul qiladi"},   // SYMPTEX_FIELDS_V1
+  "Взрослых": {"en":"Adults","ru":"Взрослых","uz":"Kattalarni"},   // SYMPTEX_FIELDS_V1
+  "Детей": {"en":"Children","ru":"Детей","uz":"Bolalarni"},   // SYMPTEX_FIELDS_V1
+  "Взрослых и детей": {"en":"Adults and children","ru":"Взрослых и детей","uz":"Kattalar va bolalarni"},   // SYMPTEX_FIELDS_V1
+  "Это видят пациенты на сайтах партнёров клиники.": {"en":"Patients see this on the clinic’s partner sites.","ru":"Это видят пациенты на сайтах партнёров клиники.","uz":"Buni bemorlar klinika hamkorlari saytlarida ko‘radi."},   // SYMPTEX_FIELDS_V1
+  "Кого принимает врач — взрослых, детей или взрослых и детей — или не указано.": {"en":"Who the doctor sees — adults, children, or adults and children — or not set.","ru":"Кого принимает врач — взрослых, детей или взрослых и детей — или не указано.","uz":"Shifokor kimlarni qabul qiladi — kattalarni, bolalarni yoki kattalar va bolalarni — yoki ko‘rsatilmagan."},   // SYMPTEX_FIELDS_V1
 };

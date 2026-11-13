@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { partnerStand } from '../test-helpers/partner-stand.js';
+import { partnerStand, snapshotFixture } from '../test-helpers/partner-stand.js';   // SYMPTEX_FIELDS_V1 — snapshotFixture
 import { NOW } from '../test-helpers/fixture.js';
 import { admitClinic, saveSnapshot, clinicRow } from '../store/clinics.js';
 import { putMedia } from '../store/media.js';
@@ -41,6 +41,26 @@ test('клиника, филиалы, врачи, услуги, пакеты: ?l
   const pk = await json(await s.get('/shifo/v1/packages'));
   assert.deepEqual(pk.body.packages.map((p) => p.id), [4], 'истёкший пакет не приходит');
   assert.equal((await s.get('/shifo/v1/doctors?lang=de')).status, 400);
+});
+
+// SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13) — тип клиники и «Принимает» у
+// врача доходят до партнёра. Снимок старой версии (поля нет) и чужое слово — "".
+test('клиника и врачи: тип клиники и «Принимает»; старый снимок или чужое слово — пусто', async (t) => {
+  const s = await partnerStand();
+  t.after(s.close);
+  assert.equal((await json(await s.get('/shifo/v1/clinic'))).body.type, 'children');
+  const doctors = (await json(await s.get('/shifo/v1/doctors?lang=uz'))).body.doctors;
+  assert.equal(doctors.find((d) => d.id === 7).patients, 'children');
+  assert.equal(doctors.find((d) => d.id === 8).patients, '', 'старый снимок — поле есть, пустое');
+
+  const snap = snapshotFixture();
+  delete snap.clinic.type;
+  saveSnapshot(s.db, s.clinicId, { ...snap, generated_at: isoOf(NOW + 1000) }, NOW + 1000);
+  assert.equal((await json(await s.get('/shifo/v1/clinic'))).body.type, '', 'клиника старой версии — пусто');
+  saveSnapshot(s.db, s.clinicId, { ...snap, generated_at: isoOf(NOW + 2000), clinic: { ...snap.clinic, type: 'hospital' },
+    doctors: snap.doctors.map((d) => ({ ...d, patients: 'teens' })) }, NOW + 2000);
+  assert.equal((await json(await s.get('/shifo/v1/clinic'))).body.type, '', 'чужое слово — пусто');
+  assert.deepEqual((await json(await s.get('/shifo/v1/doctors'))).body.doctors.map((d) => d.patients), ['', '']);
 });
 
 // SYMPTEX_FIELDS_V1 — Instagram и Telegram врача, образование, опыт, сертификаты и

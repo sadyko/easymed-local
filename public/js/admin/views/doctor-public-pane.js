@@ -21,7 +21,8 @@ import { triGroup, fieldErr } from './company-fields.js';
 import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
 import { downscalePhoto } from '../../shared/photo-downscale.js?v=pph1';
 import { DOCTOR_LANGS, PRACTICE_SINCE_MIN, DOCTOR_PUBLIC_MESSAGES, profileCompleteness,
-    experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince, BOOKING_DAYS, DEFAULT_BOOKING_DAYS } from '../../shared/doctor-public.js';
+    experienceYears, readLanguages, shownPracticeSince, cleanPracticeSince, BOOKING_DAYS, DEFAULT_BOOKING_DAYS,
+    PATIENTS_AGES, PATIENTS_AGE_LABELS, patientsAgeOf } from '../../shared/doctor-public.js';   // SYMPTEX_FIELDS_V1 — «Принимает»
 import { renderPartnerPreview, renderConsultPrices, renderConsultServices } from './doctor-public-preview.js';   // DOCTOR_PROFILE_V1 — приём, превью, цены
 import { branchAllowsDoctor } from '../../shared/branch-profile.js';
 
@@ -235,6 +236,19 @@ export function doctorPublicPane(ctx) {
     root.appendChild(h('div', { class: 'dpp-grid2' },
         h('div', { class: 'field' }, h('label', { for: since.getAttribute('id') }, 'Работает врачом с'), since, sinceHint, sinceErr.node),
         h('div', { class: 'field' }, h('span', { class: 'dpp-label' }, 'Языки приёма'), langBox, h('p', { class: 'cpf-hint' }, 'На каких языках врач говорит с пациентом.'))));
+
+    // ---- SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13) — «Принимает» ----
+    // После обновления у всех «Не указано»: партнёры получают то же, что до него.
+    const age = h('select', { class: 'docprof-in', id: 'dpp-age-' + (++seq) },
+        h('option', { value: '' }, 'Не указано'),
+        ...PATIENTS_AGES.map((a) => h('option', { value: a }, PATIENTS_AGE_LABELS[a])));
+    age.value = patientsAgeOf(pp.patients_age);
+    age.disabled = !!readOnly;
+    const ageErr = fieldErr(age);
+    if (errors.patients_age) ageErr.set(errors.patients_age);
+    age.addEventListener('change', () => { ctx.setProfile('patients_age', age.value); clearError('patients_age'); ageErr.set(''); });
+    root.appendChild(h('div', { class: 'field' }, h('label', { for: age.getAttribute('id') }, 'Принимает'), age,
+        h('p', { class: 'cpf-hint' }, 'Это видят пациенты на сайтах партнёров клиники.'), ageErr.node));
 
     // ---- биография ----
     root.appendChild(triGroup('Биография', { ru: pp.bio_ru, uz: pp.bio_uz, en: pp.bio_en }, {

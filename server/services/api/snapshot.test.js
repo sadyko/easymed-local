@@ -43,7 +43,9 @@ const ALLOWED = new Set(['version', 'generated_at', 'slug', 'clinic', 'name', 'r
   'specialties', 'experience_years', 'languages', 'photo', 'branch_ids', 'reception', 'booking_days', 'consultations', 'type', 'price',
   'minutes', 'services', 'service_id', 'group', 'packages', 'price_full', 'discount_percent', 'valid_until', 'items',
   // SYMPTEX_FIELDS_V1 — ссылки врача и списки профиля
-  'telegram', 'education', 'experience', 'certificates', 'training', 'year', 'year_from', 'year_to']);
+  'telegram', 'education', 'experience', 'certificates', 'training', 'year', 'year_from', 'year_to',
+  // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники (clinic.type) и «Принимает» у врача
+  'patients']);
 function keysOf(v, out = new Set()) {
   if (Array.isArray(v)) { for (const x of v) keysOf(x, out); return out; }
   if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (!/^\d+$/.test(k)) out.add(k); keysOf(x, out); }
@@ -106,6 +108,21 @@ test('снимок: ссылки врача и списки профиля — �
   assert.deepEqual(d.training, [], 'испорченный список — пусто');
   const other = buildSnapshot(s.db, { storageDir: s.storage, now: NOW }).snapshot.doctors.find((x) => x.id === 8);
   assert.deepEqual([other.instagram, other.telegram, other.education], ['', '', []]);
+});
+
+// SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13) — тип клиники и «Принимает» у
+// врача. Не указано (так у всех после обновления) — "" , как и до обновления.
+test('снимок: тип клиники и «Принимает» у врача; не указано или чужое слово — пусто', () => {
+  const s = clinic();
+  let snap = buildSnapshot(s.db, { storageDir: s.storage, now: NOW }).snapshot;
+  assert.equal(snap.clinic.type, '', 'после обновления — не указан');
+  assert.deepEqual(snap.doctors.map((d) => d.patients), snap.doctors.map(() => ''), 'после обновления — не указано');
+  s.db.prepare("UPDATE doc_settings SET clinic_type = 'children' WHERE id = 1").run();
+  s.db.prepare("UPDATE users SET patients_age = 'children' WHERE id = 7").run();
+  snap = buildSnapshot(s.db, { storageDir: s.storage, now: NOW }).snapshot;
+  assert.equal(snap.clinic.type, 'children');
+  assert.equal(snap.doctors.find((d) => d.id === 7).patients, 'children');
+  assert.equal(snap.doctors.find((d) => d.id === 8).patients, '');
 });
 
 test('снимок и время: только поля белого списка; ни пациентов, ни сотрудников, ни их телефонов и почты, ни заявок', () => {

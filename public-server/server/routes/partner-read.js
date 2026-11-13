@@ -10,10 +10,10 @@
 // пустой перевод — русский. Суммы — целые (так их шлёт клиника). Время —
 // Ташкент со смещением. Адрес собирается из кодов справочника той же функцией,
 // что в программе (shared/clinic-profile.js composeAddress).
-import { composeAddress } from '../../../public/js/shared/clinic-profile.js';
+import { composeAddress, clinicTypeOf } from '../../../public/js/shared/clinic-profile.js';   // SYMPTEX_FIELDS_V1 — clinicTypeOf
 import { API_GROUPS } from '../../../public/js/shared/service-public.js';
 import { CONSULT_API_KINDS } from '../../../public/js/shared/consultation-price.js';
-import { doctorSocialLink } from '../../../public/js/shared/doctor-public.js';   // SYMPTEX_FIELDS_V1 (ревью M2)
+import { doctorSocialLink, patientsAgeOf } from '../../../public/js/shared/doctor-public.js';   // SYMPTEX_FIELDS_V1 (ревью M2); patientsAgeOf — мигр. 285
 import { snapshotOf, slotsOf } from '../store/clinics.js';
 import { countryRow, regionRow, districtRow, geoReference, specialtiesReference } from '../lib/reference.js';
 import { dayWindows, windowsNeeded, SLOT_MIN } from '../lib/slot-check.js';
@@ -108,7 +108,11 @@ export function readRoutes(r, ctx) {
       street: tri(c.street, lang), address: address(c, lang), phone: str(c.phone), site: str(c.site),
       telegram_bot: str(c.telegram_bot), telegram_channel: str(c.telegram_channel), instagram: str(c.instagram),
       logo: { square: mediaUrl(req.clinic, c.logo && c.logo.square), portrait: mediaUrl(req.clinic, c.logo && c.logo.portrait) },
-      map_url: str(c.map_url), route_url: str(c.route_url), as_of: asOf(req.clinic),
+      map_url: str(c.map_url), route_url: str(c.route_url),
+      // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники: clinic / diagnostics / lab / children;
+      // не указан, снимок старой версии или чужое слово — ""
+      type: clinicTypeOf(c.type),
+      as_of: asOf(req.clinic),
     });
   });
 
@@ -158,6 +162,8 @@ export function readRoutes(r, ctx) {
         instagram: doctorSocialLink('instagram', d.instagram), telegram: doctorSocialLink('telegram', d.telegram),
         education: entries(d.education, lang, true), experience: entries(d.experience, lang, true),
         certificates: entries(d.certificates, lang, false), training: entries(d.training, lang, false),
+        // SYMPTEX_FIELDS_V1 (мигр. 285) — кого принимает: adults / children / all; иначе ""
+        patients: patientsAgeOf(d.patients),
       })),
       as_of: asOf(req.clinic),
     });

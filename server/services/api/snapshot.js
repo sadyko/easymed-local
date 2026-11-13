@@ -22,10 +22,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { routeUrl } from '../../../public/js/shared/clinic-profile.js';
+import { routeUrl, clinicTypeOf } from '../../../public/js/shared/clinic-profile.js';   // SYMPTEX_FIELDS_V1 — clinicTypeOf
 import { branchShownToPartners, overlayOwnBuilding } from '../../../public/js/shared/branch-profile.js';
-import { doctorPublicState, readLanguages, shownPracticeSince, experienceYears, BOOKING_DAYS, DEFAULT_BOOKING_DAYS, PUBLIC_SLOT_MIN, doctorSocialLink }
-  from '../../../public/js/shared/doctor-public.js';
+import { doctorPublicState, readLanguages, shownPracticeSince, experienceYears, BOOKING_DAYS, DEFAULT_BOOKING_DAYS, PUBLIC_SLOT_MIN, doctorSocialLink,
+  patientsAgeOf } from '../../../public/js/shared/doctor-public.js';   // SYMPTEX_FIELDS_V1 — patientsAgeOf
 import { servicePublicState, serviceNames, apiGroupOf } from '../../../public/js/shared/service-public.js';
 import { isPackageRow, packageCalc, packageItems, packageTerms, packagePublicState } from '../../../public/js/shared/package-price.js';
 import { readSlug } from './connections.js';
@@ -89,6 +89,8 @@ function clinicPart(db, storageDir, media) {
     telegram_bot: text(d.telegram_bot), telegram_channel: text(d.telegram_channel), instagram: text(d.instagram),
     logo: { square: mediaOf(logoFile(storageDir, d.logo_square_path), media), portrait: mediaOf(logoFile(storageDir, d.logo_portrait_path), media) },
     map_url: text(d.maps_url), route_url: routeUrl(d.maps_url),
+    // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники: clinic / diagnostics / lab / children; не указан — ""
+    type: clinicTypeOf(d.clinic_type),
   };
 }
 
@@ -190,6 +192,8 @@ function doctorsPart(db, storageDir, media, now) {
       instagram: doctorSocialLink('instagram', u.instagram_url), telegram: doctorSocialLink('telegram', u.telegram_url),
       education: profileEntries(u.education_entries, { range: true }), experience: profileEntries(u.experience_entries, { range: true }),
       certificates: profileEntries(u.certifications_entries), training: profileEntries(u.prof_dev_entries),
+      // SYMPTEX_FIELDS_V1 (мигр. 285) — кого принимает: adults / children / all; не указано — ""
+      patients: patientsAgeOf(u.patients_age),
     };
   });
 }

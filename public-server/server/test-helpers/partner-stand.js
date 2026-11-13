@@ -17,7 +17,8 @@ export function snapshotFixture(at = NOW) {
     version: 1, generated_at: isoOf(at), slug: 'shifo',
     clinic: { name: t3('Шифо', 'Shifo'), about: t3('Семейная клиника'), country: 'UZ', city: 'tashkent-city', district: 'yunusobod',
       street: t3('ул. Мира, 1', 'Mira ko‘chasi, 1'), phone: '+998712000000', site: 'https://shifo.uz', telegram_bot: '@shifo_bot',
-      telegram_channel: '', instagram: '', logo: { square: null, portrait: null }, map_url: '', route_url: '' },
+      telegram_channel: '', instagram: '', logo: { square: null, portrait: null }, map_url: '', route_url: '',
+      type: 'children' },   // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники
     branches: [
       { id: 1, name: t3('Главный корпус', 'Bosh bino'), city: 'tashkent-city', district: 'yunusobod', street: t3('ул. Мира, 1'),
         landmark: t3('напротив парка'), phone: '+998712000000', hours: WEEK, open_24_7: false, map_url: '', route_url: '' },
@@ -35,7 +36,8 @@ export function snapshotFixture(at = NOW) {
         education: [{ name: t3('ТашПМИ', 'ToshPTI'), title: 'Педиатрия', year_from: 2008, year_to: 2014 }, { name: t3('Ординатура'), title: '', year_from: 'x', year_to: null },
           { name: t3('', 'Faqat oʻzbekcha'), title: '', year_from: 2020, year_to: 2021 }],
         experience: [{ name: t3('Клиника «Шифо»', 'Shifo klinikasi'), title: 'Педиатр', year_from: 2014, year_to: null }],
-        certificates: [{ name: t3('Неонатология', 'Neonatologiya'), year: 2020 }], training: [{ name: t3('Курс УЗИ'), year: 2023 }] },
+        certificates: [{ name: t3('Неонатология', 'Neonatologiya'), year: 2020 }], training: [{ name: t3('Курс УЗИ'), year: 2023 }],
+        patients: 'children' },   // SYMPTEX_FIELDS_V1 (мигр. 285) — «Принимает» (у врача 8 нет: старый снимок)
       { id: 8, name: t3('Каримова Нигора'), title: t3(''), bio: t3(''), specialties: ['terapevt'], experience_years: null, languages: ['ru'],
         photo: null, branch_ids: [2], reception: 'live_queue', booking_days: 14, consultations: [], services: [] },
     ],

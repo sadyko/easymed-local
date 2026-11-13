@@ -232,6 +232,18 @@ test('DOCTOR_PROFILE_V1: «работает врачом с» — из преж�
   assert.deepEqual(onlyWrite().public_profile, { practice_since: YEAR - 13 });
 });
 
+// SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13) — «Принимает» в карточке врача.
+test('«Принимает»: по умолчанию «Не указано»; выбрали «Взрослых и детей» — public_profile = { patients_age: all }', async () => {
+  const s = await openProfileTab('dr.karimov');
+  const sel = tags(s.card, 'select').find((x) => String(x.attrs.id || '').startsWith('dpp-age-'));
+  assert.ok(sel, 'нет поля «Принимает»');
+  assert.equal(sel.value, '', 'после обновления — «Не указано»');
+  sel.value = 'all';
+  sel.dispatchEvent({ type: 'change' });
+  await save(s.card);
+  assert.deepEqual(onlyWrite().public_profile, { patients_age: 'all' });
+});
+
 test('профиль с сервера не пришёл — пустой раздел ничего не стирает, правка одного поля шлёт только его', async () => {
   let s = await openProfileTab('dr.bare');
   type(s.bio.en, 'x');

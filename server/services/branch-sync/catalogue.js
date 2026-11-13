@@ -63,6 +63,7 @@ export const DOC_SETTINGS_COLUMNS = [
   // новые колонки пропускает (`col in local` в applyCatalogue).
   'name_uz', 'name_en', 'about_ru', 'about_uz', 'about_en',
   'website', 'telegram_bot', 'telegram_channel', 'instagram',
+  'clinic_type',   // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники, общий для клиники, как название
 ];
 
 // Таблицы справочника — В ПОРЯДКЕ ЗАВИСИМОСТЕЙ. Порядок не косметика: services
@@ -269,6 +270,7 @@ export const TABLES = [
       // 10). Главная старше шага 5 этих ключей не шлёт — приём пропускает
       // отсутствующие (present), местное остаётся.
       'is_public', 'languages', 'practice_since', 'booking_days', 'show_queue_count',
+      'patients_age',   // SYMPTEX_FIELDS_V1 (мигр. 285) — «Принимает»: филиал видит того же врача
     ],
     refs: { department_id: 'departments' },
     // ЛОГИН, и выбор здесь вынужденный, а не вкусовой. users.username —

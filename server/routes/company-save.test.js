@@ -93,6 +93,32 @@ test('/api/db: путь логотипа с «..», разметка в сайт
   } finally { t.stop(); }
 });
 
+// SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники пишется по праву «Компания»: слово
+// списка или пусто — 200; чужое слово — 400 с переведённым объяснением, а не
+// сырой CHECK базы.
+test('/api/db: тип клиники — слово списка или пусто сохраняется; чужое слово — 400 с переводом, база не тронута', async () => {
+  const { STRINGS } = await import('../../public/js/admin/i18n-strings.js');
+  const t = await setup();
+  try {
+    const save = await saver(t);
+    assert.equal(t.db.prepare('SELECT clinic_type FROM doc_settings WHERE id = 1').get().clinic_type, '', 'после обновления — не указан');
+    for (const v of ['children', 'lab', '']) {
+      const res = await save({ clinic_type: v });
+      assert.equal(res.status, 200, v + ': ' + JSON.stringify(await res.clone().json()));
+      assert.equal(t.db.prepare('SELECT clinic_type FROM doc_settings WHERE id = 1').get().clinic_type, v);
+    }
+    for (const bad of ['hospital', 'Клиника', ' lab']) {
+      const res = await save({ clinic_type: bad });
+      assert.equal(res.status, 400, JSON.stringify(bad));
+      const { error } = await res.json();
+      assert.equal(error.code, 'bad_request');
+      const e = STRINGS[error.message];
+      assert.ok(e && e.uz && e.en, 'сообщение переведено: ' + error.message);
+    }
+    assert.equal(t.db.prepare('SELECT clinic_type FROM doc_settings WHERE id = 1').get().clinic_type, '');
+  } finally { t.stop(); }
+});
+
 // CLINIC_PROFILE_V1 (ревью M3) — ПРЕЖНИЙ ЛОГОТИП НЕ ЗАТИРАЕТСЯ НЕСКОПИРОВАННЫМ.
 // Копия при запуске (services/clinic-logo-legacy.js) могла не лечь: диск,
 // права, версия без разбора нужного варианта data URL. Поэтому /api/db

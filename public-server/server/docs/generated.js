@@ -229,6 +229,7 @@ export const RESPONSES = {
         },
         "map_url": "https://yandex.uz/maps/?pt=69.2797,41.3111&z=17",
         "route_url": "https://yandex.uz/maps/?rtext=~41.3111,69.2797&rtt=auto",
+        "type": "clinic",
         "as_of": "2030-03-11T09:00:00+05:00"
       }
     },
@@ -383,7 +384,8 @@ export const RESPONSES = {
                 "name": "УЗИ в педиатрии",
                 "year": 2023
               }
-            ]
+            ],
+            "patients": "children"
           },
           {
             "id": 8,
@@ -412,7 +414,8 @@ export const RESPONSES = {
             "education": [],
             "experience": [],
             "certificates": [],
-            "training": []
+            "training": [],
+            "patients": "adults"
           }
         ],
         "as_of": "2030-03-11T09:00:00+05:00"
@@ -806,6 +809,7 @@ export const RESPONSES = {
         },
         "map_url": "https://yandex.uz/maps/?pt=69.2797,41.3111&z=17",
         "route_url": "https://yandex.uz/maps/?rtext=~41.3111,69.2797&rtt=auto",
+        "type": "clinic",
         "as_of": "2030-03-11T09:00:00+05:00"
       }
     },
@@ -960,7 +964,8 @@ export const RESPONSES = {
                 "name": "Pediatriyada UTT",
                 "year": 2023
               }
-            ]
+            ],
+            "patients": "children"
           },
           {
             "id": 8,
@@ -989,7 +994,8 @@ export const RESPONSES = {
             "education": [],
             "experience": [],
             "certificates": [],
-            "training": []
+            "training": [],
+            "patients": "adults"
           }
         ],
         "as_of": "2030-03-11T09:00:00+05:00"
@@ -1383,6 +1389,7 @@ export const RESPONSES = {
         },
         "map_url": "https://yandex.uz/maps/?pt=69.2797,41.3111&z=17",
         "route_url": "https://yandex.uz/maps/?rtext=~41.3111,69.2797&rtt=auto",
+        "type": "clinic",
         "as_of": "2030-03-11T09:00:00+05:00"
       }
     },
@@ -1537,7 +1544,8 @@ export const RESPONSES = {
                 "name": "Ultrasound in paediatrics",
                 "year": 2023
               }
-            ]
+            ],
+            "patients": "children"
           },
           {
             "id": 8,
@@ -1566,7 +1574,8 @@ export const RESPONSES = {
             "education": [],
             "experience": [],
             "certificates": [],
-            "training": []
+            "training": [],
+            "patients": "adults"
           }
         ],
         "as_of": "2030-03-11T09:00:00+05:00"

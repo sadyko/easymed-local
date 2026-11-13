@@ -52,6 +52,7 @@ import { COMPANY_COLUMNS, NAME_MAX, ABOUT_MAX, normalizeProfile, companyProblems
 import { COMPANY_PRINT, COMPANY_PARTNER } from '../../shared/clinic-profile.js';   // BRANCH_PROFILE_V1 — филиал сохраняет только своё для документов
 import { PHONE_MAX } from '../../shared/branch-profile.js';   // BRANCH_PROFILE_V1 (ревью шага 4, #3) — тот же предел, что у сервера
 import { partnerAddressProblems } from '../../shared/clinic-profile.js';   // CLINIC_API_STEP7_V1 — решение владельца 11
+import { CLINIC_TYPES, CLINIC_TYPE_LABELS, clinicTypeOf } from '../../shared/clinic-profile.js';   // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники
 import { triGroup, labeled } from './company-fields.js';
 import { logosCard } from './company-logos.js';
 import { addressCard, mapCard } from './company-address.js';
@@ -177,6 +178,7 @@ function mount(onNavigate) {
     const formCard = h('div', { class: 'card' });
     buildForm(formCard);
     refs.errs = {};   // CLINIC_PROFILE_V1 — заполняют карточки ниже
+    refs.errs.clinic_type = refs.typeErr;   // SYMPTEX_FIELDS_V1 — отказ сервера по типу клиники встаёт под полем
     const linksCard = buildLinksCard();
     // CLINIC_PROFILE_V1 — два логотипа (company-logos.js); прежний логотип
     // «Реквизитов» ушёл в квадратную плитку.
@@ -278,6 +280,17 @@ function buildForm(card) {
         hint: 'Два-три предложения: чем клиника занимается. Партнёры показывают это под названием.',
         onInput: (l, v) => { state['about_' + l] = v; renderPreview(); },
     });
+    // SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13) — тип клиники для партнёров
+    // (слова Symptex). После обновления у всех «Не указан»: партнёры получают то же,
+    // что до него, пока клиника не выберет сама. Общий для клиники — филиал не правит.
+    const typeSel = h('select', { disabled: secondary, onchange: (e) => { state.clinic_type = e.target.value; typeBox.err.set(''); renderPreview(); } },
+        h('option', { value: '' }, 'Не указан'),
+        ...CLINIC_TYPES.map((t) => h('option', { value: t }, CLINIC_TYPE_LABELS[t])));
+    const typeBox = labeled('Тип клиники', typeSel, {
+        key: 'clinic_type',
+        hint: 'Его получают сайт клиники, Symptex и партнёры. На бланках не печатается.',
+    });
+    refs.typeErr = typeBox.err;   // реестр ошибок (refs.errs) заводится после buildForm — см. ниже
     // CLINIC_PROFILE_V1 — адрес, который ПЕЧАТАЕТСЯ: вписан руками, как
     // сегодня (ответ владельца 2026-10-10, вариант B). Списки «Адреса для
     // партнёров и сайта» его не трогают — подпись говорит это прямо.
@@ -295,7 +308,7 @@ function buildForm(card) {
     const licenseInp = h('input', { type: 'text', oninput: onText('license'), disabled: secondary });   // CLINIC_PROFILE_V1 — филиал: из главного здания
     const accentInp  = h('input', { type: 'color', oninput: onText('accent_color'), disabled: secondary });
 
-    refs.controls = { names, about, addressInp, phoneInp, emailInp, licenseInp, accentInp };
+    refs.controls = { names, about, typeSel, addressInp, phoneInp, emailInp, licenseInp, accentInp };   // SYMPTEX_FIELDS_V1 — typeSel
     // CLINIC_PROFILE_V1 (ревью C1) — строка не прочиталась: сохранять нечего и
     // опасно (значения по умолчанию затёрли бы «Компанию»), «Сохранить» выключено.
     refs.errNote = h('div', { class: 'empty', role: 'alert', style: { display: 'none', margin: '0 16px 12px' } }, ERR_LOAD);
@@ -305,6 +318,7 @@ function buildForm(card) {
     card.appendChild(h('div', { class: 'cpf-body' },
         names.node,
         about.node,
+        typeBox.node,   // SYMPTEX_FIELDS_V1
         addressBox.node,
         h('div', { class: 'cpf-grid' },
             h('div', null, field('Телефон', phoneInp), h('p', { class: 'cpf-hint' },
@@ -359,6 +373,7 @@ function applyStateToControls() {
     const c = refs.controls;
     c.names.set({ ru: state.clinic_name, uz: state.name_uz, en: state.name_en });   // CLINIC_PROFILE_V1
     c.about.set({ ru: state.about_ru, uz: state.about_uz, en: state.about_en });
+    c.typeSel.value = clinicTypeOf(state.clinic_type);   // SYMPTEX_FIELDS_V1
     c.addressInp.value = state.address || '';
     c.phoneInp.value   = state.phone || '';
     c.emailInp.value   = state.email || '';
@@ -376,7 +391,7 @@ function applyStateToControls() {
 // фокус. Иначе человек видел только тост, а поле могло быть ниже края.
 const FIELD_ORDER = [
     // «Реквизиты клиники» → «Адрес для партнёров и сайта» → «Сайт и соцсети» → «Карта и маршрут»
-    'clinic_name', 'name_uz', 'name_en', 'about_ru', 'about_uz', 'about_en', 'address', 'phone', 'email', 'license',
+    'clinic_name', 'name_uz', 'name_en', 'about_ru', 'about_uz', 'about_en', 'clinic_type', 'address', 'phone', 'email', 'license',
     'country_code', 'region_code', 'district_code', 'street_ru', 'street_uz', 'street_en',
     'website', 'telegram_bot', 'telegram_channel', 'instagram', 'maps_url',
 ];

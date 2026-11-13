@@ -372,6 +372,22 @@ test('сохранение шлёт только изменённые колон
     assert.equal(docRow.lab_scope, 'building');
 });
 
+// SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13) — тип клиники: «Не указан» по
+// умолчанию (так у всех после обновления); выбор уходит одной колонкой и виден в
+// предпросмотре «Как это увидят пациенты».
+test('тип клиники: по умолчанию «Не указан»; выбрали «Детская клиника» — уходит только clinic_type, предпросмотр показывает', async () => {
+    const root = await open();
+    const sel = descendants(root).find((n) => n.tagName === 'SELECT' && textOf(n).includes('Детская клиника'));
+    assert.ok(sel, 'нет поля «Тип клиники»');
+    assert.equal(sel.value, '', 'после обновления — «Не указан»');
+    sel.value = 'children';
+    sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+    await settle(20);
+    assert.ok(descendants(root).some((n) => n.className === 'cpf-psub' && textOf(n) === 'Детская клиника'), 'предпросмотр не показал тип');
+    await save(root);
+    assert.deepEqual(lastUpdate, { clinic_type: 'children' });
+});
+
 test('нетронутое сохранение ничего не шлёт — «Нет изменений»', async () => {
     const extra = { name_uz: 'Shifo', name_en: 'Shifo Clinic', about_ru: 'о', website: 'https://shifo.uz', telegram_bot: '@shifo_clinic_bot',
         instagram: '@shifo.uz', logo_data_url: 'data:image/png;base64,TEVHQUNZ', street_ru: 'ул. Мира 1', country_code: 'UZ',
