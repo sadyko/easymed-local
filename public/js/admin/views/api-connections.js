@@ -17,7 +17,7 @@ import { h, Icon, PageHead, Tag, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { refreshClinicBrand } from '../clinic-context.js';
 import { API_HOST, KIND_INFO, normalizeSlug, slugProblem } from '../../shared/api-connections.js';
-import { rpc, shapeSettings, copyText, secretField, permChips, expiryTag, journalTable, addressBlock, docsLink } from './api-ui.js';
+import { rpc, shapeSettings, copyText, secretField, permChips, expiryTag, journalTable, addressBlock, docsLink, missingNote } from './api-ui.js';   // SYMPTEX_FIELDS_V1 — missingNote
 import { openNewConnection } from './api-connection-new.js';
 import { openConnectionCard } from './api-connection-card.js';
 
@@ -308,7 +308,7 @@ function connRow(c, s) {
           c.kind === 'site' ? [' · ', 'создано автоматически'] : null,
           where ? [' · ', h('span', { translate: 'no' }, where)] : null)))),
     h('td', null, keyCell(c, s)),
-    h('td', null, permChips(c.scopes)),
+    h('td', null, permChips(c.scopes), missingNote(c)),   // SYMPTEX_FIELDS_V1 — «Не передаётся: …»
     h('td', null, h('span', { class: 'apic-chip api' }, c.crm_source_label)),
     h('td', null, c.webhook_url
       ? [h('span', { class: 'cell-mono apic-small', translate: 'no' }, hostPath(c.webhook_url)),

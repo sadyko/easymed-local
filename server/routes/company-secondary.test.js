@@ -24,7 +24,7 @@ import { listen } from '../../control-plane/server/test-helpers/listen.js';
 import { STRINGS } from '../../public/js/admin/i18n-strings.js';
 import { BRANCH_MESSAGES } from '../../public/js/shared/branch-profile.js';   // BRANCH_PROFILE_V1
 
-const COMPANY_MAIN_ONLY = 'Название, описание, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон и почта для документов этого здания.';   // BRANCH_PROFILE_V1
+const COMPANY_MAIN_ONLY = 'Название, описание, тип клиники, логотипы, сайт и соцсети, лицензия и фирменный цвет меняются в главном здании. Здесь — адрес, телефон и почта для документов этого здания.';   // BRANCH_PROFILE_V1
 
 async function startServer({ secondary = false } = {}) {
   const db = openDb(':memory:');
@@ -57,6 +57,7 @@ test('филиал: общее для клиники не меняется — 4
       { website: 'https://other.uz' },
       { logo_square_path: 'square/1-a.png' },
       { license: 'LIC-1', address: 'ул. Филиальная, 7' },
+      { clinic_type: 'lab' },   // SYMPTEX_FIELDS_V1 (ревью L3) — тип клиники тоже общий
     ]) {
       const res = await save(t.base, cookie, values);
       assert.equal(res.status, 409, JSON.stringify(values));
@@ -65,8 +66,8 @@ test('филиал: общее для клиники не меняется — 4
       assert.equal(error.message, COMPANY_MAIN_ONLY);
     }
     const r = row(t.db);
-    assert.deepEqual([r.clinic_name, r.name_uz, r.website, r.logo_square_path, r.license, r.address],
-      ['Клиника Луч', 'Luch klinikasi', '', '', '', '']);
+    assert.deepEqual([r.clinic_name, r.name_uz, r.website, r.logo_square_path, r.license, r.address, r.clinic_type],
+      ['Клиника Луч', 'Luch klinikasi', '', '', '', '', '']);
   } finally { t.stop(); }
 });
 

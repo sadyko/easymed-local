@@ -29,6 +29,7 @@ export function docsSnapshot(at = NOW) {
       street: t3('ул. Амира Темура, 1', 'Amir Temur ko‘chasi, 1', '1 Amir Temur Street'),
       phone: '+998712000000', site: 'https://shifo.example', telegram_bot: '@shifo_example_bot', telegram_channel: '@shifo_example',
       instagram: '@shifo.example', logo: { square: LOGO, portrait: null }, map_url: MAP, route_url: ROUTE,
+      type: 'clinic',   // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники
     },
     branches: [
       { id: 1, name: t3('Главный корпус', 'Bosh bino', 'Main building'), city: 'tashkent-city', district: 'yunusobod',
@@ -46,10 +47,18 @@ export function docsSnapshot(at = NOW) {
         specialties: ['pediatr'], experience_years: 12, languages: ['ru', 'uz'], photo: PHOTO, branch_ids: [1], reception: 'booking', booking_days: 14,
         // Только первичный приём: на нём страж показывает 400 consultation / not_offered для repeat.
         consultations: [{ type: 'initial', name: t3('Первичный приём', 'Birlamchi qabul', 'First visit'), price: 150000, minutes: 30 }],
-        services: [{ service_id: 303, price: 80000 }] },
+        services: [{ service_id: 303, price: 80000 }],
+        // SYMPTEX_FIELDS_V1 — ссылки врача и списки профиля
+        instagram: 'https://instagram.com/dr.karimov.example', telegram: 'https://t.me/dr_karimov_example',
+        education: [{ name: t3('Ташкентский педиатрический медицинский институт', 'Toshkent pediatriya tibbiyot instituti', 'Tashkent Paediatric Medical Institute'),
+          title: 'Педиатрия', year_from: 2006, year_to: 2012 }],
+        experience: [{ name: t3('Клиника «Шифо»', '«Shifo» klinikasi', 'Shifo Clinic'), title: 'Педиатр', year_from: 2012, year_to: null }],
+        certificates: [{ name: t3('Неонатология', 'Neonatologiya', 'Neonatology'), year: 2020 }],
+        training: [{ name: t3('УЗИ в педиатрии', 'Pediatriyada UTT', 'Ultrasound in paediatrics'), year: 2023 }],
+        patients: 'children' },   // SYMPTEX_FIELDS_V1 (мигр. 285) — «Принимает»
       { id: 8, name: t3('Юсупова Нигора Алишеровна', 'Yusupova Nigora Alisherovna', 'Nigora Yusupova'), title: t3('', '', ''),
         bio: t3('Терапевт.', 'Terapevt.', 'General practitioner.'), specialties: ['terapevt'], experience_years: 8, languages: ['ru', 'uz', 'en'],
-        photo: null, branch_ids: [2], reception: 'live_queue', booking_days: 14, consultations: [], services: [] },
+        photo: null, branch_ids: [2], reception: 'live_queue', booking_days: 14, consultations: [], services: [], patients: 'adults' },
     ],
     services: [
       { id: 301, group: 'lab', name: t3('Общий анализ крови', 'Umumiy qon tahlili', 'Complete blood count'), price: 45000, minutes: 10 },

@@ -57,6 +57,28 @@ test('врач сохраняет свой профиль — ВСЕ поля б
   for (const k of PROFILE_KEYS) assert.ok(cols.has(k), 'нет колонки users.' + k);
 });
 
+// SYMPTEX_FIELDS_V1 (мигр. 285) — «Принимает»: только слова списка или пусто; отказ —
+// по-русски, с полем (экран ставит его под выбором); перевод есть.
+test('«Принимает»: adults / children / all / пусто хранятся; чужое слово — отказ с полем, ничего не записано', () => {
+  const db = seed();
+  for (const v of ['children', 'all', 'adults', '']) {
+    updateMyDoctorProfile(db, { p: { patients_age: v } }, doc);
+    assert.equal(db.prepare('SELECT patients_age FROM users WHERE id = 2').get().patients_age, v);
+  }
+  updateMyDoctorProfile(db, { p: { patients_age: ' children ' } }, doc);
+  assert.equal(db.prepare('SELECT patients_age FROM users WHERE id = 2').get().patients_age, 'children', 'пробелы по краям срезаны');
+  for (const bad of ['teens', 5, ['children']]) {
+    let err = null;
+    try { updateMyDoctorProfile(db, { p: { patients_age: bad, bio_ru: 'не должно записаться' } }, doc); } catch (e) { err = e; }
+    assert.ok(err && err.status === 400, 'нет отказа для ' + JSON.stringify(bad));
+    assert.equal(err.message, DOCTOR_PUBLIC_MESSAGES.patientsAge);
+    assert.equal(err.field, 'patients_age');
+  }
+  const row = db.prepare('SELECT patients_age, bio_ru FROM users WHERE id = 2').get();
+  assert.deepEqual([row.patients_age, row.bio_ru ?? ''], ['children', ''], 'отказ ничего не записал');
+  assert.ok(STRINGS[DOCTOR_PUBLIC_MESSAGES.patientsAge], 'отказ не переведён');
+});
+
 test('пишет в колонку и только в строку самого врача', () => {
   const db = seed();
   const out = updateMyDoctorProfile(db, { p: { bio_ru: '  Терапевт  ', education_entries: [{ ru: 'ТашМИ', year: '2001' }] } }, doc);

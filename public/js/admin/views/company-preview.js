@@ -12,6 +12,7 @@
 import { h, Icon } from '../ui.js';
 import {
     composeAddress, normalizeProfile, websiteProblem, handleProblem, mapsProblem, routeUrl, telHref,
+    clinicTypeOf,   // SYMPTEX_FIELDS_V1 (мигр. 285)
 } from '../../shared/clinic-profile.js';
 import { logoSrc } from './company-logos.js';
 
@@ -22,6 +23,12 @@ const WORDS = {
     ru: { call: 'Позвонить', route: 'Маршрут', site: 'Сайт', channel: 'канал' },
     uz: { call: 'Qo‘ng‘iroq qilish', route: 'Yo‘nalish', site: 'Sayt', channel: 'kanal' },
     en: { call: 'Call', route: 'Route', site: 'Website', channel: 'channel' },
+};
+// SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники на языке предпросмотра (так его покажет партнёр).
+const TYPE_WORDS = {
+    ru: { clinic: 'Клиника', diagnostics: 'Диагностический центр', lab: 'Лаборатория', children: 'Детская клиника' },
+    uz: { clinic: 'Klinika', diagnostics: 'Diagnostika markazi', lab: 'Laboratoriya', children: 'Bolalar klinikasi' },
+    en: { clinic: 'Clinic', diagnostics: 'Diagnostic centre', lab: 'Laboratory', children: 'Children’s clinic' },
 };
 const text = (s) => document.createTextNode(String(s == null ? '' : s));
 
@@ -45,6 +52,8 @@ export function patientPreview(state, { lang = 'ru', parts = {}, logo = '' } = {
     const name = (lang === 'ru' ? v.clinic_name : v['name_' + lang]) || v.clinic_name || '';
     const about = v['about_' + lang] || '';
     const address = composeAddress({ ...parts, street: { ru: v.street_ru, uz: v.street_uz, en: v.street_en } }, lang);
+    const kind = clinicTypeOf(v.clinic_type);   // SYMPTEX_FIELDS_V1
+    const kindLabel = kind ? (TYPE_WORDS[lang] || TYPE_WORDS.ru)[kind] : '';
 
     const mark = logo
         ? h('img', { class: 'cpf-pmark', src: logo, alt: '' })
@@ -74,6 +83,7 @@ export function patientPreview(state, { lang = 'ru', parts = {}, logo = '' } = {
         h('div', { class: 'cpf-preview-head' }, mark,
             h('div', { class: 'cpf-pname-box' },
                 h('b', { class: 'cpf-pname' }, text(name || '—')),
+                kindLabel ? h('span', { class: 'cpf-psub' }, text(kindLabel)) : null,   // SYMPTEX_FIELDS_V1 — тип клиники
                 address ? h('span', { class: 'cpf-psub' }, text(address)) : null)),
         aboutNode,
         btns.length ? h('div', { class: 'cpf-pbtns' }, ...btns) : null,

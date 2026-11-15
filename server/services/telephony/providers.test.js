@@ -110,9 +110,11 @@ test('poll: включённый onlinePBX опрашивается своим �
   assert.equal(row.last_error, '');
   assert.equal(row.last_call_at, '2026-09-14T08:01:40Z');
 
-  // Второй тик: курсор — от последнего звонка ЭТОГО провайдера минус перекрытие; дублей нет.
+  // Второй тик: курсор — сохранённый у ЭТОГО подключения (PBX_END_CURSOR_V1: по
+  // окончанию звонков, только вперёд; звонки ответа старше окна его не отматывают); дублей нет.
   await pollOnce(db, { hasModule: () => true, pbxHistoryImpl });
-  assert.equal(since[1], 1789372900 - 120);
+  assert.equal(since[1].endFrom, since[0].endFrom);
+  assert.equal(since[1].endTo, null);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM calls').get().n, 2);
 });
 

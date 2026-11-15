@@ -104,9 +104,20 @@ export function writeRoutes(r, ctx) {
     return s;
   };
   const created = (res, out, row) => res.status(out.created ? 201 : 200).json(publicRequest(row, ctx.offsetMin));
+  // SYMPTEX_FIELDS_V1 (сверка контракта с Symptex, 2026-11-12) — повтор с тем же
+  // external_id ищется ДО проверок снимка: партнёр повторяет запрос, ответ на
+  // который потерял (тайм-аут), а клиника тем временем скрыла врача, услугу или
+  // вид приёма — раньше повтор получал 400/404, и партнёр считал запись
+  // непринятой, хотя она уже в очереди клиники. Тот же номер — та же заявка (200).
+  const repeated = (req, b) => {
+    const ext = str(b.external_id);
+    return ext && EXTERNAL_RE.test(ext) ? requestByExternal(ctx.db, req.clinic.clinic_id, req.conn.id, ext) : null;
+  };
 
   r.post('/requests', scope('requests'), handle((req, res) => {
     const b = bodyOf(req);
+    const again = repeated(req, b);
+    if (again) return res.status(200).json(publicRequest(again, ctx.offsetMin));
     const s = snap(req);
     const p = b.patient && typeof b.patient === 'object' ? b.patient : b;
     const patient = patientOf({ name: p.name, phone: p.phone, comment: p.comment ?? b.comment }, b.patient ? 'patient.' : '');
@@ -119,6 +130,8 @@ export function writeRoutes(r, ctx) {
   r.post('/appointments', scope('appointments'), handle((req, res) => {
     const now = ctx.now();
     const b = bodyOf(req);
+    const again = repeated(req, b);
+    if (again) return res.status(200).json(publicRequest(again, ctx.offsetMin));
     const s = snap(req);
     const c = common(b, s);
     if (!c.doctorId) throw field('doctor_id', 'required');
@@ -171,7 +184,16 @@ export function writeRoutes(r, ctx) {
   r.get('/requests/:id', scope('requests', 'appointments'), handle((req, res) => res.json(publicRequest(own(req), ctx.offsetMin))));
 
   r.delete('/appointments/:id', scope('cancel'), handle((req, res) => {
-    const out = partnerCancel(ctx.db, own(req, 'appointment'), ctx.now());
+    // SYMPTEX_FIELDS_V1 (сверка контракта с Symptex, 2026-11-12) — звонок, на
+    // который клиника уже записала пациента (type request, booked), отменяется
+    // так же, как запись: клиника получает appointment.cancel (её приём очереди
+    // отменяет визит любой заявки). Было 404 not_found — Symptex считал запись
+    // «исчезнувшей у клиники», а визит оставался в календаре. Звонок, ещё не
+    // ставший записью, — 409 not_cancellable с причиной callback_not_booked и
+    // своим текстом (ревью M7: отменять у клиники нечего, клиника перезвонит).
+    const row = own(req);
+    if (row.kind === 'request' && !['booked', 'cancelled'].includes(row.status)) return sendError(req, res, 'not_cancellable', { reason: 'callback_not_booked' });
+    const out = partnerCancel(ctx.db, row, ctx.now());
     return out.error ? sendError(req, res, out.error) : res.json(publicRequest(out.row, ctx.offsetMin));
   }));
 

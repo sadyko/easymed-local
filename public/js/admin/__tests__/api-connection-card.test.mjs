@@ -304,3 +304,21 @@ test('отказ включения у роли с «Компания: Изме�
     }
   } finally { perms.setFullAccess('Admin'); }
 });
+
+// SYMPTEX_FIELDS_V1 (владелец 2026-11-13; ревью L5) — карточка включённого подключения говорит,
+// каких данных клиники оно не получает; где выдать доступ — только администратору (остальным
+// вкладка «Доступ» только для чтения). Выключенное — без строки.
+test('карточка: «Не передаются: Филиалы, Пакеты услуг»; администратору — «Выдать доступ — на вкладке «Доступ».»; выключенное — без строки', async () => {
+  reset();
+  const { m } = open();
+  const note = byAttr(m, 'data-apic-miss', '')[0];
+  assert.ok(note, 'нет строки «Не передаются»');
+  assert.ok(textOf(note).endsWith('>Не передаются: Филиалы, Пакеты услуг. Выдать доступ — на вкладке «Доступ».'), textOf(note));   // перед текстом — значок
+  reset();
+  const viewer = open({ can: { view: true, edit: true, admin: false } });
+  const vnote = byAttr(viewer.m, 'data-apic-miss', '')[0];
+  assert.ok(vnote && textOf(vnote).endsWith('>Не передаются: Филиалы, Пакеты услуг'), 'не администратору — без «Выдать»: ' + (vnote && textOf(vnote)));
+  reset();
+  const off = open({}, { ...P, active: false });
+  assert.equal(byAttr(off.m, 'data-apic-miss', '').length, 0);
+});

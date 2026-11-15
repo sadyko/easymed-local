@@ -242,6 +242,21 @@ test('CLINIC_API_FIX_V1: изменили только биографию RU —
     assert.ok(!('conditions' in rpcCalls[0]), 'болезни ушли, хотя их не меняли');
 });
 
+// SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13) — «Принимает»: «Не указано» по
+// умолчанию (как у всех после обновления), выбор уходит в профиль только своим ключом.
+test('«Мой профиль»: «Принимает» — по умолчанию «Не указано»; выбрали «Детей» — в p только patients_age', async () => {
+    const s = await openProfile();
+    const sel = tagsOf(s.container, 'select').find((x) => x.attrs['aria-label'] === 'Принимает');
+    assert.ok(sel, 'нет поля «Принимает»');
+    assert.equal(sel.value, '', 'после обновления — «Не указано»');
+    await s.save();
+    assert.equal(rpcCalls.length, 0, '«Не указано» без правки — не изменение');
+    sel.value = 'children';
+    await s.save();
+    assert.equal(rpcCalls.length, 1, 'профиль не ушёл на сервер');
+    assert.deepEqual(rpcCalls[0].p, { patients_age: 'children' });
+});
+
 test('CLINIC_API_FIX_V1: ничего не меняли — сервер не зовётся, экран говорит «Нет изменений»', async () => {
     const s = await openProfile();
     await s.save();
@@ -617,4 +632,20 @@ test('DOCTOR_PROFILE_V1: «Мой профиль» — отказ сервера
     assert.ok(s.container.textContent.includes(MSG), 'отказа сервера нет под полем Telegram');
     assert.equal(tg.attrs['aria-invalid'], 'true');
     assert.ok(!toastText().includes(MSG), 'отказ ушёл тостом: ' + toastText());
+});
+
+// SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M10) — врач видит, что его Instagram и Telegram уходят пациентам партнёров, а телефон — нет.
+test('«Мой профиль»: под ссылками — что их видят пациенты на сайтах партнёров, а телефон партнёрам не передаётся', async () => {
+    const s = await openProfile();
+    const { DOCTOR_PUBLIC_MESSAGES } = await import('../../shared/doctor-public.js');
+    assert.ok(s.container.textContent.includes(DOCTOR_PUBLIC_MESSAGES.socialsPublic), 'нет пометки о показе ссылок');
+});
+
+// SYMPTEX_FIELDS_V1 (ревью L3) — сохранённое «Принимает» показано при открытии; без правки не уходит.
+test('«Мой профиль»: сохранённое «Детей» показано в поле; без правки — «Нет изменений»', async () => {
+    const s = await openProfile({ user: { ...DOC_ROW, patients_age: 'children' } });
+    const sel = tagsOf(s.container, 'select').find((x) => x.attrs['aria-label'] === 'Принимает');
+    assert.equal(sel.value, 'children');
+    await s.save();
+    assert.equal(rpcCalls.length, 0, 'без правки ушло: ' + JSON.stringify(rpcCalls[0]));
 });

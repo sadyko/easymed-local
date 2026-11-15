@@ -16,6 +16,7 @@ import { isRouteAllowed, settingsTileAllows } from '../permissions.js';   // CLI
 import {
   KINDS, KIND_INFO, READ_SCOPES, WRITE_SCOPES, SCOPE_INFO, EVENTS, EVENT_INFO, RATE_LIMITS, KEY_TTLS, KEY_TTL_LABEL,
   NAME_MAX, CONTACT_MAX, keyExpiryState, apiDocsUrl,
+  missingReadScopes,   // SYMPTEX_FIELDS_V1 — «Не передаётся: …»
 } from '../../shared/api-connections.js';
 
 export async function rpc(name, args = {}) {
@@ -165,6 +166,22 @@ export function permChips(scopes) {
   for (const k of write) chips.push(h('span', { class: 'apic-chip w' }, SCOPE_INFO[k].label));
   if (!write.length) chips.push(h('span', { class: 'apic-chip ro' }, 'Только просмотр'));
   return h('div', { class: 'apic-chips' }, ...chips);
+}
+/**
+ * SYMPTEX_FIELDS_V1 (владелец 2026-11-13) — «Не передаётся: Филиалы, …»: какие данные
+ * клиники включённое подключение не получает с выданным доступом. Выключенное не
+ * получает ничего — строки нет. inCard — в карточке подключения, с подсказкой, где включить.
+ */
+export function missingNote(c, { inCard = false, canGrant = false } = {}) {
+  if (!c || !c.active) return null;
+  const miss = missingReadScopes(c.scopes);
+  if (!miss.length) return null;
+  const text = trf('Не передаются: {list}', { list: miss.map((k) => tr(SCOPE_INFO[k].label)).join(', ') });
+  if (!inCard) return h('span', { class: 'apic-miss', 'data-apic-miss': '' }, text);
+  // ревью L5 — где выдать, говорится только тому, кто может выдать (вкладку «Доступ»
+  // правит администратор; остальным она только для чтения).
+  return h('p', { class: 'apic-note warn', 'data-apic-miss': '' }, Icon('Warning', { size: 16 }),
+    h('span', null, text, canGrant ? ['. ', tr('Выдать доступ — на вкладке «Доступ».')] : null));
 }
 /** Метка срока ключа: за 14 дней — «истекает», после — «истёк». */
 export function expiryTag(c, now = Date.now()) {

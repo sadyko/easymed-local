@@ -22,10 +22,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { routeUrl } from '../../../public/js/shared/clinic-profile.js';
+import { routeUrl, clinicTypeOf } from '../../../public/js/shared/clinic-profile.js';   // SYMPTEX_FIELDS_V1 — clinicTypeOf
 import { branchShownToPartners, overlayOwnBuilding } from '../../../public/js/shared/branch-profile.js';
-import { doctorPublicState, readLanguages, shownPracticeSince, experienceYears, BOOKING_DAYS, DEFAULT_BOOKING_DAYS, PUBLIC_SLOT_MIN }
-  from '../../../public/js/shared/doctor-public.js';
+import { doctorPublicState, readLanguages, shownPracticeSince, experienceYears, BOOKING_DAYS, DEFAULT_BOOKING_DAYS, PUBLIC_SLOT_MIN, doctorSocialLink,
+  patientsAgeOf } from '../../../public/js/shared/doctor-public.js';   // SYMPTEX_FIELDS_V1 — patientsAgeOf
 import { servicePublicState, serviceNames, apiGroupOf } from '../../../public/js/shared/service-public.js';
 import { isPackageRow, packageCalc, packageItems, packageTerms, packagePublicState } from '../../../public/js/shared/package-price.js';
 import { readSlug } from './connections.js';
@@ -89,6 +89,8 @@ function clinicPart(db, storageDir, media) {
     telegram_bot: text(d.telegram_bot), telegram_channel: text(d.telegram_channel), instagram: text(d.instagram),
     logo: { square: mediaOf(logoFile(storageDir, d.logo_square_path), media), portrait: mediaOf(logoFile(storageDir, d.logo_portrait_path), media) },
     map_url: text(d.maps_url), route_url: routeUrl(d.maps_url),
+    // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники: clinic / diagnostics / lab / children; не указан — ""
+    type: clinicTypeOf(d.clinic_type),
   };
 }
 
@@ -122,6 +124,44 @@ function branchesPart(db) {
   });
 }
 
+// SYMPTEX_FIELDS_V1 — ссылки врача и списки его профиля. Колонки миграции 159
+// (DOCTOR_PUBLIC_PROFILE_V1) заводились «for building a proper API for
+// partners», карточка врача их заполняет, а снимок до сих пор их не брал:
+// Instagram и Telegram врача, образование и опыт работы не доходили ни до
+// одного партнёра (Symptex: проверка healpoint 2026-11-12).
+//   • ссылка — только на свою сеть, https, в разобранном виде (ревью M2:
+//     shared/doctor-public.js doctorSocialLink); иное — пустая строка;
+//   • запись списка — название на трёх языках, год (годы «с» и «по» у
+//     образования и опыта, одна строка «должность / квалификация» у них же);
+//     запись без названия ни на одном языке не уходит; год — целый 1900..2100,
+//     иначе null; не больше 50 записей (MAX_ENTRIES карточки); название — до 300
+//     знаков на язык, title — до 200 (снимок не дальше 4 МБ сервера).
+export const PROFILE_LIST_MAX = 50;
+export const PROFILE_NAME_MAX = 300;
+export const PROFILE_TITLE_MAX = 200;
+const YEAR_MIN = 1900;
+const YEAR_MAX = 2100;
+const capped = (v, max) => text(v).slice(0, max);
+const yearOf = (v) => { const n = Number(v); return v !== null && v !== '' && Number.isInteger(n) && n >= YEAR_MIN && n <= YEAR_MAX ? n : null; };
+/** users.*_entries → записи для партнёров; range — образование и опыт (годы «с»/«по» и строка title). */
+export function profileEntries(raw, { range = false } = {}) {
+  let list = [];
+  try { list = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { list = []; }
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const e of list) {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) continue;
+    // ревью M3: обещанный предел — на каждый язык, до сборки трёх языков
+    const name = tri(capped(e.ru, PROFILE_NAME_MAX), capped(e.uz, PROFILE_NAME_MAX), capped(e.en, PROFILE_NAME_MAX));
+    if (!name.ru && !name.uz && !name.en) continue;
+    out.push(range
+      ? { name, title: capped(e.title, PROFILE_TITLE_MAX), year_from: yearOf(e.year_from != null ? e.year_from : e.year), year_to: yearOf(e.year_to) }
+      : { name, year: yearOf(e.year) });
+    if (out.length >= PROFILE_LIST_MAX) break;
+  }
+  return out;
+}
+
 /** Показанные партнёрам врачи (решение шага 5), как их читает /doctors. */
 export function publicDoctors(db) {
   const branches = new Map(db.prepare('SELECT id, active, show_public FROM branches').all().map((b) => [Number(b.id), b]));
@@ -148,6 +188,12 @@ function doctorsPart(db, storageDir, media, now) {
         type: c.api_kind || '', name: c.name, price: Math.round(Number(c.price) || 0), minutes: c.minutes,
       })),
       services: doctorConsultServices(db, u.id).filter((s) => s.online).map((s) => ({ service_id: s.service_id, price: Math.round(Number(s.price) || 0) })),
+      // SYMPTEX_FIELDS_V1 — ссылки: shared/doctor-public.js doctorSocialLink; списки: profileEntries выше
+      instagram: doctorSocialLink('instagram', u.instagram_url), telegram: doctorSocialLink('telegram', u.telegram_url),
+      education: profileEntries(u.education_entries, { range: true }), experience: profileEntries(u.experience_entries, { range: true }),
+      certificates: profileEntries(u.certifications_entries), training: profileEntries(u.prof_dev_entries),
+      // SYMPTEX_FIELDS_V1 (мигр. 285) — кого принимает: adults / children / all; не указано — ""
+      patients: patientsAgeOf(u.patients_age),
     };
   });
 }

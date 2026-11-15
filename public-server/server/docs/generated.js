@@ -229,6 +229,7 @@ export const RESPONSES = {
         },
         "map_url": "https://yandex.uz/maps/?pt=69.2797,41.3111&z=17",
         "route_url": "https://yandex.uz/maps/?rtext=~41.3111,69.2797&rtt=auto",
+        "type": "clinic",
         "as_of": "2030-03-11T09:00:00+05:00"
       }
     },
@@ -353,7 +354,38 @@ export const RESPONSES = {
                 "service_id": 303,
                 "price": 80000
               }
-            ]
+            ],
+            "instagram": "https://instagram.com/dr.karimov.example",
+            "telegram": "https://t.me/dr_karimov_example",
+            "education": [
+              {
+                "name": "Ташкентский педиатрический медицинский институт",
+                "title": "Педиатрия",
+                "year_from": 2006,
+                "year_to": 2012
+              }
+            ],
+            "experience": [
+              {
+                "name": "Клиника «Шифо»",
+                "title": "Педиатр",
+                "year_from": 2012,
+                "year_to": null
+              }
+            ],
+            "certificates": [
+              {
+                "name": "Неонатология",
+                "year": 2020
+              }
+            ],
+            "training": [
+              {
+                "name": "УЗИ в педиатрии",
+                "year": 2023
+              }
+            ],
+            "patients": "children"
           },
           {
             "id": 8,
@@ -376,7 +408,14 @@ export const RESPONSES = {
             "reception": "live_queue",
             "booking_days": 14,
             "consultations": [],
-            "services": []
+            "services": [],
+            "instagram": "",
+            "telegram": "",
+            "education": [],
+            "experience": [],
+            "certificates": [],
+            "training": [],
+            "patients": "adults"
           }
         ],
         "as_of": "2030-03-11T09:00:00+05:00"
@@ -770,6 +809,7 @@ export const RESPONSES = {
         },
         "map_url": "https://yandex.uz/maps/?pt=69.2797,41.3111&z=17",
         "route_url": "https://yandex.uz/maps/?rtext=~41.3111,69.2797&rtt=auto",
+        "type": "clinic",
         "as_of": "2030-03-11T09:00:00+05:00"
       }
     },
@@ -894,7 +934,38 @@ export const RESPONSES = {
                 "service_id": 303,
                 "price": 80000
               }
-            ]
+            ],
+            "instagram": "https://instagram.com/dr.karimov.example",
+            "telegram": "https://t.me/dr_karimov_example",
+            "education": [
+              {
+                "name": "Toshkent pediatriya tibbiyot instituti",
+                "title": "Педиатрия",
+                "year_from": 2006,
+                "year_to": 2012
+              }
+            ],
+            "experience": [
+              {
+                "name": "«Shifo» klinikasi",
+                "title": "Педиатр",
+                "year_from": 2012,
+                "year_to": null
+              }
+            ],
+            "certificates": [
+              {
+                "name": "Neonatologiya",
+                "year": 2020
+              }
+            ],
+            "training": [
+              {
+                "name": "Pediatriyada UTT",
+                "year": 2023
+              }
+            ],
+            "patients": "children"
           },
           {
             "id": 8,
@@ -917,7 +988,14 @@ export const RESPONSES = {
             "reception": "live_queue",
             "booking_days": 14,
             "consultations": [],
-            "services": []
+            "services": [],
+            "instagram": "",
+            "telegram": "",
+            "education": [],
+            "experience": [],
+            "certificates": [],
+            "training": [],
+            "patients": "adults"
           }
         ],
         "as_of": "2030-03-11T09:00:00+05:00"
@@ -1311,6 +1389,7 @@ export const RESPONSES = {
         },
         "map_url": "https://yandex.uz/maps/?pt=69.2797,41.3111&z=17",
         "route_url": "https://yandex.uz/maps/?rtext=~41.3111,69.2797&rtt=auto",
+        "type": "clinic",
         "as_of": "2030-03-11T09:00:00+05:00"
       }
     },
@@ -1435,7 +1514,38 @@ export const RESPONSES = {
                 "service_id": 303,
                 "price": 80000
               }
-            ]
+            ],
+            "instagram": "https://instagram.com/dr.karimov.example",
+            "telegram": "https://t.me/dr_karimov_example",
+            "education": [
+              {
+                "name": "Tashkent Paediatric Medical Institute",
+                "title": "Педиатрия",
+                "year_from": 2006,
+                "year_to": 2012
+              }
+            ],
+            "experience": [
+              {
+                "name": "Shifo Clinic",
+                "title": "Педиатр",
+                "year_from": 2012,
+                "year_to": null
+              }
+            ],
+            "certificates": [
+              {
+                "name": "Neonatology",
+                "year": 2020
+              }
+            ],
+            "training": [
+              {
+                "name": "Ultrasound in paediatrics",
+                "year": 2023
+              }
+            ],
+            "patients": "children"
           },
           {
             "id": 8,
@@ -1458,7 +1568,14 @@ export const RESPONSES = {
             "reception": "live_queue",
             "booking_days": 14,
             "consultations": [],
-            "services": []
+            "services": [],
+            "instagram": "",
+            "telegram": "",
+            "education": [],
+            "experience": [],
+            "certificates": [],
+            "training": [],
+            "patients": "adults"
           }
         ],
         "as_of": "2030-03-11T09:00:00+05:00"

@@ -604,7 +604,9 @@ export const REGISTRY = {
                 // партнёров, языки приёма, «работает с», срок записи для
                 // партнёров, счётчик очереди. Читают карточка сотрудника и «Мой
                 // профиль»; пишут routes/users.js и update_my_doctor_profile.
-                'is_public','languages','practice_since','booking_days','show_queue_count'],
+                'is_public','languages','practice_since','booking_days','show_queue_count',
+                // SYMPTEX_FIELDS_V1 (мигр. 285) — «Принимает» (взрослых / детей / всех); пишут те же двое.
+                'patients_age'],
                 // V3120_FIX (F1) — ДЕНЬГИ СОТРУДНИКА ВИДЯТ НЕ ВСЕ. Раньше любой
                 // вошедший одним запросом к users забирал оклад, процент и
                 // ставки каждого сотрудника. Теперь их видят администратор,
@@ -694,10 +696,10 @@ export const REGISTRY = {
   // предпросмотр «Компании». Пишет тот же ключ «Компания».
   doc_settings: {
     read:  { roles: ALL_STAFF, columns: ['id','clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope','lab_round_analyzer','updated_at',
-                                         'name_uz','name_en','about_ru','about_uz','about_en','country_code','region_code','district_code','street_ru','street_uz','street_en','website','telegram_bot','telegram_channel','instagram','maps_url','logo_square_path','logo_portrait_path'] },   // CLINIC_PROFILE_V1 (mig 240) — профиль клиники
+                                         'name_uz','name_en','about_ru','about_uz','about_en','country_code','region_code','district_code','street_ru','street_uz','street_en','website','telegram_bot','telegram_channel','instagram','maps_url','logo_square_path','logo_portrait_path','clinic_type'] },   // CLINIC_PROFILE_V1 (mig 240) — профиль клиники; SYMPTEX_FIELDS_V1 (mig 285) — тип клиники
     write: { grant:'settings.company', insert: { roles: [] },
              update: { roles: ['admin'], columns: ['clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope','lab_round_analyzer',
-                                                   'name_uz','name_en','about_ru','about_uz','about_en','country_code','region_code','district_code','street_ru','street_uz','street_en','website','telegram_bot','telegram_channel','instagram','maps_url','logo_square_path','logo_portrait_path'] },   // CLINIC_PROFILE_V1 (mig 240) — профиль клиники
+                                                   'name_uz','name_en','about_ru','about_uz','about_en','country_code','region_code','district_code','street_ru','street_uz','street_en','website','telegram_bot','telegram_channel','instagram','maps_url','logo_square_path','logo_portrait_path','clinic_type'] },   // CLINIC_PROFILE_V1 (mig 240) — профиль клиники; SYMPTEX_FIELDS_V1 (mig 285) — тип клиники
              delete: { roles: [] } },
     filters: ['id'],
     embed:   {},

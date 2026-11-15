@@ -30,6 +30,26 @@ test('онлайн-запись: 201 pending без hold_until; пациент �
   assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 1);
 });
 
+// SYMPTEX_FIELDS_V1 — повтор потерянного ответа после того, как клиника скрыла врача
+// и время прошло: та же заявка (200), а не 404/400 — партнёр не считает её потерянной.
+test('повтор external_id — та же заявка (200), даже если врача уже нет в снимке и время прошло', async (t) => {
+  const s = await partnerStand();
+  t.after(s.close);
+  const first = await json(await s.send('POST', '/shifo/v1/appointments', appt({ external_id: 'sx-1-abcdef01' })));
+  const cb = await json(await s.send('POST', '/shifo/v1/requests', { name: 'Имя', phone: '+998901234567', doctor_id: 7, external_id: 'sx-2-abcdef02' }));
+  assert.deepEqual([first.status, cb.status], [201, 201]);
+  const snap = JSON.parse(s.db.prepare('SELECT snapshot FROM clinics').get().snapshot);
+  snap.doctors = snap.doctors.filter((d) => d.id !== 7);
+  s.db.prepare('UPDATE clinics SET snapshot = ?').run(JSON.stringify(snap));
+  s.setClock(NOW + 2 * 86400000);
+  const again = await json(await s.send('POST', '/shifo/v1/appointments', appt({ external_id: 'sx-1-abcdef01' })));
+  assert.deepEqual([again.status, again.body.request_id], [200, first.body.request_id]);
+  const cbAgain = await json(await s.send('POST', '/shifo/v1/requests', { name: 'Имя', phone: '+998901234567', doctor_id: 7, external_id: 'sx-2-abcdef02' }));
+  assert.deepEqual([cbAgain.status, cbAgain.body.request_id], [200, cb.body.request_id]);
+  const fresh = await json(await s.send('POST', '/shifo/v1/appointments', appt({ external_id: 'sx-3-abcdef03' })));
+  assert.deepEqual([fresh.status, fresh.body.error.field], [404, 'doctor_id'], 'новая — по-прежнему проверяется');
+});
+
 test('время: занятое в присланном — 409; своё ждущее — 409; рядом свободное — 201; прошедшее, вне сетки, вне срока записи — 400', async (t) => {
   const s = await partnerStand();
   t.after(s.close);
@@ -104,6 +124,27 @@ test('статус, отмена, другое время — только св�
   assert.deepEqual(s.db.prepare('SELECT type FROM inbox ORDER BY cursor').all().map((r) => r.type), ['offer.accept', 'appointment.cancel']);
   const no = await json(await s.send('DELETE', '/shifo/v1/appointments/' + id + 'x'));
   assert.equal(no.status, 404);
+});
+
+// SYMPTEX_FIELDS_V1 — сверка контракта с Symptex 2026-11-12: отмена звонка, на
+// который клиника записала, отвечала 404 — Symptex считал запись пропавшей у
+// клиники, визит оставался в календаре.
+test('отмена обратного звонка: до записи — 409 not_cancellable; записанный клиникой — как запись (booked + cancel_requested)', async (t) => {
+  const s = await partnerStand();
+  t.after(s.close);
+  const id = (await json(await s.send('POST', '/shifo/v1/requests', { name: 'ИМЯ_ПАЦИЕНТА', phone: '+998901234567', doctor_id: 7, external_id: 'cb-9' }))).body.request_id;
+  const early = await json(await s.send('DELETE', '/shifo/v1/appointments/' + id));
+  assert.deepEqual([early.status, early.body.error.code, early.body.error.reason], [409, 'not_cancellable', 'callback_not_booked']);
+  assert.match(early.body.error.message, /^Это заявка «перезвоните», а не запись/, 'ревью M7: свой текст — отменять в клинике нечего');
+  assert.match((await json(await s.send('DELETE', '/shifo/v1/appointments/' + id + '?lang=en'))).body.error.message, /^This is a call-back request, not a booking/);
+  applyEvents(s.db, s.clinicId, [{ seq: 1, event: 'appointment.created', status: 'booked', webhook_url: '', signature: '',
+    body: JSON.stringify({ event_id: 'ev_1', event: 'appointment.created', request_id: id, external_id: 'cb-9', status: 'booked', start: '2030-03-12T09:00:00+05:00', occurred_at: isoOf(NOW) }) }], NOW);
+  assert.equal((await json(await s.get('/shifo/v1/requests/' + id))).body.status, 'booked');
+  const del = await json(await s.send('DELETE', '/shifo/v1/appointments/' + id));
+  assert.deepEqual([del.status, del.body.type, del.body.status, del.body.cancel_requested], [200, 'request', 'booked', true]);
+  assert.deepEqual(s.db.prepare('SELECT type FROM inbox ORDER BY cursor').all().map((r) => r.type), ['request.new', 'appointment.cancel']);
+  const again = await json(await s.send('DELETE', '/shifo/v1/appointments/' + id));
+  assert.deepEqual([again.status, again.body.cancel_requested], [200, true], 'повтор — тот же ответ');
 });
 
 test('права записи: без «Отмена записи» — 403; лимит записей 30 в минуту — 429', async (t) => {

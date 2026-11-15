@@ -10,9 +10,10 @@
 // пустой перевод — русский. Суммы — целые (так их шлёт клиника). Время —
 // Ташкент со смещением. Адрес собирается из кодов справочника той же функцией,
 // что в программе (shared/clinic-profile.js composeAddress).
-import { composeAddress } from '../../../public/js/shared/clinic-profile.js';
+import { composeAddress, clinicTypeOf } from '../../../public/js/shared/clinic-profile.js';   // SYMPTEX_FIELDS_V1 — clinicTypeOf
 import { API_GROUPS } from '../../../public/js/shared/service-public.js';
 import { CONSULT_API_KINDS } from '../../../public/js/shared/consultation-price.js';
+import { doctorSocialLink, patientsAgeOf } from '../../../public/js/shared/doctor-public.js';   // SYMPTEX_FIELDS_V1 (ревью M2); patientsAgeOf — мигр. 285
 import { snapshotOf, slotsOf } from '../store/clinics.js';
 import { countryRow, regionRow, districtRow, geoReference, specialtiesReference } from '../lib/reference.js';
 import { dayWindows, windowsNeeded, SLOT_MIN } from '../lib/slot-check.js';
@@ -48,6 +49,25 @@ function address(p, lang) {
 function hours(h) {
   const out = {};
   for (const d of WEEK) out[d] = Array.isArray(h && h[d]) && h[d].length === 2 ? [str(h[d][0]), str(h[d][1])] : null;
+  return out;
+}
+
+const yearOrNull = (v) => (Number.isInteger(v) && v >= 1900 && v <= 2100 ? v : null);
+// SYMPTEX_FIELDS_V1 — образование, опыт, сертификаты, повышение квалификации:
+// название по ?lang (без него — три языка), годы — целые или null; range —
+// образование и опыт (title, year_from, year_to), иначе одна строка year.
+// Ревью M4: запись без названия на запрошенном языке (и на русском — его
+// подставляет tri) не уходит; без ?lang — без названия ни на одном языке.
+function entries(list, lang, range) {
+  const out = [];
+  for (const e of Array.isArray(list) ? list : []) {
+    if (!e || typeof e !== 'object') continue;
+    const name = tri(e.name, lang);
+    if (lang ? !name : !(name.ru || name.uz || name.en)) continue;
+    out.push(range
+      ? { name, title: str(e.title), year_from: yearOrNull(e.year_from), year_to: yearOrNull(e.year_to) }
+      : { name, year: yearOrNull(e.year) });
+  }
   return out;
 }
 
@@ -88,7 +108,11 @@ export function readRoutes(r, ctx) {
       street: tri(c.street, lang), address: address(c, lang), phone: str(c.phone), site: str(c.site),
       telegram_bot: str(c.telegram_bot), telegram_channel: str(c.telegram_channel), instagram: str(c.instagram),
       logo: { square: mediaUrl(req.clinic, c.logo && c.logo.square), portrait: mediaUrl(req.clinic, c.logo && c.logo.portrait) },
-      map_url: str(c.map_url), route_url: str(c.route_url), as_of: asOf(req.clinic),
+      map_url: str(c.map_url), route_url: str(c.route_url),
+      // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники: clinic / diagnostics / lab / children;
+      // не указан, снимок старой версии или чужое слово — ""
+      type: clinicTypeOf(c.type),
+      as_of: asOf(req.clinic),
     });
   });
 
@@ -133,6 +157,13 @@ export function readRoutes(r, ctx) {
         consultations: (d.consultations || []).filter((c) => CONSULT_API_KINDS.includes(c.type))
           .map((c) => ({ type: c.type, name: tri(c.name, lang), price: int(c.price), minutes: int(c.minutes) })),
         services: (d.services || []).map((x) => ({ service_id: int(x.service_id), price: int(x.price) })),
+        // SYMPTEX_FIELDS_V1 — ссылки врача и списки профиля; снимок клиники старой
+        // версии их не несёт — пустая строка и [] (поле есть всегда)
+        instagram: doctorSocialLink('instagram', d.instagram), telegram: doctorSocialLink('telegram', d.telegram),
+        education: entries(d.education, lang, true), experience: entries(d.experience, lang, true),
+        certificates: entries(d.certificates, lang, false), training: entries(d.training, lang, false),
+        // SYMPTEX_FIELDS_V1 (мигр. 285) — кого принимает: adults / children / all; иначе ""
+        patients: patientsAgeOf(d.patients),
       })),
       as_of: asOf(req.clinic),
     });

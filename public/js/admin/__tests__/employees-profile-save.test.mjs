@@ -232,6 +232,18 @@ test('DOCTOR_PROFILE_V1: «работает врачом с» — из преж�
   assert.deepEqual(onlyWrite().public_profile, { practice_since: YEAR - 13 });
 });
 
+// SYMPTEX_FIELDS_V1 (мигр. 285, владелец 2026-11-13) — «Принимает» в карточке врача.
+test('«Принимает»: по умолчанию «Не указано»; выбрали «Взрослых и детей» — public_profile = { patients_age: all }', async () => {
+  const s = await openProfileTab('dr.karimov');
+  const sel = tags(s.card, 'select').find((x) => String(x.attrs.id || '').startsWith('dpp-age-'));
+  assert.ok(sel, 'нет поля «Принимает»');
+  assert.equal(sel.value, '', 'после обновления — «Не указано»');
+  sel.value = 'all';
+  sel.dispatchEvent({ type: 'change' });
+  await save(s.card);
+  assert.deepEqual(onlyWrite().public_profile, { patients_age: 'all' });
+});
+
 test('профиль с сервера не пришёл — пустой раздел ничего не стирает, правка одного поля шлёт только его', async () => {
   let s = await openProfileTab('dr.bare');
   type(s.bio.en, 'x');
@@ -555,4 +567,25 @@ test('DOCTOR_PROFILE_V1: сетки полей карточки — auto-fill (�
     assert.deepEqual(fixed.map((g) => g.style.gridTemplateColumns), [], label + ': сетка с жёсткими колонками');
     assert.ok(grids.some((g) => g.style.gridTemplateColumns === RULE), label + ': нет сетки auto-fill');
   }
+});
+
+// SYMPTEX_FIELDS_V1 (ревью 2026-11-12, M10) — та же пометка в карточке врача у администратора.
+test('карточка врача: под Instagram и Telegram — их видят пациенты на сайтах партнёров, телефон не передаётся', async () => {
+  const s = await openProfileTab('dr.karimov');
+  const { DOCTOR_PUBLIC_MESSAGES } = await import('../../shared/doctor-public.js');
+  assert.ok(textOf(s.card).includes(DOCTOR_PUBLIC_MESSAGES.socialsPublic), 'нет пометки о показе ссылок');
+});
+
+// SYMPTEX_FIELDS_V1 (ревью L3) — сохранённое «Принимает» показано в карточке врача.
+test('«Принимает»: сохранённое «Взрослых» показано в поле; без правки public_profile не уходит', async () => {
+  const before = DOC.public_profile;
+  DOC.public_profile = { ...PROFILE, patients_age: 'adults' };
+  try {
+    const s = await openProfileTab('dr.karimov');
+    const sel = tags(s.card, 'select').find((x) => String(x.attrs.id || '').startsWith('dpp-age-'));
+    assert.equal(sel.value, 'adults');
+    type(s.bio.uz, 'Kardiolog!');
+    await save(s.card);
+    assert.deepEqual(onlyWrite().public_profile, { bio_uz: 'Kardiolog!' }, '«Принимает» без правки не уходит');
+  } finally { DOC.public_profile = before; }
 });

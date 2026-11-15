@@ -199,6 +199,23 @@ export function pbxHistory(domain, sinceUnix, o = {}) {
 }
 
 /**
+ * PBX_END_CURSOR_V1 — история по ВРЕМЕНИ ОКОНЧАНИЯ звонка (end_stamp_from /
+ * end_stamp_to; проверено на живой станции клиники 11.11). Журнал спрашивает
+ * так, потому что станция показывает звонок только после того, как он
+ * закончился: запрос «по началу» с курсором по последнему увиденному началу
+ * терял длинный разговор, во время которого чужой короткий успел закончиться.
+ * `endTo` не задан — окно открыто справа (живой хвост). Станция отдаёт не
+ * больше недели за запрос — начало подрезается, как в pbxHistory.
+ * pbxHistory («по началу») остаётся проверке подключения.
+ */
+export function pbxHistoryByEnd(domain, { endFrom, endTo = null } = {}, o = {}) {
+  const from = Math.max(Number(endFrom) || 0, Math.floor(Date.now() / 1000) - 7 * 86400 + 60);
+  const params = { end_stamp_from: from };
+  if (endTo != null && Number.isFinite(Number(endTo))) params.end_stamp_to = Math.max(from, Math.floor(Number(endTo)));
+  return pbxCall(domain, 'mongo_history/search.json', params, o);
+}
+
+/**
  * CALL_RECORDING_V1 — ссылка на запись ОДНОГО разговора.
  *
  * Как это устроено у onlinePBX, проверено на живой станции клиники, а не по

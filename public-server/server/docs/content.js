@@ -113,11 +113,15 @@ export const ENDPOINTS = Object.freeze([
     summary: L('Специальности врачей: код и название на трёх языках.', 'Shifokor mutaxassisliklari: kod va uch tildagi nom.', 'Doctor specialties: code and name in three languages.'),
     params: [qLang] },
   { id: 'clinic', section: 'clinic', method: 'GET', path: '/clinic', scopes: ['clinic'], examples: ['clinic'],
-    summary: L('Карточка клиники: название, описание, адрес главного здания (страна, город и район — кодами справочника, полный адрес — строкой), телефон, сайт, Telegram, Instagram, логотипы, карта и маршрут.',
-      'Klinika kartochkasi: nomi, tavsifi, bosh bino manzili (mamlakat, shahar va tuman — ma’lumotnoma kodlari, to‘liq manzil — satr), telefon, sayt, Telegram, Instagram, logotiplar, xarita va yo‘nalish.',
-      'The clinic card: name, description, main building address (country, city and district as reference codes, the full address as a string), phone, website, Telegram, Instagram, logos, map and directions.'),
+    summary: L('Карточка клиники: название, описание, адрес главного здания (страна, город и район — кодами справочника, полный адрес — строкой), телефон, сайт, Telegram, Instagram, логотипы, карта и маршрут, тип клиники.',
+      'Klinika kartochkasi: nomi, tavsifi, bosh bino manzili (mamlakat, shahar va tuman — ma’lumotnoma kodlari, to‘liq manzil — satr), telefon, sayt, Telegram, Instagram, logotiplar, xarita va yo‘nalish, klinika turi.',
+      'The clinic card: name, description, main building address (country, city and district as reference codes, the full address as a string), phone, website, Telegram, Instagram, logos, map and directions, the type of clinic.'),
     params: [qLang],
-    notes: [L('`logo.square` и `logo.portrait` — ссылки на файлы или `null`, если логотипа нет.', '`logo.square` va `logo.portrait` — fayllarga havolalar yoki logotip bo‘lmasa `null`.', '`logo.square` and `logo.portrait` are file links, or `null` when there is no logo.')] },
+    notes: [L('`logo.square` и `logo.portrait` — ссылки на файлы или `null`, если логотипа нет.', '`logo.square` va `logo.portrait` — fayllarga havolalar yoki logotip bo‘lmasa `null`.', '`logo.square` and `logo.portrait` are file links, or `null` when there is no logo.'),
+      // SYMPTEX_FIELDS_V1 (мигр. 285) — тип клиники
+      L('`type` — тип клиники: `clinic` (клиника), `diagnostics` (диагностический центр), `lab` (лаборатория), `children` (детская клиника); клиника тип не указала — пустая строка.',
+        '`type` — klinika turi: `clinic` (klinika), `diagnostics` (diagnostika markazi), `lab` (laboratoriya), `children` (bolalar klinikasi); klinika turini ko‘rsatmagan bo‘lsa — bo‘sh qator.',
+        '`type` — the kind of clinic: `clinic` (a clinic), `diagnostics` (a diagnostic centre), `lab` (a laboratory), `children` (a children’s clinic); an empty string when the clinic has not set it.')] },
   { id: 'branches', section: 'clinic', method: 'GET', path: '/branches', scopes: ['branches'], examples: ['branches'],
     summary: L('Филиалы: название, город и район кодами, улица и ориентир, полный адрес, телефон, часы работы, карта и маршрут.',
       'Filiallar: nomi, shahar va tuman kodlari, ko‘cha va mo‘ljal, to‘liq manzil, telefon, ish soatlari, xarita va yo‘nalish.',
@@ -136,9 +140,9 @@ export const ENDPOINTS = Object.freeze([
       'Kalit kerak emas: rasmni saytingizda brauzer o‘zi yuklaydi. Kesh — {{mediaCacheHours:hour}}; yangi fayl — yangi havola.',
       'No key needed: the browser loads the picture on your site by itself. Cached for {{mediaCacheHours:hour}}; a new file gets a new link.')] },
   { id: 'doctors', section: 'doctors', method: 'GET', path: '/doctors', scopes: ['doctors'], examples: ['doctors'],
-    summary: L('Врачи, которых клиника показывает: ФИО, должность, о враче, специальности, стаж, языки приёма, фото, филиалы, как принимает и цены.',
-      'Klinika ko‘rsatadigan shifokorlar: F.I.Sh., lavozimi, shifokor haqida, mutaxassisliklari, tajribasi, qabul tillari, fotosi, filiallari, qanday qabul qilishi va narxlar.',
-      'The doctors the clinic shows: full name, title, about, specialties, experience, languages, photo, branches, how they see patients and prices.'),
+    summary: L('Врачи, которых клиника показывает: ФИО, должность, о враче, специальности, стаж, языки приёма, фото, филиалы, как принимает, цены, соцсети, образование и опыт, кого принимает (взрослых или детей).',
+      'Klinika ko‘rsatadigan shifokorlar: F.I.Sh., lavozimi, shifokor haqida, mutaxassisliklari, tajribasi, qabul tillari, fotosi, filiallari, qanday qabul qilishi, narxlar, ijtimoiy tarmoqlar, ta’lim va tajriba, kimlarni qabul qilishi (kattalar yoki bolalar).',
+      'The doctors the clinic shows: full name, title, about, specialties, experience, languages, photo, branches, how they see patients, prices, social links, education and work history, who they see (adults or children).'),
     params: [
       { name: 'branch_id', in: 'query', req: false, value: L('номер филиала из `/branches`', '`/branches` dagi filial raqami', 'a branch number from `/branches`') },
       { name: 'specialty', in: 'query', req: false, value: L('код специальности из `/reference/specialties`', '`/reference/specialties` dagi mutaxassislik kodi', 'a specialty code from `/reference/specialties`') },
@@ -151,7 +155,18 @@ export const ENDPOINTS = Object.freeze([
       L('`booking_days` — на сколько дней вперёд открыта запись: {{bookingDays|or}}.', '`booking_days` — yozilish necha kun oldinga ochiq: {{bookingDays|or}}.', '`booking_days` — how many days ahead booking is open: {{bookingDays|or}}.'),
       L('`consultations` — виды приёма `initial` (первичный) и `repeat` (повторный) с ценой и длительностью в минутах; `services` — услуги группы «Консультации», которые ведёт врач, с его ценой.',
         '`consultations` — `initial` (birlamchi) va `repeat` (takroriy) qabul turlari narxi va daqiqalardagi davomiyligi bilan; `services` — shifokor olib boradigan «Konsultatsiyalar» guruhi xizmatlari uning narxi bilan.',
-        '`consultations` — the visit types `initial` and `repeat` with price and length in minutes; `services` — services of the “Consultations” group the doctor provides, at the doctor’s price.')] },
+        '`consultations` — the visit types `initial` and `repeat` with price and length in minutes; `services` — services of the “Consultations” group the doctor provides, at the doctor’s price.'),
+      // SYMPTEX_FIELDS_V1 — ссылки врача и списки профиля
+      L('`instagram`, `telegram` — ссылки на профиль врача, собранные из имени: `https://instagram.com/<имя>`, `https://t.me/<имя>` (без запроса и якоря); ссылка не на профиль (приглашение, «поделиться», служебный адрес, другой сайт) — пустая строка.',
+        '`instagram`, `telegram` — shifokor profiliga nomidan yig‘ilgan havolalar: `https://instagram.com/<nom>`, `https://t.me/<nom>` (so‘rov va langarsiz); profilga olib bormaydigan havola (taklif, «ulashish», xizmat manzili, boshqa sayt) — bo‘sh qator.',
+        '`instagram`, `telegram` — links to the doctor’s profile, rebuilt from the handle: `https://instagram.com/<handle>`, `https://t.me/<handle>` (no query, no fragment); a link that is not a profile (an invite, a share link, a service address, another site) is an empty string.'),
+      L('`education` и `experience` — образование и опыт работы: `name` (учреждение), `title` (квалификация или должность — одна строка, как её ввела клиника, без перевода), `year_from`, `year_to`; `certificates` и `training` — сертификаты и повышение квалификации: `name`, `year`. Год — число или `null`; списка нет — `[]`.',
+        '`education` va `experience` — ta’lim va ish tajribasi: `name` (muassasa), `title` (malaka yoki lavozim — klinika kiritgan bitta qator, tarjimasiz), `year_from`, `year_to`; `certificates` va `training` — sertifikatlar va malaka oshirish: `name`, `year`. Yil — son yoki `null`; ro‘yxat bo‘lmasa — `[]`.',
+        '`education` and `experience` — education and work history: `name` (the institution), `title` (qualification or position — one string as the clinic typed it, not translated), `year_from`, `year_to`; `certificates` and `training` — certificates and professional development: `name`, `year`. A year is a number or `null`; no list — `[]`.'),
+      // SYMPTEX_FIELDS_V1 (мигр. 285) — «Принимает»
+      L('`patients` — кого принимает врач: `adults` (взрослых), `children` (детей), `all` (взрослых и детей); клиника не указала — пустая строка.',
+        '`patients` — shifokor kimlarni qabul qiladi: `adults` (kattalarni), `children` (bolalarni), `all` (kattalar va bolalarni); klinika ko‘rsatmagan bo‘lsa — bo‘sh qator.',
+        '`patients` — who the doctor sees: `adults`, `children` or `all` (adults and children); an empty string when the clinic has not set it.')] },
   { id: 'slots', section: 'doctors', method: 'GET', path: '/slots', scopes: ['slots'], examples: ['slots-day', 'slots-fit', 'slots-days', 'slots-live'],
     summary: L('Свободное время врача: окна по {{slotMin:min}}.', 'Shifokorning bo‘sh vaqti: {{slotMin:min}}lik oynalar.', 'A doctor’s free time in {{slotMin}}-minute windows.'),
     params: [
@@ -243,7 +258,11 @@ export const ENDPOINTS = Object.freeze([
       L('Записанная (`booked`) остаётся `booked` с `cancel_requested: true`, пока клиника не отменит визит: тогда `cancelled` и уведомление `appointment.cancelled`. Если пациент уже в клинике, решает клиника.',
         'Yozilgan (`booked`) yozuv klinika tashrifni bekor qilmaguncha `cancel_requested: true` bilan `booked` bo‘lib qoladi: shunda `cancelled` va `appointment.cancelled` bildirishnomasi. Bemor allaqachon klinikada bo‘lsa, klinika hal qiladi.',
         'A booked one stays `booked` with `cancel_requested: true` until the clinic cancels the visit: then `cancelled` and the `appointment.cancelled` notification. If the patient is already at the clinic, the clinic decides.'),
-      L('Повтор отмены — тот же ответ; из других статусов — `409 not_cancellable`.', 'Bekor qilishni takrorlash — o‘sha javob; boshqa holatlardan — `409 not_cancellable`.', 'Repeating a cancellation gives the same answer; from other statuses — `409 not_cancellable`.')] },
+      L('Повтор отмены — тот же ответ; из других статусов — `409 not_cancellable`.', 'Bekor qilishni takrorlash — o‘sha javob; boshqa holatlardan — `409 not_cancellable`.', 'Repeating a cancellation gives the same answer; from other statuses — `409 not_cancellable`.'),
+      // SYMPTEX_FIELDS_V1 — отмена звонка, ставшего записью
+      L('Так же отменяется обратный звонок (`type: "request"`), на который клиника уже записала пациента (`booked`). Звонок до записи — `409 not_cancellable` с `reason: "callback_not_booked"`: отменять в клинике нечего, клиника перезвонит пациенту, и он скажет, что запись не нужна.',
+        'Klinika bemorni allaqachon yozib qo‘ygan (`booked`) qayta qo‘ng‘iroq so‘rovi (`type: "request"`) ham shunday bekor qilinadi. Yozilishdan oldingi so‘rov — `reason: "callback_not_booked"` bilan `409 not_cancellable`: klinikada bekor qiladigan narsa yo‘q, klinika bemorga qo‘ng‘iroq qiladi va u yozilish kerak emasligini aytadi.',
+        'A call-back request (`type: "request"`) the clinic has already booked (`booked`) is cancelled the same way. A call-back not yet booked gives `409 not_cancellable` with `reason: "callback_not_booked"`: there is nothing to cancel at the clinic; the clinic will call the patient, who can tell them the visit is not needed.')] },
 ]);
 
 // ---- примеры: запросы (ответы — docs/generated.js) ---------------------------------------
