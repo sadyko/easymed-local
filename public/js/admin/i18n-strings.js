@@ -3308,6 +3308,61 @@ export const STRINGS = {
   "Showed up": {"en":"Showed up","ru":"Пришли","uz":"Keldi"},
   "Sign & lock": {"en":"Sign & lock","ru":"Подписать и заблокировать","uz":"Imzolash va qulflash"},
   "Sign in": {"en":"Sign in","ru":"Войти","uz":"Kirish"},
+  "Отчёт в Telegram": {"en":"Telegram report","ru":"Отчёт в Telegram","uz":"Telegram hisobot"},
+  "Ежедневный отчёт в группу совета директоров: касса, способы оплаты, долги, пациенты, CRM, звонки.": {"en":"Daily report to the board of directors group: cashier, payment types, debts, patients, CRM, calls.","ru":"Ежедневный отчёт в группу совета директоров: касса, способы оплаты, долги, пациенты, CRM, звонки.","uz":"Direktorlar kengashi guruhiga kunlik hisobot: kassa, toʻlov turlari, qarzlar, bemorlar, CRM, qoʻngʻiroqlar."},
+  "Каждый день в назначенное время бот присылает в группу совета директоров отчёт: касса, способы оплаты, долги, пациенты, CRM, звонки.": {"en":"Every day at the set time the bot sends a report to the board of directors group: cashier, payment types, debts, patients, CRM, calls.","ru":"Каждый день в назначенное время бот присылает в группу совета директоров отчёт: касса, способы оплаты, долги, пациенты, CRM, звонки.","uz":"Har kuni belgilangan vaqtda bot direktorlar kengashi guruhiga hisobot yuboradi: kassa, toʻlov turlari, qarzlar, bemorlar, CRM, qoʻngʻiroqlar."},
+  "Касса: принято, возвраты, средний чек, смены": {"en":"Cashier: collected, refunds, average bill, shifts","ru":"Касса: принято, возвраты, средний чек, смены","uz":"Kassa: qabul qilingan, qaytarishlar, oʻrtacha chek, smenalar"},
+  "Пациенты и визиты": {"en":"Patients and visits","ru":"Пациенты и визиты","uz":"Bemorlar va tashriflar"},
+  "CRM: заявки, конверсия, источники": {"en":"CRM: leads, conversion, sources","ru":"CRM: заявки, конверсия, источники","uz":"CRM: arizalar, konversiya, manbalar"},
+  "Стационар и лаборатория": {"en":"Inpatient and laboratory","ru":"Стационар и лаборатория","uz":"Statsionar va laboratoriya"},
+  "Бот не подключён": {"en":"Bot not connected","ru":"Бот не подключён","uz":"Bot ulanmagan"},
+  "Создайте бота в @BotFather и вставьте его токен ниже.": {"en":"Create a bot in @BotFather and paste its token below.","ru":"Создайте бота в @BotFather и вставьте его токен ниже.","uz":"@BotFather da bot yarating va uning tokenini quyiga qoʻying."},
+  "Группа не выбрана": {"en":"No group selected","ru":"Группа не выбрана","uz":"Guruh tanlanmagan"},
+  "Добавьте бота в группу совета директоров и нажмите «Найти группу».": {"en":"Add the bot to the board of directors group and press “Find group”.","ru":"Добавьте бота в группу совета директоров и нажмите «Найти группу».","uz":"Botni direktorlar kengashi guruhiga qoʻshing va «Guruhni topish» tugmasini bosing."},
+  "Отчёт выключен": {"en":"Report is off","ru":"Отчёт выключен","uz":"Hisobot oʻchirilgan"},
+  "Отправьте проверочный отчёт, затем включите ежедневную отправку.": {"en":"Send a test report, then turn on daily sending.","ru":"Отправьте проверочный отчёт, затем включите ежедневную отправку.","uz":"Sinov hisobotini yuboring, soʻng kunlik yuborishni yoqing."},
+  "Каждый день в {time} · {day}": {"en":"Every day at {time} · {day}","ru":"Каждый день в {time} · {day}","uz":"Har kuni {time} da · {day}"},
+  "за вчера": {"en":"for yesterday","ru":"за вчера","uz":"kecha uchun"},
+  "за сегодня": {"en":"for today","ru":"за сегодня","uz":"bugun uchun"},
+  "Последняя попытка не удалась: {msg}": {"en":"The last attempt failed: {msg}","ru":"Последняя попытка не удалась: {msg}","uz":"Oxirgi urinish muvaffaqiyatsiz: {msg}"},
+  "Последний отчёт ушёл {at}": {"en":"Last report sent {at}","ru":"Последний отчёт ушёл {at}","uz":"Oxirgi hisobot yuborildi: {at}"},
+  "Отчётов ещё не было.": {"en":"No reports sent yet.","ru":"Отчётов ещё не было.","uz":"Hali hisobot yuborilmagan."},
+  "Вставьте токен бота.": {"en":"Paste the bot token.","ru":"Вставьте токен бота.","uz":"Bot tokenini qoʻying."},
+  "Токен сохранён, но Telegram не ответил: {msg}": {"en":"Token saved, but Telegram did not respond: {msg}","ru":"Токен сохранён, но Telegram не ответил: {msg}","uz":"Token saqlandi, lekin Telegram javob bermadi: {msg}"},
+  "Бот подключён: @{name}": {"en":"Bot connected: @{name}","ru":"Бот подключён: @{name}","uz":"Bot ulandi: @{name}"},
+  "Удалить токен? Ежедневный отчёт будет выключен.": {"en":"Delete the token? The daily report will be turned off.","ru":"Удалить токен? Ежедневный отчёт будет выключен.","uz":"Token oʻchirilsinmi? Kunlik hisobot oʻchiriladi."},
+  "Токен удалён, отчёт выключен.": {"en":"Token deleted, report turned off.","ru":"Токен удалён, отчёт выключен.","uz":"Token oʻchirildi, hisobot oʻchirildi."},
+  "Бот": {"en":"Bot","ru":"Бот","uz":"Bot"},
+  "Подключён бот @{name}": {"en":"Connected bot @{name}","ru":"Подключён бот @{name}","uz":"Ulangan bot @{name}"},
+  "Токен сохранён: …{hint}": {"en":"Token saved: …{hint}","ru":"Токен сохранён: …{hint}","uz":"Token saqlangan: …{hint}"},
+  "Создайте НОВОГО бота: в Telegram откройте @BotFather, отправьте /newbot, придумайте имя — он пришлёт токен. Пациентский бот сюда не подходит.": {"en":"Create a NEW bot: in Telegram open @BotFather, send /newbot, choose a name — it will send you the token. The patient bot cannot be used here.","ru":"Создайте НОВОГО бота: в Telegram откройте @BotFather, отправьте /newbot, придумайте имя — он пришлёт токен. Пациентский бот сюда не подходит.","uz":"YANGI bot yarating: Telegramda @BotFather ni oching, /newbot yuboring, nom tanlang — u token yuboradi. Bemorlar boti bu yerga toʻgʻri kelmaydi."},
+  "Новый токен (заменить)": {"en":"New token (replace)","ru":"Новый токен (заменить)","uz":"Yangi token (almashtirish)"},
+  "Групп не найдено. Добавьте бота в группу, напишите в ней любое сообщение и нажмите снова.": {"en":"No groups found. Add the bot to the group, write any message there and press again.","ru":"Групп не найдено. Добавьте бота в группу, напишите в ней любое сообщение и нажмите снова.","uz":"Guruh topilmadi. Botni guruhga qoʻshing, unda istalgan xabar yozing va qayta bosing."},
+  "Найти группу": {"en":"Find group","ru":"Найти группу","uz":"Guruhni topish"},
+  "Группа выбрана: {name}": {"en":"Group selected: {name}","ru":"Группа выбрана: {name}","uz":"Guruh tanlandi: {name}"},
+  "Номер группы сохранён.": {"en":"Group number saved.","ru":"Номер группы сохранён.","uz":"Guruh raqami saqlandi."},
+  "Сохранить номер": {"en":"Save number","ru":"Сохранить номер","uz":"Raqamni saqlash"},
+  "Группа совета директоров": {"en":"Board of directors group","ru":"Группа совета директоров","uz":"Direktorlar kengashi guruhi"},
+  "Отчёт идёт в группу: {name}": {"en":"The report goes to the group: {name}","ru":"Отчёт идёт в группу: {name}","uz":"Hisobot guruhga yuboriladi: {name}"},
+  "Добавьте бота в группу совета директоров (Участники → Добавить), затем нажмите «Найти группу» и выберите её.": {"en":"Add the bot to the board of directors group (Members → Add), then press “Find group” and select it.","ru":"Добавьте бота в группу совета директоров (Участники → Добавить), затем нажмите «Найти группу» и выберите её.","uz":"Botni direktorlar kengashi guruhiga qoʻshing (Aʼzolar → Qoʻshish), soʻng «Guruhni topish» ni bosing va uni tanlang."},
+  "Ввести номер группы вручную": {"en":"Enter the group number manually","ru":"Ввести номер группы вручную","uz":"Guruh raqamini qoʻlda kiritish"},
+  "Номер группы": {"en":"Group number","ru":"Номер группы","uz":"Guruh raqami"},
+  "За сегодня — вечерний отчёт": {"en":"For today — evening report","ru":"За сегодня — вечерний отчёт","uz":"Bugun uchun — kechki hisobot"},
+  "За вчера — утренний отчёт": {"en":"For yesterday — morning report","ru":"За вчера — утренний отчёт","uz":"Kecha uchun — ertalabki hisobot"},
+  "Расписание сохранено.": {"en":"Schedule saved.","ru":"Расписание сохранено.","uz":"Jadval saqlandi."},
+  "Ежедневный отчёт включён.": {"en":"Daily report turned on.","ru":"Ежедневный отчёт включён.","uz":"Kunlik hisobot yoqildi."},
+  "Ежедневный отчёт выключен.": {"en":"Daily report turned off.","ru":"Ежедневный отчёт выключен.","uz":"Kunlik hisobot oʻchirildi."},
+  "Время отправки": {"en":"Sending time","ru":"Время отправки","uz":"Yuborish vaqti"},
+  "За какой день": {"en":"For which day","ru":"За какой день","uz":"Qaysi kun uchun"},
+  "Время — по часам сервера клиники. Если сервер был выключен в это время, отчёт уйдёт, как только он включится в тот же день.": {"en":"Time is by the clinic server clock. If the server was off at that time, the report is sent as soon as it is back on the same day.","ru":"Время — по часам сервера клиники. Если сервер был выключен в это время, отчёт уйдёт, как только он включится в тот же день.","uz":"Vaqt klinika serveri soati boʻyicha. Agar server bu vaqtda oʻchiq boʻlsa, hisobot oʻsha kuni server yoqilishi bilan yuboriladi."},
+  "Отправлять отчёт каждый день": {"en":"Send the report every day","ru":"Отправлять отчёт каждый день","uz":"Hisobotni har kuni yuborish"},
+  "Состав отчёта сохранён.": {"en":"Report contents saved.","ru":"Состав отчёта сохранён.","uz":"Hisobot tarkibi saqlandi."},
+  "Что в отчёте": {"en":"What is in the report","ru":"Что в отчёте","uz":"Hisobotda nima bor"},
+  "Числа — те же, что на экране «Сводка», за один день и со сравнением с днём раньше.": {"en":"The numbers are the same as on the “Summary” screen, for one day and compared with the day before.","ru":"Числа — те же, что на экране «Сводка», за один день и со сравнением с днём раньше.","uz":"Raqamlar «Xulosa» ekranidagi bilan bir xil, bir kun uchun va oldingi kun bilan solishtirilgan."},
+  "Отчёт отправлен в группу.": {"en":"Report sent to the group.","ru":"Отчёт отправлен в группу.","uz":"Hisobot guruhga yuborildi."},
+  "Отчёт не отправлен.": {"en":"Report not sent.","ru":"Отчёт не отправлен.","uz":"Hisobot yuborilmadi."},
+  "Отправить сейчас": {"en":"Send now","ru":"Отправить сейчас","uz":"Hozir yuborish"},
+  "«Отправить сейчас» шлёт отчёт в группу немедленно — расписание это не меняет.": {"en":"“Send now” sends the report to the group immediately — it does not change the schedule.","ru":"«Отправить сейчас» шлёт отчёт в группу немедленно — расписание это не меняет.","uz":"«Hozir yuborish» hisobotni guruhga darhol yuboradi — bu jadvalni oʻzgartirmaydi."},
   "Sign in to continue": {"en":"Sign in to continue","ru":"Войдите, чтобы продолжить","uz":"Davom etish uchun kiring"},
   "Вся клиника в одном окне": {"en":"Your whole clinic in one window","ru":"Вся клиника в одном окне","uz":"Butun klinika bitta oynada"},
   "Пациенты, запись, касса, лаборатория и стационар. Данные остаются в клинике и работают даже без интернета.": {"en":"Patients, appointments, cashier, laboratory and inpatient care. Data stays in the clinic and works even without internet.","ru":"Пациенты, запись, касса, лаборатория и стационар. Данные остаются в клинике и работают даже без интернета.","uz":"Bemorlar, qabulga yozilish, kassa, laboratoriya va statsionar. Maʼlumotlar klinikada qoladi va internetsiz ham ishlaydi."},
@@ -6128,6 +6183,8 @@ export const STRINGS = {
   "Наличные вне смены: {sum} сум": {"en":"Cash outside a shift: {sum} sum","ru":"Наличные вне смены: {sum} сум","uz":"Smenadan tashqari naqd pul: {sum} so'm"},
   "Наличных платежей без открытой смены: {n}. Они не привязаны ни к одному ящику — попросите кассиров открывать смену до приёма наличных.": {"en":"Cash payments taken without an open shift: {n}. They are not tied to any drawer — ask cashiers to open a shift before taking cash.","ru":"Наличных платежей без открытой смены: {n}. Они не привязаны ни к одному ящику — попросите кассиров открывать смену до приёма наличных.","uz":"Ochiq smenasiz qabul qilingan naqd to'lovlar: {n}. Ular hech bir kassaga bog'lanmagan — kassirlardan naqd pul olishdan oldin smena ochishni so'rang."},
   "Предпросмотр печати": {"en":"Print preview","ru":"Предпросмотр печати","uz":"Chop etishni oldindan ko'rish"},
+  "Скидка на эту услугу": {"en":"Discount on this service","ru":"Скидка на эту услугу","uz":"Ushbu xizmatga chegirma"},
+  "Напечатать счёт": {"en":"Print invoice","ru":"Напечатать счёт","uz":"Hisobni chop etish"},
   "Не удалось напечатать счёт.": {"en":"Could not print the invoice.","ru":"Не удалось напечатать счёт.","uz":"Hisobni chop etib bo'lmadi."},
   "Счёта для печати ещё нет.": {"en":"There is no invoice to print yet.","ru":"Счёта для печати ещё нет.","uz":"Chop etish uchun hisob hali yo'q."},
   "Пациент заплатит заново": {"en":"The patient will pay again","ru":"Пациент заплатит заново","uz":"Bemor qaytadan to'laydi"},
@@ -9983,6 +10040,16 @@ export const STRINGS = {
   "Принято сегодня": {"en":"Collected today","ru":"Принято сегодня","uz":"Bugun qabul qilindi"},
   "Начислено стационару": {"en":"Accrued by the ward","ru":"Начислено стационару","uz":"Statsionarga hisoblangan"},
   "Анализы в работе": {"en":"Lab tests in progress","ru":"Анализы в работе","uz":"Ishlanayotgan tahlillar"},
+  // CRM_TASKS_FILTER_V1 — отборы вида «Задачи»
+  "Нет задач в этом отборе.": {"en":"No tasks in this filter.","ru":"Нет задач в этом отборе.","uz":"Bu tanlovda vazifalar yo'q."},
+  "Отбор задач": {"en":"Task filter","ru":"Отбор задач","uz":"Vazifalar tanlovi"},
+  // DAILY_REPORT_FORMAT_V2 — блоки отчёта в Telegram («Итог дня»)
+  "Принято за день: способы оплаты, счетов закрыто": {"en":"Collected today: payment methods, invoices closed","ru":"Принято за день: способы оплаты, счетов закрыто","uz":"Kun davomida qabul qilindi: to'lov usullari, yopilgan hisoblar"},
+  "По типу покрытия": {"en":"By coverage type","ru":"По типу покрытия","uz":"Qoplash turi bo'yicha"},
+  "По отделениям": {"en":"By department","ru":"По отделениям","uz":"Bo'limlar bo'yicha"},
+  "По группам услуг": {"en":"By service group","ru":"По группам услуг","uz":"Xizmat guruhlari bo'yicha"},
+  "Пациенты и стационар": {"en":"Patients and inpatient ward","ru":"Пациенты и стационар","uz":"Bemorlar va statsionar"},
+  "Колл-центр: заявки, дошли, завели карту": {"en":"Call centre: leads, arrived, cards created","ru":"Колл-центр: заявки, дошли, завели карту","uz":"Koll-markaz: arizalar, kelganlar, karta ochilganlar"},
   // PATIENT_LEAD_SOURCE_V1 — «Откуда узнали о нас» в окне пациента
   "Откуда узнали о нас": {"en":"How did they hear about us","ru":"Откуда узнали о нас","uz":"Biz haqimizda qayerdan bilishdi"},
   "Список — «Источники» в настройках CRM. Пациент без рекламы и рекомендации — «Пришёл сам».": {"en":"The list is «Sources» in the CRM settings. A patient with no ad or recommendation is «Walk-in».","ru":"Список — «Источники» в настройках CRM. Пациент без рекламы и рекомендации — «Пришёл сам».","uz":"Ro'yxat — CRM sozlamalaridagi «Manbalar». Reklama va tavsiyasiz kelgan bemor — «O'zi keldi»."},
@@ -10961,6 +11028,9 @@ export const STRINGS = {
   "Неоплаченные счета пациента (без страховой)": {"en":"Patient's unpaid invoices (excluding insurer)","ru":"Неоплаченные счета пациента (без страховой)","uz":"Bemorning to'lanmagan hisoblari (sug'urtasiz)"},
   // V3120_FIX (экраны и навигация) — END
   // V3120_I18N — сообщения сервера — BEGIN (2026-09-28)
+  "Раздел CRM вам не выдан.": {"en":"The CRM section has not been granted to you.","ru":"Раздел CRM вам не выдан.","uz":"CRM bo‘limi sizga berilmagan."},   // OPERATOR_KPI_V1
+  "Не указан оператор.": {"en":"No operator specified.","ru":"Не указан оператор.","uz":"Operator ko‘rsatilmagan."},   // OPERATOR_KPI_V1
+  "Чужие показатели видит только руководитель колл-центра.": {"en":"Only the call-center head can see other people’s figures.","ru":"Чужие показатели видит только руководитель колл-центра.","uz":"Boshqalarning ko‘rsatkichlarini faqat call-markaz rahbari ko‘radi."},   // OPERATOR_KPI_V1
   "Раздел «Чат Facebook и Instagram» вам не выдан.": {"en":"The “Facebook & Instagram chat” section has not been granted to you.","ru":"Раздел «Чат Facebook и Instagram» вам не выдан.","uz":"«Facebook va Instagram chat» bo‘limi sizga berilmagan."},   // META_INBOX_V1
   "У вас доступ «только чтение»: отвечать от имени клиники нельзя.": {"en":"You have read-only access: you cannot reply on behalf of the clinic.","ru":"У вас доступ «только чтение»: отвечать от имени клиники нельзя.","uz":"Sizda faqat o‘qish huquqi bor: klinika nomidan javob berib bo‘lmaydi."},   // META_INBOX_V1
   "Не указана переписка или комментарий.": {"en":"No conversation or comment specified.","ru":"Не указана переписка или комментарий.","uz":"Yozishma yoki izoh ko‘rsatilmagan."},   // META_INBOX_V1
@@ -12574,6 +12644,34 @@ export const STRINGS = {
   "Лид": {"en":"Lead","ru":"Лид","uz":"Lid"},   // META_INBOX_LAYOUT_V2
   "Ответ на рекламу": {"en":"Reply to an ad","ru":"Ответ на рекламу","uz":"Reklamaga javob"},   // META_INBOX_LAYOUT_V2
   "Все сообщения": {"en":"All messages","ru":"Все сообщения","uz":"Barcha xabarlar"},   // META_INBOX_LAYOUT_V2
+  "Заявки и обращения в клинику": {"en":"Requests and enquiries to the clinic","ru":"Заявки и обращения в клинику","uz":"Klinikaga so‘rovlar va murojaatlar"},   // CRM_HERO_V1
+  "Доска": {"en":"Board","ru":"Доска","uz":"Doska"},   // CRM_HERO_V1
+  "Мои задачи": {"en":"My tasks","ru":"Мои задачи","uz":"Mening vazifalarim"},   // CRM_HERO_V1
+  "За каждой заявкой — человек, который решился позвонить или написать. Быстрый ответ, вежливый голос и запись на удобное время — первый шаг к выздоровлению. Спасибо за вашу работу.": {"en":"Behind every request is a person who decided to call or write. A quick answer, a polite voice and a convenient appointment are the first step to recovery. Thank you for your work.","ru":"За каждой заявкой — человек, который решился позвонить или написать. Быстрый ответ, вежливый голос и запись на удобное время — первый шаг к выздоровлению. Спасибо за вашу работу.","uz":"Har bir so‘rov ortida qo‘ng‘iroq qilishga yoki yozishga qaror qilgan inson bor. Tez javob, xushmuomala ovoz va qulay vaqtga yozuv — tuzalish sari birinchi qadam. Mehnatingiz uchun rahmat."},   // CRM_HERO_V1
+  "Мой KPI": {"en":"My KPI","ru":"Мой KPI","uz":"Mening KPI"},   // OPERATOR_KPI_V1
+  "Не удалось загрузить показатели.": {"en":"Could not load the figures.","ru":"Не удалось загрузить показатели.","uz":"Ko‘rsatkichlarni yuklab bo‘lmadi."},   // OPERATOR_KPI_V1
+  "Оклад в месяц": {"en":"Monthly salary","ru":"Оклад в месяц","uz":"Oylik maosh"},   // OPERATOR_KPI_V1
+  "Оплаты ваших пациентов": {"en":"Payments from your patients","ru":"Оплаты ваших пациентов","uz":"Bemorlaringiz to‘lovlari"},   // OPERATOR_KPI_V1
+  "Бонус за период": {"en":"Bonus for the period","ru":"Бонус за период","uz":"Davr uchun bonus"},   // OPERATOR_KPI_V1
+  "К начислению за месяц": {"en":"Due for the month","ru":"К начислению за месяц","uz":"Oy uchun hisoblanadi"},   // OPERATOR_KPI_V1
+  "Бонус — {p}% от оплат в кассу за период от пациентов, которых вы довели до визита: ваша заявка в колонке «Пришёл». Пациентов с оплатой: {n}.": {"en":"The bonus is {p}% of what the patients you brought to a visit paid at the cashier during the period: your request in the “Came” column. Patients who paid: {n}.","ru":"Бонус — {p}% от оплат в кассу за период от пациентов, которых вы довели до визита: ваша заявка в колонке «Пришёл». Пациентов с оплатой: {n}.","uz":"Bonus — siz tashrifgacha olib kelgan bemorlarning davr mobaynida kassaga to‘lovlaridan {p}%: so‘rovingiz «Keldi» ustunida. To‘lov qilgan bemorlar: {n}."},   // OPERATOR_KPI_V1
+  "Оклад месячный: итог «к начислению» показывается за месяц.": {"en":"The salary is monthly: the “due” total is shown for a month.","ru":"Оклад месячный: итог «к начислению» показывается за месяц.","uz":"Maosh oylik: «hisoblanadi» jami oy uchun ko‘rsatiladi."},   // OPERATOR_KPI_V1
+  "Это ориентир по данным программы; итоговую зарплату считает бухгалтерия.": {"en":"This is a guide based on the program’s data; the final salary is calculated by accounting.","ru":"Это ориентир по данным программы; итоговую зарплату считает бухгалтерия.","uz":"Bu dastur ma’lumotlari bo‘yicha mo‘ljal; yakuniy maoshni buxgalteriya hisoblaydi."},   // OPERATOR_KPI_V1
+  "Оклад и процент в карточке сотрудника не заданы (Сотрудники → «Employment & salary»). Здесь показываются только показатели работы.": {"en":"Salary and percentage are not set on the employee card (Employees → “Employment & salary”). Only work figures are shown here.","ru":"Оклад и процент в карточке сотрудника не заданы (Сотрудники → «Employment & salary»). Здесь показываются только показатели работы.","uz":"Xodim kartasida maosh va foiz belgilanmagan (Xodimlar → «Employment & salary»). Bu yerda faqat ish ko‘rsatkichlari ko‘rsatiladi."},   // OPERATOR_KPI_V1
+  "Заявок в работе": {"en":"Requests handled","ru":"Заявок в работе","uz":"Ishdagi so‘rovlar"},   // OPERATOR_KPI_V1
+  "сейчас открытых: {n}": {"en":"open now: {n}","ru":"сейчас открытых: {n}","uz":"hozir ochiq: {n}"},   // OPERATOR_KPI_V1
+  "конверсия {p}": {"en":"conversion {p}","ru":"конверсия {p}","uz":"konversiya {p}"},   // OPERATOR_KPI_V1
+  "место среди операторов: {a} из {b}": {"en":"place among operators: {a} of {b}","ru":"место среди операторов: {a} из {b}","uz":"operatorlar orasida o‘rin: {b} tadan {a}"},   // OPERATOR_KPI_V1
+  "с датой визита: {n}": {"en":"with a visit date: {n}","ru":"с датой визита: {n}","uz":"tashrif sanasi bilan: {n}"},   // OPERATOR_KPI_V1
+  "Считаются заявки, которые вы ведёте (взяли в работу или вам передали), заведённые за период.": {"en":"Counted are the requests you handle (taken into work or passed to you) created during the period.","ru":"Считаются заявки, которые вы ведёте (взяли в работу или вам передали), заведённые за период.","uz":"Siz yuritayotgan (ishga olgan yoki sizga berilgan), davr mobaynida ochilgan so‘rovlar hisoblanadi."},   // OPERATOR_KPI_V1
+  "По дням": {"en":"By day","ru":"По дням","uz":"Kunlar bo‘yicha"},   // OPERATOR_KPI_V1
+  "отвечено {p}": {"en":"answered {p}","ru":"отвечено {p}","uz":"javob berilgan {p}"},   // OPERATOR_KPI_V1
+  "дозвонились: {n}": {"en":"got through: {n}","ru":"дозвонились: {n}","uz":"bog‘lanildi: {n}"},   // OPERATOR_KPI_V1
+  "среднее ожидание {s} с": {"en":"average wait {s} s","ru":"среднее ожидание {s} с","uz":"o‘rtacha kutish {s} s"},   // OPERATOR_KPI_V1
+  "По внутреннему номеру {ext}.": {"en":"By extension {ext}.","ru":"По внутреннему номеру {ext}.","uz":"Ichki raqam {ext} bo‘yicha."},   // OPERATOR_KPI_V1
+  "Внутренний номер телефонии не задан — звонки посчитать не к чему. Его задают в карточке сотрудника.": {"en":"No phone extension is set, so there are no calls to count. It is set on the employee card.","ru":"Внутренний номер телефонии не задан — звонки посчитать не к чему. Его задают в карточке сотрудника.","uz":"Telefoniya ichki raqami belgilanmagan — qo‘ng‘iroqlarni hisoblab bo‘lmaydi. U xodim kartasida belgilanadi."},   // OPERATOR_KPI_V1
+  "Выполнено за период": {"en":"Done in the period","ru":"Выполнено за период","uz":"Davr mobaynida bajarilgan"},   // OPERATOR_KPI_V1
+  "Открыто": {"en":"Open","ru":"Открыто","uz":"Ochiq"},   // OPERATOR_KPI_V1
   "Сегодня, {date}. Сравнение — со вчерашним днём.": {"en":"Today, {date}. Compared with yesterday.","ru":"Сегодня, {date}. Сравнение — со вчерашним днём.","uz":"Bugun, {date}. Kechagi kun bilan solishtirilgan."},   // DASHBOARD_ONE_VIEW_V1
   "Каждый пациент приходит с надеждой. Выслушайте, объясните понятными словами и дайте ясный план — доверие к клинике рождается в вашем кабинете. Спасибо за вашу заботу.": {"en":"Every patient comes with hope. Listen, explain in plain words and give a clear plan — trust in the clinic is born in your office. Thank you for your care.","ru":"Каждый пациент приходит с надеждой. Выслушайте, объясните понятными словами и дайте ясный план — доверие к клинике рождается в вашем кабинете. Спасибо за вашу заботу.","uz":"Har bir bemor umid bilan keladi. Tinglang, tushunarli so‘zlar bilan tushuntiring va aniq reja bering — klinikaga ishonch sizning xonangizda tug‘iladi. G‘amxo‘rligingiz uchun rahmat."},   // SECTION_HERO_V1
   "За каждой пробиркой — человек, который ждёт ответа. Точность и скорость здесь — забота о пациенте и опора для врача. Спасибо за вашу внимательность.": {"en":"Behind every tube is a person waiting for an answer. Accuracy and speed here are care for the patient and support for the doctor. Thank you for your attentiveness.","ru":"За каждой пробиркой — человек, который ждёт ответа. Точность и скорость здесь — забота о пациенте и опора для врача. Спасибо за вашу внимательность.","uz":"Har bir probirka ortida javob kutayotgan inson bor. Bu yerda aniqlik va tezlik — bemorga g‘amxo‘rlik va shifokorga tayanch. E’tiboringiz uchun rahmat."},   // SECTION_HERO_V1
@@ -13900,4 +13998,64 @@ export const STRINGS = {
   "Врач не направляет сам к себе — эту услугу он и выполняет.": {"en":"A doctor cannot refer to themselves — they perform this service.","ru":"Врач не направляет сам к себе — эту услугу он и выполняет.","uz":"Shifokor o'ziga o'zi yo'llamaydi — bu xizmatni o'zi bajaradi."},
   // REFERRAL_LINE_EXTERNAL_GUARD_V1 (3.22.0, ревью) — второй внешний партнёр на строке не оплачивается
   "Направивший визита — внешний партнёр, и за эту услугу платят ему. Чтобы платить другому партнёру, смените направившего в окне визита.": {"en":"The visit's referrer is an external partner, and this service is paid to them. To pay a different partner, change the referrer in the visit window.","ru":"Направивший визита — внешний партнёр, и за эту услугу платят ему. Чтобы платить другому партнёру, смените направившего в окне визита.","uz":"Tashrif yo'llovchisi — tashqi hamkor, bu xizmat uchun unga to'lanadi. Boshqa hamkorga to'lash uchun yo'llovchini tashrif oynasida o'zgartiring."},
+  // FAST_REG_PICKED_CARD_V1 — плашка найденного пациента в «Быстрой регистрации»
+  "Открыть карту пациента": {"en":"Open the patient card","ru":"Открыть карту пациента","uz":"Bemor kartasini ochish"},
+  "Добавленные услуги ещё не записаны и пропадут. Открыть карту пациента?": {"en":"The added services are not saved yet and will be lost. Open the patient card?","ru":"Добавленные услуги ещё не записаны и пропадут. Открыть карту пациента?","uz":"Qo‘shilgan xizmatlar hali yozilmagan va yo‘qoladi. Bemor kartasi ochilsinmi?"},
+  // FAST_REG_FOUND_TO_CARD_V1
+  "— выберите его, и откроется его карта": {"en":"— pick them and their card opens","ru":"— выберите его, и откроется его карта","uz":"— uni tanlang, uning kartasi ochiladi"},
+  // BOOKING_DAY_V1 — вкладка «Бронирование» раздела «Пациенты»
+  "Бронирование": {"en":"Booking","ru":"Бронирование","uz":"Bron qilish"},
+  "Поиск врача по ФИО или специальности…": {"en":"Search a doctor by name or specialty…","ru":"Поиск врача по ФИО или специальности…","uz":"Shifokorni F.I.Sh. yoki mutaxassislik bo‘yicha qidirish…"},
+  "Все специальности": {"en":"All specialties","ru":"Все специальности","uz":"Barcha mutaxassisliklar"},
+  "Обычный приём (30 мин)": {"en":"Regular appointment (30 min)","ru":"Обычный приём (30 мин)","uz":"Oddiy qabul (30 daq)"},
+  "Не удалось загрузить расписание.": {"en":"Could not load the schedule.","ru":"Не удалось загрузить расписание.","uz":"Jadvalni yuklab bo‘lmadi."},
+  "Выберите врача — ниже появятся время приёма и список пациентов на выбранный день.": {"en":"Choose a doctor — their appointment times and the list of patients for the selected day will appear below.","ru":"Выберите врача — ниже появятся время приёма и список пациентов на выбранный день.","uz":"Shifokorni tanlang — quyida tanlangan kun uchun qabul vaqtlari va bemorlar ro‘yxati paydo bo‘ladi."},
+  "Загружаем расписание…": {"en":"Loading the schedule…","ru":"Загружаем расписание…","uz":"Jadval yuklanmoqda…"},
+  "Приём {from}–{to}": {"en":"Appointments {from}–{to}","ru":"Приём {from}–{to}","uz":"Qabul {from}–{to}"},
+  "перерыв": {"en":"break","ru":"перерыв","uz":"tanaffus"},
+  "В этот день врач не принимает": {"en":"The doctor does not see patients on this day","ru":"В этот день врач не принимает","uz":"Bu kuni shifokor qabul qilmaydi"},
+  "свободно": {"en":"free","ru":"свободно","uz":"bo‘sh"},
+  "записано": {"en":"booked","ru":"записано","uz":"yozilgan"},
+  "приём": {"en":"appointment","ru":"приём","uz":"qabul"},
+  "Сегодня приём уже закончился.": {"en":"Appointments are already over for today.","ru":"Сегодня приём уже закончился.","uz":"Bugungi qabul allaqachon tugagan."},
+  "Свободного времени нет.": {"en":"No free time.","ru":"Свободного времени нет.","uz":"Bo‘sh vaqt yo‘q."},
+  "Нет пациентов с таким статусом.": {"en":"No patients with this status.","ru":"Нет пациентов с таким статусом.","uz":"Bu holatdagi bemorlar yo‘q."},
+  "На этот день никто не записан.": {"en":"No one is booked for this day.","ru":"На этот день никто не записан.","uz":"Bu kunga hech kim yozilmagan."},
+  // BOOKING_DAY_V2 — «Бронирование»: расписание и запись в свободное время
+  "Расписание": {"en":"Schedule","ru":"Расписание","uz":"Jadval"},
+  "Нет строк с таким статусом.": {"en":"No rows with this status.","ru":"Нет строк с таким статусом.","uz":"Bu holatdagi qatorlar yo‘q."},
+  "Пациент: ФИО, телефон или номер карты…": {"en":"Patient: name, phone or card number…","ru":"Пациент: ФИО, телефон или номер карты…","uz":"Bemor: F.I.Sh., telefon yoki karta raqami…"},
+  "Запись к врачу на {date} в {time}": {"en":"Booking with the doctor on {date} at {time}","ru":"Запись к врачу на {date} в {time}","uz":"{date} kuni {time} da shifokorga yozilish"},
+  "Записан: {name}, {time}": {"en":"Booked: {name}, {time}","ru":"Записан: {name}, {time}","uz":"Yozildi: {name}, {time}"},
+  // BOOKING_DAY_ROW_CLICK_V1
+  "Записать на это время": {"en":"Book this time","ru":"Записать на это время","uz":"Shu vaqtga yozish"},
+  // BOOKING_DAY_DETAIL_V1 / BOOKING_DAY_TO_WIZARD_V1
+  "Оформить: услуги, счёт, очередь": {"en":"Register: services, bill, queue","ru":"Оформить: услуги, счёт, очередь","uz":"Rasmiylashtirish: xizmatlar, hisob, navbat"},
+  "Оформить запись можно в её день": {"en":"A booking can be registered on its day","ru":"Оформить запись можно в её день","uz":"Yozuvni uning kunida rasmiylashtirish mumkin"},
+  // BOOKING_DAY_SERVICE_V1
+  "Без услуги (30 мин)": {"en":"No service (30 min)","ru":"Без услуги (30 мин)","uz":"Xizmatsiz (30 daq)"},
+  // BOOKING_DAY_SERVICE_REQUIRED_V1
+  "У врача нет услуг": {"en":"The doctor has no services","ru":"У врача нет услуг","uz":"Shifokorda xizmatlar yo‘q"},
+  "Сначала выберите врача": {"en":"Choose a doctor first","ru":"Сначала выберите врача","uz":"Avval shifokorni tanlang"},
+  "У врача нет услуг — записать к нему нельзя. Добавьте услуги, которые он выполняет, в карточке сотрудника.": {"en":"The doctor has no services — booking is not possible. Add the services they perform in the employee card.","ru":"У врача нет услуг — записать к нему нельзя. Добавьте услуги, которые он выполняет, в карточке сотрудника.","uz":"Shifokorda xizmatlar yo‘q — unga yozib bo‘lmaydi. U bajaradigan xizmatlarni xodim kartasida qo‘shing."},
+  // BOOKING_DAY_CANCEL_V1
+  "пациента": {"en":"the patient","ru":"пациента","uz":"bemorni"},
+  "Отменить запись {name} на {time}? Время освободится.": {"en":"Cancel the booking of {name} at {time}? The time will become free.","ru":"Отменить запись {name} на {time}? Время освободится.","uz":"{name} ning {time} dagi yozuvi bekor qilinsinmi? Vaqt bo‘shaydi."},
+  "Запись не найдена — возможно, её уже отменили.": {"en":"Booking not found — it may already have been cancelled.","ru":"Запись не найдена — возможно, её уже отменили.","uz":"Yozuv topilmadi — ehtimol, u allaqachon bekor qilingan."},
+  "Запись отменена: {name}, {time}": {"en":"Booking cancelled: {name}, {time}","ru":"Запись отменена: {name}, {time}","uz":"Yozuv bekor qilindi: {name}, {time}"},
+  "Не удалось отменить запись.": {"en":"Could not cancel the booking.","ru":"Не удалось отменить запись.","uz":"Yozuvni bekor qilib bo‘lmadi."},
+  // CRM_BOOKED_FILTER_V1 — фильтр «Запись» на доске CRM
+  "Завтра": {"en":"Tomorrow","ru":"Завтра","uz":"Ertaga"},
+  "Ближайшие 7 дней": {"en":"Next 7 days","ru":"Ближайшие 7 дней","uz":"Keyingi 7 kun"},
+  "Свой день": {"en":"Pick a day","ru":"Свой день","uz":"Kunni tanlash"},
+  // CLINIC_NEWS_GRANT_V1 — строка «Информационная доска» в «Ролях»
+  "Объявления клиники для сотрудников: приезжие врачи, неработающее оборудование, новости дня. Читают все сотрудники.": {"en":"Clinic announcements for staff: visiting doctors, broken equipment, news of the day. All staff can read them.","ru":"Объявления клиники для сотрудников: приезжие врачи, неработающее оборудование, новости дня. Читают все сотрудники.","uz":"Xodimlar uchun klinika e’lonlari: kelayotgan shifokorlar, ishlamayotgan uskunalar, kun yangiliklari. Barcha xodimlar o‘qiy oladi."},
+  "Публикует, исправляет и снимает объявления, отмечает важные и закреплённые.": {"en":"Publishes, edits and removes announcements, marks them important or pinned.","ru":"Публикует, исправляет и снимает объявления, отмечает важные и закреплённые.","uz":"E’lonlarni joylaydi, tahrirlaydi va olib tashlaydi, muhim va qadalgan deb belgilaydi."},
+  "Объявления на доске публикует администратор клиники или роль с правом «Информационная доска» в «Настройки → Роли».": {"en":"Announcements are published by the clinic administrator or a role with the «Information board» right in «Settings → Roles».","ru":"Объявления на доске публикует администратор клиники или роль с правом «Информационная доска» в «Настройки → Роли».","uz":"E’lonlarni klinika administratori yoki «Sozlamalar → Rollar»da «Axborot taxtasi» huquqi bor rol joylaydi."},
+  // PATIENT_SORT_DROPDOWN_V1 — сортировка списка пациентов
+  "Последний визит — сначала недавние": {"en":"Last visit — most recent first","ru":"Последний визит — сначала недавние","uz":"Oxirgi tashrif — avval yaqinlari"},
+  "Последний визит — сначала давние": {"en":"Last visit — oldest first","ru":"Последний визит — сначала давние","uz":"Oxirgi tashrif — avval eskilari"},
+  "Сортировка": {"en":"Sort","ru":"Сортировка","uz":"Saralash"},
+  // CRM_TASK_EDIT_V1 — правка задачи в карточке заявки
+  "Изменить задачу": {"en":"Edit task","ru":"Изменить задачу","uz":"Vazifani tahrirlash"},
 };

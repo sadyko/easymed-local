@@ -89,3 +89,22 @@ test('исправление: тот же id, новые поля', () => {
   assert.equal(row.title, 'Кардиолог из Турции');
   assert.equal(row.pinned, 1);
 });
+
+// CLINIC_NEWS_GRANT_V1 — строка «Информационная доска» в «Ролях»: роль с «Изменением»
+// публикует и снимает; роль, которой строку не настраивали, — нет (как вчера).
+test('CLINIC_NEWS_GRANT_V1: «Информационная доска: Изменение» открывает публикацию не администратору', () => {
+  const db = fresh();
+  const setGrant = (lvl) => {
+    const row = db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get('doctor');
+    const perms = row ? JSON.parse(row.permissions || '{}') : {};
+    perms.grants = { ...(perms.grants || {}), commerce_news: lvl };
+    if (row) db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify(perms), 'doctor');
+    else db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run('doctor', JSON.stringify(perms));
+  };
+  assert.throws(() => clinicNewsSave(db, { title: 'x' }, doctor), (e) => e.status === 403);
+  setGrant('edit');
+  const { id } = clinicNewsSave(db, { title: 'Приезжает кардиолог' }, doctor);
+  clinicNewsArchive(db, { id }, doctor);
+  setGrant('none');
+  assert.throws(() => clinicNewsSave(db, { title: 'x' }, doctor), (e) => e.status === 403);
+});

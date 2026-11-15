@@ -9,7 +9,7 @@
 // все». CRM_FILTER_ALL_VALUE_V1 — «Все · N» = сумма чисел колонок.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, mk, walk, textOf, byClass, byAttr, tick } from './crm-harness.mjs';
+import { S, CALLS, mk, walk, textOf, byClass, byAttr, tick, periodChip, crmView } from './crm-harness.mjs';
 import { DEFAULT_STAGES } from '../crm-settings-logic.js?v=crmcfg1';
 
 const { renderCrm, CRM_FILTER_ALL } = await import('../views/crm.js');
@@ -30,7 +30,7 @@ async function board(leads) {
 }
 const colOf = (root, key) => walk(root).find((n) => n.attrs && n.attrs['data-col'] === key);
 const countOf = (root, key) => textOf(byAttr(root, 'data-col-count').find((n) => n.getAttribute('data-col-count') === key));
-const chipText = (root, re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
+const chipText = periodChip;   // CRM_PERIOD_DROPDOWN_V1 — период списком; прочие кнопки — по подписи, как раньше
 
 test('в колонке все карточки, кнопки «Показать ещё» нет, число — настоящее', async () => {
   const root = await board(Array.from({ length: 25 }, (_, i) => lead(i + 1, 'in_process')));
@@ -162,10 +162,10 @@ test('C3 (3.23.0): «Период» сужает каждую колонку —
     assert.ok(textOf(colOf(root, 'came')).includes('Пришёл сегодня'));
     assert.equal(textOf(periodLine(root)), 'Период «Сегодня»: показаны заявки, поступившие сегодня. Открытых за другие дни: 3 — Показать все');
     // «Список» — те же карточки и та же строка
-    walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'list').click(); await tick(80);
+    crmView(root, 'list'); await tick(80);
     assert.ok(!textOf(root).includes('Старый Перезвон') && textOf(root).includes('Сегодняшний'), '«Список» не по периоду');
     assert.ok(periodLine(root), 'в «Списке» нет строки о периоде');
-    walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'kanban').click(); await tick(80);
+    crmView(root, 'kanban'); await tick(80);
     // ушли из раздела и вернулись — период сохранился
     const again = mk('div');
     await renderCrm(again, { onNavigate() {} }); await tick();
@@ -240,7 +240,7 @@ test('CRM_PERIOD_ALL_COLUMNS_V1: пока доска перезагружает�
   try {
     chipText(root, /^Сегодня$/).click();
     const busy = byAttr(root, 'data-crm-period');
-    assert.equal(busy.length, 5, 'чипов периода не пять');
+    assert.equal(busy.length, 1, 'нет списка периода');   // CRM_PERIOD_DROPDOWN_V1 — один список вместо пяти чипов
     assert.ok(busy.every((b) => b.hasAttribute('disabled') && b.getAttribute('aria-busy') === 'true'), 'чипы не показывают загрузку');
     await tick(500);
     const after = byAttr(root, 'data-crm-period');
@@ -355,14 +355,14 @@ test('C4: «Список» при «Всё время» — у обрезанн�
   try {
     const leads = Array.from({ length: 450 }, (_, i) => lead(i + 1, 'came'));
     const root = await board(leads);
-    walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'list').click();
+    crmView(root, 'list');
     await tick(80);
     const rows = walk(root).filter((n) => n.tagName === 'TR' && String(n.className).includes('row-click'));
     assert.equal(rows.length, 300);
     const note = byAttr(root, 'data-list-capped');
     assert.equal(note.length, 1, 'список молча обрезан до 300');
     assert.ok(textOf(note[0]).includes('Пришёл') && textOf(note[0]).includes('450'), textOf(note[0]));
-    walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'kanban').click();
+    crmView(root, 'kanban');
     await tick(80);
   } finally { S.countFor = null; window.easymed.state.user = null; }
 });
@@ -416,11 +416,11 @@ test('Excel при «Всё время» выгружает ВСЕ строки 
 test('вид «Задачи» не грузит доску, которую не показывает', async () => {
   const root = await board([lead(1, 'in_process')]);
   CALLS.length = 0;
-  walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'tasks').click();
+  crmView(root, 'tasks');
   await tick(80);
   assert.equal(CALLS.filter((c) => c.table === 'crm_requests' && c.op === 'select').length, 0, 'вид «Задачи» загрузил карточки доски');
   assert.ok(CALLS.some((c) => c.table === 'crm_tasks'), 'вид «Задачи» не спросил задачи');
-  walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'kanban').click();
+  crmView(root, 'kanban');
   await tick(80);
   window.easymed.state.user = null;
 });
@@ -484,7 +484,7 @@ test('«Не пришёл» — живая колонка: без 300, числ�
     assert.ok(!textOf(colOf(root, 'stopped')).includes('Давний Остановлен'), 'закрытая карточка вне периода видна');
     assert.match(textOf(periodLine(root)), /Открытых за другие дни: 1 — /, 'давняя «Не пришёл» не названа строкой над доской');
     // «Список» — те же карточки
-    walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'list').click(); await tick(80);
+    crmView(root, 'list'); await tick(80);
     assert.ok(!textOf(root).includes('Давний Не пришёл'), '«Список» не сузил «Не пришёл» периодом');
     assert.equal(byAttr(root, 'data-list-capped').length, 0);
     // Excel — тоже
@@ -492,7 +492,40 @@ test('«Не пришёл» — живая колонка: без 300, числ�
     assert.ok(!exp.rows.some((r) => r.full_name === 'Давний Не пришёл'), 'выгрузка не сузила «Не пришёл» периодом');
     assert.equal(exp.rows.filter((r) => r.status === 'no_show').length, 349);
     assert.ok(!exp.rows.some((r) => r.full_name === 'Давний Остановлен'));
-    walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'kanban').click(); await tick(80);
+    crmView(root, 'kanban'); await tick(80);
     chipText(root, /^Всё время$/).click(); await tick(80);
   } finally { S.countFor = null; window.easymed.state.user = null; }
+});
+
+// CRM_BOOKED_FILTER_V1 — «Запись»: карточки, у которых услуга записана на выбранный
+// день — по дню самой заявки ИЛИ по дню любой неотменённой строки услуги.
+test('CRM_BOOKED_FILTER_V1: «Запись · Завтра» — заявки с услугой на завтра, по заявке и по строке', async () => {
+  const p = (n) => String(n).padStart(2, '0');
+  const dayOf = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+  S.reqLines = [
+    { id: 1, request_id: 2, scheduled_date: dayOf(0), status: 'pending' },
+    { id: 2, request_id: 2, scheduled_date: dayOf(1), status: 'pending' },     // вторая услуга заявки 2 — завтра
+    { id: 3, request_id: 3, scheduled_date: dayOf(1), status: 'cancelled' },   // отменённая не считается
+  ];
+  const root = await board([
+    lead(1, 'scheduled', { scheduled_date: dayOf(1) }),
+    lead(2, 'scheduled', { scheduled_date: dayOf(0) }),
+    lead(3, 'scheduled', { scheduled_date: dayOf(2) }),
+    lead(4, 'in_process'),
+  ]);
+  const sel = () => byAttr(root, 'data-booked-select')[0];
+  const pick = async (v) => { const s = sel(); s.value = v; s.dispatchEvent({ type: 'change', target: s, currentTarget: s }); await tick(60); };
+  const shown = () => byClass(root, 'crm-card').map((c) => textOf(c)).filter((t) => /Лид \d/.test(t)).map((t) => t.match(/Лид (\d)/)[1]).sort().join(',');
+  try {
+    assert.ok(sel(), 'нет фильтра «Запись»');
+    assert.ok(walk(sel()).some((n) => n.tagName === 'OPTION' && /Завтра · 2/.test(textOf(n))), 'у «Завтра» нет числа 2');
+    await pick('tomorrow');
+    assert.equal(shown(), '1,2');
+    await pick('today');
+    assert.equal(shown(), '2');
+    await pick('day');
+    assert.equal(byAttr(root, 'data-booked-day')[0].getAttribute('value') || byAttr(root, 'data-booked-day')[0].value, dayOf(1), '«Свой день» не начинается с завтра');
+    await pick(CRM_FILTER_ALL);
+    assert.equal(shown(), '1,2,3,4');
+  } finally { S.reqLines = []; window.easymed.state.user = null; }
 });

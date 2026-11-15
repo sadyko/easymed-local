@@ -103,7 +103,7 @@ const state = {
     filter: 'all',
     search: '',
     dob:    '',   // PATIENT_SEARCH_DOB_V2
-    sort:   'recent',
+    sort:   'last_visit_desc',   // PATIENT_SORT_DROPDOWN_V1 — по умолчанию последний визит
     page:   1,
     total:  0,
     // PATIENT_LIST_LAST_VISIT_V1 — «Фильтр»: период последнего визита ('YYYY-MM-DD').
@@ -125,7 +125,7 @@ const refs = {
     nextBtn:   null,
     totalEl:   null,
     filterButtons: {},
-    sortButtons:   {},
+    sortSelect:    null,   // PATIENT_SORT_DROPDOWN_V1 — список сортировки
     lastRows:  [],
     revealed:  false,   // MOTION_REVEAL_ONCE_V1 — появление уже сыграно на этом монтировании
 };
@@ -134,7 +134,7 @@ export async function renderPatients(container, { onNavigate, embedded = false }
     state.filter = 'all';
     state.search = '';
     state.dob    = '';   // PATIENT_SEARCH_DOB_V2
-    state.sort   = 'recent';
+    state.sort   = 'last_visit_desc';   // PATIENT_SORT_DROPDOWN_V1
     state.page   = 1;
     state.total  = 0;
     state.lastFrom = '';   // PATIENT_LIST_LAST_VISIT_V1
@@ -149,7 +149,7 @@ export async function renderPatients(container, { onNavigate, embedded = false }
     // услуги»; scopedDoctorId() no longer narrows this list.
     refs.doctorId   = null;
     refs.filterButtons = {};
-    refs.sortButtons   = {};
+    refs.sortSelect    = null;
 
     mount();
     // PATIENT_ROW_V2 спрашивал отметки Telegram здесь, до первой отрисовки.
@@ -300,24 +300,19 @@ function mount() {
         },
     }, Icon('ChevronRight', { size: 14 }));
 
-    // PATIENT_LIST_LAST_VISIT_V1 — «Последний визит»: первое нажатие — сначала
-    // недавние, повторное — сначала давние. Сортирует сервер всю картотеку.
-    refs.lastSortArrow = h('span', { style: { display: 'inline-flex', marginLeft: '4px' } });
-    const lastVisitSortBtn = h('button', {
-        type: 'button', 'data-sort': 'last_visit',
-        title: 'Сортировать по последнему визиту; нажмите ещё раз — обратный порядок',
-        onclick: () => {
-            state.sort = state.sort === 'last_visit_desc' ? 'last_visit_asc' : 'last_visit_desc';
-            state.page = 1; paintSortChrome(); fetchAndPaint();
-        },
-    }, 'Последний визит', refs.lastSortArrow);
-    refs.sortButtons.last_visit = lastVisitSortBtn;
-    const sortSegmented = h('div', { class: 'segmented' },
-        sortBtn('recent', 'Сначала новые'),   // V3120_FIX — было «Sort: Recent»
-        sortBtn('az',     'A–Z'),
-        sortBtn('mrn',    'MRN'),
-        lastVisitSortBtn,
-    );
+    // PATIENT_SORT_DROPDOWN_V1 (2026-11-14, владелец: «make it drop down, and random
+    // should be last visit») — сортировка одним выпадающим списком вместо четырёх
+    // кнопок, и по умолчанию — «Последний визит», сначала недавние: регистратура
+    // ищет того, кто приходил недавно, а не того, чью карту завели последней.
+    // Направление последнего визита (PATIENT_LIST_LAST_VISIT_V1 — раньше повторным
+    // нажатием) — два варианта списка. Сортирует сервер всю картотеку; на 70 000
+    // карт «Последний визит» — около 0,17 с против 0,006 с у «Сначала новые».
+    const sortSegmented = h('select', {
+        class: 'reg-sort-sel', 'data-sort-select': '', 'aria-label': 'Сортировка',
+        onchange: (e) => { state.sort = e.target.value; state.page = 1; fetchAndPaint(); },
+    }, ...SORT_OPTIONS.map(([key, label]) => h('option', { value: key }, label)));
+    sortSegmented.value = state.sort;
+    refs.sortSelect = sortSegmented;
 
     // REGISTRATURA_CLEANUP_V1 — table-header actions: duplicates chip + calculator + create.
     const dupCountSpan = h('span', { class: 'num', style: { fontWeight: '700' } }, '—');
@@ -632,27 +627,18 @@ function paintFilterCardChrome() {
     }
 }
 
-function sortBtn(key, label) {
-    const btn = h('button', {
-        type: 'button',
-        onclick: () => { state.sort = key; state.page = 1; paintSortChrome(); fetchAndPaint(); },
-    }, label);
-    refs.sortButtons[key] = btn;
-    return btn;
-}
+// PATIENT_SORT_DROPDOWN_V1 — варианты сортировки; ключи — те, что знает сервер
+// (rpc/patient-list.js SORTS). Первый — по умолчанию.
+const SORT_OPTIONS = [
+    ['last_visit_desc', 'Последний визит — сначала недавние'],
+    ['last_visit_asc',  'Последний визит — сначала давние'],
+    ['recent',          'Сначала новые'],
+    ['az',              'A–Z'],
+    ['mrn',             'MRN'],
+];
 
 function paintSortChrome() {
-    for (const [key, btn] of Object.entries(refs.sortButtons)) {
-        // PATIENT_LIST_LAST_VISIT_V1 — «last_visit» горит в обоих направлениях.
-        const on = key === 'last_visit' ? String(state.sort).startsWith('last_visit') : state.sort === key;
-        if (on) btn.classList.add('on');
-        else    btn.classList.remove('on');
-    }
-    if (refs.lastSortArrow) {
-        clear(refs.lastSortArrow);
-        if (state.sort === 'last_visit_desc') refs.lastSortArrow.appendChild(Icon('ArrowDown', { size: 13 }));
-        if (state.sort === 'last_visit_asc') refs.lastSortArrow.appendChild(Icon('ArrowUp', { size: 13 }));
-    }
+    if (refs.sortSelect) refs.sortSelect.value = state.sort;
 }
 
 // -----------------------------------------------------------------------------

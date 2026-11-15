@@ -186,6 +186,8 @@ globalThis.fetch = async (url, opts = {}) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push(name);
     if (name === 'telegram_chats_list') return tgAllowed ? ok({ data: TG_CHATS }) : denied();
+    // PATIENT_SORT_DROPDOWN_V1 — по умолчанию список сортируется по последнему визиту: страницу отдаёт сервер.
+    if (name === 'patient_list_page') return ok({ data: { rows: JSON.parse(JSON.stringify(PATIENTS)), total: PATIENTS.length } });
     // PATIENT_BOT_INVITE_V1 — кто подключён к боту: id первой карты (Каримова,
     // её номер в TG_CHATS). botConnected = false — у клиники бота нет.
     if (name === 'patient_bot_status') return ok({ data: { bot: botConnected, sms_ready: false, linked: botConnected ? [1] : [] } });
@@ -428,9 +430,13 @@ test('всё, что умел экран, цело: поиск, сортиров
     'поиска по дате рождения нет в шапке списка');
 
   const labels = buttons(box).map(labelOf);
-  // «MRN» — ключ словаря, и по-русски кнопка подписана «МРН» (i18n-strings).
-  for (const need of ['Сначала новые', 'A–Z', 'МРН']) {
-    assert.ok(labels.includes(need), 'пропала сортировка «' + need + '»');
+  // «MRN» — ключ словаря, и по-русски подписан «МРН» (i18n-strings).
+  // PATIENT_SORT_DROPDOWN_V1 — сортировки — варианты выпадающего списка.
+  const sortSel = walk(box).find((n) => n.attrs && 'data-sort-select' in n.attrs);
+  assert.ok(sortSel, 'списка сортировки нет');
+  const sortLabels = walk(sortSel).filter((n) => n.tagName === 'OPTION').map(labelOf);
+  for (const need of ['Последний визит — сначала недавние', 'Последний визит — сначала давние', 'Сначала новые', 'A–Z', 'МРН']) {
+    assert.ok(sortLabels.includes(need), 'пропала сортировка «' + need + '»: ' + sortLabels.join(' | '));
   }
   assert.ok(labels.some((l) => l.includes('Дубликаты')), 'кнопка дубликатов пропала');
   assert.ok(labels.some((l) => l.includes('Калькулятор')), 'калькулятор пропал');
@@ -480,7 +486,7 @@ test('FAST_REGISTRATION_V1: на месте поиска по дате рожд�
   // сортировкой; поиск и поиск по дате рождения — ниже, отдельным рядом.
   const order = walk(box);
   const iSearch = order.findIndex((n) => n.tagName === 'INPUT' && n.attrs.type === 'search');
-  const iSort   = order.findIndex((n) => hasClass(n, 'segmented'));
+  const iSort   = order.findIndex((n) => n.attrs && 'data-sort-select' in n.attrs);   // PATIENT_SORT_DROPDOWN_V1
   const iBtn    = order.indexOf(btn);
   assert.ok(iSearch > -1 && iSort > -1, 'шапка списка потеряла поиск или сортировку — сравнивать не с чем');
   assert.ok(iBtn < iSort && iSort < iSearch,
@@ -556,6 +562,11 @@ test('DEBT_FLOW_V1: у должника красная метка «Долг» �
 // в запрос списка фильтром date_of_birth, очистка снимает фильтр.
 test('поиск по дате рождения фильтрует список точной датой', async () => {
   const { box } = await paint();
+  // PATIENT_SORT_DROPDOWN_V1 — по умолчанию страницу отдаёт сервер (последний визит);
+  // здесь проверяется прежний путь /api/db — сортировка «Сначала новые».
+  const sortSel = walk(box).find((n) => n.attrs && 'data-sort-select' in n.attrs);
+  sortSel.value = 'recent'; sortSel.dispatchEvent({ type: 'change', currentTarget: sortSel, target: sortSel });
+  await tick();
   const dobInp = walk(box).find((n) => n.tagName === 'INPUT' && 'data-dob-search' in n.attrs);
   assert.ok(dobInp, 'поля даты рождения нет');
   const patientsCalls = () => dbCalls.filter((b) => b && b.table === 'patients' && JSON.stringify(b).includes('registration_date'));
@@ -573,7 +584,7 @@ test('поиск по дате рождения фильтрует список 
 // ===========================================================================
 // PATIENT_LIST_LAST_VISIT_V1 · PATIENT_LIST_COLUMNS_V1 (владелец, 2026-11-07)
 // ===========================================================================
-test('«Последний визит»: сортирует сервер, повторное нажатие — обратный порядок; «Фильтр» шлёт период', async () => {
+test('«Последний визит»: по умолчанию, сортирует сервер, «сначала давние» — вторым вариантом; «Фильтр» шлёт период', async () => {
   const prevFetch = globalThis.fetch;
   const listCalls = [];
   globalThis.fetch = async (url, opts = {}) => {
@@ -587,13 +598,15 @@ test('«Последний визит»: сортирует сервер, пов
   };
   try {
     const { box } = await paint();
-    const sortBtn = buttons(box).find((b) => b.attrs['data-sort'] === 'last_visit');
-    assert.ok(sortBtn, 'кнопки «Последний визит» нет');
-    sortBtn.click(); await tick();
-    assert.equal(listCalls.at(-1).sort, 'last_visit_desc', 'первое нажатие — сначала недавние');
+    // PATIENT_SORT_DROPDOWN_V1 (владелец: «random should be last visit») — список
+    // открывается уже отсортированным по последнему визиту, сначала недавние.
+    const sortSel = walk(box).find((n) => n.attrs && 'data-sort-select' in n.attrs);
+    assert.ok(sortSel, 'списка сортировки нет');
+    assert.equal(sortSel.value, 'last_visit_desc', 'по умолчанию выбран не «Последний визит»');
+    assert.equal(listCalls.at(-1).sort, 'last_visit_desc', 'первая загрузка — не по последнему визиту');
     assert.equal(rowsOf(box).length, PATIENTS.length, 'строки пришли с сервера и нарисованы');
-    sortBtn.click(); await tick();
-    assert.equal(listCalls.at(-1).sort, 'last_visit_asc', 'повторное — сначала давние');
+    sortSel.value = 'last_visit_asc'; sortSel.dispatchEvent({ type: 'change', currentTarget: sortSel, target: sortSel }); await tick();
+    assert.equal(listCalls.at(-1).sort, 'last_visit_asc', '«сначала давние» не ушло на сервер');
 
     // «Фильтр» — справа, под «Создать пациента»; период уходит на сервер.
     const filterBtn = buttons(box).find((b) => b.attrs['data-act'] === 'patients-filter');

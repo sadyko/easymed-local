@@ -89,14 +89,18 @@ test('строка открывает карточку; задача на чуж
   // кнопка; карточку открывает настоящая кнопка с текстом задачи.
   byAttr(mine, 'data-task-open')[0].click();
   assert.equal(byAttr(foreign, 'data-task-open').length, 0, 'у задачи на чужой карточке есть кнопка «открыть»');
+  // CRM_TASK_ROW_CLICK_V1 — ОБНОВЛЕНО НАМЕРЕННО: щелчок по строке своей карточки тоже
+  // открывает её; строка чужой карточки (открыть нечего) — нет.
   mine.click(); foreign.click(); await tick();
-  assert.deepEqual(opened, [101]);
+  assert.deepEqual(opened, [101, 101]);
   assert.ok(textOf(foreign).includes('Карточка у другого оператора'));
   assert.ok(textOf(mine).includes('Карточка 1'));
-  // отметить «сделано» на чужой карточке можно
+  // отметить «сделано» на чужой карточке можно.
+  // CRM_TASKS_COMPACT_V1 — кнопкой «Готово», а не флажком.
   const box = byAttr(foreign, 'data-task-done')[0];
-  box.checked = true;
-  box.dispatchEvent({ type: 'change', target: box, currentTarget: box });
+  assert.equal(box.tagName, 'BUTTON');
+  assert.ok(textOf(box).includes('Готово'));
+  box.click();
   await tick();
   const upd = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'update');
   assert.ok(upd, 'отметка не ушла');
@@ -196,7 +200,7 @@ test('T3 доступность: строка — не кнопка; карто�
   assert.ok(textOf(open).includes('Задача 1'));
   const box = byAttr(vis, 'data-task-done')[0];
   assert.equal(box.getAttribute('aria-label'), 'Сделано');
-  assert.ok(!walk(open).includes(box), 'флажок внутри кнопки');
+  assert.ok(!walk(open).includes(box), '«Готово» внутри кнопки открытия');
   open.click(); await tick();
   assert.deepEqual(opened, [101]);
   // у невидимой карточки — не кнопка, текст задачи и пометка
@@ -217,3 +221,40 @@ test('метки задач на доске грузятся тем же пор�
   assert.ok(reads.every((c) => /users\(full_name\)/.test(c.columns)));
 });
 
+
+// CRM_TASKS_FILTER_V1 (2026-11-14, владелец: «better put filter … today, this
+// week, later») — отборы вместо групп; неделя — с понедельника по воскресенье.
+test('отборы: просрочено / сегодня / эта неделя / позже (и без срока — в «позже»)', async () => {
+  const { taskInFilter, TASK_FILTERS } = await import('../views/crm-tasks-view.js');
+  assert.deepEqual(TASK_FILTERS.map(([k]) => k), ['all', 'overdue', 'today', 'week', 'later']);
+  const now = new Date(2026, 10, 14, 12);   // суббота, 14 ноября, полдень
+  const t = (d) => ({ id: 1, due_at: d ? d.toISOString().replace(/\.\d{3}Z$/, 'Z') : null });
+  const pastToday = t(new Date(2026, 10, 14, 9));
+  const laterToday = t(new Date(2026, 10, 14, 18));
+  const sunday = t(new Date(2026, 10, 15, 10));
+  const monday = t(new Date(2026, 10, 16, 10));
+  const noDue = t(null);
+  assert.ok(taskInFilter(pastToday, 'overdue', now) && taskInFilter(pastToday, 'today', now));
+  assert.ok(!taskInFilter(laterToday, 'overdue', now) && taskInFilter(laterToday, 'today', now) && taskInFilter(laterToday, 'week', now));
+  assert.ok(taskInFilter(sunday, 'week', now) && !taskInFilter(sunday, 'today', now) && !taskInFilter(sunday, 'later', now),
+    'завтрашнее воскресенье — «эта неделя», а не «позже»');
+  assert.ok(taskInFilter(monday, 'later', now) && !taskInFilter(monday, 'week', now));
+  assert.ok(taskInFilter(noDue, 'later', now) && !taskInFilter(noDue, 'week', now));
+  assert.ok(!taskInFilter({ ...sunday, done_at: '2026-11-14T10:00:00Z' }, 'all', now), 'сделанная не показывается');
+});
+
+test('вид: полоса отборов со счётчиками, задача — одной строкой с «Готово»', async () => {
+  window.easymed.state.user = LOLA;
+  S.tasks = [T(1, new Date(2020, 0, 1, 9)), T(2, null)];
+  const root = mk('div');
+  await renderTasksView(root, { who: 'me', me: 21 });   // задачи T() — у сотрудника 21
+  const chips = byAttr(root, 'data-task-filter');
+  assert.deepEqual(chips.map((c) => c.getAttribute('data-task-filter')), ['all', 'overdue', 'today', 'week', 'later']);
+  assert.ok(textOf(chips[0]).includes('2'), 'у «Все» нет счётчика');
+  chips.find((c) => c.getAttribute('data-task-filter') === 'overdue').click();
+  const rows = byAttr(root, 'data-task-row');
+  assert.equal(rows.length, 1, 'отбор «Просрочено» показал не одну задачу');
+  const row = rows[0];
+  assert.ok(byAttr(row, 'data-task-done').length === 1 && textOf(row).includes('Готово'));
+  assert.equal(byAttr(row, 'data-task-row').length, 1, 'строка не плоская');
+});

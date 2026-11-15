@@ -61,12 +61,38 @@ globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
 export const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
+// CRM_HERO_V1 — вид доски выбирается списком «Вид» в ряду фильтров (Канбан /
+// Список); «Мои задачи» и «Доска» — кнопки баннера раздела. Из «Задач» назад —
+// «Доска»: она возвращает запомненный вид доски (по умолчанию Канбан).
+export function crmView(root, v) {
+  const all = walk(root);
+  if (v === 'tasks') { all.find((n) => n.attrs && n.attrs['data-crm-view'] === 'tasks').click(); return; }
+  const sel = all.find((n) => n.attrs && 'data-crm-view-select' in n.attrs);
+  if (!sel) { all.find((n) => n.attrs && n.attrs['data-crm-view'] === 'board').click(); return; }
+  sel.value = v;
+  sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+}
 export const textOf = (el) => walk(el).map((n) => n._t || '').join('');
 export const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
 export const byClass = (root, c) => walk(root).filter((n) => hasClass(n, c));
 export const byAttr = (root, a) => walk(root).filter((n) => n.attrs && a in n.attrs);
 export const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 export const button = (root, re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
+// CRM_PERIOD_DROPDOWN_V1 — «Период» — выпадающий список, а не чипы. Тесты писались
+// под чипы (найти кнопку по подписи, .click(), ' on' в className): periodChip
+// отдаёт то же лицо поверх списка — click() выбирает вариант, className — ' on',
+// если он выбран. Подпись не периода — обычная кнопка, как раньше.
+export const PERIOD_KEYS = { 'Всё время': 'all', 'Сегодня': 'today', 'Эта неделя': 'week', '30 дней': '30', 'Свой период': 'custom' };
+export function periodChip(root, re) {
+  const sel = byAttr(root, 'data-period-select')[0];
+  const label = Object.keys(PERIOD_KEYS).find((l) => re.test(l));
+  if (!sel || !label) return button(root, re);
+  const key = PERIOD_KEYS[label];
+  return {
+    click() { sel.value = key; sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel }); },
+    get className() { return sel.value === key ? ' on' : ''; },
+  };
+}
 
 // --- поддельный сервер -----------------------------------------------------
 // S — изменяемое состояние стенда; CALLS — журнал /api/db, RPC — журнал RPC.
@@ -221,3 +247,7 @@ globalThis.fetch = async (url, opts) => {
   }
   return jsonOk([]);
 };
+
+// CRM_PERIOD_DEFAULT_TODAY_V1 — доска открывается на «Сегодня»; заявки стенда записаны задним
+// числом, и тесты (писанные под «Всё время» по умолчанию) смотрят всё время.
+globalThis.__CRM_TEST_PERIOD__ = 'all';

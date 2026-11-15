@@ -6,7 +6,7 @@
 // осталось кириллицей. Раньше утекали подписи источников («Звонок · N») и
 // ступеней в «Отчёте» («Пришёл · N»): к ним приклеивали число ДО перевода.
 import assert from 'node:assert/strict';
-import { S, mk, walk, byAttr, tick, TOASTS } from './crm-harness.mjs';
+import { S, mk, walk, byAttr, tick, TOASTS, crmView } from './crm-harness.mjs';
 
 const CYR = /[А-Яа-яЁёҚқҒғЎўҲҳ]/;
 function leaks(root) {
@@ -56,7 +56,9 @@ export async function crmLeaks(lang) {
   // CRM_PERIOD_ALL_COLUMNS_V1 (3.23.0) — строка о периоде над доской: каждый период
   // и свои даты; «Показать все» возвращает «Всё время».
   for (const key of ['today', 'week', '30', 'custom']) {
-    byAttr(root, 'data-crm-period').find((n) => n.getAttribute('data-crm-period') === key).click();
+    // CRM_PERIOD_DROPDOWN_V1 — период выбирается в списке.
+    const ps = byAttr(root, 'data-period-select')[0];
+    ps.value = key; ps.dispatchEvent({ type: 'change', target: ps, currentTarget: ps });
     await tick(60);
     assert.equal(byAttr(root, 'data-crm-period-line').length, 1, 'нет строки о периоде: ' + key);
     found['period_' + key] = leaks(root);
@@ -71,14 +73,14 @@ export async function crmLeaks(lang) {
   found.foreignHint = leaks(byAttr(root, 'data-crm-foreign-hint')[0]);
   inp.value = ''; inp.dispatchEvent({ type: 'input', target: inp, currentTarget: inp });
   await tick(560); await tick(40);
-  byAttr(root, 'data-crm-view').find((n) => n.getAttribute('data-crm-view') === 'list').click(); await tick(60);
+  crmView(root, 'list'); await tick(60);
   found.list = leaks(root);
-  byAttr(root, 'data-crm-view').find((n) => n.getAttribute('data-crm-view') === 'tasks').click(); await tick(80);
+  crmView(root, 'tasks'); await tick(80);
   found.tasks = leaks(root);
   const tv = mk('div');
   await renderTasksView(tv, { who: 'all', me: 7, canPick: true, staff: [{ id: 24, full_name: 'Operator B' }] });
   found.tasksAll = leaks(tv);
-  byAttr(root, 'data-crm-view').find((n) => n.getAttribute('data-crm-view') === 'kanban').click(); await tick(60);
+  crmView(root, 'kanban'); await tick(60);
   await setOp('none');
   const reportBtn = walk(root).find((n) => n.tagName === 'BUTTON' && walk(n).some((c) => c._t && /Report|Hisobot|Отчёт/.test(c._t)));
   reportBtn.click(); await tick(80);

@@ -156,6 +156,8 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     if (name === 'kitchen_sheet') return ok({ data: KITCHEN_SHEET });
+    // PATIENT_SORT_DROPDOWN_V1 — по умолчанию список сортируется по последнему визиту: страницу отдаёт сервер.
+    if (name === 'patient_list_page') return ok({ data: { rows: [JSON.parse(JSON.stringify(PATIENT))], total: 1 } });
     if (name === 'inpatient_capabilities') return ok({ data: { roles: [], can: { discharge: true } } });
     if (name === 'admission_discharge_queue') return ok({ data: DISCHARGE_QUEUE });
     if (name === 'accommodation_state') return ok({ data: { stay_units: 1, invoiced: { units: 1, total: 0 }, current: null, billed: null, stale: false } });

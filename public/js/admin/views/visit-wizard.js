@@ -29,7 +29,7 @@ import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE
 import { CAT_ORDER, categoryOf } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1
 import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDateTime } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageSplit, packageValidOn, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
+import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageSplit, packageValidOn, cartPackage, packageDiscount } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';   // PACKAGES_V1 — «скидка 20 % · до 30.09.2026»
 import { doctorPoolFor, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
 import { performerRequired, assignedTo } from './doctor-pool.js?v=dp1';
@@ -41,7 +41,7 @@ import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule
 // они действуют; одно правило на оба мастера.
 import { eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining, serviceScope } from '../discount-rules.js';
 import { groupOf, discountChoiceOptions, keepChoice, choiceArgs, choiceFloorPct, choiceReason, choiceToSend, groupHint } from '../discount-choice.js';   // DISCOUNT_V2 — одна скидка на выбор; choiceToSend — ревью S1 L-3; groupHint — DISCOUNT_HINT_TRUE_V1
-import { ratedOutcome, hasRates } from '../discount-rates.js';   // DISCOUNT_RATES_V1 — скидка по ставкам услуг, как посчитает счёт
+import { ratedOutcome, hasRates, lineDiscountPct, promoRateSource, promoRatesApply } from '../discount-rates.js';   // DISCOUNT_RATES_V1 — скидка по ставкам услуг, как посчитает счёт
 import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
@@ -690,6 +690,24 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // сбой не мешает мастеру — просто нечего предложить.
         { const w = await loadPatientWallet(patient && patient.id); wiz.balance = w.balance; wiz.walletDebt = w.debt; }
         wiz.services = svcRes.data || [];
+        // SALE_PACKAGE_V1 (2026-11-13, владелец со снимком каталога: «I don't see here discount
+        // on the service» — у услуги был пакет «Discount 10%» из ОДНОЙ этой услуги). Пакет из
+        // одной услуги — это акция на услугу: её скидку каталог показывает значком
+        // (CATALOG_DISCOUNT_BADGE_V1) и даёт строке, добавленной «Добавить», — тем же
+        // cartPackage, что «Выбрать шаблон» (сервер принимает такую строку так же). Пакет из
+        // нескольких услуг — скидка за НАБОР: она по-прежнему только через «Выбрать шаблон».
+        // Сбой чтения — просто без акций: каталог работает.
+        wiz.salePkg = new Map();
+        try {
+            const pk = await listTemplates(supabase, { withPrices: true });
+            for (const t of (pk && !pk.error && Array.isArray(pk.data) ? pk.data : [])) {
+                if (!(packageDiscount(t) > 0) || templateSize(t) !== 1) continue;
+                const one = resolveTemplate(t, wiz.services).services;
+                if (one.length !== 1) continue;
+                const prev = wiz.salePkg.get(one[0].id);
+                if (!prev || packageDiscount(t) > packageDiscount(prev)) wiz.salePkg.set(one[0].id, t);
+            }
+        } catch (_) { wiz.salePkg = new Map(); }
         wiz.doctors  = performerCandidates(docRes.data || []);   // DIAG_ROUTE_V1 (D1)
         wiz.sources  = srcRes.data || [];
         wiz.refCats  = refCatRes.data || [];
@@ -1107,20 +1125,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // Step 1 — Услуги и пациент
     // ---------------------------------------------------------------------
     function paintStep1(root) {
-        // patient chip
-        root.appendChild(h('div', { style: { marginBottom: '12px' } },
-            h('span', {
-                style: {
-                    display: 'inline-flex', alignItems: 'center', gap: '8px',
-                    padding: '6px 14px 6px 6px', borderRadius: '999px',
-                    border: '1px solid var(--primary-200, #b6e2d6)', background: 'var(--white, #fff)',
-                    fontSize: '12.5px', fontWeight: 600, color: 'var(--primary-700)',
-                },
-            },
-                Avatar({ initials: initials(patient.full_name || '?'), color: avColor(patient.id), size: 'sm' }),
-                [patient.full_name, patient.mrn, patient.phone].filter(Boolean).join(' · '),
-            ),
-        ));
+        // RAIL_PATIENT_ONCE_V1 (2026-11-14, владелец: «patient data is 2 times, on a right and
+        // on a left» — и уточнил: «keep on a right side and remove the left one»). Здесь была
+        // плашка пациента над поиском; пациент назван в смете справа, на всех шагах.
 
         // search
         const searchInp = h('input', {
@@ -1138,7 +1145,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         });
         // category chips
         const chipsEl = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
-        const listEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
+        // CATALOG_COMPACT_V1 (2026-11-14, владелец со снимком каталога: «services are looking big
+        // enough, is it possible to make them little compact») — строки плотнее: меньше
+        // промежуток, отступы и кнопка; на экран входит заметно больше услуг.
+        const listEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } });
         // CATALOG_STICKY_HEAD_V1 — поиск и категории ПРИЛИПАЮТ к верху колонки.
         // Раньше они уезжали вместе со списком: на ноутбуке (а с масштабом ОС
         // 125–150% высоты остаётся ~430px) каталог прокручен почти всегда, и
@@ -1235,8 +1245,19 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const onVisit = inCart ? null : orderedMatch(s, orderedNow());
                 const headRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px' } },
                     h('div', { style: { minWidth: 0, flex: 1 } },
-                        h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: inCart ? 'var(--primary-700)' : 'var(--ink-900)' } },
-                            s.name, inCart ? (performerRequired(inCart.svc) && !inCart.doctorId ? ' — выберите врача' : ' — добавлено') : '',   // DIAG_ROUTE_V1 (D1) · LAB_NO_DOCTOR_V1
+                        h('div', { title: [categoryOf(s), trf('{n} мин', { n: s.duration_minutes || 30 }), s.requires_doctor ? tr('нужен врач') : performerRequired(s) ? tr('нужен исполнитель') : tr('врач не требуется')].join(' · '),   // CATALOG_ONE_LINE_V1 · DIAG_ROUTE_V1 (D1) · LAB_NO_DOCTOR_V1
+                            style: { fontSize: '13.5px', fontWeight: 700, lineHeight: '1.35', color: inCart ? 'var(--primary-700)' : 'var(--ink-900)' } },
+                            s.name,
+                            // CATALOG_DISCOUNT_BADGE_V1 — скидка на услугу при выбранной скидке, красным
+                            // CATALOG_DISCOUNT_NAME_V1 (владелец: «put the name of discount to 12 symbols then wrap it») —
+                            // рядом с процентом имя скидки; длиннее 12 знаков — переносится строкой ниже (CSS 12ch).
+                            // CATALOG_DISCOUNT_SPLIT_V1 (владелец: «separate name and discount amount», затем
+                            // «first name then discount») — два отдельных значка: сначала светлый с именем
+                            // скидки, за ним красный «−10%».
+                            (() => { const d = catalogDiscount(s); return d.pct > 0 ? [
+                                d.name ? h('span', { class: 'svc-disc-name', title: d.name }, d.name) : null,
+                                h('span', { class: 'svc-disc-badge', title: tr('Скидка на эту услугу'), dataset: { discBadge: String(d.pct) } }, '−' + d.pct + '%')] : null; })(),
+                            inCart ? (performerRequired(inCart.svc) && !inCart.doctorId ? ' — выберите врача' : ' — добавлено') : '',   // DIAG_ROUTE_V1 (D1) · LAB_NO_DOCTOR_V1
                             // CRM_CONVERT_V1 — услуга пришла из заявки колл-центра
                             inCart && inCart.fromCrm
                                 ? h('span', { style: { marginLeft: '8px', padding: '2px 8px', borderRadius: '999px', fontSize: '12.5px', fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', background: 'var(--teal-50, #e0f2f1)', color: 'var(--teal-700, #00796b)', verticalAlign: 'middle' } }, 'из заявки')
@@ -1245,22 +1266,28 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                             onVisit
                                 ? h('span', { dataset: { orderedTag: '' }, style: { marginLeft: '8px', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-500)' } }, ' — ', orderedLabel(onVisit))
                                 : null),
-                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
-                            [categoryOf(s), trf('{n} мин', { n: s.duration_minutes || 30 }), s.requires_doctor ? tr('нужен врач') : performerRequired(s) ? tr('нужен исполнитель') : tr('врач не требуется')].join(' · ')),   // DIAG_ROUTE_V1 (D1) · LAB_NO_DOCTOR_V1
+                        // CATALOG_ONE_LINE_V1 (2026-11-14, владелец: «remove from the card inside service type and
+                        // duration and more service can fit there») — строки «Процедуры · 30 мин · нужен врач»
+                        // под именем больше нет: строка услуги в одну линию. Те же слова — подсказкой при
+                        // наведении на имя (title выше), а выбор врача по-прежнему открывается под строкой.
                     ),
                     h('span', { class: 'num', style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', whiteSpace: 'nowrap' } },
                         fmtPrice(s.price), ' сум'),
                     inCart
                         ? h('button', {
                             class: 'btn btn-sm', type: 'button',
-                            style: { borderRadius: '999px', minWidth: '80px', color: 'var(--crit-600, #dc2626)', fontWeight: 700 },
+                            style: { borderRadius: '999px', minWidth: '80px', height: '28px', color: 'var(--crit-600, #dc2626)', fontWeight: 700 },
                             onclick: () => { removeCartLine(inCart); repaintRail(); repaintCatalog(); },   // CRM_LINK_ALL_V1 (R7a)
                         }, 'убрать')
                         : h('button', {
                             class: 'btn btn-primary btn-sm', type: 'button',
-                            style: { borderRadius: '999px', minWidth: '96px' },
+                            style: { borderRadius: '999px', minWidth: '88px', height: '28px' },   // CATALOG_COMPACT_V1
                             onclick: () => {
                                 addToCart(s);
+                                // SALE_PACKAGE_V1 — акция на услугу едет со строкой, как у «Выбрать шаблон»
+                                const sale = wiz.salePkg && wiz.salePkg.get(s.id);
+                                const added = sale ? wiz.cart.find(c => c.svc.id === s.id && !c.package) : null;
+                                if (added) { added.package = cartPackage(sale, s.id); repaintRail(); }
                                 repaintCatalog();
                                 // SCROLL_KEEP_V1 — планировщик разворачивается ПОД
                                 // строкой и может оказаться за нижним краем.
@@ -1275,7 +1302,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     style: {
                         background: 'var(--white, #fff)',
                         border: inCart ? '1px dashed var(--primary-300, #7fcbb8)' : '1px solid var(--ink-100)',
-                        borderRadius: '12px', padding: '12px 16px',
+                        borderRadius: '9px', padding: '5px 12px',   // CATALOG_COMPACT_V1 — было 12px 16px; CATALOG_ONE_LINE_V1 — 5px
                     },
                     // DOC_FIRST_V1 — без врача нет и планировщика.
                     // DATE_ONLY_V1 — услуге без врача время не нужно: только дата.
@@ -2608,6 +2635,34 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // DISCOUNT_V2 — группа пациента со скидкой ({ name, pct } или null) и пол группы,
     // который сервер положит при выбранной скидке (группа и «вручную» — да).
     function wizGroup() { return groupOf(wiz.categoryName, wiz.categoryPct, wiz.categoryRates); }   // DISCOUNT_RATES_V1 — со ставками
+    // CATALOG_DISCOUNT_BADGE_V1 (2026-11-13, владелец со снимком каталога мастера: «when
+    // any service is on discount next to name of service show in red discounted %»).
+    // Процент, который ЭТА услуга получит при скидке, выбранной сейчас: группа пациента
+    // (со ставками по услугам), промокод с процентом или «вручную» процентом. Считает
+    // lineDiscountPct — то же правило, что смета (ratedNow) и сервер: значок не обещает
+    // скидку, которой не даст счёт. Скидка СУММОЙ (промокод суммой, карта, сертификат,
+    // «вручную» в сумах) на услугу не раскладывается — значка нет. Пакет из нескольких
+    // услуг — скидка набора, у строки сметы; пакет из ОДНОЙ услуги — акция на неё
+    // (SALE_PACKAGE_V1), её процент тоже здесь. Врач скидку не выбирает: у него, как у
+    // сервера, действует группа.
+    function catalogDiscount(svc) {
+        const k = doctorBill ? 'group' : String(wiz.discountChoice || '');
+        let src = null;
+        if (k === 'group') src = (Number(wiz.categoryPct) > 0 || hasRates(wiz.categoryRates)) ? { pct: wiz.categoryPct, rates: wiz.categoryRates } : null;
+        else if (k.startsWith('promo:') && wiz.promo && promoRatesApply(wiz.promo)) src = promoRateSource(wiz.promo) || { pct: Math.min(100, Number(wiz.promo.percent) || 0), scope: serviceScope(wiz.promo) };
+        else if (k === 'manual' && wiz.discountMode === 'pct' && Number(wiz.discountPct) > 0) src = { pct: Number(wiz.discountPct) };
+        const choicePct = src ? Math.round(lineDiscountPct(src, svc)) : 0;
+        // SALE_PACKAGE_V1 — акция-пакет на эту услугу; со скидкой группы не складывается
+        // (PACKAGES_V1: на строке действует бо́льшая), поэтому значок — бо́льший из двух.
+        const sale = wiz.salePkg && wiz.salePkg.get(svc.id);
+        const salePct = sale && packageValidOn(sale) ? Math.round(packageDiscount(sale)) : 0;
+        // CATALOG_DISCOUNT_NAME_V1 — имя той скидки, что даёт процент: пакета, группы,
+        // промокода; у «вручную» имени нет — слово «Вручную».
+        if (salePct >= choicePct && salePct > 0) return { pct: salePct, name: sale.name || '' };
+        if (choicePct <= 0) return { pct: 0, name: '' };
+        const name = k === 'group' ? (wiz.categoryName || '') : k.startsWith('promo:') ? ((wiz.promo && wiz.promo.name) || '') : tr('Вручную');
+        return { pct: choicePct, name };
+    }
     // DISCOUNT_RATES_V1 — скидка по ставкам услуг на строки (discount-rates.js — зеркало сервера):
     // null — ставок нет (прежний расчёт); { rated, off } — что даст счёт. Врач скидку не выбирает:
     // сервер считает по правилу «без выбора» (ставки группы).
@@ -2745,6 +2800,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     onclick: () => openSaveTemplate(),
                 }, Icon('Folder', { size: 13 }), ' Сохранить как шаблон')
                 : null));
+        // RAIL_PATIENT_ONCE_V1 — пациент назван ЗДЕСЬ, в смете, на всех шагах; плашку над
+        // поиском первого шага владелец убрал (дубль).
         railEl.appendChild(h('div', { class: 'row', style: { gap: '10px' } },
             Avatar({ initials: initials(patient.full_name || '?'), color: avColor(patient.id) }),
             h('div', { style: { minWidth: 0 } },

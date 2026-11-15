@@ -5,7 +5,7 @@
 // Читают ВСЕ вошедшие: объявление «аппарат УЗИ не работает» нужно регистратору
 // и врачу не меньше, чем администратору, — поэтому своего ключа прав у чтения
 // нет. Пишет и снимает администратор клиники.
-import { isAdminUser } from '../grants.js';
+import { grantAllowsAdminOr } from '../grants.js';
 import { today } from '../domain/day.js';
 
 export class RpcError extends Error {
@@ -19,9 +19,10 @@ const BODY_MAX = 4000;
 function requireUser(user) {
   if (!user || !user.id) throw new RpcError('Нужно войти в систему.', 401);
 }
-function requireAdmin(user) {
+function requireAdmin(db, user) {
   requireUser(user);
-  if (!isAdminUser(user)) throw new RpcError('Объявления на доске публикует администратор клиники.', 403);
+  // CLINIC_NEWS_GRANT_V1 — строка «Информационная доска» в «Ролях»; не настроена — администратор.
+  if (!grantAllowsAdminOr(db, user, 'commerce_news', 'edit')) throw new RpcError('Объявления на доске публикует администратор клиники или роль с правом «Информационная доска» в «Настройки → Роли».', 403);
 }
 
 // CLINIC_NEWS_IMPORTANT_V1 — n.important (мигр. 267): «Важно», жёлтым на экране.
@@ -67,7 +68,7 @@ function cleanArgs(args) {
 
 /** Опубликовать (без id) или исправить (с id) объявление. */
 export function clinicNewsSave(db, args, user) {
-  requireAdmin(user);
+  requireAdmin(db, user);
   const v = cleanArgs(args);
   const id = args && args.id != null ? Number(args.id) : null;
   if (id !== null) {
@@ -85,7 +86,7 @@ export function clinicNewsSave(db, args, user) {
 
 /** «Снять с доски»: строка остаётся в архиве. */
 export function clinicNewsArchive(db, args, user) {
-  requireAdmin(user);
+  requireAdmin(db, user);
   const id = Number(args && args.id);
   if (!Number.isInteger(id) || id <= 0) throw new RpcError('Объявление не выбрано.', 400);
   const r = db.prepare(`UPDATE clinic_news SET archived_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), archived_by = ?

@@ -90,6 +90,8 @@ const FULL_ACCESS_ONLY = {
     // Явное `return false`: ключи Binotel/onlinePBX открывают журнал звонков всей клиники.
     'telephony-settings': 'TELEPHONY_V1 — раздел админский целиком, включая чтение',
     'sms-settings': 'SMS_INFORM_V1 — логин и пароль Play Mobile: право слать SMS за деньги клиники; только администратор',
+    // Явное `return false`: отчёт несёт деньги клиники, токен — право писать от её имени.
+    'daily-report': 'DAILY_REPORT_BOT_V1 — отчёт совету директоров в Telegram; только администратор',
     // Явное `return false`: экран задаёт саму воронку CRM; ошибка ломает CRM всей клиники.
     'crm-settings':       'CRM_CONFIG_V1 — раздел админский целиком, включая чтение',
     // Весь /api/users стоит за requireRole(\'admin\') (server/routes/users.js):
@@ -166,6 +168,13 @@ test('ROUTE_GATE_COVERS_PARENT_OF_V1: у каждого подэкрана из 
             if (parent in TILE_OPENED) {
                 perms.setEffectiveFromRole(tileRole(TILE_OPENED[parent]));
                 assert.ok(perms.isModuleAllowed(parent), 'TILE_OPENED протух: «' + parent + '» больше не открывается уровнем ' + JSON.stringify(TILE_OPENED[parent]));
+                // DAILY_REPORT_BOT_V1 — у витрины «Коммерческие инструменты» появился подэкран
+                // «только полный доступ» (отчёт совету директоров): FULL_ACCESS_ONLY действует и
+                // здесь, в обе стороны — открылся уровнем плитки, значит запись протухла.
+                if (child in FULL_ACCESS_ONLY) {
+                    if (perms.isRouteAllowed(child)) stale.push(child + ' — открывается уровнем плитки «' + parent + '», а записан как «только полный доступ»');
+                    continue;
+                }
                 if (!perms.isRouteAllowed(child)) fallen.push('#' + child + ' (родитель «' + parent + '», уровень ' + JSON.stringify(TILE_OPENED[parent]) + ')');
                 continue;
             }

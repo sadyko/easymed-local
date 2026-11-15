@@ -146,6 +146,7 @@ globalThis.fetch = async (url, opts) => {
     return jsonOk([]);
 };
 
+globalThis.__CRM_TEST_PERIOD__ = 'all';   // CRM_PERIOD_DEFAULT_TODAY_V1 — заявки стенда задним числом: доска на «Всё время»
 const { renderCrm } = await import('../views/crm.js');
 
 async function board(leads) {

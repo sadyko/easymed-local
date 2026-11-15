@@ -10,7 +10,7 @@
 // ведёт доску. Прежних чипов data-op-chip и отдельного списка «По имени…» нет.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, RPC, mk, walk, textOf, byAttr, byClass, tick } from './crm-harness.mjs';
+import { S, CALLS, RPC, mk, walk, textOf, byAttr, byClass, tick, crmView } from './crm-harness.mjs';
 import { TASK_LIST_SELECT } from '../views/crm-tasks.js';
 
 const { renderCrm, crmExcelRows } = await import('../views/crm.js');
@@ -34,7 +34,7 @@ async function boardAs(user, view) {
   const root = mk('div');
   await renderCrm(root, { onNavigate() {} });
   await tick();
-  if (view) { walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === view).click(); await tick(60); }
+  if (view) { crmView(root, view); await tick(60); }
   return root;
 }
 const opSel = (root) => byAttr(root, 'data-op-select')[0];
@@ -155,12 +155,12 @@ test('вид «Задачи» — свой отбор «Чьи задачи»: �
   const root = await boardAs(BOSS);
   await pickOp(root, 'none');
   CALLS.length = 0;
-  walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'tasks').click();
+  crmView(root, 'tasks');
   await tick(80);
   assert.equal(byAttr(root, 'data-op-select').length, 0, 'фильтр «Оператор» в виде «Задачи»');
   const q = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'select' && c.columns === TASK_LIST_SELECT);
   assert.ok(q && q.filters.some((f) => f.col === 'assignee_id' && f.op === 'eq' && f.val === 23), 'вид «Задачи» взял фильтр доски');
-  walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'kanban').click();
+  crmView(root, 'kanban');
   await tick(60);
   await reset(root);
 });

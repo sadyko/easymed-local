@@ -995,6 +995,8 @@ export function stripToGrant(table, payload) {
 const COMMERCE_TOOLS = {
     commerce_push:  { legacy: () => (settingsTileAllows('settings.telegram', 'edit') ? 'edit' : 'none') },
     commerce_links: { legacy: () => { const l = settingsTileLevel('settings.telegram'); return l === 'delete' ? 'edit' : l; } },
+    // CLINIC_NEWS_GRANT_V1 — публикация на доске; не настроена — только администратор, как вчера.
+    commerce_news:  { legacy: () => (actorIsAdmin() ? 'edit' : 'none') },
 };
 /** Уровень инструмента витрины: 'none' | 'view' | 'edit'. */
 export function commerceToolLevel(key) {
@@ -1276,6 +1278,10 @@ export function isRouteAllowed(view) {
     // клиники за её деньги: только полный доступ, как у Телефонии. Сервер
     // (rpc/sms.js) отказывает второй раз, независимо от этой строки.
     if (view === 'sms-settings') return false;
+    // DAILY_REPORT_BOT_V1 — отчёт совету директоров несёт деньги клиники, а токен — право
+    // писать от её имени: только полный доступ, как у SMS выше. Сервер (rpc/daily-report.js)
+    // отказывает второй раз, независимо от этой строки.
+    if (view === 'daily-report') return false;
     // TELEPHONY_V1 — то же правило, что у Telegram-бота строкой выше: ключ и
     // secret Binotel открывают журнал звонков всей клиники, настроенным ролям
     // тут делать нечего. Полный доступ (_effective === null) уже пропущен выше;

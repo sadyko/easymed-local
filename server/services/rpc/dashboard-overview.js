@@ -74,7 +74,11 @@ const inList = (keys) => keys.map((k) => `'${String(k).replace(/'/g, "''")}'`).j
 
 export function dashboardOverview(db, args, user) {
   const days = Math.max(1, Math.min(DAYS_MAX, Math.round(Number(args && args.days) || DAYS_DEFAULT)));
-  const to = today(db);
+  // DAILY_REPORT_BOT_V1 — end: последний день периода ('YYYY-MM-DD'). Утренний
+  // отчёт совету директоров идёт «за вчера» (daily-report/report.js). Не дата или
+  // будущее — сегодня, как было: сводка этим аргументом не пользуется.
+  const end = args && typeof args.end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.end) ? args.end : null;
+  const to = end && end < today(db) ? end : today(db);
   const from = addDays(to, -(days - 1));
   const prevTo = addDays(from, -1);
   const prevFrom = addDays(prevTo, -(days - 1));

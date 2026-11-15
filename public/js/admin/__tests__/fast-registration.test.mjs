@@ -1146,20 +1146,15 @@ test('исполнитель из каталога вне пула услуги 
 // ===========================================================================
 // ПОИСК СУЩЕСТВУЮЩЕГО — ВТОРАЯ КАРТА НЕ ЗАВОДИТСЯ.
 // ===========================================================================
-test('пациент найден строкой поиска: форма заперта, «Сменить» отпирает, визит уезжает на его карту', async () => {
+test('существующий пациент взят в окно («Это он»): форма заперта, «Сменить» отпирает, визит уезжает на его карту', async () => {
   reset();
   patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова',
                    first_name: 'Азиза', middle_name: '', phone: '+998901112233', date_of_birth: '1990-04-01' }];
   const dlg = openFastRegistrationDialog({});
   await tick(40);
 
-  dlg.searchInput.value = 'Кари';
-  dlg.searchInput.fireInput();
-  await tick(600);   // SEARCH_DEBOUNCE_V1 — поиск ждёт паузы в наборе
-
-  const hit = walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt'));
-  assert.ok(hit, 'найденный пациент не показан строкой выбора');
-  hit.click();
+  // FAST_REG_FOUND_TO_CARD_V1 — как кнопкой «Это он» в предупреждении о дубле.
+  await dlg.usePatient(patientRows[0], { load: true });
   await tick(60);
 
   assert.ok(dlg.state.patient && dlg.state.patient.id === 42, 'выбор не взял карту найденного');
@@ -1178,9 +1173,7 @@ test('пациент найден строкой поиска: форма зап
   assert.strictEqual(dlg.state.patient, null, '«Сменить» не отпустила выбранного пациента');
 
   // Берём его снова и записываем услугу.
-  dlg.searchInput.fireInput();
-  await tick(600);
-  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  await dlg.usePatient(patientRows[0], { load: true });
   await tick(60);
   const row = dlg.state.addLine(SERVICES[0], null);
   row.sel.value = '7';
@@ -1210,10 +1203,7 @@ test('найденный пациент без услуг: окно говори
                    first_name: 'Азиза', date_of_birth: '1990-04-01' }];
   const dlg = openFastRegistrationDialog({});
   await tick(40);
-  dlg.searchInput.value = 'Кари';
-  dlg.searchInput.fireInput();
-  await tick(600);
-  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  await dlg.usePatient(patientRows[0], { load: true });   // FAST_REG_FOUND_TO_CARD_V1 — как «Это он»
   await tick(60);
 
   calls.length = 0; toasts.length = 0;
@@ -1391,11 +1381,11 @@ test('визит дня с работой: услуги НЕ записаны, �
 // ===========================================================================
 const KARIMOVA = { id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова', first_name: 'Азиза', middle_name: '', phone: '+998901112233', date_of_birth: '1990-04-01' };
 const todayAt = (hh) => { const d = new Date(); d.setHours(hh, 0, 0, 0); return d.toISOString(); };
+// FAST_REG_FOUND_TO_CARD_V1 — строка поиска теперь открывает карту, а не берёт
+// пациента в окно; существующий пациент попадает сюда кнопкой «Это он» в
+// предупреждении о дубле — тот же usePatient(p, { load: true }).
 async function pickKarimova(dlg) {
-  dlg.searchInput.value = 'Кари';
-  dlg.searchInput.fireInput();
-  await tick(600);
-  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  await dlg.usePatient(KARIMOVA, { load: true });
   await tick(80);
 }
 
@@ -1805,4 +1795,94 @@ test('VISIT_TIER_SHOWN_CASHIER_V1: строка пакета — без чипа
   await saveWithTier(dlg, { packaged: true });
   assert.equal(tierChips(dlg.table).length, 0, 'у строки пакета чипа нет');
   dlg.close();
+});
+
+// FAST_REG_PICKED_CARD_V1 (2026-11-13) — владелец: «when patient is found from
+// search place here, if you press to it it should send to patient card». Имя на
+// плашке найденного пациента ведёт в его карту; несохранённые услуги — только
+// с согласия.
+test('FAST_REG_PICKED_CARD_V1: имя пациента на плашке открывает его карту; несохранённые услуги — с согласия', async () => {
+  reset();
+  patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова',
+                   first_name: 'Азиза', middle_name: '', phone: '+998901112233', date_of_birth: '1990-04-01' }];
+  const went = [];
+  const asked = [];
+  const prevConfirm = globalThis.window.confirm;
+  let answer = false;
+  globalThis.window.confirm = (q) => { asked.push(q); return answer; };
+  try {
+    const dlg = openFastRegistrationDialog({ onNavigate: (v, p) => went.push([v, p]) });
+    await tick(40);
+    await dlg.usePatient(patientRows[0], { load: true });   // как «Это он»
+    await tick(60);
+
+    const link = walk(dlg.card).find((n) => n.attrs && n.attrs['data-fr-open-card'] != null);
+    assert.ok(link && link.tagName === 'BUTTON', 'имя на плашке не нажимается');
+    assert.ok(textOf(link).includes('P-42') && textOf(link).includes('Каримова'), 'на плашке не тот пациент: ' + textOf(link));
+
+    // Добавили услугу и не записали — без согласия никуда не уходим.
+    dlg.state.addLine(SERVICES[0], null);
+    link.click();
+    await tick(40);
+    assert.equal(asked.length, 1, 'несохранённые услуги пропали бы молча — не спросили');
+    assert.equal(went.length, 0, 'ушли в карту, хотя человек отказался');
+
+    // Согласились — карта пациента.
+    answer = true;
+    link.click();
+    await tick(60);
+    assert.equal(went.length, 1, 'карта пациента не открылась');
+    assert.equal(went[0][0], 'patient-card');
+    assert.equal(went[0][1].id, 42, 'открылась не та карта');
+  } finally {
+    globalThis.window.confirm = prevConfirm;
+  }
+});
+
+// FAST_REG_FOUND_TO_CARD_V1 (2026-11-13) — владелец: «no need to click the name,
+// directly send to patient card». Найденный строкой поиска пациент в окно не
+// берётся: сразу его карта, окно закрыто, визита и карты не заводится.
+test('FAST_REG_FOUND_TO_CARD_V1: найденный строкой поиска пациент — сразу его карта, окно закрыто', async () => {
+  reset();
+  patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова',
+                   first_name: 'Азиза', middle_name: '', phone: '+998901112233', date_of_birth: '1990-04-01' }];
+  const went = [];
+  const prevConfirm = globalThis.window.confirm;
+  let asked = 0;
+  globalThis.window.confirm = () => { asked += 1; return false; };
+  try {
+    const dlg = openFastRegistrationDialog({ onNavigate: (v, p) => went.push([v, p]) });
+    await tick(40);
+    dlg.searchInput.value = 'Кари';
+    dlg.searchInput.fireInput();
+    await tick(600);   // SEARCH_DEBOUNCE_V1 — поиск ждёт паузы в наборе
+    const hit = walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt'));
+    assert.ok(hit, 'найденный пациент не показан строкой выбора');
+    calls.length = 0;
+    hit.click();
+    await tick(60);
+    assert.equal(asked, 0, 'спросили, хотя терять нечего');
+    assert.deepEqual(went.map(([v, p]) => [v, p.id]), [['patient-card', 42]], 'карта найденного не открылась');
+    assert.strictEqual(dlg.state.patient, null, 'найденный всё равно взят в окно');
+    assert.equal(calls.filter((c) => c.kind === 'rpc' && c.name === 'ensure_visit').length, 0, 'завёлся визит');
+    assert.ok(textOf(dlg.card).includes('откроется его карта'), 'подпись поиска обещает старое');
+
+    // Добавленные и не записанные услуги — только с согласия.
+    reset();
+    patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова',
+                     first_name: 'Азиза', middle_name: '', phone: '+998901112233', date_of_birth: '1990-04-01' }];
+    went.length = 0;
+    const dlg2 = openFastRegistrationDialog({ onNavigate: (v, p) => went.push([v, p]) });
+    await tick(40);
+    dlg2.state.addLine(SERVICES[0], null);
+    dlg2.searchInput.value = 'Кари';
+    dlg2.searchInput.fireInput();
+    await tick(600);
+    walk(dlg2.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+    await tick(60);
+    assert.equal(asked, 1, 'несохранённые услуги пропали бы молча — не спросили');
+    assert.equal(went.length, 0, 'ушли в карту, хотя человек отказался');
+  } finally {
+    globalThis.window.confirm = prevConfirm;
+  }
 });

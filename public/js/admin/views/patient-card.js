@@ -29,7 +29,7 @@ import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
 import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — подпись у результата
 import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=ownrep4';   // LIVE_AUDIT_FIX_V1 — canAddVisitLines · REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
-import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1
+import { printInvoiceCheck, printInvoiceSheetById } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1 · PATIENT_INVOICE_PRINT_V1
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
 import { openVisitBillModal } from './visit-bill.js?v=ownrep3';   // REFBILL_REVIEW_V1 — штамп: «Выставить счёт» только денежным ролям
 import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» с карты пациента
@@ -1420,6 +1420,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 h('td', { class: 'num', style: { textAlign: 'right', color: 'var(--ok-700)' } }, fmtPrice(inv.paid_amount)),
                 h('td', { class: 'num', style: { textAlign: 'right', fontWeight: 600, color: !cancelled && balance > 0 ? 'var(--crit-600)' : 'var(--ink-500)' } }, cancelled ? '—' : fmtPrice(balance)),
                 h('td', null, StatusTag(inv.status)),
+                h('td', { style: { textAlign: 'right' } }, invoicePrintBtn(inv)),
             ));
         }
         wrap.appendChild(h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
@@ -1430,11 +1431,36 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 h('th', { style: { textAlign: 'right' } }, 'Сумма'),
                 h('th', { style: { textAlign: 'right' } }, 'Оплачено'),
                 h('th', { style: { textAlign: 'right' } }, 'Остаток'),
-                h('th', null, 'Статус'))),
+                h('th', null, 'Статус'),
+                h('th', { 'aria-label': tr('Печать') }))),
             tbody,
         )));
         fillBillingDetails(svcCells, docCells);
         return wrap;
+    }
+
+    // PATIENT_INVOICE_PRINT_V1 (2026-11-13, владелец со снимком вкладки «Счёт»:
+    // «make the invoice printable put at the end print button»). Последней
+    // графой строки — «Печать»: A4-счёт тем же бланком, что у кассы, окна визита
+    // и мастера записи (receipt-print.js printInvoiceSheetById — одна сборка,
+    // V3120_FIX). Это не чек: чек об оплате перепечатывает кнопка у услуги
+    // (REPRINT_SERVICE_CHECK_V1). Счёт без строк (отменённый пустой) бланк не
+    // печатает — сборка отказывает словами, и они уходят в тост.
+    function invoicePrintBtn(inv) {
+        return h('button', {
+            class: 'btn btn-outline btn-sm', type: 'button', 'data-invoice-print': String(inv.id),
+            title: tr('Напечатать счёт'),
+            onclick: async (ev) => {
+                const btn = ev.currentTarget;
+                btn.disabled = true;
+                try {
+                    const res = await printInvoiceSheetById({ supabase, printableSheet: _printSheet, invoiceId: inv.id });
+                    if (!res.ok) toast(tr(res.reason || 'Не удалось напечатать счёт.'), 'fail');
+                } catch (e) {
+                    toast(trf('Не удалось напечатать счёт: {msg}', { msg: (e && e.message) || e }), 'fail');
+                } finally { btn.disabled = false; }
+            },
+        }, Icon('Print', { size: 13 }), ' ', tr('Печать'));
     }
 
     // PATIENT_TAB_ACCESS_V1 — строки счетов и врач по строке приезжают ВМЕСТЕ с

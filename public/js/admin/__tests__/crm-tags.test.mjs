@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, mk, walk, textOf, byAttr, byClass, tick, button, TOASTS } from './crm-harness.mjs';
+import { S, CALLS, mk, walk, textOf, byAttr, byClass, tick, button, TOASTS, crmView } from './crm-harness.mjs';
 import { boardConfig, shapeConfig, validateTags } from '../crm-settings-logic.js?v=crmcfg1';
 
 const { renderCrm, groupLeadTags, CRM_FILTER_ALL } = await import('../views/crm.js');
@@ -35,7 +35,7 @@ async function board(view = 'kanban') {
   // исходное, чтобы тесты не зависели от порядка.
   const ts = byAttr(root, 'data-tag-select')[0];   // CRM_FILTERS_DROPDOWN_V1 — «Метки» — выпадающий список
   if (ts) { ts.value = CRM_FILTER_ALL; ts.dispatchEvent({ type: 'change', target: ts, currentTarget: ts }); await tick(); }
-  button(root, view === 'list' ? /Список/ : /Канбан/).click();
+  crmView(root, view === 'list' ? 'list' : 'kanban');   // CRM_HERO_V1 — вид — список «Вид»
   await tick();
   return root;
 }

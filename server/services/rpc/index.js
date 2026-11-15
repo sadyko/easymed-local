@@ -25,6 +25,8 @@ import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshne
 import { referralsRepresentatives, referralsAssignRepresentative, referralsRepresentativeOptions, referralsInternal, referralsActivity, referralsSourceDetail, referralsDoctorDetail } from './referrals.js';   // REFERRALS_CRM_V1 — «Реферирование» под CRM
 import { doctorBotSettingsGet, doctorBotSettingsSave, doctorBotTokenClear, doctorBotTestConnection, doctorBotStats, doctorBotLinksList, doctorBotLinkRevoke,
          doctorBotLinkConfirm, doctorBotLinkReject } from './doctor-bot.js';   // REFERRALS_CRM_V1 — бот для врачей-источников; FIX_318_V1 (M2) — подтверждение подключения
+import { dailyReportSettingsGet, dailyReportSettingsSave, dailyReportTokenClear, dailyReportFindChats, dailyReportPreview,
+         dailyReportSendNow } from './daily-report.js';   // DAILY_REPORT_BOT_V1 — отчёт совету директоров в Telegram
 import { repBotSettingsGet, repBotSettingsSave, repBotTokenClear, repBotTestConnection, repBotStats, repBotLinksList, repBotAdditionsList,
          repBotLinkConfirm, repBotLinkReject, repBotLinkRevoke } from './rep-bot.js';   // REP_BOT_V1 — бот для медпредставителей
 import { clinicNewsList, clinicNewsSave, clinicNewsArchive } from './clinic-news.js';   // CLINIC_NEWS_V1 — «Информационная доска»
@@ -76,6 +78,7 @@ import { mergePatientsRpc } from './patient-merge.js';   // PATIENT_MERGE_SERVER
 import { documentsFeed } from './documents.js';   // DOCS_FEED_V1
 import { getClinicBySlug } from './clinic.js';
 import { callcenterReport } from './callcenter.js';
+import { operatorKpi } from './operator-kpi.js';   // OPERATOR_KPI_V1 — «Мой KPI» оператора
 import { billAccommodation, unbillAccommodation, accommodationState } from './accommodation.js';
 import { setAdmissionDate } from './admission-date.js';   // ADMISSION_DATE_EDIT_V1   // ACCOMMODATION_AS_SERVICE_V1   // CALLCENTER_REPORT_V1
 import { deleteService, serviceDeleteCheck } from './catalog.js';   // SERVICE_DELETE_V1
@@ -161,6 +164,7 @@ export const RPC = {
   patient_doc_sources:      (db, args, user) => patientDocSources(db, args, user),   // PASTE_SOURCES_V1 — «Вставить результаты»: документы пациента по вкладкам
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
   callcenter_report:        (db, args, user) => callcenterReport(db, args, user),
+  crm_operator_kpi:         (db, args, user) => operatorKpi(db, args, user),   // OPERATOR_KPI_V1
   // CUSTDEV_V1 — обзвон пациентов после визита
   custdev_list:             (db, args, user) => custdevList(db, args, user),
   custdev_sync:             (db, args, user) => custdevSync(db, args, user),
@@ -321,6 +325,12 @@ export const RPC = {
   clinic_news_archive:              (db, args, user) => clinicNewsArchive(db, args, user),
   // REP_BOT_V1 — Telegram-бот для медпредставителей (вкладка «Реферирование → Бот представителей»), администратору.
   // Чтения — *_get, *_stats, *_list — в READ_ONLY_RPCS (control/gate.js); остальное — записи.
+  daily_report_settings_get:        (db, args, user) => dailyReportSettingsGet(db, args, user),   // DAILY_REPORT_BOT_V1
+  daily_report_settings_save:       (db, args, user) => dailyReportSettingsSave(db, args, user),
+  daily_report_token_clear:         (db, args, user) => dailyReportTokenClear(db, args, user),
+  daily_report_find_chats:          (db, args, user) => dailyReportFindChats(db, args, user),
+  daily_report_preview:             (db, args, user) => dailyReportPreview(db, args, user),
+  daily_report_send_now:            (db, args, user) => dailyReportSendNow(db, args, user),
   rep_bot_settings_get:             (db, args, user) => repBotSettingsGet(db, args, user),
   rep_bot_settings_save:            (db, args, user) => repBotSettingsSave(db, args, user),
   rep_bot_token_clear:              (db, args, user) => repBotTokenClear(db, args, user),

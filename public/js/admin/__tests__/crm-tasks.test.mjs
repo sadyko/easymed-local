@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, RPC, mk, walk, textOf, byClass, byAttr, tick, TOASTS } from './crm-harness.mjs';
+import { S, CALLS, RPC, mk, walk, textOf, byClass, byAttr, tick, TOASTS, crmView } from './crm-harness.mjs';
 import { isOverdue, nearestOpenTasks, localDueIso, nowIso, overdueTaskCount, DEFAULT_DUE_TIME, TASK_LIST_SELECT } from '../views/crm-tasks.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -226,9 +226,11 @@ test('отметить сделанной и снять отметку', async (
   S.tasks = [{ id: 60, request_id: 1, text: 'Позвонить', due_at: PAST, assignee_id: 12, done_at: null }];
   CALLS.length = 0;
   const { modal } = await openCard(LOLA);
+  // CRM_CARD_TASK_DONE_V1 — «Готово» кнопкой, снять отметку — «Вернуть».
   const box = one(modal, 'data-task-done');
-  box.checked = true;
-  box.dispatchEvent({ type: 'change', target: box, currentTarget: box });
+  assert.equal(box.tagName, 'BUTTON');
+  assert.ok(textOf(box).includes('Готово'));
+  box.click();
   await tick(60);
   const upd = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'update');
   assert.ok(upd, 'отметка не ушла на сервер');
@@ -238,8 +240,8 @@ test('отметить сделанной и снять отметку', async (
   assert.ok(!String(taskRows(modal)[0].className).includes('crm-task-overdue'), 'сделанная всё ещё просрочена');
 
   const box2 = one(modal, 'data-task-done');
-  box2.checked = false;
-  box2.dispatchEvent({ type: 'change', target: box2, currentTarget: box2 });
+  assert.ok(textOf(box2).includes('Вернуть'), 'у сделанной задачи нет «Вернуть»');
+  box2.click();
   await tick(60);
   assert.equal(S.tasks[0].done_at, null);
 });
@@ -254,6 +256,38 @@ test('удалить может только администратор', async 
   await tick(60);
   assert.ok(CALLS.some((c) => c.table === 'crm_tasks' && c.op === 'delete'));
   assert.equal(taskRows(modal).length, 0);
+});
+
+// CRM_TASK_EDIT_V1 — карандаш у открытой задачи: правка текста и срока на месте,
+// «Отмена» ничего не шлёт; у сделанной задачи карандаша нет.
+test('CRM_TASK_EDIT_V1: задачу можно изменить — текст и срок уходят на сервер, «Отмена» ничего не шлёт', async () => {
+  S.tasks = [
+    { id: 80, request_id: 1, text: 'Позвонить', due_at: FUTURE, assignee_id: 12, done_at: null },
+    { id: 81, request_id: 1, text: 'Сделанная', due_at: PAST, assignee_id: 12, done_at: PAST },
+  ];
+  const { modal } = await openCard(LOLA);
+  assert.equal(byAttr(modal, 'data-task-edit').length, 1, 'карандаш — только у открытой задачи');
+  CALLS.length = 0;
+  one(modal, 'data-task-edit').click();
+  assert.equal(byAttr(modal, 'data-task-editing').length, 1, 'строка не перешла в правку');
+  one(modal, 'data-task-edit-cancel').click();
+  assert.equal(byAttr(modal, 'data-task-editing').length, 0, '«Отмена» не вернула строку');
+  assert.ok(!CALLS.some((c) => c.table === 'crm_tasks' && c.op === 'update'), '«Отмена» что-то отправила');
+
+  one(modal, 'data-task-edit').click();
+  const txt = one(modal, 'data-task-edit-text');
+  assert.equal(txt.value, 'Позвонить', 'в поле не нынешний текст');
+  txt.value = 'Перезвонить после обеда';
+  one(modal, 'data-task-edit-date').value = '2030-01-15';
+  one(modal, 'data-task-edit-time').value = '14:30';
+  one(modal, 'data-task-edit-save').click();
+  await tick(60);
+  const upd = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'update');
+  assert.ok(upd, 'правка не ушла на сервер');
+  assert.equal(upd.values.text, 'Перезвонить после обеда');
+  assert.match(upd.values.due_at, /^2030-01-15T/);
+  assert.ok(!('assignee_id' in upd.values), 'ответственный не менялся, а ушёл на сервер');
+  assert.equal(byAttr(modal, 'data-task-editing').length, 0, 'после сохранения строка осталась в правке');
 });
 
 // CRM_UNIFY_V1 — старая подпись { me, isAdmin } оставлена для совместимости;
@@ -344,7 +378,7 @@ test('CRM_UNIFY_V1: «Список» — колонка «Задача» гов�
   const root = mk('div');
   await renderCrm(root, { onNavigate() {} });
   await tick();
-  walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'list').click();
+  crmView(root, 'list');
   await tick(60);
   const heads = walk(root).filter((n) => n.tagName === 'TH').map(textOf);
   assert.ok(heads.includes('Задача'), 'в списке нет колонки «Задача»');
@@ -373,7 +407,7 @@ test('CRM_UNIFY_V1: красный счётчик открывает «Зада�
   assert.equal(byAttr(root, 'data-task-who-filter')[0].value, 'all');
   // переключатель вида после этого открывает «Мои»
   CALLS.length = 0;
-  walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'tasks').click();
+  crmView(root, 'tasks');
   await tick(80);
   const q2 = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'select' && c.columns === TASK_LIST_SELECT);
   assert.ok(q2.filters.some((f) => f.col === 'assignee_id' && f.val === 7), 'переключатель вида открыл не «Мои»');

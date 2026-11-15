@@ -1,0 +1,125 @@
+// OPERATOR_KPI_V1 — «Мой KPI» оператора. Что утверждается:
+//   1. заявки оператора — те, что он ВЕДЁТ (assigned_to), а не завёл; ступени — из воронки;
+//   2. звонки — по его внутреннему номеру; чужой номер не засчитывается;
+//   3. оплата — из карточки сотрудника как есть: оклад, процент, база процента —
+//      оплаты в кассу его пациентов (заявка «Пришёл», заведена не позже оплаты);
+//      итог «к начислению» — только за месяц;
+//   4. не задано в карточке — оплаты нет, показатели есть;
+//   5. доступ: оператор — только себя; руководитель — любого; без CRM — 403;
+//   6. RPC зарегистрирован и разрешён лапсу лицензии как чтение.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { openDb } from '../../db/connection.js';
+import { migrate } from '../../db/migrate.js';
+import { operatorKpi, kpiRange } from './operator-kpi.js';
+import { getRpc } from './index.js';
+
+const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
+const HOURS_AGO = (n) => `strftime('%Y-%m-%dT%H:%M:%SZ','now','-${n} hours')`;
+
+function seed() {
+  const db = openDb(':memory:'); migrate(db);
+  const run = (sql, ...a) => db.prepare(sql).run(...a).lastInsertRowid;
+  run("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (1,'adm','x','Админ','admin')");
+  run(`INSERT INTO users (id, username, password_hash, full_name, role, pbx_extension, salary_type, salary_fixed, salary_percent, kpi_links)
+       VALUES (2,'anna','x','Оператор Анна','callcenter','101','fix_plus_kpi',3000000,5,'["revenue"]')`);
+  run("INSERT INTO users (id, username, password_hash, full_name, role, pbx_extension) VALUES (3,'bek','x','Оператор Бек','callcenter','102')");
+  run("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (4,'nurse','x','Медсестра','nobody_role')");
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run('nobody_role', JSON.stringify({ sections: [] }));
+
+  const p1 = run(`INSERT INTO patients (full_name, branch_id, created_at) VALUES ('Пациент 1',1,${NOW})`);
+  const p2 = run(`INSERT INTO patients (full_name, branch_id, created_at) VALUES ('Пациент 2',1,${NOW})`);
+  // Анна ведёт три заявки (одну завёл Бек): одна дошла, одна записана, одна потеряна.
+  run(`INSERT INTO crm_requests (full_name, phone, source, status, assigned_to, created_by, patient_id, created_at)
+       VALUES ('Л1','1','call','came',2,3,?,${HOURS_AGO(3)})`, p1);
+  run(`INSERT INTO crm_requests (full_name, phone, source, status, assigned_to, scheduled_date, created_at)
+       VALUES ('Л2','2','call','scheduled',2,date('now','+1 day'),${NOW})`);
+  run(`INSERT INTO crm_requests (full_name, phone, source, status, assigned_to, created_at) VALUES ('Л3','3','call','stopped',2,${NOW})`);
+  // Бек: одна заявка, дошла — у его пациента оплата, но в базу Анны она не идёт.
+  run(`INSERT INTO crm_requests (full_name, phone, source, status, assigned_to, patient_id, created_at) VALUES ('Л4','4','call','came',3,?,${NOW})`, p2);
+
+  // Оплаты: пациент Анны заплатил 200 000 после заявки; оплата ДО заявки не в счёт.
+  const inv1 = run(`INSERT INTO invoices (patient_id, total_amount, paid_amount, status, created_at) VALUES (?,250000,250000,'paid',${NOW})`, p1);
+  run(`INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (?,200000,'cash',${HOURS_AGO(1)})`, inv1);
+  run(`INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (?,50000,'cash',${HOURS_AGO(5)})`, inv1);
+  const inv2 = run(`INSERT INTO invoices (patient_id, total_amount, paid_amount, status, created_at) VALUES (?,90000,90000,'paid',${NOW})`, p2);
+  run(`INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (?,90000,'card',${NOW})`, inv2);
+
+  // Звонки: два входящих Анне (один пропущен), исходящий; звонок Беку — не её.
+  db.prepare(`INSERT INTO calls (general_call_id, started_at, call_type, external_number, internal_number, billsec, waitsec, disposition) VALUES
+      ('g1',${NOW},0,'111','101',120,8,'ANSWER'),
+      ('g2',${NOW},0,'222','101',0,30,'NOANSWER'),
+      ('g3',${NOW},1,'333','101',60,0,'ANSWER'),
+      ('g4',${NOW},0,'444','102',90,5,'ANSWER')`).run();
+  // Задачи Анны: одна выполнена сегодня, одна просрочена.
+  run(`INSERT INTO crm_tasks (request_id, text, due_at, assignee_id, done_at, created_at) VALUES (1,'Перезвонить',${HOURS_AGO(2)},2,${NOW},${NOW})`);
+  run(`INSERT INTO crm_tasks (request_id, text, due_at, assignee_id, created_at) VALUES (2,'Напомнить',${HOURS_AGO(2)},2,${NOW})`);
+  return db;
+}
+
+const db = seed();
+test.after(() => db.close());
+const ANNA = { id: 2, role: 'callcenter' };
+
+test('периоды: неделя — с понедельника, прошлый месяц — целиком', () => {
+  assert.deepEqual(kpiRange('2026-11-14', 'week'), { key: 'week', from: '2026-11-09', to: '2026-11-14' });
+  assert.deepEqual(kpiRange('2026-11-14', 'month'), { key: 'month', from: '2026-11-01', to: '2026-11-14' });
+  assert.deepEqual(kpiRange('2026-11-14', 'prev_month'), { key: 'prev_month', from: '2026-10-01', to: '2026-10-31' });
+  assert.deepEqual(kpiRange('2026-11-14', 'today'), { key: 'today', from: '2026-11-14', to: '2026-11-14' });
+});
+
+test('заявки — те, что оператор ведёт; ступени — из воронки', () => {
+  const o = operatorKpi(db, { period: 'month' }, ANNA);
+  assert.equal(o.operator.name, 'Оператор Анна');
+  assert.equal(o.leads.total, 3, 'заявка, которую завёл Бек, а ведёт Анна, — её');
+  assert.equal(o.leads.came, 1);
+  assert.equal(o.leads.lost, 1);
+  assert.equal(o.leads.became_patient, 1);
+  assert.equal(o.leads.with_date, 1);
+  assert.equal(o.leads.conversion, 33.3);
+  assert.equal(o.rank.place, 1);
+});
+
+test('звонки — по внутреннему номеру; чужие не в счёт', () => {
+  const c = operatorKpi(db, { period: 'today' }, ANNA).calls;
+  assert.deepEqual({ i: c.incoming, a: c.answered, m: c.missed, o: c.outgoing, t: c.talk_min, w: c.avg_wait_sec },
+    { i: 2, a: 1, m: 1, o: 1, t: 3, w: 8 });
+  assert.equal(c.answer_rate, 50);
+});
+
+test('оплата: оклад и процент из карточки; база — оплаты её пациентов после заявки; итог — за месяц', () => {
+  const m = operatorKpi(db, { period: 'month' }, ANNA).pay;
+  assert.equal(m.fixed, 3000000);
+  assert.equal(m.percent, 5);
+  assert.equal(m.revenue_base, 200000, 'оплата до заявки и чужой пациент не в счёт');
+  assert.equal(m.bonus, 10000);
+  assert.equal(m.total, 3010000);
+  assert.deepEqual(m.kpi_links, ['revenue']);
+  const t = operatorKpi(db, { period: 'today' }, ANNA).pay;
+  assert.equal(t.bonus, 10000);
+  assert.equal(t.total, null, 'месячный оклад в дневной итог не входит');
+  const w = operatorKpi(db, { period: 'week' }, ANNA);
+  assert.equal(w.tasks.done, 1);
+  assert.equal(w.tasks.overdue, 1);
+});
+
+test('не задано в карточке — оплаты нет, показатели есть', () => {
+  const o = operatorKpi(db, { period: 'month' }, { id: 3, role: 'callcenter' });
+  assert.equal(o.pay.configured, false);
+  assert.equal(o.pay.bonus, null);
+  assert.equal(o.leads.came, 1);
+});
+
+test('доступ: оператор — только себя; руководитель — любого; без CRM — отказ', () => {
+  assert.throws(() => operatorKpi(db, { user_id: 3 }, ANNA), (e) => e.status === 403);
+  assert.equal(operatorKpi(db, {}, ANNA).can_pick, false);
+  const adm = operatorKpi(db, { user_id: 2 }, { id: 1, role: 'admin' });
+  assert.equal(adm.operator.id, 2);
+  assert.equal(adm.can_pick, true);
+  assert.ok(adm.operators.some((x) => x.name === 'Оператор Бек'));
+  assert.throws(() => operatorKpi(db, {}, { id: 4, role: 'nobody_role' }), (e) => e.status === 403);
+});
+
+test('RPC зарегистрирован', () => {
+  assert.equal(typeof getRpc('crm_operator_kpi'), 'function');
+});

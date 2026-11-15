@@ -48,6 +48,7 @@ import { grantAllows, isRouteAllowed } from '../permissions.js';   // GRANTS_V1 
 // модуля. Разошедшийся ?v= развёл бы состояние экрана на две копии.
 import { renderPatients } from './patients.js?v=regfit2';
 import { renderQueue } from './queue.js?v=q7';
+import { renderBookingDay } from './booking-day.js';   // BOOKING_DAY_V1 — «Бронирование»: день одного врача
 // MOTION_REVEAL_V1 — переход между вкладками: панель проявляется, полоса
 // вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
 import { animateIn, smoothScrollTo } from '../motion.js?v=mo1';
@@ -56,8 +57,12 @@ const TABS = [
     { id: 'list',     sub: null,       label: 'Список',  icon: 'Patients' },
     { id: 'queue',    sub: 'queue',    label: 'Очередь', icon: 'Clock'    },
     { id: 'calendar', sub: 'calendar', label: 'Записи',  icon: 'Calendar' },
+    // BOOKING_DAY_V1 (2026-11-13, владелец: «add Бронирование section also») —
+    // день ОДНОГО врача: фильтры, дата (сегодня), поиск врача, время приёма и
+    // записанные пациенты (views/booking-day.js).
+    { id: 'booking',  sub: 'booking',  label: 'Бронирование', icon: 'Stethoscope' },
 ];
-const SUB_TO_TAB = { queue: 'queue', calendar: 'calendar' };
+const SUB_TO_TAB = { queue: 'queue', calendar: 'calendar', booking: 'booking' };
 
 // ---------------------------------------------------------------------------
 // PATIENTS_HERO_V1 (2026-10-31) — ТЁМНЫЙ БАННЕР НАД ВКЛАДКАМИ.
@@ -82,7 +87,7 @@ const SUB_TO_TAB = { queue: 'queue', calendar: 'calendar' };
 //   * всё через tr()/trf() и monthName() — на узбекском и английском баннер
 //     говорит на своём языке, а не по-русски.
 // ---------------------------------------------------------------------------
-const HERO_SUB = { list: 'База пациентов', queue: 'Очередь', calendar: 'Календарь записи' };
+const HERO_SUB = { list: 'База пациентов', queue: 'Очередь', calendar: 'Календарь записи', booking: 'Бронирование' };
 
 // SECTION_HERO_V1 — баннер стал общим для клинических разделов
 // (views/section-hero.js); здесь только то, что знает «Пациенты»: подзаголовок
@@ -182,14 +187,16 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     const hosts = {};
     // GRANTS_V1 — «Очередь» и «Записи» можно закрыть роли в «Настройки → Роли».
     // Ненастроенный ключ = вкладка видна, как и была.
-    const TAB_GRANT = { queue: 'patients.queue', calendar: 'patients.calendar' };
+    // BOOKING_DAY_V1 — «Бронирование» показывает то же расписание, что «Записи»:
+    // одно право и одна дверь (calendar_slots закрыт BOOK_ROLES).
+    const TAB_GRANT = { queue: 'patients.queue', calendar: 'patients.calendar', booking: 'patients.calendar' };
     // V3120_FIX — ВКЛАДКА, ЗА КОТОРОЙ СЕРВЕР ОТКАЖЕТ, НЕ РИСУЕТСЯ. «Записи»
     // показывались медсестре, кассиру и лаборанту, а сетку календаря сервер
     // отдаёт только BOOK_ROLES (rpc/calendar.js) — вкладка открывалась стеной
     // отказов. «Очередь» — та же история с разделом `queue` (rpc/queue.js
     // queueBoard). Правило — то же, что у отдельных адресов #appointments и
     // #queue (permissions.js): одна дверь, один ответ.
-    const TAB_ROUTE = { queue: 'queue', calendar: 'appointments' };
+    const TAB_ROUTE = { queue: 'queue', calendar: 'appointments', booking: 'appointments' };
     const visibleTabs = TABS.filter((t) => (!TAB_GRANT[t.id] || grantAllows(TAB_GRANT[t.id], 'view'))
         && (!TAB_ROUTE[t.id] || isRouteAllowed(TAB_ROUTE[t.id])));
     for (const t of visibleTabs) {
@@ -215,7 +222,7 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     // Вкладка монтируется при первом показе и дальше ЖИВЁТ: прокрутка списка,
     // страница пагинации и наполовину введённый поиск переживают уход на
     // соседнюю вкладку — ровно как панели переживают уход на соседний экран.
-    const mounted = { list: false, queue: false, calendar: false };
+    const mounted = { list: false, queue: false, calendar: false, booking: false };
     let queue = null;        // пульт доски очереди (views/queue.js)
     let active = SUB_TO_TAB[sub] || 'list';
     // GRANTS_V1 — адрес просит закрытую вкладку: открываем список, а не пустой экран.
@@ -300,6 +307,12 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             // Вернулись на вкладку: доска могла простоять минуты, поэтому
             // сначала свежее чтение, потом снова опрос.
             if (queue) await queue.start();
+            return;
+        }
+        if (id === 'booking') {   // BOOKING_DAY_V1
+            if (mounted.booking) return;
+            mounted.booking = true;
+            await renderBookingDay(hosts.booking, { onNavigate: ctx.onNavigate });
             return;
         }
         if (mounted.calendar) return;

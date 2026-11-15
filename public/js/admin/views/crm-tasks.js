@@ -13,7 +13,7 @@
 // Модуль не знает о доске (views/crm.js его импортирует, а не наоборот), и
 // его же зовёт оболочка (admin.js) за числом для меню.
 import { supabase } from '../../supabase.js';
-import { h, Icon, clear, toast, Tag, fmtDateTime } from '../ui.js';
+import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 
 /** «Сейчас» в той же форме, в какой хранится срок. */
@@ -166,6 +166,8 @@ export function crmTasksBlock({ request, me, isAdmin, onChange } = {}) {
         return p ? p.full_name : '';
     };
     const changed = () => { try { if (onChange) onChange(); } catch (e) { /* бейдж — подсказка */ } };
+    // CRM_TASK_EDIT_V1 — id задачи, которая сейчас правится на месте (null — никакая).
+    let editingId = null;
 
     function paintList() {
         clear(list);
@@ -175,24 +177,48 @@ export function crmTasksBlock({ request, me, isAdmin, onChange } = {}) {
         }
         const now = nowIso();
         for (const t of tasks) {
+            if (String(t.id) === String(editingId) && !t.done_at) { list.appendChild(editRow(t)); continue; }   // CRM_TASK_EDIT_V1
             const late = isOverdue(t, now);
             const done = !!t.done_at;
-            const tick = h('input', { type: 'checkbox', 'aria-label': 'Сделано', 'data-task-done': String(t.id) });
-            tick.checked = done;
-            tick.addEventListener('change', () => toggleDone(t, tick.checked));
+            // CRM_CARD_TASK_DONE_V1 (2026-11-14, владелец со снимком задач карточки:
+            // «the same here, but done button and make attractive and compact») —
+            // как в виде «Задачи» (crm-tasks-view.js CRM_TASKS_FILTER_V1): задача
+            // ОДНОЙ строкой — текст · срок (красный у просроченной) · исполнитель ·
+            // «Готово». Сделанная — зачёркнута, и вместо «Готово» тихое «Вернуть»:
+            // отметку по-прежнему можно снять (toggleDone).
+            const doneBtn = done
+                ? h('button', { type: 'button', class: 'crm-task-undo', 'aria-label': 'Вернуть в работу', 'data-task-done': String(t.id),
+                    onclick: (e) => { e.currentTarget.disabled = true; toggleDone(t, false); } }, 'Вернуть')
+                : h('button', { type: 'button', class: 'crm-task-done-btn', 'aria-label': 'Сделано', 'data-task-done': String(t.id),
+                    onclick: (e) => { e.currentTarget.disabled = true; toggleDone(t, true); } }, Icon('Check', { size: 13 }), h('span', null, 'Готово'));
             const who = t.assignee_id != null ? (nameOf(t.assignee_id) || trf('Сотрудник №{id}', { id: t.assignee_id })) : '';
             list.appendChild(h('div', {
                 class: 'crm-task' + (late ? ' crm-task-overdue' : '') + (done ? ' crm-task-done' : ''),
                 'data-task': String(t.id),
             },
-                tick,
-                h('div', { class: 'crm-task-main' },
-                    h('div', { class: 'crm-task-text' }, t.text),
+                done ? h('span', { class: 'crm-task-ok' }, Icon('Check', { size: 13 })) : null,
+                // CRM_CARD_TASK_FIT_V1 (владелец со снимком карточки, где «Готово»
+                // уехала за край: «can you correct it») — карточка заявки узкая,
+                // и одна строка «текст · срок · исполнитель · Готово» не влезала.
+                // Теперь текст и под ним срок с исполнителем — одним блоком
+                // слева, кнопки — справа, и ничто не выходит за карточку.
+                h('div', { class: 'crm-task-body' },
+                    h('div', { class: 'crm-task-text', title: t.text }, t.text),
                     h('div', { class: 'crm-task-meta' },
-                        t.due_at ? h('span', null, Icon('Clock', { size: 12 }), ' ', fmtDateTime(t.due_at)) : h('span', null, 'Без срока'),
-                        who ? h('span', null, Icon('User', { size: 12 }), ' ', who) : null,
-                        late ? Tag('Просрочено', { kind: 'warn' }) : null,
-                        done ? Tag('Сделано', { kind: 'ok' }) : null)),
+                        // «Просрочено» — словом в самом сроке, а не одним цветом:
+                        // красный не все различают.
+                        h('span', { class: 'crm-task-due' + (late ? ' is-late' : '') },
+                            Icon('Clock', { size: 12 }), ' ', late ? h('b', null, 'Просрочено') : null, late ? ' · ' : '',
+                            t.due_at ? fmtDateTime(t.due_at) : 'Без срока'),
+                        who ? h('span', { class: 'crm-task-who' }, Icon('User', { size: 12 }), ' ', who) : null)),
+                doneBtn,
+                // CRM_TASK_EDIT_V1 (2026-11-14, владелец со снимком задачи карточки: «add edit
+                // button») — карандаш у открытой задачи: текст, срок и ответственный правятся
+                // на месте, в строке. Сделанную не правят — её сначала «Вернуть».
+                done ? null : h('button', {
+                    class: 'btn btn-ghost btn-sm', type: 'button', title: 'Изменить задачу', 'aria-label': 'Изменить задачу', 'data-task-edit': String(t.id),
+                    onclick: () => { editingId = t.id; paintList(); },
+                }, Icon('Edit', { size: 13 })),
                 isAdmin ? h('button', {
                     class: 'btn btn-ghost btn-sm', type: 'button', title: 'Удалить задачу', 'data-task-delete': String(t.id),
                     onclick: () => removeTask(t),
@@ -213,6 +239,57 @@ export function crmTasksBlock({ request, me, isAdmin, onChange } = {}) {
         // Открытые сверху (по сроку), сделанные — внизу.
         tasks = (data || []).slice().sort((a, b) => (!!a.done_at - !!b.done_at) || (dueRank(a) < dueRank(b) ? -1 : dueRank(a) > dueRank(b) ? 1 : 0));
         paintList();
+    }
+
+    // CRM_TASK_EDIT_V1 — строка задачи в режиме правки: те же поля, что у формы новой
+    // задачи, с её нынешними значениями. Правила те же: текст и дата обязательны,
+    // ответственный — только из ответа сервера (crm_task_assignees). Список не
+    // загрузился — ответственный не меняется, правятся текст и срок.
+    function editRow(t) {
+        const pad = (n) => String(n).padStart(2, '0');
+        const d = t.due_at ? new Date(t.due_at) : null;
+        const ok = d && !Number.isNaN(d.getTime());
+        const txt = h('input', { type: 'text', maxlength: String(TEXT_MAX), value: t.text || '', 'aria-label': 'Задача', 'data-task-edit-text': '' });
+        const date = h('input', { type: 'date', 'aria-label': 'Дата', 'data-task-edit-date': '',
+            value: ok ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : '' });
+        const time = h('input', { type: 'time', 'aria-label': 'Время', 'data-task-edit-time': '',
+            value: ok ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : DEFAULT_DUE_TIME });
+        const who = h('select', { 'aria-label': 'Ответственный', 'data-task-edit-who': '' });
+        who.appendChild(h('option', { value: '' }, '— выберите ответственного —'));
+        for (const p of people) who.appendChild(h('option', { value: String(p.id) }, p.full_name || trf('Сотрудник №{id}', { id: p.id })));
+        // Нынешний ответственный, которого нет в ответе сервера, остаётся видимым: иначе
+        // поле показало бы «— выберите —», и сохранение молча сняло бы его.
+        if (t.assignee_id != null && !people.some((p) => String(p.id) === String(t.assignee_id))) {
+            who.appendChild(h('option', { value: String(t.assignee_id) }, nameOf(t.assignee_id) || trf('Сотрудник №{id}', { id: t.assignee_id })));
+        }
+        who.value = t.assignee_id != null ? String(t.assignee_id) : '';
+        who.disabled = peopleState !== 'ready';
+        const save = h('button', { class: 'btn btn-sm btn-primary', type: 'button', 'data-task-edit-save': '' }, Icon('Check', { size: 13 }), ' ', 'Сохранить');
+        const cancel = h('button', { class: 'btn btn-sm btn-ghost', type: 'button', 'data-task-edit-cancel': '',
+            onclick: () => { editingId = null; paintList(); } }, 'Отмена');
+        save.addEventListener('click', async () => {
+            const text = txt.value.trim();
+            if (!text) { toast('Напишите, что нужно сделать.', 'fail'); return; }
+            const due = localDueIso(date.value, time.value);
+            if (!due) { toast('Укажите дату задачи.', 'fail'); return; }
+            const values = { text: text.slice(0, TEXT_MAX), due_at: due };
+            if (peopleState === 'ready') {
+                if (!who.value) { toast('Выберите ответственного.', 'fail'); return; }
+                // Сменить можно только на предложенного сервером; прежний остаётся как был.
+                if (String(who.value) !== String(t.assignee_id ?? '')) {
+                    if (!people.some((p) => String(p.id) === String(who.value))) { toast('Выберите ответственного.', 'fail'); return; }
+                    values.assignee_id = Number(who.value);
+                }
+            }
+            save.disabled = true;
+            const { error } = await supabase.from('crm_tasks').update(values).eq('id', t.id);
+            if (error) { toast(error.message, 'fail'); save.disabled = false; return; }
+            editingId = null;
+            await reload();
+            changed();
+        });
+        return h('div', { class: 'crm-task crm-task-editing', 'data-task': String(t.id), 'data-task-editing': '' },
+            h('div', { class: 'crm-task-form crm-task-edit-form' }, txt, date, time, who, save, cancel));
     }
 
     async function toggleDone(t, on) {

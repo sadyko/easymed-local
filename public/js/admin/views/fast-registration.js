@@ -231,21 +231,42 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         placeholder: 'Поиск по ФИО, MRN, телефону или ПИНФЛ…',
     });
     const searchResults = h('div', { class: 'mg-search-results', style: { display: 'none' } });
+    // FAST_REG_FOUND_TO_CARD_V1 (2026-11-13). Владелец: «no need to click the
+    // name, directly send to patient card» — и, на вопрос, что тогда окно
+    // перестаёт делать для уже заведённого пациента (строки «из записи»,
+    // скидка группы и промокод, направления врача), выбрал: «Open the card
+    // directly». Найденный строкой поиска пациент в это окно больше не берётся:
+    // сразу открывается его карта, и услуги ему выставляют там; окно — для
+    // НОВЫХ пациентов. Окно закрывается; несохранённые строки — только с
+    // согласия (openPickedCard).
+    // Всё перечисленное по-прежнему работает, когда существующий пациент
+    // попадает сюда кнопкой «Это он» в предупреждении о дубле (usePatient ниже).
     searchInput.addEventListener('input', () => {
-        runPatientSearch(searchInput.value, searchResults, (p) => usePatient(p, { load: true }));
+        runPatientSearch(searchInput.value, searchResults, (p) => openPickedCard(p));
     });
     const searchEl = h('div', { class: 'mg-section span-full mg-search' },
         h('div', { class: 'field' },
             h('label', null, tr('Найти существующего пациента'), ' ',
                 h('span', { class: 'muted', style: { fontWeight: '400' } },
-                    tr('— выберите его, и услуги запишутся на эту карту'))),
+                    tr('— выберите его, и откроется его карта'))),
             h('div', { class: 'mg-search-box' },
                 h('span', { class: 'mg-search-ic' }, Icon('Search', { size: 15 })),
                 searchInput, searchResults)));
 
     // Плашка выбранного пациента: пока она видна, поля заперты — карта уже есть,
     // и править её из окна регистрации значило бы тихо менять чужие данные.
-    const pickedName = h('span', { class: 'cell-strong', style: { fontSize: '13.5px' } }, '');
+    // FAST_REG_PICKED_CARD_V1 (2026-11-13, владелец со снимком окна: «when patient
+    // is found from search place here, if you press to it it should send to
+    // patient card»). Имя на плашке — ссылка на карту пациента: то же, что
+    // «Открыть карту» в подвале (та доступна только ПОСЛЕ записи). Окно при этом
+    // закрывается; если в нём уже добавлены услуги и ещё не записаны —
+    // спрашиваем, иначе строки пропали бы молча. Строки «из записи» (booked)
+    // уже в базе — их не считаем.
+    const pickedName = h('button', {
+        class: 'link-btn fr-picked-name', type: 'button', 'data-fr-open-card': '',
+        title: tr('Открыть карту пациента'),
+        onclick: () => openPickedCard(),
+    }, '');
     const changeBtn = h('button', {
         class: 'link-btn', type: 'button',
         onclick: () => { if (!locked()) usePatient(null); },
@@ -1040,6 +1061,19 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         paintDoctorOrders();
     }
 
+    // FAST_REG_PICKED_CARD_V1 — переход на карту пациента: выбранного на плашке
+    // или (FAST_REG_FOUND_TO_CARD_V1) найденного строкой поиска.
+    async function openPickedCard(found = null) {
+        const p = found || state.patient;
+        if (!p || !p.id || state.saving) return;
+        searchResults.style.display = 'none';
+        const unsaved = !state.result && state.rows.some((r) => !r.booked);
+        if (unsaved && !window.confirm(tr('Добавленные услуги ещё не записаны и пропадут. Открыть карту пациента?'))) return;
+        const full = await loadPatientById(p.id).catch(() => null);
+        close();
+        navigate('patient-card', full || p);
+    }
+
     async function usePatient(p, { load = false } = {}) {
         clearBookedRows();   // CRM_LINK_ALL_V1 (R7a)
         if (!p) {
@@ -1442,6 +1476,10 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
 
     return {
         overlay, card, body, close, state,
+        // FAST_REG_FOUND_TO_CARD_V1 — взять существующего пациента в окно так,
+        // как это делает «Это он» в предупреждении о дубле (тесты строк «из
+        // записи», скидок и направлений).
+        usePatient,
         fields: api.fields, collect: api.collect, setGender: api.setGender,
         table, saveBtn, printBtn, addServicesBtn, addPackagesBtn, referralSel, searchInput,
         doctorOrdersEl,   // DOCTOR_REFERRAL_DESK_V1

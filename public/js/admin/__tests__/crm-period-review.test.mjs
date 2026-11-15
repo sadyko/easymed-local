@@ -15,7 +15,7 @@
 // Данные — выдуманные.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, RPC, CALLS, mk, walk, textOf, byAttr, byClass, tick, TOASTS } from './crm-harness.mjs';
+import { S, RPC, CALLS, mk, walk, textOf, byAttr, byClass, tick, TOASTS, periodChip, crmView } from './crm-harness.mjs';
 import { DEFAULT_STAGES } from '../crm-settings-logic.js?v=crmcfg1';
 
 const { renderCrm, crmExportRows, CRM_FILTER_ALL } = await import('../views/crm.js');
@@ -26,7 +26,7 @@ const DAY = 86400000;
 const isoAgo = (d) => new Date(Date.now() - d * DAY).toISOString().replace(/\.\d{3}Z$/, 'Z');
 const OLD = { id: 11, full_name: 'Давняя Заявка', phone: '+998 93 555 01 12', status: 'recall', source: 'call', created_at: isoAgo(40), assigned_to: 7 };
 const TODAY = { id: 12, full_name: 'Сегодняшняя', phone: '+998 93 555 01 13', status: 'in_process', source: 'call', created_at: isoAgo(0), assigned_to: 7 };
-const chip = (root, re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
+const chip = periodChip;   // CRM_PERIOD_DROPDOWN_V1
 const periodLine = (root) => byAttr(root, 'data-crm-period-line')[0] || null;
 const modalOpen = () => document.body.children.find((n) => String(n.className).includes('modal'));
 const NAV = [];
@@ -51,8 +51,8 @@ async function search(root, q) {
 }
 async function backToAll(root) {
   for (const m of document.body.children.filter((n) => String(n.className).includes('modal'))) m.remove();
-  const v = walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'kanban');
-  if (v) { v.click(); await tick(60); }
+  // CRM_HERO_V1 — вид доски — список «Вид»; назад на Канбан тем же списком.
+  crmView(root, 'kanban'); await tick(60);
   const all = chip(root, /^Всё время$/);
   if (all) { all.click(); await tick(100); }
   S.dups = []; S.config = null; S.leadTags = []; S.live = [];
@@ -75,7 +75,7 @@ test('Q1: при «Сегодня» поиск находит давнюю от�
     const exp = await crmExportRows();
     assert.ok(exp.rows.some((r) => r.full_name === 'Давняя Заявка'), 'выгрузка при поиске — только за период');
     // «Список» — то же
-    walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'list').click(); await tick(80);
+    crmView(root, 'list'); await tick(80);
     assert.ok(textOf(root).includes('Давняя Заявка'), '«Список» при поиске — только за период');
     // поиск стёрли — снова период
     await search(root, '');
@@ -131,7 +131,7 @@ test('панель «Телефон», журнал и набор: номер д
 test('«Список» за период без карточек — «За этот период заявок нет»; строка над доской — только когда давних открытых больше нуля (Q2)', async () => {
   const { root } = await shell([OLD]);
   try {
-    walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'list').click(); await tick(80);
+    crmView(root, 'list'); await tick(80);
     chip(root, /^Сегодня$/).click(); await tick(100);
     const t = textOf(root);
     assert.ok(t.includes('За этот период заявок нет'), 'пустой период назван не так: ' + t.slice(0, 300));

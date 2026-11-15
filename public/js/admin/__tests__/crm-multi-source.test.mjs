@@ -12,7 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, TOASTS, mk, walk, textOf, byAttr, byClass, tick, button } from './crm-harness.mjs';
+import { S, CALLS, TOASTS, mk, walk, textOf, byAttr, byClass, tick, button, periodChip, crmView } from './crm-harness.mjs';
 
 const { renderCrm, crmExcelRows, CRM_FILTER_ALL } = await import('../views/crm.js');
 
@@ -47,7 +47,7 @@ async function board(view = 'kanban', leads = LEADS) {
   await tick();
   // Фильтр — состояние модуля: возвращаем «Все», чтобы тесты не зависели от порядка.
   if (srcSel(root)) await pickSrc(root, CRM_FILTER_ALL);
-  button(root, view === 'list' ? /Список/ : /Канбан/).click();
+  crmView(root, view === 'list' ? 'list' : 'kanban');   // CRM_HERO_V1 — вид — список «Вид»
   await tick();
   return root;
 }
@@ -252,7 +252,7 @@ test('ревью M1: отмеченный источник остаётся в �
     { id: 12, full_name: 'Свежая Instagram', phone: '+998906667788', status: 'came', source: 'instagram', sources: null, created_at: now },
   ];
   const root = await board('kanban', leads);
-  const period = (re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
+  const period = (re) => periodChip(root, re);   // CRM_PERIOD_DROPDOWN_V1
   try {
     await pickSrc(root, 'telegram');
     assert.equal(cards(root).length, 1);

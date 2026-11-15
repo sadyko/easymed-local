@@ -277,6 +277,11 @@ export const CATALOG = [
   // бот или «Настройки» сдвинули.
   { key: 'commerce_push', block: 'Коммерческие инструменты', follows: ['settings.telegram'], label: 'Push-уведомления', desc: 'Рассылка пациентам в Telegram-боте: текст, картинка, фильтры по визитам и услугам.', levels: ['none', 'edit'], levelDesc: { edit: 'Делает рассылку в Telegram: видит число получателей, историю и отправляет. SMS-рассылка — только администратор.' }, windows: [], actions: [], enforced: 'rpc:telegram_broadcast_send' },
   { key: 'commerce_links', block: 'Коммерческие инструменты', follows: ['settings.telegram'], label: 'Ссылки для рекламы в Telegram', desc: 'Своя ссылка на бота для каждого объявления: ответ, файл, кнопка «Оставить заявку», счётчики.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит ссылки и счётчики переходов и заявок.', edit: 'Заводит, правит и удаляет ссылки: ответ бота, файл, кнопки.' }, windows: [], actions: [], enforced: 'rpc:telegram_deeplink_save' },
+  // CLINIC_NEWS_GRANT_V1 (2026-11-14, владелец: «here is no information desk publication acess, add it») —
+  // публикация на «Информационной доске». Читают доску все сотрудники, поэтому у строки
+  // один уровень — «Изменение»: публикует, исправляет и снимает. Правило перехода —
+  // «только администратор» (`adminDefault`): так доска и работала до этой строки.
+  { key: 'commerce_news', block: 'Коммерческие инструменты', label: 'Информационная доска', desc: 'Объявления клиники для сотрудников: приезжие врачи, неработающее оборудование, новости дня. Читают все сотрудники.', levels: ['none', 'edit'], levelDesc: { edit: 'Публикует, исправляет и снимает объявления, отмечает важные и закреплённые.' }, adminDefault: true, windows: [], actions: [], enforced: 'rpc:clinic_news_save' },
   // CASHIER_HEAD_V1 (2026-09-28) — владелец: «fix in the roles for the cashier,
   // so it can change service and provider for appointed + add service, and if
   // created invoice. It should be switchable in the roles so cashier either

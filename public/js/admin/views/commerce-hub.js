@@ -61,6 +61,7 @@ export const TOOLS = [
         icon: 'Megaphone',
         title: 'Push-уведомления',
         desc: 'Рассылка пациентам в Telegram или по SMS: текст, предпросмотр, фильтры по визитам и услугам.',
+        group: 'messages',   // MESSAGES_BLOCK_V1
     },
     // Владелец: «add this to commercial instrument too» — тот же экран, что
     // плитка в «Настройки → Коммерческие инструменты»; плитка там осталась.
@@ -69,6 +70,7 @@ export const TOOLS = [
         icon: 'Link',
         title: 'Ссылки для рекламы в Telegram',
         desc: 'Своя ссылка на бота для каждого объявления: ответ, файл, кнопка «Оставить заявку», счётчики переходов и заявок',
+        group: 'messages',   // MESSAGES_BLOCK_V1
     },
     // REFERRALS_TO_COMMERCE_V1 (2026-10-31, владелец: «put refirrirovania to
     // commercial instruments too») — раздел целиком, со своими вкладками;
@@ -78,6 +80,14 @@ export const TOOLS = [
         icon: 'Target',
         title: 'Реферирование',
         desc: 'Представители и внешние врачи, внутренние направления, активность врачей и боты для врачей и представителей.',
+    },
+    // DAILY_REPORT_BOT_V1 (2026-11-13, владелец: «build report push telegram bot set up, to
+    // instruments block») — свой бот шлёт ежедневный отчёт в группу совета директоров.
+    {
+        route: 'daily-report',
+        icon: 'Chart',
+        title: 'Отчёт в Telegram',
+        desc: 'Ежедневный отчёт в группу совета директоров: касса, способы оплаты, долги, пациенты, CRM, звонки.',
     },
 ];
 
@@ -95,10 +105,15 @@ export function renderCommerceHub(container, ctx = {}) {
         subtitle: 'Инструменты для работы с пациентами. Подключения (SMS, Telegram, Meta) настраиваются в «Настройки → Коммерческие инструменты».',
     }));
 
-    const tools = visibleTools();
+    // MESSAGES_BLOCK_V1 (2026-11-13, владелец: «put push and link one to message block») —
+    // Push-уведомления и ссылки для рекламы в Telegram — это тоже сообщения пациентам:
+    // они стоят в блоке «Сообщения» после чатов (group: 'messages' в TOOLS).
+    const allTools = visibleTools();
+    const msgTools = allTools.filter((t) => t.group === 'messages');
+    const tools = allTools.filter((t) => t.group !== 'messages');
     const chats = visibleChats();   // CHATS_TO_COMMERCE_V1
     const board = isRouteAllowed(BOARD.route) ? BOARD : null;   // CLINIC_NEWS_V1
-    if (!tools.length && !chats.length && !board) {
+    if (!tools.length && !msgTools.length && !chats.length && !board) {
         root.appendChild(h('div', { class: 'empty', style: { padding: '30px' } }, 'Коммерческие инструменты вашей роли недоступны.'));
         return;
     }
@@ -118,7 +133,7 @@ export function renderCommerceHub(container, ctx = {}) {
     );
     const groupHead = (text) => h('div', { class: 'ct-group' }, text);
 
-    if (chats.length) {
+    if (chats.length || msgTools.length) {
         root.appendChild(groupHead(tr('Сообщения')));
         root.appendChild(h('div', { class: 'ct-grid', 'data-commerce-chats': '' }, ...chats.map((c) => {
             // Значок заполняется, когда ответит сервер; пока — пусто, а не «0».
@@ -127,14 +142,14 @@ export function renderCommerceHub(container, ctx = {}) {
                 if (n > 0) { badge.textContent = n > 99 ? '99+' : String(n); badge.hidden = false; }
             });
             return card(c, 'data-commerce-chat', badge);
-        })));
+        }), ...msgTools.map((t) => card(t, 'data-commerce-tool'))));
     }
     if (board) {
         root.appendChild(groupHead(tr('Для сотрудников')));
         root.appendChild(h('div', { class: 'ct-grid', 'data-commerce-board': '' }, card(board, 'data-commerce-news')));
     }
     if (tools.length) {
-        if (chats.length || board) root.appendChild(groupHead(tr('Инструменты')));
+        if (chats.length || msgTools.length || board) root.appendChild(groupHead(tr('Инструменты')));
         root.appendChild(h('div', { class: 'ct-grid' }, ...tools.map((t) => card(t, 'data-commerce-tool'))));
     }
 }

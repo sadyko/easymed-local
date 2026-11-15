@@ -268,6 +268,7 @@ globalThis.fetch = async (url, opts) => {
   return jsonOk([]);
 };
 
+globalThis.__CRM_TEST_PERIOD__ = 'all';   // CRM_PERIOD_DEFAULT_TODAY_V1 — заявки стенда задним числом: доска на «Всё время»
 const { renderCrm } = await import('../views/crm.js');
 // Кэш занятости живёт НА МОДУЛЕ (один на мастер визита, каталог услуг и это
 // окно), поэтому между тестами его чистит тот же forgetSlots(), что чистит его
@@ -354,15 +355,15 @@ test('номер не переносится ни при какой ширине
 
 test('в списке номер записан так же, как на карточке: одно поле — одна запись', async () => {
   const root = await board([{ id: 1, status: 'in_process', source: 'call', full_name: 'Каримова Азиза', phone: UZ_RAW, created_at: '2026-09-03T10:12:00Z' }]);
-  // Переключаемся на «Список» той же кнопкой, что и владелец.
-  const btn = walk(root).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Список'));
-  assert.ok(btn, 'кнопка «Список» пропала с экрана');
-  btn.click();
+  // Переключаемся на «Список» тем же, чем владелец: CRM_HERO_V1 — списком «Вид».
+  const viewSel = () => walk(root).find((n) => n.attrs && 'data-crm-view-select' in n.attrs);
+  const setView = (v) => { const sel = viewSel(); sel.value = v; sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel }); };
+  assert.ok(viewSel(), 'список «Вид» пропал с экрана');
+  setView('list');
   await tick();
   assert.ok(textOf(root).includes(UZ_READ), 'в списке номер снова печатается слитно');
   // и возвращаемся на канбан — state.view живёт в модуле между тестами
-  const back = walk(root).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Канбан'));
-  back.click();
+  setView('kanban');
   await tick();
 });
 

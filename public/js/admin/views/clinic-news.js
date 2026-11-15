@@ -11,7 +11,7 @@
 import { h, Icon, Tag, PageHead, clear, toast, field, checkField } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { supabase } from '../../supabase.js';
-import { actorIsAdmin } from '../permissions.js';
+import { commerceToolLevel } from '../permissions.js';
 
 export const KINDS = [
     { id: 'news',         label: 'Новости',        icon: 'Megaphone',   tone: 'info' },
@@ -46,7 +46,9 @@ export function dmy(v) {
 
 export async function renderClinicNews(container) {
     clear(container);
-    const isAdmin = actorIsAdmin();
+    // CLINIC_NEWS_GRANT_V1 — публикует тот, кому «Роли» дали строку «Информационная доска»
+    // (не настроена — администратор). Имя isAdmin осталось: «может публиковать».
+    const isAdmin = commerceToolLevel('commerce_news') === 'edit';
     const state = { archive: false, kind: 'all', items: [], error: null };
     const root = h('div', { class: 'fade-in cn-page', 'data-clinic-news': '' });
     container.appendChild(root);

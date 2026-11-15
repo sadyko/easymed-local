@@ -283,7 +283,11 @@ export async function renderPackagesEditor(container, { onBack = null, readOnly 
             sumBox.appendChild(h('div', null, h('span', null, 'Без скидки'), h('b', null, sumText(calc.full)), h('small', null, 'сумма цен услуг')));
             sumBox.appendChild(h('div', null, h('span', null, 'Скидка'), h('b', null, document.createTextNode('−' + fmt(calc.off) + ' ' + tr('сум'))),
                 h('small', null, trf('{pct}% от суммы', { pct: String(calc.pct).replace('.', ',') }))));
-            sumBox.appendChild(h('div', { class: 'main' }, h('span', null, 'Цена пакета'), h('b', null, sumText(calc.price)), h('small', null, 'округляем до 1 000 сум')));
+            // PKG_SUM_COMPACT_V1 (владелец: «compact the last price place») — класс
+            // НЕ 'main': так зовётся рабочая область всего приложения (admin.css
+            // .main — min-height 100vh, отступы), и карточка цены вытягивалась в
+            // высоту экрана.
+            sumBox.appendChild(h('div', { class: 'pkg-sum-main' }, h('span', null, 'Цена пакета'), h('b', null, sumText(calc.price)), h('small', null, 'округляем до 1 000 сум')));
             // В10 — пакет с услугой, которую сайт не показывает, партнёры не увидят.
             const hidden = packageHiddenServices({ service_ids: draft.items }, services).map((s) => s.name);
             pubWarn.hidden = !(draft.pub && hidden.length);

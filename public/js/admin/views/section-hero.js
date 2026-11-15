@@ -74,9 +74,12 @@ function heroName() {
  *   tabs — элемент кнопок раздела (вкладки) — встаёт СЛЕВА под названием
  *          (SECTION_HERO_LEFT_V2; справа под часами они были SECTION_HERO_RIGHT_V1);
  *   actions — элемент действий раздела — встаёт справа под часами.
+ *   greeting / clock — CRM_HERO_V2: false снимает приветствие с тёплой строкой и
+ *          дату с часами. CRM (владелец: «remove right side text and date,
+ *          instead put buttons there») отдаёт правую сторону своим кнопкам.
  * Возвращает { el, stop, setSub(text), setTabs(el), setActions(el) }.
  */
-export function sectionHero({ section, title, sub = '', tabs = null, actions = null } = {}) {
+export function sectionHero({ section, title, sub = '', tabs = null, actions = null, greeting = true, clock = true } = {}) {
     const now = new Date();
     const name = heroName();
     const subEl = h('div', { class: 'phub-hero-sub' }, sub ? tr(sub) : '');
@@ -98,17 +101,21 @@ export function sectionHero({ section, title, sub = '', tabs = null, actions = n
                 // to the left side». Снова слева, под названием раздела, одной
                 // строкой — как в первой версии баннера.
                 tabsSlot),
-            h('div', { class: 'phub-hero-msg' },
+            greeting ? h('div', { class: 'phub-hero-msg' },
                 hello,
-                message ? h('div', { class: 'phub-hero-warm' }, tr(message)) : null)),
+                message ? h('div', { class: 'phub-hero-warm' }, tr(message)) : null)
+                // CRM_HERO_V2 — без приветствия черта всё равно делит баннер посередине,
+                // как у остальных разделов (владелец: «put line in the middle as on others»).
+                : h('div', { class: 'shero-divider', 'aria-hidden': 'true' })),
         h('div', { class: 'phub-hero-ctrl' },
-            h('div', { class: 'phub-hero-now' },
+            clock ? h('div', { class: 'phub-hero-now' },
                 h('span', { class: 'phub-hero-date' }, Icon('Calendar', { size: 14 }), date),
-                h('span', { class: 'phub-hero-time' }, Icon('Clock', { size: 14 }), time)),
+                h('span', { class: 'phub-hero-time' }, Icon('Clock', { size: 14 }), time)) : null,
             actionsSlot));
 
     let lastHour = now.getHours();
-    let timer = setInterval(() => {
+    // CRM_HERO_V2 — ни часов, ни приветствия — и таймеру тикать незачем.
+    let timer = !(greeting || clock) ? null : setInterval(() => {
         if (!el.isConnected) { stop(); return; }
         const t = new Date();
         time.textContent = heroTimeLabel(t);

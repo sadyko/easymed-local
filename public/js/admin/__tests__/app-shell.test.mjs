@@ -461,7 +461,10 @@ test('заголовок раздела называет экран и пере�
     await go('labs');
     assert.equal(TITLE_EL.textContent, 'Лаборатория');
     assert.equal(TITLE_EL.style.visibility, 'hidden', '«Лаборатория» дважды: в панели и в баннере');
+    // CRM_HERO_V1 — у CRM теперь тоже свой баннер; пример экрана без баннера — склад.
     await go('crm');
+    assert.equal(TITLE_EL.style.visibility, 'hidden', '«CRM» дважды: в панели и в баннере');
+    await go('inventory');
     assert.equal(TITLE_EL.style.visibility, '', 'на других экранах имя в панели видно');
 
     // CRUMBS остаются несущими: isKnownView() читает их при загрузке.

@@ -2713,6 +2713,9 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .reg-base-find { flex-wrap: nowrap; }
 .reg-base-find .reg-base-search { flex: 1 1 auto; }
 .reg-base-find input[type="date"] { flex: 0 0 auto; }
+/* PATIENT_SORT_DROPDOWN_V1 — сортировка списком: высота кнопок ряда (32px), ширина — по самой
+   длинной подписи «Последний визит — сначала недавние», чтобы список не прыгал. */
+.reg-sort-sel { height: 32px; min-width: 250px; max-width: 100%; font-size: 13.5px; }
 
 /* Узкая карточка: первый ряд складывается — поиск во всю ширину, под ним
    «Быстрая регистрация», сортировка и справа «Создать пациента». */
@@ -4827,22 +4830,59 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 /* Задачи в окне заявки: строка = отметка · текст и подпись · удалить. */
 .crm-tasks { display: flex; flex-direction: column; gap: 10px; }
 .crm-task-list { display: flex; flex-direction: column; gap: 6px; }
+/* CRM_CARD_TASK_DONE_V1 (2026-11-14, владелец со снимком задач карточки: «the
+   same here, but done button and make attractive and compact»). Задача в
+   карточке — ОДНА строка, как в виде «Задачи» (CRM_TASKS_FILTER_V1): текст
+   (длинный — многоточием, целиком — в подсказке) · срок · исполнитель ·
+   «Готово» · корзина. Флажка больше нет (был CRM_TASK_TICK_V1): «Готово» —
+   зелёная обводка, на наведении заливка; у сделанной — галочка слева,
+   зачёркнутый текст и тихое «Вернуть». Просроченная — янтарный фон, срок красный. */
 .crm-task {
-    display: flex; align-items: flex-start; gap: 10px;
-    border: 1px solid var(--ink-100); border-radius: 10px; padding: 8px 10px;
+    display: flex; align-items: center; gap: 10px; min-height: 40px;
+    border: 1px solid var(--ink-100); border-radius: 10px; padding: 5px 6px 5px 12px;
     background: var(--white, #fff);
 }
-.crm-task > input[type="checkbox"] { margin-top: 3px; flex: none; }
-.crm-task-main { flex: 1 1 auto; min-width: 0; }
-.crm-task-text { font-size: 13.5px; line-height: 1.45; color: var(--ink-900); overflow-wrap: anywhere; }
-.crm-task-meta {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 3px;
-    font-size: 12.5px; color: var(--ink-500);
+.crm-task-text {
+    flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-900);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.crm-task-meta > span { display: inline-flex; align-items: center; gap: 4px; }
+.crm-task-due, .crm-task-who {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12.5px; color: var(--ink-500); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.crm-task-who { flex: 0 1 auto; min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.crm-task-due.is-late { color: var(--crit-700, #b91c1c); font-weight: 600; }
+.crm-task-done-btn {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 12px;
+    border: 1px solid var(--ok-500); border-radius: 999px; background: var(--ok-50); color: var(--ok-700);
+    font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
+.crm-task-done-btn:hover { background: var(--ok-700); border-color: var(--ok-700); color: #fff; }
+.crm-task-done-btn:focus-visible, .crm-task-undo:focus-visible { outline: 2px solid var(--primary-400); outline-offset: 2px; }
+.crm-task-done-btn:disabled, .crm-task-undo:disabled { opacity: .6; cursor: progress; }
+.crm-task-undo {
+    flex: 0 0 auto; height: 28px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent;
+    color: var(--ink-500); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.crm-task-undo:hover { background: var(--ink-50); color: var(--ink-800); }
+.crm-task-ok {
+    flex: 0 0 auto; width: 20px; height: 20px; border-radius: 999px; display: grid; place-items: center;
+    background: var(--ok-700); color: #fff;
+}
+/* CRM_CARD_TASK_FIT_V1 — карточка заявки узкая: текст и под ним срок с
+   исполнителем — один блок (.crm-task-body) слева, «Готово» и корзина — справа
+   и не уезжают за край. Длинное — многоточием, целиком — в подсказке. */
+.crm-task-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.crm-task-body .crm-task-text { flex: none; }
+.crm-task-meta { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; min-width: 0; }
+.crm-task-meta .crm-task-due, .crm-task-meta .crm-task-who { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.crm-task > .crm-task-done-btn, .crm-task > .crm-task-undo, .crm-task > .btn { flex: 0 0 auto; }
 .crm-task-overdue { border-color: var(--warn-500); background: var(--warn-50, #fffbeb); }
-.crm-task-overdue .crm-task-meta { color: var(--warn-700, #8a5a00); }
-.crm-task-done .crm-task-text { color: var(--ink-500); text-decoration: line-through; }
+.crm-task-done { background: var(--ink-25, #f8fafc); }
+/* CRM_TASK_EDIT_V1 — задача в режиме правки: форма во всю строку, поля переносятся. */
+.crm-task-editing { padding: 8px; border-color: var(--primary-300, #93c5fd); background: var(--primary-25, #f5f9ff); }
+.crm-task-edit-form { flex: 1 1 auto; min-width: 0; }
+.crm-task-done .crm-task-text { color: var(--ink-500); font-weight: 500; text-decoration: line-through; }
 .crm-task-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .crm-task-form > input[type="text"] { flex: 1 1 220px; min-width: 0; }
 .crm-task-form > input[type="date"],
@@ -4852,20 +4892,22 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 /* CRM_UNIFY_V1 — вид «Задачи» (views/crm-tasks-view.js): группы Просрочено /
    Сегодня / Позже / Без срока, строка = отметка · текст и подписи. Без
    фиксированных ширин: на телефоне подписи переносятся, страница вбок не едет. */
-.crm-tv-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--ink-500); max-width: 100%; }
+.crm-tv-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--ink-500); max-width: 100%; }
 .crm-tv-who { max-width: 100%; min-width: 0; }
-.crm-tv { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.crm-tv { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .crm-tv-group { padding: 10px 12px; min-width: 0; }
-.crm-tv-title { font-size: 15px; font-weight: 700; margin: 0 0 6px; color: var(--ink-900); }
+.crm-tv-title { font-size: 13.5px; font-weight: 700; margin: 0 0 2px; color: var(--ink-900); }
 .crm-tv-late .crm-tv-title { color: var(--warn-700, #8a5a00); }
 .crm-tv-row {
-    display: flex; align-items: flex-start; gap: 10px; padding: 8px 4px;
+    display: flex; align-items: center; gap: 10px; padding: 6px 4px;
     border-top: 1px solid var(--ink-100); border-radius: 6px; min-width: 0;
 }
 .crm-tv-row:first-of-type { border-top: none; }
 /* CRM_UNIFY_V1 (итоговое ревью, T3) — строка не кнопка: карточку открывает
    кнопка с текстом задачи (во всю ширину, вид — текст), «Сделано» — флажок рядом. */
 .crm-tv-row:hover { background: var(--ink-25, #f8fafc); }
+/* CRM_TASK_ROW_CLICK_V1 — строка со своей карточкой открывает её щелчком в любом месте. */
+.crm-tv-row.is-clickable { cursor: pointer; }
 .crm-tv-open {
     display: block; width: 100%; padding: 0; margin: 0; border: 0; background: none;
     font: inherit; text-align: left; color: inherit; cursor: pointer;
@@ -4873,7 +4915,74 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .crm-tv-open:hover { text-decoration: underline; }
 .crm-tv-open:focus-visible { outline: 2px solid var(--primary-500, #3d5c8c); outline-offset: 2px; border-radius: 4px; }
 .crm-tv-truncated { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
-.crm-tv-row > input[type="checkbox"] { margin-top: 3px; flex: none; }
+/* CRM_TASKS_COMPACT_V1 (2026-11-14, владелец: «make this place more compact
+   and remove thickin better put button done») — флажка в строке нет: справа
+   кнопка «Готово» (crm-tasks-view.js). Отбор «Мои» и «Новая заявка» — одной
+   строкой (кнопка прижата вправо), ряды задач — плотнее. */
+.crm-tv-head-extra { margin-left: auto; flex: 0 0 auto; }
+.crm-tv-done {
+    flex: 0 0 auto; align-self: center; display: inline-flex; align-items: center; gap: 5px;
+    height: 28px; padding: 0 10px; border-radius: 8px;
+    border: 1px solid var(--ink-200); background: var(--white, #fff); color: var(--ink-700);
+    font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.crm-tv-done:hover { border-color: var(--ok-700); background: var(--ok-50); color: var(--ok-700); }
+.crm-tv-done:disabled { opacity: .6; cursor: progress; }
+
+/* CRM_TASKS_FILTER_V1 (2026-11-14, владелец: «better put filter … today, this
+   week, later. Make task in one line only, task, deadline of task then visible
+   beautiful button done»). Полоса отборов со счётчиками над ОДНИМ списком
+   (crm-tasks-view.js); задача — одна строка: текст · карточка · срок · «Готово».
+   Длинный текст обрезается многоточием, целиком — в подсказке кнопки карточки. */
+.crm-tv-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.crm-tv-chip {
+    display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px;
+    border: 1px solid var(--ink-200); border-radius: 999px; background: var(--white, #fff);
+    color: var(--ink-700); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.crm-tv-chip:hover { border-color: var(--primary-400); }
+.crm-tv-chip.on { background: var(--primary-600); border-color: var(--primary-600); color: #fff; }
+.crm-tv-chip-n {
+    min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 999px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--ink-100); color: var(--ink-700); font-size: 12.5px; font-weight: 700;
+}
+.crm-tv-chip.on .crm-tv-chip-n { background: rgba(255,255,255,.22); color: #fff; }
+.crm-tv-chip.is-late:not(.on) .crm-tv-chip-n { background: var(--crit-700, #b91c1c); color: #fff; }
+.crm-tv-list { padding: 4px 12px; min-width: 0; }
+.crm-tv-list .crm-tv-row { display: flex; align-items: center; gap: 12px; padding: 7px 4px; min-height: 40px; }
+.crm-tv-list .crm-tv-row .crm-tv-text {
+    flex: 0 1 auto; min-width: 0; max-width: 45%; width: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.crm-tv-lead, .crm-tv-who-name {
+    flex: 0 1 auto; min-width: 0; max-width: 220px; display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12.5px; color: var(--ink-500); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* CRM_TASKS_LEAD_CHIP_V1 (владелец: «make it more visible, patient name and
+   number») — кому звонить: плашкой сразу за текстом задачи, тёмным шрифтом,
+   номер целиком. Срок и «Готово» уходят вправо (margin-left: auto у срока). */
+.crm-tv-list .crm-tv-lead[data-task-lead] {
+    max-width: 360px; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px;
+    background: var(--primary-50); border: 1px solid var(--primary-100); color: var(--primary-700);
+}
+.crm-tv-lead-name { font-weight: 700; color: var(--ink-900); overflow: hidden; text-overflow: ellipsis; }
+.crm-tv-lead-phone { font-size: 12.5px; font-weight: 600; color: var(--ink-800); flex: 0 0 auto; }
+.crm-tv-list .crm-tv-row .crm-tv-due { margin-left: auto; }
+.crm-tv-due {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12.5px; color: var(--ink-600); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.crm-tv-due.is-late { color: var(--crit-700, #b91c1c); font-weight: 600; }
+/* «Готово» — заметная, но спокойная: зелёная обводка, на наведении — заливка. */
+.crm-tv-list .crm-tv-done {
+    height: 30px; padding: 0 14px; border-radius: 999px;
+    border-color: var(--ok-500); background: var(--ok-50); color: var(--ok-700); font-weight: 700;
+}
+.crm-tv-list .crm-tv-done:hover { background: var(--ok-700); border-color: var(--ok-700); color: #fff; }
+@media (max-width: 760px) {
+    .crm-tv-list .crm-tv-row { flex-wrap: wrap; }
+    .crm-tv-lead, .crm-tv-who-name { max-width: 100%; }
+}
 .crm-tv-hidden { cursor: default; }
 .crm-tv-main { flex: 1 1 auto; min-width: 0; }
 .crm-tv-text { font-size: 13.5px; font-weight: 600; line-height: 1.45; color: var(--ink-900); overflow-wrap: anywhere; }
@@ -5042,6 +5151,9 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     box-sizing: border-box; border-radius: 999px; background: var(--primary-600); color: #fff; font-size: 12.5px; font-weight: 700; line-height: 1;
 }
 .crm-news-count[hidden] { display: none; }
+/* CRM_TASKS_COUNT_V1 — счётчик «Мои задачи» тем же кружком; есть просроченные —
+   красный, как бейдж просроченных задач у пункта CRM в меню. */
+.crm-task-count.is-overdue { background: var(--crit-700, #b91c1c); }
 /* PATIENT_BOT_INVITE_V1 — строка «Telegram-бот» под полем «Телефон» карточки заявки (crm.js leadBotLine):
    те же логотип .pt-tg и кнопка .pt-bot-invite, что в конце строки списка пациентов. */
 .crm-bot-line { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-height: 0; }
@@ -5053,6 +5165,12 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    день, непрерывное движение утомляет). «Важно» — та же анимация в светло-
    красном (CLINIC_NEWS_IMPORTANT_RED_V1), текст тёмно-красный, не белый. */
 .crm-head-news { margin-top: 8px; }
+/* CRM_HERO_ONE_LINE_V1 (2026-11-14, владелец со снимком кнопок справа: «can you
+   put little down to the one line with other buttons»). У баннера CRM справа
+   нет часов (CRM_HERO_V2), и колонка действий, выровненная по центру баннера,
+   стояла выше вкладок слева (те — последней строкой под названием). Прижатая
+   к низу, она встаёт в одну линию с «Доска · Мои задачи · Мой KPI». */
+.phub-hero[data-section-hero="crm"] .phub-hero-ctrl { align-self: flex-end; }
 .crm-news-btn { position: relative; height: 34px; gap: 8px; padding: 0 12px 0 8px; }
 .crm-news-ic { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; background: var(--ink-50); color: var(--ink-600); }
 .crm-news-btn.has-news { background: var(--primary-50); border-color: var(--primary-300); color: var(--primary-800); }
@@ -5110,9 +5228,19 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .news-strip.ns-kind-equipment .ns-label { color: var(--crit-700, #b91c1c); }
 /* CLINIC_NEWS_IMPORTANT_V1 — важное объявление красит полосу поверх цвета вида;
    CLINIC_NEWS_IMPORTANT_RED_V1 — светло-красным, как на доске. */
-.news-strip.ns-important { background: var(--crit-50, #fef2f2); border-bottom-color: #fecaca; }
-.news-strip.ns-important .ns-ico { background: #fecaca; color: #7f1d1d; }
-.news-strip.ns-important .ns-label { color: var(--crit-700, #b91c1c); }
+/* CLINIC_NEWS_IMPORTANT_DARKER_V1 (2026-11-13, владелец со снимком полосы
+   «ВАЖНО»: «make the color little darker to attract user») — на ступень темнее:
+   фон заметно розово-красный, а не почти белый; значок — сплошной красный
+   квадрат с белым знаком (именно он ловит взгляд); подпись и заголовок —
+   тёмно-красные, чтобы на более тёмном фоне читались не хуже прежнего. */
+.news-strip.ns-important { background: #fcd9d9; border-bottom-color: #f5a3a3; }
+.news-strip.ns-important .ns-ico { background: #dc2626; color: #fff; }
+.news-strip.ns-important .ns-label { color: #991b1b; }
+.news-strip.ns-important .ns-title { color: #7f1d1d; }
+.news-strip.ns-important .ns-more { color: #9f3a3a; }
+.news-strip.ns-important .ns-all { color: #991b1b; }
+.news-strip.ns-important .ns-all:hover, .news-strip.ns-important .ns-close:hover { background: rgba(255,255,255,.55); }
+.news-strip.ns-important .ns-close { color: #9f3a3a; }
 @media (max-width: 640px) {
     .news-strip .ns-label, .news-strip .ns-more { display: none; }
 }
@@ -8179,6 +8307,127 @@ table.list tr.is-off td { color: var(--ink-400); }
 /* Плашка выбранного пациента: имя слева, «Сменить» у правого края. */
 .fr-picked { display: flex; align-items: center; gap: 10px; }
 
+/* BOOKING_DAY_V1 (2026-11-13) — вкладка «Бронирование» раздела «Пациенты»
+   (views/booking-day.js): строка фильтров, день врача — сводка, лента времени
+   приёма (свободное — зелёным, занятое — серым) и таблица пациентов. */
+.bkd { display: flex; flex-direction: column; gap: 14px; }
+.bkd-filters { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; padding: 14px 18px; }
+.bkd-f { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.bkd-f-l { font-size: 12.5px; font-weight: 600; color: var(--ink-500); }
+.bkd-f select { height: 34px; min-width: 190px; }
+.bkd-f-doc { flex: 1 1 280px; }
+.bkd-date-row { display: flex; align-items: center; gap: 6px; }
+.bkd-date { height: 34px; padding: 0 10px; border: 1px solid var(--ink-200); border-radius: 8px; font: inherit; font-size: 13.5px; background: var(--white, #fff); }
+.bkd-date-row .btn.is-today { background: var(--primary-50); border-color: var(--primary-200); color: var(--primary-700); }
+.bkd-doc { position: relative; }
+.bkd-doc-ic { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--ink-400); display: flex; pointer-events: none; }
+.bkd-doc-input { width: 100%; box-sizing: border-box; height: 34px; padding: 0 12px 0 32px; border: 1px solid var(--ink-200); border-radius: 8px; font: inherit; font-size: 13.5px; background: var(--white, #fff); }
+.bkd-doc-input:focus { outline: none; border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
+.bkd-doc-list {
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 40; max-height: 300px; overflow: auto; padding: 4px;
+    background: var(--white, #fff); border: 1px solid var(--ink-200); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12);
+}
+.bkd-doc-list[hidden] { display: none; }
+.bkd-doc-opt { width: 100%; display: flex; align-items: baseline; gap: 10px; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.bkd-doc-opt:hover, .bkd-doc-opt.on { background: var(--primary-50); }
+.bkd-doc-nm { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.bkd-doc-sp { font-size: 12.5px; color: var(--ink-500); }
+.bkd-doc-empty { padding: 10px; font-size: 12.5px; color: var(--ink-500); }
+.bkd-empty { padding: 36px 24px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--ink-500); }
+.bkd-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 14px 18px; }
+.bkd-head-nm { font-size: 15px; font-weight: 700; color: var(--ink-900); }
+.bkd-head-sub { margin-top: 3px; font-size: 12.5px; color: var(--ink-500); }
+.bkd-kpis { display: flex; gap: 10px; }
+.bkd-kpi { display: flex; flex-direction: column; align-items: center; min-width: 78px; padding: 6px 12px; border-radius: 10px; background: var(--ink-25, #f7f9fb); border: 1px solid var(--ink-100); }
+.bkd-kpi b { font-size: 17px; color: var(--ink-900); }
+.bkd-kpi span { font-size: 12.5px; color: var(--ink-500); }
+.bkd-kpi.is-free { background: var(--ok-50, #f0fdf4); border-color: var(--ok-200, #bbf7d0); }
+.bkd-kpi.is-free b { color: var(--ok-700, #15803d); }
+.bkd-card-empty { padding: 22px 18px; font-size: 13.5px; color: var(--ink-500); }
+.bkd-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+/* BOOKING_DAY_V2 — «Расписание»: строка на время дня, слева время, справа
+   пациент или «Свободно · Записать»; под открытой строкой — поиск пациента. */
+.bkd-sched { display: flex; flex-direction: column; }
+.bkd-sched-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; min-height: 48px; border-top: 1px solid var(--ink-100); }
+.bkd-sched > :first-child, .bkd-sched > :first-child > .bkd-sched-row { border-top: 0; }
+.bkd-sched-time { display: flex; align-items: baseline; gap: 6px; padding: 10px 18px; font-variant-numeric: tabular-nums; border-right: 1px solid var(--ink-100); align-self: stretch; }
+.bkd-sched-time b { font-size: 15px; color: var(--ink-900); }
+.bkd-sched-time span { font-size: 12.5px; color: var(--ink-500); }
+.bkd-sched-who { display: flex; align-items: center; gap: 10px; padding: 8px 18px; min-width: 0; }
+.bkd-sched-row.is-free .bkd-sched-time b { color: var(--ok-700, #15803d); }
+.bkd-free-l { flex: 1 1 auto; font-size: 13.5px; color: var(--ok-700, #15803d); }
+.bkd-sched-row.is-busy .bkd-pt { flex: 0 1 auto; }
+/* BOOKING_DAY_DETAIL_V1 — у записи: имя, номер карты и услуги визита. */
+.bkd-who-main { flex: 1 1 auto; min-width: 0; }
+.bkd-who-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.bkd-mrn { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-500); }
+.bkd-svc { margin-top: 3px; font-size: 12.5px; color: var(--ink-600); display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* BOOKING_DAY_TO_WIZARD_V1 — сегодняшняя запись нажимается: окно услуг. */
+.bkd-sched-row.is-actionable { cursor: pointer; transition: background var(--dur-1) var(--ease-out); }
+.bkd-sched-row.is-actionable:hover { background: var(--primary-50); }
+.bkd-sched-row.is-actionable:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
+.bkd-go { display: inline-flex; color: var(--ink-400); }
+/* BOOKING_DAY_CANCEL_V1 — «Отменить запись» в конце строки записи. */
+.bkd-cancel {
+    flex: 0 0 auto; width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink-400); cursor: pointer;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+.bkd-cancel:hover { background: var(--crit-50, #fef2f2); border-color: var(--crit-100, #fee2e2); color: var(--crit-700, #b91c1c); }
+.bkd-cancel:focus-visible { outline: 2px solid var(--crit-500, #ef4444); outline-offset: 1px; }
+.bkd-sched-row.is-actionable:hover .bkd-go { color: var(--primary-700); }
+.bkd-sched-row.is-busy .bkd-st { margin-left: auto; }
+.bkd-sched-row.is-open { background: var(--primary-50); }
+/* BOOKING_DAY_SERVICE_REQUIRED_V1 — у врача нет услуг: записать нельзя. */
+.bkd-noservice {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px;
+    background: var(--warn-50, #fffbeb); border: 1px solid var(--warn-200, #fde68a); color: var(--warn-800, #92400e); font-size: 13.5px;
+}
+/* BOOKING_DAY_ROW_CLICK_V1 — нажимается сама свободная строка: подсветка и «+»
+   справа на наведении (и всегда — у открытой строки, там это «×»). */
+.bkd-sched-row.is-bookable { cursor: pointer; transition: background var(--dur-1) var(--ease-out); }
+.bkd-sched-row.is-bookable:hover { background: var(--ok-50, #f0fdf4); }
+.bkd-sched-row.is-bookable.is-open:hover { background: var(--primary-50); }
+.bkd-sched-row.is-bookable:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
+.bkd-free-plus { margin-left: auto; display: inline-flex; color: var(--ok-700, #15803d); opacity: 0; transition: opacity var(--dur-1) var(--ease-out); }
+.bkd-sched-row.is-bookable:hover .bkd-free-plus,
+.bkd-sched-row.is-bookable:focus-visible .bkd-free-plus,
+.bkd-sched-row.is-open .bkd-free-plus { opacity: 1; }
+.bkd-sched-row.is-open .bkd-free-plus { color: var(--ink-500); }
+.bkd-book { padding: 10px 18px 14px 130px; background: var(--primary-50); border-top: 1px dashed var(--primary-200); }
+.bkd-book-row { display: flex; gap: 8px; align-items: center; }
+.bkd-book-search { position: relative; flex: 1 1 auto; }
+.bkd-book-input { width: 100%; box-sizing: border-box; height: 34px; padding: 0 12px 0 32px; border: 1px solid var(--ink-200); border-radius: 8px; font: inherit; font-size: 13.5px; background: var(--white, #fff); }
+.bkd-book-input:focus { outline: none; border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-100); }
+.bkd-book-results { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; }
+.bkd-book-hint { margin-top: 6px; font-size: 12.5px; color: var(--ink-500); }
+@media (max-width: 640px) {
+    .bkd-sched-row { grid-template-columns: 84px minmax(0, 1fr); }
+    .bkd-book { padding-left: 18px; }
+    .bkd-book-row { flex-wrap: wrap; }
+}
+.bkd-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--ink-200); background: var(--white, #fff); font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-700); cursor: pointer; }
+.bkd-chip b { color: var(--ink-500); }
+.bkd-chip.on { background: var(--primary-600); border-color: var(--primary-600); color: #fff; }
+.bkd-chip.on b { color: rgba(255,255,255,.8); }
+.bkd-pt { font-size: 13.5px; font-weight: 600; color: var(--primary-700); text-align: left; }
+.bkd-st { display: inline-flex; padding: 2px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+.bkd-st.is-scheduled { background: var(--primary-50); color: var(--primary-700); }
+.bkd-st.is-confirmed { background: var(--info-50, #eff6ff); color: var(--info-700, #1d4ed8); }
+.bkd-st.is-arrived { background: var(--ok-50, #f0fdf4); color: var(--ok-700, #15803d); }
+@media (max-width: 760px) {
+    .bkd-f select { min-width: 0; width: 100%; }
+    .bkd-f { flex: 1 1 100%; }
+}
+/* FAST_REG_PICKED_CARD_V1 — имя на плашке — ссылка на карту пациента: тот же
+   вес, что был у строки (13.5px, полужирный), но видно, что она нажимается. */
+.fr-picked .fr-picked-name {
+    font-size: 13.5px; font-weight: 600; color: var(--primary-700);
+    text-align: left; text-decoration: underline; text-underline-offset: 3px;
+    text-decoration-color: var(--primary-200); cursor: pointer;
+}
+.fr-picked .fr-picked-name:hover { text-decoration-color: currentColor; }
+
 /* Сетка формы: подпись — поле — подпись — поле. Колонка подписи постоянная
    (200 px), поле забирает остаток; minmax(0,1fr) — чтобы длинное содержимое
    поля не раздувало колонку шире строки. */
@@ -8554,8 +8803,12 @@ table.pkg-tbl thead th.pkg-r { text-align: right; }
 /* Подвал окна: «Отмена» слева, «Сохранить» справа (макет); на телефоне кнопки переносятся, а не уезжают за левый край. */
 .pkg-card .modal-foot { flex-wrap: wrap; row-gap: 8px; }
 .pkg-card .modal-foot .grow { flex: 1 1 auto; }
-.pkg-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
-.pkg-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
+/* PKG_SUM_COMPACT_V1 (2026-11-13, владелец со снимком «Нового пакета услуг»: «can you
+   compacted it») — у сетки по умолчанию align-content: stretch, и в высоком окне
+   (.modal-body растянут) лишняя высота делилась между рядами: три карточки итога
+   вытягивались на всю высоту окна. Ряды держатся сверху и своей высоты. */
+.pkg-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-content: start; }
+.pkg-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; align-content: start; }
 .pkg-sec h4 { margin: 0; font-size: 15px; color: var(--ink-900); }
 .pkg-sec h4 small { font-size: 12.5px; font-weight: 400; color: var(--ink-500); }
 .pkg-sec .cpf-set { min-width: 0; }
@@ -8576,12 +8829,15 @@ table.pkg-tbl thead th.pkg-r { text-align: right; }
 .pkg-mode:disabled { cursor: default; }
 .pkg-value-box { display: inline-flex; align-items: center; gap: 8px; }
 .pkg-value { width: min(160px, 100%); }
-.pkg-sum { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 10px; }
-.pkg-sum > div { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--ink-100); border-radius: 10px; }
+/* PKG_SUM_COMPACT_V1 — итог одной узкой полосой из трёх ячеек: подпись, сумма, пояснение. */
+.pkg-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 8px; align-items: start; }
+.pkg-sum > div { display: grid; gap: 0; align-content: start; padding: 8px 12px; border: 1px solid var(--ink-100); border-radius: 10px; }
 .pkg-sum > div span { font-size: 12.5px; color: var(--ink-500); }
-.pkg-sum > div b { font-size: 17px; color: var(--ink-900); font-variant-numeric: tabular-nums; }
+.pkg-sum > div b { font-size: 15px; line-height: 1.35; color: var(--ink-900); font-variant-numeric: tabular-nums; }
 .pkg-sum > div small { font-size: 12.5px; color: var(--ink-500); }
-.pkg-sum > div.main { border-color: var(--primary-500); background: var(--primary-50); }
+/* PKG_SUM_COMPACT_V1 — было div.main: глобальный .main (admin.css, рабочая
+   область приложения) давал карточке min-height 100vh и отступы оболочки. */
+.pkg-sum > div.pkg-sum-main { border-color: var(--primary-500); background: var(--primary-50); }
 .pkg-grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 12px; }
 .pkg-warn { color: var(--warn-700); }
 .pkg-note { margin-top: 4px; }
@@ -9414,3 +9670,105 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
    выходил прямоугольником 34×28. Малый размер теперь задаёт и flex-basis. */
 .avatar.sm { flex: 0 0 28px; }
 /* ========================= end AVATAR_SQUARE_BLUE_V1 ========================= */
+
+/* CATALOG_DISCOUNT_BADGE_V1 (2026-11-13, владелец: «when any service is on
+   discount next to name of service show in red discounted %») — «−20%» рядом с
+   именем услуги в каталоге мастера визита (visit-wizard.js catalogDiscountPct).
+   Тёмно-красный текст на светло-красном (--crit-700 на --crit-50 — 6.3:1). */
+.svc-disc-badge {
+    display: inline-flex; align-items: center; margin-left: 8px; padding: 1px 7px;
+    border-radius: 6px; background: var(--crit-50, #fef2f2); color: var(--crit-700, #b91c1c);
+    border: 1px solid #fecaca; font-size: 12.5px; font-weight: 800; vertical-align: middle;
+    font-variant-numeric: tabular-nums;
+}
+/* CATALOG_DISCOUNT_NAME_V1 (владелец: «put the name of discount to 12 symbols then
+   wrap it») — имя скидки не шире 12 знаков (12ch), длинное переносится вниз, а не
+   обрезается. CATALOG_DISCOUNT_SPLIT_V1 («separate name and discount amount») — имя
+   отдельным значком ПЕРЕД процентом («first name then discount»): светлое, тот же красный
+   тон; процент за ним — .svc-disc-name + .svc-disc-badge ближе к имени. */
+.svc-disc-name + .svc-disc-badge { margin-left: 6px; }
+.svc-disc-name {
+    display: inline-block; max-width: 12ch; margin-left: 8px; padding: 1px 7px; vertical-align: middle;
+    border-radius: 6px; background: var(--ink-50); color: var(--crit-700, #b91c1c); border: 1px dashed #fecaca;
+    white-space: normal; overflow-wrap: anywhere; font-size: 12.5px; font-weight: 600; line-height: 1.25; text-align: left;
+}
+
+/* DAILY_REPORT_BOT_V1 (2026-11-13) — экран «Отчёт в Telegram» (views/daily-report.js). */
+.drb-banner { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 10px; margin-bottom: 16px; }
+.drb-banner.drb-ok { background: var(--ok-50, #ecfdf5); color: var(--ok-700, #047857); }
+.drb-banner.drb-warn { background: var(--warn-50, #fffbeb); color: var(--warn-700, #b45309); }
+.drb-banner svg { flex: 0 0 auto; margin-top: 2px; }
+.drb-sub { font-size: 12.5px; margin-top: 2px; opacity: .9; }
+.drb-line { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; font-size: 13.5px; font-weight: 600; color: var(--ok-700, #047857); }
+.drb-chats { display: grid; gap: 6px; margin-top: 12px; max-width: 520px; }
+.drb-chat {
+    display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; text-align: left; cursor: pointer;
+    border: 1px solid var(--ink-200); border-radius: 9px; background: var(--white); font: inherit; font-size: 13.5px; color: var(--ink-800);
+}
+.drb-chat:hover { border-color: var(--primary-500); background: var(--primary-50); }
+.drb-chat.on { border-color: var(--primary-600); background: var(--primary-50); }
+.drb-chat span { flex: 1 1 auto; font-weight: 600; }
+.drb-chat small { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-500); }
+.drb-manual { margin-top: 14px; }
+.drb-manual summary { cursor: pointer; font-size: 12.5px; color: var(--ink-500); }
+.drb-sections { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 4px 16px; }
+.drb-preview {
+    margin: 14px 0 0; padding: 14px 16px; max-height: 420px; overflow: auto; white-space: pre-wrap;
+    background: var(--ink-25); border: 1px solid var(--ink-100); border-radius: 10px;
+    font: inherit; font-size: 13.5px; line-height: 1.55; color: var(--ink-800);
+}
+
+/* OPERATOR_KPI_V1 (2026-11-14) — «Мой KPI» оператора (views/crm-operator-kpi.js):
+   окно поверх доски CRM, как «Cust Dev». Плитки — те же .dash-kpi сводки. */
+.okpi-ico { width: 34px; height: 34px; border-radius: 10px; background: var(--primary-50); color: var(--primary-700); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.okpi-controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.okpi-pick-wrap { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.okpi-pick { min-width: 220px; }
+.okpi-body { overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding-top: 16px; }
+.okpi-sec-h { margin: 0 0 10px; font-size: 12.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-500); }
+.okpi-tiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.okpi-pay { display: flex; flex-wrap: wrap; gap: 10px; }
+.okpi-pay-i { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; min-width: 170px; border: 1px solid var(--ink-100); border-radius: 12px; background: var(--white, #fff); }
+.okpi-pay-i span { font-size: 12.5px; color: var(--ink-500); }
+.okpi-pay-i b { font-size: 20px; color: var(--ink-900); }
+.okpi-pay-i.okpi-total { background: var(--primary-50); border-color: var(--primary-200); }
+.okpi-pay-i.okpi-total b { color: var(--primary-700); }
+.okpi-note { margin-top: 8px; font-size: 12.5px; color: var(--ink-500); line-height: 1.45; }
+.okpi-chart { margin-top: 6px; height: 200px; }
+
+/* CRM_HERO_V1 (2026-11-14) — кнопки CRM в тёмном баннере (crm.js). «Информация»
+   несёт свой значок и счётчик новостей: в баннере она — такая же пилюля, как
+   соседние, а «есть новости» — светлее, без белого фона дневной кнопки. */
+.shero .crm-news-btn { height: auto; padding: 6px 12px; gap: 6px; }
+.shero .crm-news-btn .crm-news-ic { width: auto; height: auto; background: transparent; color: currentColor; }
+.shero .crm-news-btn.has-news, .shero .crm-news-btn.has-important { background: rgba(255,255,255,.16); border-color: transparent; color: #fff; }
+.shero .crm-news-btn.has-news .crm-news-ic { background: transparent; color: #fff; }
+
+/* CRM_HERO_V2 — черта посередине баннера без приветствия (CRM): тот же цвет и
+   толщина, что у границы .phub-hero-msg в остальных разделах. */
+.shero-divider {
+    flex: 1 1 auto; align-self: stretch; min-height: 44px;
+    background: linear-gradient(rgba(255,255,255,.18), rgba(255,255,255,.18)) center / 1px 100% no-repeat;
+}
+@media (max-width: 760px) { .shero-divider { display: none; } }
+
+/* CRM_TASKS_GRID_V1 (2026-11-14) — владелец, со снимком «Мои задачи»: «each block
+   of information should be appropriate to each other … little messy view».
+   Строка была гибкой строкой: плашка пациента начиналась там, где кончался текст
+   задачи, и в каждой строке — в своём месте. Теперь все строки — по ОДНИМ
+   колонкам: задача · пациент · (исполнитель) · срок · «Готово». Ширины — доли и
+   постоянные, не «по содержимому»: каждая строка — своя сетка, и выровнять их
+   между собой могут только одинаковые дорожки. */
+.crm-tv-list .crm-tv-row {
+    display: grid; align-items: center; column-gap: 14px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) 200px 112px;
+}
+.crm-tv-list.has-who .crm-tv-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, .7fr) 200px 112px; }
+.crm-tv-list .crm-tv-row .crm-tv-text { max-width: 100%; text-align: left; justify-self: start; }
+.crm-tv-list .crm-tv-row .crm-tv-lead, .crm-tv-list .crm-tv-row .crm-tv-who-name { justify-self: start; max-width: 100%; }
+.crm-tv-list .crm-tv-row .crm-tv-due { margin-left: 0; justify-self: end; }
+.crm-tv-list .crm-tv-row .crm-tv-done { justify-self: end; }
+@media (max-width: 760px) {
+    .crm-tv-list .crm-tv-row, .crm-tv-list.has-who .crm-tv-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
+    .crm-tv-list .crm-tv-row .crm-tv-due { justify-self: start; }
+}

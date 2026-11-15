@@ -79,7 +79,7 @@ const READ_ONLY_RPCS = new Set([
   // DOCTOR_LINES_SPECIALTY_V1 — варианты фильтра «Врач» в «Отчётах»; чтение.
   'report_choices',
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',
-  'callcenter_report', 'queue_board', 'documents_feed', 'accommodation_state',
+  'callcenter_report', 'crm_operator_kpi', 'queue_board', 'documents_feed', 'accommodation_state',
   'deposit_balance', 'list_deposits', 'service_delete_check', 'get_clinic_by_slug',
   'list_card_sales',   // CARD_SALE_V1 — список карт кассы; чтение
   // PATIENT_AGGREGATES_V1 — числа рядом с фамилиями в картотеке. Чистое чтение,
@@ -259,6 +259,7 @@ const READ_ONLY_RPCS = new Set([
   'referrals_source_detail', 'referrals_doctor_detail',
   'doctor_bot_settings_get', 'doctor_bot_stats', 'doctor_bot_links_list',   // REFERRALS_CRM_V1 — бот для врачей-источников
   'rep_bot_settings_get', 'rep_bot_stats', 'rep_bot_links_list', 'rep_bot_additions_list',   // REP_BOT_V1 — бот медпредставителей: только SELECT
+  'daily_report_settings_get', 'daily_report_preview',   // DAILY_REPORT_BOT_V1 — настройки (без токена) и текст отчёта: только SELECT
   'clinic_news_list',   // CLINIC_NEWS_V1 — доска объявлений: только SELECT
   'patient_bot_status', 'phone_bot_status',   // PATIENT_BOT_INVITE_V1 — кто подключён к боту: только SELECT
   'meta_settings_get', 'meta_leads_recent',   // META_LEADS_V1 — настройки (без токена) и журнал заявок

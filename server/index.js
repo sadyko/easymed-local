@@ -30,6 +30,7 @@ import { readPairing } from './services/branch-sync/pairing.js';
 import { runBranchSync } from './services/rpc/branch-sync.js';
 import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EVENTS_V1
 import { scheduleCrmNoShow } from './services/crm/no-show.js';   // CRM_UNIFY_V1
+import { scheduleDailyReport } from './services/daily-report/index.js';   // DAILY_REPORT_BOT_V1 — отчёт совету директоров в Telegram
 import { crmUnifyRepair } from './services/crm/unify-repair.js';   // CRM_UNIFY_V1
 import { crmOneWayRepair } from './services/crm/one-way-repair.js';   // CRM_ONE_WAY_V1 (O8)
 import { scheduleCrmTaskRehome } from './services/crm/tasks-follow.js';   // CRM_UNIFY_V1
@@ -282,6 +283,8 @@ if (isMain) {
   // (crmArrivalCatchUp): карточки, чью работу над услугой или отметку «Пришёл»
   // правило прихода когда-то пропустило. При запуске — после разового исправления выше.
   try { scheduleCrmNoShow(db); } catch (e) { console.warn('[crm-no-show]', e && e.message); }
+  // DAILY_REPORT_BOT_V1 — раз в минуту: пора ли слать отчёт в группу совета директоров.
+  try { scheduleDailyReport(db); } catch (e) { console.warn('[daily-report]', e && e.message); }
   // CRM_UNIFY_V1 — задачи тех, кто больше не может вести карточку («crm.all»
   // сняли, роль — «просмотр», уволен), — её хозяину: при запуске (после
   // разового исправления выше) и раз в час (crm/tasks-follow.js). Правка прав

@@ -144,7 +144,42 @@ const BOARD = {
   }],
 };
 let rpcCalls = [];
+let rpcArgs = [];   // BOOKING_DAY_V1 — с какими аргументами звали RPC
 let AGGS = null;   // V3120_FIX — ответ patient_base_aggregates
+// BOOKING_DAY_V1 — врачи, виды консультаций и день врача (calendar_slots).
+const DOCTORS = [
+  { id: 7, full_name: 'Алиева Нигора', specialty: 'Терапевт', role: 'doctor', is_doctor: 1,
+    service_rates: JSON.stringify([{ service_id: 21, pct: 20 }, { service_id: 22, pct: 20 }]) },   // BOOKING_DAY_SERVICE_V1 — услуги врача
+  { id: 8, full_name: 'Каримов Бахтиёр', specialty: 'Кардиолог', role: 'doctor', is_doctor: 1 },
+  { id: 9, full_name: 'Регистратор Анна', specialty: '', role: 'registrar', is_doctor: 0 },
+];
+const CTYPES = [{ id: 3, name: 'Первичная консультация', price: 100000, active: 1 }];
+// BOOKING_DAY_CANCEL_V1 — визиты записей дня (время до секунды берётся отсюда).
+const VISITS = [
+  { id: 101, visit_date: '2026-11-13T04:00:00.000Z', status: 'confirmed' },
+  { id: 102, visit_date: '2026-11-13T05:00:00.000Z', status: 'arrived' },
+];
+// BOOKING_DAY_SERVICE_V1 — каталог: две услуги врача 7 и чужая.
+const SERVICES = [
+  { id: 21, name: 'Консультация терапевта', duration_minutes: 20, price: 90000, active: 1 },
+  { id: 22, name: 'ЭКГ', duration_minutes: 0, price: 60000, active: 1 },
+  { id: 23, name: 'МРТ головы', duration_minutes: 45, price: 900000, active: 1 },
+];
+// BOOKING_DAY_DETAIL_V1 — услуги записей дня (visit_services с именем услуги).
+const VISIT_LINES = [
+  { visit_id: 101, status: 'added', services: { name: 'УЗИ брюшной полости' }, consultation_types: null },
+  { visit_id: 101, status: 'added', services: { name: 'Общий анализ крови' }, consultation_types: null },
+  { visit_id: 101, status: 'cancelled', services: { name: 'Отменённая услуга' }, consultation_types: null },
+  { visit_id: 102, status: 'added', services: null, consultation_types: { name: 'Первичная консультация' } },
+];
+const DAY = {
+  date: 'x', duration_minutes: 30, window: { from: '09:00', to: '12:00', breaks: [{ from: '10:30', to: '11:00' }] },
+  slots: [{ start: '09:30', end: '10:00', start_iso: '2026-11-13T04:30:00.000Z' }, { start: '11:00', end: '11:30', start_iso: '2026-11-13T06:00:00.000Z' }, { start: '11:30', end: '12:00', start_iso: '2026-11-13T06:30:00.000Z' }],
+  busy: [
+    { visit_id: 101, from: '09:00', to: '09:30', from_min: 540, status: 'confirmed', patient_id: 'p-1', patient_name: 'Эргашев Жахонгир' },
+    { visit_id: 102, from: '10:00', to: '10:30', from_min: 600, status: 'arrived', patient_id: 'p-2', patient_name: 'Юсупова Дилноза' },
+  ],
+};
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -153,7 +188,11 @@ globalThis.fetch = async (url, opts = {}) => {
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push(name);
+    rpcArgs.push([name, body]);
+    if (name === 'calendar_slots') return ok({ data: { ...JSON.parse(JSON.stringify(DAY)), date: body && body.date } });
     if (name === 'queue_board') return ok({ data: JSON.parse(JSON.stringify(BOARD)) });
+    // PATIENT_SORT_DROPDOWN_V1 — по умолчанию список сортируется по последнему визиту: страницу отдаёт сервер.
+    if (name === 'patient_list_page') return ok({ data: { rows: JSON.parse(JSON.stringify(PATIENTS)), total: PATIENTS.length } });
     // PATIENT_BOT_INVITE_V1 — кто из страницы подключён к боту пациента.
     if (name === 'patient_bot_status') return ok({ data: { bot: true, sms_ready: false, linked: ['p-1'] } });
     // V3120_FIX — сводка реестра: депозит и долг раздельно (rpc/patient-aggregates.js).
@@ -165,7 +204,8 @@ globalThis.fetch = async (url, opts = {}) => {
   if (u.startsWith('/api/db')) {
     const table = body && body.table;
     const op = (body && body.op) || 'select';
-    const rows = { patients: PATIENTS }[table] || [];
+    // BOOKING_DAY_V1 — врачи и виды консультаций для «Бронирования».
+    const rows = { patients: PATIENTS, users: DOCTORS, consultation_types: CTYPES, visit_services: VISIT_LINES, services: SERVICES, visits: VISITS }[table] || [];
     return ok({ data: op === 'select' ? JSON.parse(JSON.stringify(rows)) : null, count: rows.length });
   }
   return ok({ data: null });
@@ -174,6 +214,7 @@ globalThis.fetch = async (url, opts = {}) => {
 const tick = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 
 const { renderPatientsHub, mountCalendarInto } = await import('../views/patients-hub.js');
+const { renderBookingDay } = await import('../views/booking-day.js');   // BOOKING_DAY_TO_WIZARD_V1 — с подменой окна услуг
 const { openPatientCreateModal } = await import('../views/patient-create-modal.js?v=onewin1');
 const { renderQueue, stopQueuePolling } = await import('../views/queue.js?v=q7');
 const perms = await import('../permissions.js');
@@ -228,7 +269,8 @@ test('каждая вкладка показывает СВОЁ: список п
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: stubCalendar });
 
   const btns = tabButtons(box);
-  assert.deepEqual(btns.map(tabLabel), ['Список', 'Очередь', 'Записи'], 'полоса вкладок не та');
+  // BOOKING_DAY_V1 — четвёртая вкладка «Бронирование»: день одного врача.
+  assert.deepEqual(btns.map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование'], 'полоса вкладок не та');
   assert.equal(hub.activeTab(), 'list', 'по умолчанию открывается не список');
   assert.equal(visiblePanels(box).length, 1, 'видна не ровно одна вкладка');
 
@@ -264,7 +306,7 @@ test('полоса вкладок доступна с клавиатуры: ст
   // В tablist из порядка обхода Tab вынуто всё, кроме активной вкладки, —
   // значит по стрелкам обязано ходить, иначе двух вкладок из трёх для
   // клавиатуры просто не существует.
-  assert.deepEqual(btns.map((b) => b.attrs.tabindex), ['0', '-1', '-1']);
+  assert.deepEqual(btns.map((b) => b.attrs.tabindex), ['0', '-1', '-1', '-1']);
   const press = (b, key) => b.dispatchEvent({ type: 'keydown', key, preventDefault() {} });
 
   press(btns[0], 'ArrowRight'); await tick();
@@ -272,16 +314,18 @@ test('полоса вкладок доступна с клавиатуры: ст
   press(btns[1], 'ArrowRight'); await tick();
   assert.equal(hub.activeTab(), 'calendar');
   press(btns[2], 'ArrowRight'); await tick();
+  assert.equal(hub.activeTab(), 'booking');   // BOOKING_DAY_V1
+  press(btns[3], 'ArrowRight'); await tick();
   assert.equal(hub.activeTab(), 'list', 'стрелка вправо с последней вкладки не вернулась к первой');
   press(btns[0], 'ArrowLeft'); await tick();
-  assert.equal(hub.activeTab(), 'calendar');
-  press(btns[2], 'Home'); await tick();
+  assert.equal(hub.activeTab(), 'booking');
+  press(btns[3], 'Home'); await tick();
   assert.equal(hub.activeTab(), 'list');
   press(btns[0], 'End'); await tick();
-  assert.equal(hub.activeTab(), 'calendar');
+  assert.equal(hub.activeTab(), 'booking');
   // Активная вкладка — единственная в порядке обхода, и она же помечена.
-  assert.deepEqual(tabButtons(box).map((b) => b.attrs['aria-selected']), ['false', 'false', 'true']);
-  assert.deepEqual(tabButtons(box).map((b) => b.attrs.tabindex), ['-1', '-1', '0']);
+  assert.deepEqual(tabButtons(box).map((b) => b.attrs['aria-selected']), ['false', 'false', 'false', 'true']);
+  assert.deepEqual(tabButtons(box).map((b) => b.attrs.tabindex), ['-1', '-1', '-1', '0']);
   hub.destroy();
 });
 
@@ -384,7 +428,7 @@ test('регистратура видит все три вкладки, и ка�
 
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-  assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи'],
+  assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование'],
     'регистратура недосчиталась вкладок');
   hub.destroy();
 
@@ -675,8 +719,9 @@ test('V3120_FIX: вкладки «Записи» и «Очередь» — то�
     ['nurse',     ['patients', 'queue'],        ['Список', 'Очередь']],
     ['cashier',   ['patients', 'queue'],        ['Список', 'Очередь']],
     ['lab',       ['patients', 'labs'],         ['Список']],
-    ['registrar', ['patients', 'queue'],        ['Список', 'Очередь', 'Записи']],
-    ['doctor',    ['patients'],                 ['Список', 'Записи']],
+    // BOOKING_DAY_V1 — «Бронирование» видят те же, кому открыты «Записи».
+    ['registrar', ['patients', 'queue'],        ['Список', 'Очередь', 'Записи', 'Бронирование']],
+    ['doctor',    ['patients'],                 ['Список', 'Записи', 'Бронирование']],
   ];
   try {
     for (const [role, sections, want] of CASES) {
@@ -780,5 +825,275 @@ test('LAST_VISIT_TRUE_V1: под датой последнего визита �
     assert.ok(t2.includes('1 сентября 2026') && t2.includes('визитов не было') && t2.includes('запись: 3 ноября 2026'), t2.slice(0, 400));
   } finally {
     AGGS = null;
+  }
+});
+
+// ===========================================================================
+// BOOKING_DAY_V1 (2026-11-13) — вкладка «Бронирование»: владелец — «it should
+// have filters and random date should be today, and search place for doctor,
+// and if doctor chosen, down place it should show consultation times and list
+// of patient».
+// ===========================================================================
+const localYmd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const byData = (root, attr) => walk(root).filter((n) => n.attrs && n.attrs[attr] != null);
+
+test('BOOKING_DAY_V1: дата — сегодня, до выбора врача — подсказка, поиск врача — только врачи, по специальности', async () => {
+  reset(); rpcArgs = [];
+  const box = mk('div');
+  const hub = await renderPatientsHub(box, ctxFor({ sub: 'booking' }), { calendarLoader: async () => async () => {} });
+  await tick(60);
+  assert.equal(hub.activeTab(), 'booking', 'адрес #patients/booking открыл не «Бронирование»');
+  const panel = panelFor(box, 'booking');
+  const date = walk(panel).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'date');
+  assert.equal(date.value, localYmd(new Date()), 'дата по умолчанию — не сегодня');
+  assert.equal(byData(panel, 'data-bkd-hint').length, 1, 'до выбора врача нет подсказки');
+  assert.ok(!rpcArgs.some(([n]) => n === 'calendar_slots'), 'расписание спрошено без врача');
+
+  // В поиске — только врачи (регистратор не врач), по алфавиту.
+  const opts = () => byData(panel, 'data-bkd-doctor-opt').map((n) => n.attrs['data-bkd-doctor-opt']);
+  assert.deepEqual(opts(), ['7', '8']);
+  // Специальность сужает список.
+  const spec = byData(panel, 'data-bkd-spec')[0];
+  spec.value = 'Кардиолог'; spec.dispatchEvent({ type: 'change' });
+  assert.deepEqual(opts(), ['8'], 'специальность не сузила поиск врача');
+  hub.destroy();
+});
+
+test('BOOKING_DAY_V1: выбран врач — время приёма (свободное и занятое по порядку) и пациенты; статус фильтрует; имя открывает карту', async () => {
+  reset(); rpcArgs = [];
+  const navigated = [];
+  const box = mk('div');
+  const hub = await renderPatientsHub(box, ctxFor({ sub: 'booking' }, navigated), { calendarLoader: async () => async () => {} });
+  await tick(60);
+  const panel = panelFor(box, 'booking');
+  byData(panel, 'data-bkd-doctor-opt').find((n) => n.attrs['data-bkd-doctor-opt'] === '7').click();
+  await tick(60);
+
+  const call = rpcArgs.filter(([n]) => n === 'calendar_slots').pop();
+  assert.ok(call, 'день врача не спрошен');
+  assert.deepEqual([call[1].doctor_id, call[1].date], [7, localYmd(new Date())], 'спросили не того врача или не сегодня');
+
+  // Лента: 09:00 занято, 09:30 свободно, 10:00 занято, 11:00 и 11:30 свободны.
+  const chips = walk(panel).filter((n) => n.attrs && (n.attrs['data-bkd-free'] != null || n.attrs['data-bkd-busy'] != null))
+    .map((n) => (n.attrs['data-bkd-free'] != null ? 'free ' + n.attrs['data-bkd-free'] : 'busy ' + n.attrs['data-bkd-busy']));
+  assert.deepEqual(chips, ['busy 09:00', 'free 09:30', 'busy 10:00', 'free 11:00', 'free 11:30']);
+  const head = textOf(byData(panel, 'data-bkd-head')[0]);
+  assert.ok(head.includes('Алиева Нигора') && head.includes('09:00–12:00') && head.includes('10:30–11:00'), 'сводка дня не та: ' + head);
+
+  // Пациенты: двое; фильтр «Пришёл» оставляет одну.
+  const rows = () => byData(panel, 'data-bkd-row').map((n) => n.attrs['data-bkd-row']);
+  assert.deepEqual(rows(), ['101', '102']);
+  byData(panel, 'data-bkd-status').find((n) => n.attrs['data-bkd-status'] === 'arrived').click();
+  assert.deepEqual(rows(), ['102'], 'фильтр статуса не сработал');
+  byData(panel, 'data-bkd-status').find((n) => n.attrs['data-bkd-status'] === 'all').click();
+
+  // Имя пациента — в его карту.
+  byData(panel, 'data-bkd-open').find((n) => n.attrs['data-bkd-open'] === 'p-1').click();
+  await tick(60);
+  assert.ok(navigated.includes('patient-card'), 'имя пациента не открыло карту');
+
+  // Следующий день — новый запрос на завтра.
+  walk(panel).find((n) => n.tagName === 'BUTTON' && n.attrs['aria-label'] === 'Следующий день').click();
+  await tick(60);
+  const next = rpcArgs.filter(([n]) => n === 'calendar_slots').pop();
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  assert.equal(next[1].date, localYmd(tomorrow), '«‹ ›» не сменил день');
+  hub.destroy();
+});
+
+// BOOKING_DAY_V2 — владелец: «make it possibe to chose time and make booking too
+// for registrars». «Записать» в свободной строке → поиск пациента → calendar_book.
+test('BOOKING_DAY_V2: «Записать» в свободное время — найти пациента и записать (calendar_book); день перечитан', async () => {
+  reset(); rpcArgs = [];
+  const box = mk('div');
+  const hub = await renderPatientsHub(box, ctxFor({ sub: 'booking' }), { calendarLoader: async () => async () => {} });
+  await tick(60);
+  const panel = panelFor(box, 'booking');
+  byData(panel, 'data-bkd-doctor-opt').find((n) => n.attrs['data-bkd-doctor-opt'] === '7').click();
+  await tick(60);
+
+  // Слева время, справа пациент или «Свободно»: строки по порядку.
+  const order = walk(panel).filter((n) => n.attrs && (n.attrs['data-bkd-free'] != null || n.attrs['data-bkd-busy'] != null) && hasClass(n, 'bkd-sched-row'))
+    .map((n) => (n.attrs['data-bkd-free'] != null ? 'free ' + n.attrs['data-bkd-free'] : 'busy ' + n.attrs['data-bkd-busy']));
+  assert.deepEqual(order, ['busy 09:00', 'free 09:30', 'busy 10:00', 'free 11:00', 'free 11:30']);
+
+  byData(panel, 'data-bkd-book').find((n) => n.attrs['data-bkd-book'] === '09:30').click();
+  await tick(20);
+  const search = byData(panel, 'data-bkd-book-search')[0];
+  assert.ok(search, 'у свободной строки не открылся поиск пациента');
+  search.value = 'Эрга';
+  search.dispatchEvent({ type: 'input' });
+  await tick(400);
+  const hit = walk(panel).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt'));
+  assert.ok(hit, 'пациент не найден в строке записи');
+  const before = rpcArgs.filter(([n]) => n === 'calendar_slots').length;
+  hit.click();
+  await tick(80);
+
+  const bookCall = rpcArgs.find(([n]) => n === 'calendar_book');
+  assert.ok(bookCall, 'запись не ушла на сервер');
+  assert.deepEqual([bookCall[1].patient_id, bookCall[1].doctor_id, bookCall[1].start, bookCall[1].duration_minutes, bookCall[1].status],
+    ['p-1', 7, '2026-11-13T04:30:00.000Z', 30, 'scheduled'], 'записали не того, не к тому или не на то время');
+  // BOOKING_DAY_SERVICE_V1 — запись уносит услугу врача строкой визита.
+  assert.equal(bookCall[1].service_id, 21, 'запись без услуги врача');
+  assert.deepEqual(bookCall[1].line, { service_id: 21 }, 'услуга не ушла строкой визита');
+  assert.ok(rpcArgs.filter(([n]) => n === 'calendar_slots').length > before, 'после записи день не перечитан');
+  hub.destroy();
+});
+
+test('BOOKING_DAY_V2: «Записи» только на просмотр — кнопки «Записать» нет, расписание видно', async () => {
+  reset(); rpcArgs = [];
+  setEffectiveFromRole({ name: 'registrar', permissions: { sections: ['patients', 'queue'], levels: {}, grants: { 'patients.calendar': 'view' } } });
+  const box = mk('div');
+  const hub = await renderPatientsHub(box, ctxFor({ sub: 'booking' }), { calendarLoader: async () => async () => {} });
+  await tick(60);
+  const panel = panelFor(box, 'booking');
+  assert.ok(panel, 'вкладка «Бронирование» не видна роли с просмотром «Записей»');
+  byData(panel, 'data-bkd-doctor-opt').find((n) => n.attrs['data-bkd-doctor-opt'] === '7').click();
+  await tick(60);
+  assert.ok(byData(panel, 'data-bkd-free').length > 0, 'свободного времени не видно');
+  assert.equal(byData(panel, 'data-bkd-book').length, 0, 'кнопка «Записать» у роли без права записи');
+  hub.destroy();
+  setFullAccess('Admin');
+});
+
+// BOOKING_DAY_DETAIL_V1 / BOOKING_DAY_TO_WIZARD_V1 — владелец: «make it more
+// detailed, id of patient and name of service too» и «when you press it, it
+// should come to service added place as service added and continue process».
+test('BOOKING_DAY_DETAIL_V1: у записи — номер карты и услуги визита (без отменённых), консультация — своим названием', async () => {
+  reset(); rpcArgs = [];
+  const host = mk('div');
+  const api = await renderBookingDay(host, { onNavigate() {} });
+  api.pickDoctor(DOCTORS[0]);
+  await tick(120);
+  const row = byData(host, 'data-bkd-row').find((n) => n.attrs['data-bkd-row'] === '101');
+  const t = textOf(row);
+  assert.ok(t.includes('MRN-1'), 'нет номера карты: ' + t);
+  assert.ok(t.includes('УЗИ брюшной полости') && t.includes('Общий анализ крови'), 'нет услуг визита: ' + t);
+  assert.ok(!t.includes('Отменённая услуга'), 'отменённая услуга показана');
+  const row2 = byData(host, 'data-bkd-row').find((n) => n.attrs['data-bkd-row'] === '102');
+  assert.ok(textOf(row2).includes('Первичная консультация'), 'вид консультации не назван');
+});
+
+test('BOOKING_DAY_TO_WIZARD_V1: сегодняшняя запись открывает окно услуг для этого пациента; имя — карту; другой день — не нажимается', async () => {
+  reset(); rpcArgs = [];
+  const wizard = [];
+  const wizardPatients = [];   // какую карту получило окно услуг
+  const navigated = [];
+  const host = mk('div');
+  const api = await renderBookingDay(host, { onNavigate: (v) => navigated.push(v) },
+    { openVisitWizard: async (onSaved, patient) => { wizard.push(patient && patient.id); wizardPatients.push(patient); await onSaved(); } });
+  api.pickDoctor(DOCTORS[0]);
+  await tick(120);
+  const row = () => byData(host, 'data-bkd-row').find((n) => n.attrs['data-bkd-row'] === '101');
+  assert.equal(row().attrs['data-bkd-wizard'], '101', 'сегодняшняя запись не нажимается');
+
+  // Имя — карта пациента, окно услуг не открывается.
+  byData(row(), 'data-bkd-open')[0].click();
+  await tick(60);
+  assert.ok(navigated.includes('patient-card'), 'имя не открыло карту');
+  assert.equal(wizard.length, 0, 'нажатие на имя открыло ещё и окно услуг');
+
+  // Строка — окно услуг для этого пациента; после него день перечитан.
+  const before = rpcArgs.filter(([n]) => n === 'calendar_slots').length;
+  row().click();
+  await tick(120);
+  assert.deepEqual(wizard, ['p-1'], 'окно услуг открылось не для того пациента');
+  assert.ok(rpcArgs.filter(([n]) => n === 'calendar_slots').length > before, 'после оформления день не перечитан');
+
+  // Завтра — запись видна, но в сегодняшний счёт её не оформить.
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  api.setDate(localYmd(tomorrow));
+  await tick(120);
+  assert.equal(row().attrs['data-bkd-wizard'], undefined, 'запись другого дня нажимается');
+});
+
+// BOOKING_DAY_SERVICE_V1 — владелец: «why services of doctor is not coming, if
+// there is one it should come randomly». «Услуга» — услуги врача (service_rates),
+// первая выбрана сразу; длительность слотов — её длительность.
+test('BOOKING_DAY_SERVICE_V1: у выбранного врача — его услуги, первая уже выбрана; слоты — по её длительности', async () => {
+  reset(); rpcArgs = [];
+  const host = mk('div');
+  const api = await renderBookingDay(host, { onNavigate() {} });
+  api.pickDoctor(DOCTORS[0]);
+  await tick(120);
+  const sel = byData(host, 'data-bkd-type')[0];
+  const opts = walk(sel).filter((n) => n.tagName === 'OPTION').map((n) => n.attrs.value);
+  assert.deepEqual(opts, ['svc:21', 'svc:22', 'ct:3'], 'в списке не услуги врача (или чужая услуга)');   // BOOKING_DAY_SERVICE_REQUIRED_V1 — «Без услуги» нет
+  assert.equal(api.state.choice, 'svc:21', 'первая услуга врача не выбрана сама');
+  const slots = rpcArgs.filter(([n]) => n === 'calendar_slots').pop();
+  assert.equal(slots[1].duration_minutes, 20, 'слоты не по длительности услуги');
+
+  // ЭКГ без своей длительности — 30, как у сервера.
+  sel.value = 'svc:22'; sel.dispatchEvent({ type: 'change' });
+  await tick(80);
+  assert.equal(rpcArgs.filter(([n]) => n === 'calendar_slots').pop()[1].duration_minutes, 30);
+
+  // Врач без услуг — первым идёт вид консультации.
+  api.pickDoctor(DOCTORS[1]);
+  await tick(80);
+  assert.equal(api.state.choice, 'ct:3');
+});
+
+// BOOKING_DAY_SERVICE_REQUIRED_V1 — владелец: «if there is no service no booking
+// should happen». Врач без услуг (и клиника без видов консультаций): свободное
+// время видно, но «Записать» не открывается, а экран говорит почему.
+test('BOOKING_DAY_SERVICE_REQUIRED_V1: у врача нет услуг — записать нельзя, экран объясняет', async () => {
+  reset(); rpcArgs = [];
+  const saved = CTYPES.splice(0, CTYPES.length);   // клиника без видов консультаций
+  try {
+    const host = mk('div');
+    const api = await renderBookingDay(host, { onNavigate() {} });
+    api.pickDoctor(DOCTORS[1]);   // Каримов — без service_rates
+    await tick(120);
+    assert.equal(api.state.choice, '', 'услуга выбралась, хотя её нет');
+    const sel = byData(host, 'data-bkd-type')[0];
+    assert.ok(textOf(sel).includes('У врача нет услуг'), 'список не говорит, что услуг нет');
+    assert.equal(byData(host, 'data-bkd-noservice').length, 1, 'нет объяснения, почему записать нельзя');
+    assert.ok(byData(host, 'data-bkd-free').length > 0, 'свободное время пропало — его должно быть видно');
+    assert.equal(byData(host, 'data-bkd-book').length, 0, 'свободная строка всё ещё открывает запись');
+    assert.ok(!rpcArgs.some(([n]) => n === 'calendar_book'), 'запись ушла без услуги');
+  } finally {
+    CTYPES.push(...saved);
+  }
+});
+
+// BOOKING_DAY_CANCEL_V1 — владелец: «add at the end remove button too». Кнопка
+// отмены в конце строки записи: «Записан» / «Подтверждён», с подтверждением,
+// не открывает окно услуг; «Пришёл» не отменяется.
+test('BOOKING_DAY_CANCEL_V1: отмена записи в конце строки — с подтверждением, без окна услуг; «Пришёл» не отменяется', async () => {
+  reset(); rpcArgs = [];
+  const cancelled = [];
+  const wizard = [];
+  const prevConfirm = globalThis.window.confirm;
+  let answer = false;
+  globalThis.window.confirm = () => answer;
+  try {
+    const host = mk('div');
+    const api = await renderBookingDay(host, { onNavigate() {} }, {
+      setVisitStatus: async (v, st) => { cancelled.push([v && v.id, st]); },
+      openVisitWizard: async (onSaved, p) => { wizard.push(p && p.id); },
+    });
+    api.pickDoctor(DOCTORS[0]);
+    await tick(120);
+    const btnFor = (vid) => byData(host, 'data-bkd-cancel').find((n) => n.attrs['data-bkd-cancel'] === vid);
+    assert.ok(btnFor('101'), 'у подтверждённой записи нет кнопки отмены');
+    assert.equal(btnFor('102'), undefined, 'у «Пришёл» есть кнопка отмены');
+
+    btnFor('101').click();   // отказ в подтверждении
+    await tick(60);
+    assert.equal(cancelled.length, 0, 'отменили без согласия');
+    assert.equal(wizard.length, 0, 'кнопка отмены открыла окно услуг');
+
+    answer = true;
+    const before = rpcArgs.filter(([n]) => n === 'calendar_slots').length;
+    btnFor('101').click();
+    await tick(120);
+    assert.equal(cancelled.length, 1, 'запись не отменена');
+    assert.equal(cancelled[0][1], 'cancelled');
+    assert.equal(wizard.length, 0, 'кнопка отмены открыла окно услуг');
+    assert.ok(rpcArgs.filter(([n]) => n === 'calendar_slots').length > before, 'после отмены день не перечитан');
+  } finally {
+    globalThis.window.confirm = prevConfirm;
   }
 });
