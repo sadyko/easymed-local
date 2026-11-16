@@ -25,7 +25,10 @@ import { SCOPES, SCOPE_INFO, EVENT_INFO } from '../../../public/js/shared/api-co
 import { PUBLIC_GROUPS } from '../../../public/js/shared/service-public.js';
 
 test('docs/generated.js — ответы сервера сейчас (иначе: node public-server/scripts/docs-build.mjs)', async () => {
-  assert.equal(await buildGenerated(), fs.readFileSync(GENERATED_FILE, 'utf8'),
+  // Концы строк не в счёт: в репозитории файл хранится с LF, а Windows-копия
+  // (core.autocrlf) выдаёт его с CRLF — без этого тест падал на каждой машине
+  // разработчика под Windows при том же содержимом.
+  assert.equal(await buildGenerated(), fs.readFileSync(GENERATED_FILE, 'utf8').replace(/\r\n/g, '\n'),
     'ответы партнёрам или примеры изменились — пересоберите: node public-server/scripts/docs-build.mjs');
   const labels = [...Object.values(SCOPE_INFO).flatMap((v) => [v.label, v.desc]), ...Object.values(EVENT_INFO).flatMap((v) => [v.label, v.desc]),
     ...PUBLIC_GROUPS.map((g) => g.label)];

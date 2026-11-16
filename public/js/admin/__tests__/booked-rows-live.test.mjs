@@ -170,7 +170,7 @@ async function pickPatient(dlg) {
   dlg.searchInput.value = 'Пациент';
   dlg.searchInput.fireInput();
   for (let i = 0; i < 60 && !walk(dlg.card).some((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')); i++) await tick(50);
-  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  await dlg.usePatient({ id: 77 }, { load: true });   // FAST_REG_FOUND_TO_CARD_V1 — найденный строкой поиска открывает свою карту; в окно пациент попадает как «Это он»
   for (let i = 0; i < 60 && !dlg.state.rows.some((r) => r.booked); i++) await tick(50);
 }
 async function waitCatalog(dlg) {

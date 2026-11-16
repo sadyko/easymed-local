@@ -11028,6 +11028,20 @@ export const STRINGS = {
   "Неоплаченные счета пациента (без страховой)": {"en":"Patient's unpaid invoices (excluding insurer)","ru":"Неоплаченные счета пациента (без страховой)","uz":"Bemorning to'lanmagan hisoblari (sug'urtasiz)"},
   // V3120_FIX (экраны и навигация) — END
   // V3120_I18N — сообщения сервера — BEGIN (2026-09-28)
+  "Бота убрали из группы. Добавьте его обратно.": {"en":"The bot was removed from the group. Add it back.","ru":"Бота убрали из группы. Добавьте его обратно.","uz":"Bot guruhdan olib tashlangan. Uni qayta qo‘shing."},   // DAILY_REPORT_BOT_V1
+  "У бота нет права писать в группу. Разрешите ему отправлять сообщения.": {"en":"The bot is not allowed to post in the group. Allow it to send messages.","ru":"У бота нет права писать в группу. Разрешите ему отправлять сообщения.","uz":"Botda guruhga yozish huquqi yo‘q. Unga xabar yuborishga ruxsat bering."},   // DAILY_REPORT_BOT_V1
+  "Telegram не принял токен: бот удалён или токен заменён в @BotFather.": {"en":"Telegram rejected the token: the bot was deleted or the token was replaced in @BotFather.","ru":"Telegram не принял токен: бот удалён или токен заменён в @BotFather.","uz":"Telegram tokenni qabul qilmadi: bot o‘chirilgan yoki token @BotFather’da almashtirilgan."},   // DAILY_REPORT_BOT_V1
+  "Номер группы не разобран. У группы он отрицательный, например -1001234567890 — нажмите «Найти группу».": {"en":"The group number could not be read. A group number is negative, for example -1001234567890 — press “Find group”.","ru":"Номер группы не разобран. У группы он отрицательный, например -1001234567890 — нажмите «Найти группу».","uz":"Guruh raqami aniqlanmadi. Guruh raqami manfiy bo‘ladi, masalan -1001234567890 — «Guruhni topish»ni bosing."},   // DAILY_REPORT_BOT_V1
+  "Время отправки — в виде ЧЧ:ММ, например 21:00.": {"en":"Send time must be HH:MM, for example 21:00.","ru":"Время отправки — в виде ЧЧ:ММ, например 21:00.","uz":"Yuborish vaqti SS:DD ko‘rinishida, masalan 21:00."},   // DAILY_REPORT_BOT_V1
+  "«За какой день» — сегодня или вчера.": {"en":"“For which day” must be today or yesterday.","ru":"«За какой день» — сегодня или вчера.","uz":"«Qaysi kun uchun» — bugun yoki kecha."},   // DAILY_REPORT_BOT_V1
+  "Отметьте хотя бы один блок отчёта.": {"en":"Select at least one report block.","ru":"Отметьте хотя бы один блок отчёта.","uz":"Hisobotning kamida bitta blokini belgilang."},   // DAILY_REPORT_BOT_V1
+  "Сначала введите токен бота, потом включайте отчёт.": {"en":"Enter the bot token first, then turn the report on.","ru":"Сначала введите токен бота, потом включайте отчёт.","uz":"Avval bot tokenini kiriting, keyin hisobotni yoqing."},   // DAILY_REPORT_BOT_V1
+  "Сначала выберите группу, куда слать отчёт.": {"en":"First choose the group to send the report to.","ru":"Сначала выберите группу, куда слать отчёт.","uz":"Avval hisobot yuboriladigan guruhni tanlang."},   // DAILY_REPORT_BOT_V1
+  "Настройки отчёта не инициализированы.": {"en":"Report settings are not initialised.","ru":"Настройки отчёта не инициализированы.","uz":"Hisobot sozlamalari ishga tushirilmagan."},   // DAILY_REPORT_BOT_V1
+  "Отчёт в Telegram настраивает администратор клиники.": {"en":"The Telegram report is set up by the clinic administrator.","ru":"Отчёт в Telegram настраивает администратор клиники.","uz":"Telegramdagi hisobotni klinika administratori sozlaydi."},   // DAILY_REPORT_BOT_V1
+  "Сначала сохраните токен бота.": {"en":"Save the bot token first.","ru":"Сначала сохраните токен бота.","uz":"Avval bot tokenini saqlang."},   // DAILY_REPORT_BOT_V1
+  "Группа не выбрана.": {"en":"No group selected.","ru":"Группа не выбрана.","uz":"Guruh tanlanmagan."},   // DAILY_REPORT_BOT_V1
+  "Группа не найдена: добавьте бота в группу и выберите её заново («Найти группу»).": {"en":"Group not found: add the bot to the group and select it again (“Find group”).","ru":"Группа не найдена: добавьте бота в группу и выберите её заново («Найти группу»).","uz":"Guruh topilmadi: botni guruhga qo‘shing va uni qayta tanlang («Guruhni topish»)."},   // DAILY_REPORT_BOT_V1
   "Раздел CRM вам не выдан.": {"en":"The CRM section has not been granted to you.","ru":"Раздел CRM вам не выдан.","uz":"CRM bo‘limi sizga berilmagan."},   // OPERATOR_KPI_V1
   "Не указан оператор.": {"en":"No operator specified.","ru":"Не указан оператор.","uz":"Operator ko‘rsatilmagan."},   // OPERATOR_KPI_V1
   "Чужие показатели видит только руководитель колл-центра.": {"en":"Only the call-center head can see other people’s figures.","ru":"Чужие показатели видит только руководитель колл-центра.","uz":"Boshqalarning ko‘rsatkichlarini faqat call-markaz rahbari ko‘radi."},   // OPERATOR_KPI_V1
@@ -12645,6 +12659,7 @@ export const STRINGS = {
   "Лид": {"en":"Lead","ru":"Лид","uz":"Lid"},   // META_INBOX_LAYOUT_V2
   "Ответ на рекламу": {"en":"Reply to an ad","ru":"Ответ на рекламу","uz":"Reklamaga javob"},   // META_INBOX_LAYOUT_V2
   "Все сообщения": {"en":"All messages","ru":"Все сообщения","uz":"Barcha xabarlar"},   // META_INBOX_LAYOUT_V2
+  "Вернуть в работу": {"en":"Return to work","ru":"Вернуть в работу","uz":"Ishga qaytarish"},   // CRM_TASKS_FILTER_V1
   "Заявки и обращения в клинику": {"en":"Requests and enquiries to the clinic","ru":"Заявки и обращения в клинику","uz":"Klinikaga so‘rovlar va murojaatlar"},   // CRM_HERO_V1
   "Доска": {"en":"Board","ru":"Доска","uz":"Doska"},   // CRM_HERO_V1
   "Мои задачи": {"en":"My tasks","ru":"Мои задачи","uz":"Mening vazifalarim"},   // CRM_HERO_V1

@@ -302,6 +302,7 @@ export const TABLE_PLAN = Object.freeze({
   telegram_settings: keep('settings'),
   doctor_bot_settings: keep('settings'),
   rep_bot_settings: keep('settings'),      // REP_BOT_V1
+  daily_report_settings: keep('settings'), // DAILY_REPORT_BOT_V1 — бот и группа отчёта совету директоров (мигр. 286)
   sms_settings: keep('settings'),          // SMS_INFORM_V1 — подключение Play Mobile
   clinic_news: keep('settings'),           // CLINIC_NEWS_V1 — объявления клиники для сотрудников
   telephony_settings: keep('settings'),

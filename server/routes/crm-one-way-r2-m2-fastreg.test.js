@@ -287,7 +287,7 @@ async function pickKarimova(dlg) {
   dlg.searchInput.value = 'Кари';
   dlg.searchInput.fireInput();
   await tick(600);
-  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  await dlg.usePatient(KARIMOVA, { load: true });   // FAST_REG_FOUND_TO_CARD_V1 — найденный строкой поиска открывает свою карту; в окно пациент попадает как «Это он»
   await tick(80);
 }
 const LAB_BOOKED = { id: 556, service_id: 2, consultation_type_id: null, doctor_id: 8, quantity: 1, unit_price: 40000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 2, name: 'Общий анализ крови', price: 40000 } };

@@ -91,7 +91,7 @@ async function openDialog(seed) {
   for (let i = 0; i < 60 && !(dlg.state.catalog && dlg.state.catalog.length && dlg.state.doctors); i++) await tick(50);
   dlg.searchInput.value = 'Пациент'; dlg.searchInput.fireInput();
   for (let i = 0; i < 60 && !walk(dlg.card).some((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')); i++) await tick(50);
-  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  await dlg.usePatient({ id: 77 }, { load: true });   // FAST_REG_FOUND_TO_CARD_V1 — найденный строкой поиска открывает свою карту; в окно пациент попадает как «Это он»
   await tick(300);
   dlg.state.addLine(dlg.state.catalog.find((s) => Number(s.id) === 60), null);
   const row = () => dlg.state.rows.find((r) => Number(r.service.id) === 60);
@@ -160,7 +160,7 @@ async function openBooked(perf, { order = false } = {}) {
   for (let i = 0; i < 60 && !(dlg.state.catalog && dlg.state.catalog.length && dlg.state.doctors); i++) await tick(50);
   dlg.searchInput.value = 'Пациент'; dlg.searchInput.fireInput();
   for (let i = 0; i < 60 && !walk(dlg.card).some((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')); i++) await tick(50);
-  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  await dlg.usePatient({ id: 77 }, { load: true });   // FAST_REG_FOUND_TO_CARD_V1 — найденный строкой поиска открывает свою карту; в окно пациент попадает как «Это он»
   for (let i = 0; i < 60 && !dlg.state.rows.length; i++) await tick(50);
   await tick(100);
   const row = () => dlg.state.rows.find((r) => Number(r.service.id) === 60);
