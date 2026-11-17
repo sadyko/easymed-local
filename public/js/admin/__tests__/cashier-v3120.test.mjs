@@ -98,6 +98,8 @@ globalThis.fetch = async (url, opts = {}) => {
         calls.push([decodeURIComponent(rpc), body]);
         const a = rpcAnswers[decodeURIComponent(rpc)];
         data = typeof a === 'function' ? a(body) : (a !== undefined ? a : []);
+        // RELEASE_SELECT_V1 (ревью) — отказ сервера со статусом и кодом (409 invoice_changed).
+        if (data && data.__refuse) return { ok: false, status: data.__refuse.status || 400, json: async () => ({ error: data.__refuse }), headers: { getSetCookie: () => [] } };
     } else {
         calls.push(['db:' + body.table, body]);
         const rows = (tables[body.table] || []).filter((r) => (body.filters || []).every((f) => matches(r, f)));
@@ -286,12 +288,14 @@ test('«Оплатить» отправляет record_payment с ключом �
     assert.match(pay[1].idempotency_key, /^[A-Za-z0-9_-]{8,80}$/);
 });
 
-// V3120_FINAL (I1) — ключ повтора живёт только до УДАЧНОЙ операции. Частичная
-// оплата записана, «Оставить как долг» упал — окно остаётся открытым, и
-// «Принять оплату» на остаток обязана уйти с НОВЫМ ключом: со старым сервер
-// отвечает отказом (другая форма), а прежде — квитанцией первой части, и
-// остаток не записывался при тосте «Оплата принята».
-test('оплата: частичная записана, долг не оформился — «Принять оплату» на остаток уходит с новым ключом', async () => {
+// V3120_FINAL (I1) — ключ повтора живёт только до УДАЧНОЙ операции.
+// RELEASE_SELECT_V1 (ревью) — «Оставить как долг» с частью денег больше не
+// проводит часть отдельной оплатой: часть и долг — один вызов mark_invoice_debt
+// (одна транзакция). Долг не оформился — не записано НИЧЕГО, и окно не считает
+// часть принятой: «Принять оплату» уходит одной оплатой с ключом окна (если долг
+// всё-таки прошёл и потерялся лишь ответ, сервер узнает ключ и откажет 409, а не
+// проведёт деньги второй раз).
+test('оплата: долг с частью денег не оформился — отдельной оплаты части не было; «Принять оплату» уходит одной оплатой с ключом окна', async () => {
     calls.length = 0;
     tables = { invoice_items: ITEMS, visit_services: [], payment_providers: [], patient_discounts: [] };
     rpcAnswers = {
@@ -306,16 +310,17 @@ test('оплата: частичная записана, долг не офор�
     amt().fire('input');
     buttonByText(ov, 'Оставить как долг').click();
     await tick(60);
-    amt().value = '278 000';
+    assert.ok(!calls.some((c) => c[0] === 'record_payment'), 'часть денег не уходит отдельной оплатой');
+    const debt = calls.find((c) => c[0] === 'mark_invoice_debt');
+    assert.deepEqual(debt[1].tenders.map((t) => [t.method, t.amount]), [['cash', 100000]], 'часть едет с долгом');
+    amt().value = '378 000';
     amt().fire('input');
     buttonByText(ov, 'Принять оплату').click();
     await tick(60);
     const pays = calls.filter((c) => c[0] === 'record_payment');
-    assert.equal(pays.length, 2, 'обе части ушли на сервер');
-    assert.equal(pays[0][1].amount, 100000);
-    assert.equal(pays[1][1].amount, 278000);
-    assert.match(pays[1][1].idempotency_key, /^[A-Za-z0-9_-]{8,80}$/);
-    assert.notEqual(pays[1][1].idempotency_key, pays[0][1].idempotency_key, 'после удачной оплаты — новый ключ');
+    assert.equal(pays.length, 1);
+    assert.equal(pays[0][1].amount, 378000);
+    assert.equal(pays[0][1].idempotency_key, debt[1].idempotency_key, 'ничего не прошло — ключ окна тот же');
 });
 
 test('оплата: неудачная попытка повторяется с ТЕМ ЖЕ ключом', async () => {
@@ -544,17 +549,55 @@ test('RELEASE_SELECT_V1: разделённая частичная оплата 
     assert.deepEqual(split[1].release_line_ids, [502]);
 });
 
-test('RELEASE_SELECT_V1: «Оставить как долг» с частью денег — отмеченное несёт оплата части (одна транзакция), долг — пустой список', async () => {
-    const ov = await openRelease({ record_payment: { ok: true }, mark_invoice_debt: { invoice: { id: 1, status: 'debt' } } });
+// RELEASE_SELECT_V1 (ревью) — часть денег, отмеченное и долг — ОДИН вызов
+// mark_invoice_debt (одна транзакция сервера): прежде часть уходила record_payment,
+// окно брало новый ключ, и упавший долг при повторном нажатии писал второй платёж.
+test('RELEASE_SELECT_V1 (ревью): «Оставить как долг» с частью денег — один вызов mark_invoice_debt: части, отмеченное, ключ повтора, остаток окна', async () => {
+    const ov = await openRelease({ mark_invoice_debt: { invoice: { id: 1, status: 'debt' } } });
     typeAmount(ov, '30 000');
     const cb = relBox(ov, 502);
     cb.checked = true; cb.fire('change');
     buttonByText(ov, 'Оставить как долг').click();
     await tick(60);
+    assert.ok(!calls.some((c) => c[0] === 'record_payment' || c[0] === 'record_payment_split'), 'часть не уходит отдельной оплатой');
+    const debt = calls.filter((c) => c[0] === 'mark_invoice_debt');
+    assert.equal(debt.length, 1);
+    assert.deepEqual(debt[0][1].tenders.map((t) => [t.method, t.amount]), [['cash', 30000]]);
+    assert.deepEqual(debt[0][1].release_line_ids, [502], 'отмеченное несёт долг — одна транзакция с деньгами');
+    assert.match(debt[0][1].idempotency_key, /^[A-Za-z0-9_-]{8,80}$/);
+    assert.equal(debt[0][1].expected_balance, 140000, 'остаток, который видело окно');
+});
+
+test('RELEASE_SELECT_V1 (ревью): долг с деньгами не оформился — повтор уходит с ТЕМ ЖЕ ключом и той же формой', async () => {
+    let n = 0;
+    const ov = await openRelease({ mark_invoice_debt: () => { n += 1; if (n === 1) throw new Error('сеть оборвалась'); return { invoice: { id: 1, status: 'debt' } }; } });
+    typeAmount(ov, '30 000');
+    buttonByText(ov, 'Оставить как долг').click();
+    await tick(60);
+    buttonByText(ov, 'Оставить как долг').click();
+    await tick(60);
+    const debt = calls.filter((c) => c[0] === 'mark_invoice_debt');
+    assert.equal(debt.length, 2, 'повтор ушёл на сервер');
+    assert.equal(debt[1][1].idempotency_key, debt[0][1].idempotency_key, 'тот же ключ — сервер ответит квитанцией, если первый всё-таки прошёл');
+    assert.deepEqual(debt[1][1].tenders, debt[0][1].tenders);
+    assert.ok(!calls.some((c) => c[0] === 'record_payment'), 'ни одной отдельной оплаты');
+});
+
+test('RELEASE_SELECT_V1 (ревью): счёт изменился (409 invoice_changed) — окно открывается заново с новым остатком и списком услуг', async () => {
+    const ov = await openRelease({ record_payment: () => ({ __refuse: { status: 409, code: 'invoice_changed', message: 'Счёт изменился — откройте оплату заново.' } }) });
+    tables.invoices = [{ ...REL_INV, subtotal: 170000, total_amount: 170000, paid_amount: 0, status: 'unpaid' }];
+    buttonByText(ov, 'Принять оплату').click();
+    await tick(90);
     const pay = calls.find((c) => c[0] === 'record_payment');
-    const debt = calls.find((c) => c[0] === 'mark_invoice_debt');
-    assert.deepEqual(pay[1].release_line_ids, [502], 'отмеченное уходит с оплатой части: отказ по отметке не запишет и денег');
-    assert.deepEqual(debt[1].release_line_ids, [], 'долг второй раз ничего не отпускает');
+    assert.equal(pay[1].expected_balance, 140000, 'окно прислало остаток, который видело');
+    assert.ok(!('release_line_ids' in pay[1]), 'окно считало оплату полной');
+    assert.ok(toasts().some((t) => /Счёт изменился/.test(t)), toasts().join(' | '));
+    const ov2 = lastOverlay();
+    assert.notEqual(ov2, ov, 'окно открыто заново');
+    assert.match(textOf(ov2), /170 000/, 'новый остаток');
+    assert.equal(calls.filter((c) => c[0] === 'invoice_release_lines').length, 2, 'список «Что можно оказать сейчас» спрошен заново');
+    typeAmount(ov2, '140 000');
+    assert.equal(relBlock(ov2).style.display, '', 'прежняя сумма теперь частичная — кассир выбирает услуги');
 });
 
 test('RELEASE_SELECT_V1: долг без денег и без отметок — пустой список', async () => {

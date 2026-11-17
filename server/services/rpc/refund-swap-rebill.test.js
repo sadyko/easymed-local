@@ -190,13 +190,52 @@ test('дороже: счёт «частично» на разницу, нова�
   const i = inv(db, a.invoiceId);
   assert.deepEqual([i.total_amount, i.paid_amount, i.status], [200000, 120000, 'partial']);
   assert.equal(pays(db, a.invoiceId).filter((p) => p.amount < 0).length, 0, 'денег никто не возвращал');
-  assert.equal(vsRow(db, r.line.id).status, 'queued', 'частично оплаченный счёт работу не останавливает');
+  // RELEASE_SELECT_V1 (ревью, решение владельца) — было правило «частично оплаченный
+  // счёт работу не останавливает»: новая строка наследовала «отпущено» прежней.
+  // Теперь новая услуга ждёт оплаты (или отметки кассира), пока счёт не оплачен полностью.
+  assert.equal(vsRow(db, r.line.id).status, 'added', 'новая услуга в частично оплаченном счёте ждёт оплаты');
   assert.equal(vsRow(db, a.vs).status, 'in_progress', 'начатая работа — как была');
   assert.equal(released(db, a.vs), true);
   assertBalanced(db, a.invoiceId);
   recordPayment(db, { invoice_id: a.invoiceId, amount: 80000, method: 'card' }, cashier);
   assert.equal(inv(db, a.invoiceId).status, 'paid');
+  assert.equal(vsRow(db, r.line.id).status, 'queued', 'доплата отпускает новую услугу в работу');
   assertBalanced(db, a.invoiceId);
+});
+
+// RELEASE_SELECT_V1 (ревью, решение владельца; проба P9) — «вернуть и выставить новую»
+// в частично оплаченном счёте: отмеченный и уже взятый анализ меняют на МРТ — МРТ
+// не наследует «отпущено», ждёт оплаты; в «Что можно оказать сейчас» кассир её видит.
+test('RELEASE_SELECT_V1 (ревью): возврат с новой услугой при частичной оплате — новая услуга ждёт оплаты, без отметки и денег в работу не идёт', () => {
+  const { db, pid, CONS } = clinic();
+  const LAB = svc(db, 'ОАК', 40000, { type: 'lab', is_lab: 1 });
+  const MRI = svc(db, 'МРТ', 900000, { type: 'procedure' });
+  const vid = Number(db.prepare('INSERT INTO visits (patient_id, visit_date) VALUES (?, ?)').run(pid, DAY).lastInsertRowid);
+  const c = Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (?, ?, ?, 1, 0, 0, 'added')").run(vid, CONS, DOC).lastInsertRowid);
+  const a = Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?, ?, 1, 0, 0, 'added')").run(vid, LAB).lastInsertRowid);
+  const invoiceId = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [c, a] }, registrar).invoice.id;
+  recordPayment(db, { invoice_id: invoiceId, amount: 40000, method: 'cash', release_line_ids: [a] }, cashier);
+  db.prepare("UPDATE visit_services SET status = 'collected' WHERE id = ?").run(a);   // проба взята
+  const r = call('cashier_line_rebill_paid', db, { visit_service_id: a, new_service_id: MRI, no_doctor: true }, cashier);
+  const i = inv(db, invoiceId);
+  assert.equal(i.status, 'partial');
+  assert.equal(vsRow(db, r.line.id).status, 'added', 'МРТ ждёт оплаты — «отпущено» прежней строки не наследуется');
+  assert.equal(vsRow(db, r.line.id).queue_no, null);
+  assert.equal(vsRow(db, a).status, 'collected', 'взятая проба — как была');
+  assert.equal(vsRow(db, c).status, 'added', 'неотмеченная консультация не отпущена');
+  assertBalanced(db, invoiceId);
+  // Касса может отпустить МРТ отметкой (долг с отметкой) — тот же путь, что у любой строки.
+  call('mark_invoice_debt', db, { invoice_id: invoiceId, release_line_ids: [r.line.id] }, cashier);
+  assert.equal(vsRow(db, r.line.id).status, 'queued');
+  assert.equal(vsRow(db, c).status, 'added');
+});
+
+test('RELEASE_SELECT_V1 (ревью): возврат с новой услугой, счёт остаётся оплаченным — новая услуга сразу в работе', () => {
+  const { db, pid, CONS, USG } = clinic();
+  const a = started(db, pid, CONS, DOC, { status: 'in_progress' });   // 150 000, оплачен полностью
+  const r = call('cashier_line_rebill_paid', db, { visit_service_id: a.vs, new_service_id: USG, doctor_id: DOC2 }, cashier);   // дешевле — возврат разницы
+  assert.equal(inv(db, a.invoiceId).status, 'paid');
+  assert.equal(vsRow(db, r.line.id).status, 'queued', 'оплаченный счёт — новая услуга в работе');
 });
 
 test('кэшбэк: возврат разницы откатывает его в той же доле', () => {

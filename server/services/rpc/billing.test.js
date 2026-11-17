@@ -709,3 +709,174 @@ test('RELEASE_SELECT_V1: invoice_release_lines — неотпущенные ст
   assert.throws(() => billingModule.invoiceReleaseLines(db, { invoice_id: invoice.id }, lab), /недоступно/);
   assert.throws(() => billingModule.invoiceReleaseLines(db, { invoice_id: 0 }, cashier), (e) => e.status === 400);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RELEASE_SELECT_V1 (ревью) — СЧЁТ СТАЛ ОПЛАЧЕННЫМ: В РАБОТУ УХОДИТ ТОЛЬКО
+// НЕОТПУЩЕННОЕ ('added'). Отмеченный при части анализ лаборатория уже взяла или
+// внесла по нему результат — доплата не возвращает его в «Забор»; отменённая
+// строка счёта отменённой и остаётся. Деньги те же.
+// ═══════════════════════════════════════════════════════════════════════════
+const admin = { id: 1, role: 'admin' };
+
+test('RELEASE_SELECT_V1 (ревью): доплата record_payment не сбрасывает взятую пробу и не оживляет отменённую строку', () => {
+  const a = seedRelease();
+  recordPayment(a.db, { invoice_id: a.invoice.id, amount: 40000, method: 'cash', release_line_ids: [a.analysis] }, cashier);
+  a.db.prepare("UPDATE visit_services SET status = 'collected' WHERE id = ?").run(a.analysis);   // лаборатория взяла пробу
+  const r = recordPayment(a.db, { invoice_id: a.invoice.id, amount: 100000, method: 'cash' }, cashier);
+  assert.equal(r.invoice.status, 'paid');
+  assert.equal(lineStatus(a.db, a.analysis), 'collected', 'проба взята — доплата не отправляет её снова в «Забор»');
+  assert.equal(lineStatus(a.db, a.consult), 'queued', 'неотпущенная консультация отпущена полной оплатой');
+
+  const c = seedRelease();
+  recordPayment(c.db, { invoice_id: c.invoice.id, amount: 40000, method: 'cash', release_line_ids: [] }, cashier);
+  c.db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = ?").run(c.analysis);
+  recordPayment(c.db, { invoice_id: c.invoice.id, amount: 100000, method: 'cash' }, cashier);
+  assert.equal(lineStatus(c.db, c.analysis), 'cancelled', 'отменённая строка не оживает');
+  assert.equal(lineStatus(c.db, c.consult), 'queued');
+});
+
+test('RELEASE_SELECT_V1 (ревью): доплата частями не сбрасывает внесённый результат и не оживляет отменённую строку', () => {
+  const b = seedRelease();
+  markInvoiceDebt(b.db, { invoice_id: b.invoice.id, release_line_ids: [b.analysis] }, cashier);
+  b.db.prepare("UPDATE visit_services SET status = 'resulted' WHERE id = ?").run(b.analysis);   // результат внесён
+  const r = billingModule.recordPaymentSplit(b.db, { invoice_id: b.invoice.id, tenders: [{ amount: 70000, method: 'cash' }, { amount: 70000, method: 'card' }] }, cashier);
+  assert.equal(r.invoice.status, 'paid');
+  assert.equal(lineStatus(b.db, b.analysis), 'resulted', 'результат внесён — доплата его не сбрасывает');
+  assert.equal(lineStatus(b.db, b.consult), 'queued');
+
+  const c = seedRelease();
+  billingModule.recordPaymentSplit(c.db, { invoice_id: c.invoice.id, tenders: [{ amount: 40000, method: 'cash' }], release_line_ids: [] }, cashier);
+  c.db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = ?").run(c.consult);
+  billingModule.recordPaymentSplit(c.db, { invoice_id: c.invoice.id, tenders: [{ amount: 50000, method: 'cash' }, { amount: 50000, method: 'card' }] }, cashier);
+  assert.equal(lineStatus(c.db, c.consult), 'cancelled');
+  assert.equal(lineStatus(c.db, c.analysis), 'queued');
+});
+
+test('RELEASE_SELECT_V1 (ревью): счёт стал оплаченным возвратом строки или скидкой 100 % — отменённая строка не оживает, проба не сбрасывается', () => {
+  // Возврат неотпущенной строки закрывает счёт: деньги покрыли остальное.
+  const a = seedRelease();
+  a.db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (1,'admin1','x','admin')").run();
+  const sE = a.db.prepare("INSERT INTO services (name, price) VALUES ('ЭКГ', 30000)").run().lastInsertRowid;
+  const ecg = Number(a.db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,?,1,30000,30000,'added')").run(a.vid, sE).lastInsertRowid);
+  const app = createInvoiceForVisit(a.db, { visit_id: a.vid, visit_service_ids: [ecg] }, registrar);
+  assert.equal(app.invoice.id, a.invoice.id, 'ЭКГ дописана в тот же счёт (170 000)');
+  recordPayment(a.db, { invoice_id: a.invoice.id, amount: 140000, method: 'cash', release_line_ids: [a.consult] }, cashier);
+  a.db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = ?").run(a.analysis);
+  const item = a.db.prepare('SELECT invoice_item_id i FROM visit_services WHERE id = ?').get(ecg).i;
+  billingModule.refundInvoiceLine(a.db, { invoice_item_id: item, reason: 'не нужна' }, admin);
+  assert.equal(a.db.prepare('SELECT status FROM invoices WHERE id = ?').get(a.invoice.id).status, 'paid');
+  assert.equal(lineStatus(a.db, a.analysis), 'cancelled', 'возврат строки не оживляет отменённую');
+  assert.equal(lineStatus(a.db, a.consult), 'queued');
+
+  // Скидка 100 % на долг без денег: счёт закрыт на ноль (settleZeroTotal).
+  const b = seedRelease();
+  b.db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (1,'admin1','x','admin')").run();
+  markInvoiceDebt(b.db, { invoice_id: b.invoice.id, release_line_ids: [b.analysis] }, cashier);
+  b.db.prepare("UPDATE visit_services SET status = 'collected' WHERE id = ?").run(b.analysis);
+  b.db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = ?").run(b.consult);
+  billingModule.cashierInvoiceDiscountChange(b.db, { invoice_id: b.invoice.id, mode: 'pct', value: 100, reason: 'r' }, admin);
+  assert.equal(b.db.prepare('SELECT status FROM invoices WHERE id = ?').get(b.invoice.id).status, 'paid');
+  assert.equal(lineStatus(b.db, b.analysis), 'collected');
+  assert.equal(lineStatus(b.db, b.consult), 'cancelled', 'счёт на ноль не оживляет отменённую строку');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RELEASE_SELECT_V1 (ревью) — «ОСТАВИТЬ КАК ДОЛГ» С ДЕНЬГАМИ — ОДНА ОПЕРАЦИЯ.
+// Окно кассы проводило часть денег (record_payment), брало новый ключ повтора и
+// только потом звало mark_invoice_debt; упал долг — повторное нажатие писало
+// второй платёж. Теперь mark_invoice_debt принимает части оплаты (tenders) и
+// проводит их в той же транзакции, что и долг, с ключом повтора на всю операцию.
+// ═══════════════════════════════════════════════════════════════════════════
+const payRows = (db, id) => db.prepare('SELECT amount, method FROM payments WHERE invoice_id = ? ORDER BY id').all(id);
+const invOf = (db, id) => db.prepare('SELECT status, paid_amount, total_amount FROM invoices WHERE id = ?').get(id);
+
+test('RELEASE_SELECT_V1 (ревью): долг с деньгами — платёж и долг одной транзакцией; повтор с тем же ключом — без второго платежа', () => {
+  const { db, consult, analysis, invoice } = seedRelease();
+  const args = { invoice_id: invoice.id, tenders: [{ amount: 30000, method: 'cash' }], release_line_ids: [analysis], idempotency_key: 'debt-key-0001' };
+  const r = markInvoiceDebt(db, args, cashier);
+  assert.equal(r.invoice.status, 'debt');
+  assert.equal(r.invoice.paid_amount, 30000);
+  assert.deepEqual(payRows(db, invoice.id), [{ amount: 30000, method: 'cash' }]);
+  assert.deepEqual([lineStatus(db, analysis), lineStatus(db, consult)], ['queued', 'added']);
+  // Журнал: отпущено при долге (часть денег записана), а не «частичной оплатой».
+  const log = releaseLog(db, invoice.id);
+  assert.equal(log.length, 1);
+  assert.match(log[0].notes, /^Долг/);
+  assert.match(log[0].notes, /частичн/i);
+  assert.doesNotMatch(log[0].notes, /^Частичная оплата/);
+  assert.equal(log[0].amount, 0, 'запись журнала — не деньги');
+  // Ответ потерялся, кассир нажал ещё раз: та же форма, тот же ключ — квитанция, а не второй платёж.
+  const again = markInvoiceDebt(db, { ...args }, cashier);
+  assert.equal(again.repeated, true);
+  assert.deepEqual(payRows(db, invoice.id), [{ amount: 30000, method: 'cash' }]);
+  // Тот же ключ с другой суммой — отказ 409, денег не прибавилось.
+  assert.throws(() => markInvoiceDebt(db, { ...args, tenders: [{ amount: 20000, method: 'cash' }] }, cashier), (e) => e.status === 409);
+  assert.equal(payRows(db, invoice.id).length, 1);
+  assert.equal(invOf(db, invoice.id).paid_amount, 30000);
+});
+
+test('RELEASE_SELECT_V1 (ревью): долг с деньгами — отказ где угодно не оставляет ни платежа, ни долга', () => {
+  const { db, consult, analysis, invoice } = seedRelease();
+  // Отметка устарела (строка уже отпущена) — отказ до денег.
+  recordPayment(db, { invoice_id: invoice.id, amount: 10000, method: 'cash', release_line_ids: [consult] }, cashier);
+  assert.throws(() => markInvoiceDebt(db, { invoice_id: invoice.id, tenders: [{ amount: 20000, method: 'cash' }], release_line_ids: [consult] }, cashier),
+    (e) => e.status === 400 && /уже передана в работу/.test(e.message));
+  // Вторая часть падает ВНУТРИ (карты нет) — первая часть откатывается вместе с долгом.
+  assert.throws(() => markInvoiceDebt(db, { invoice_id: invoice.id, tenders: [{ amount: 20000, method: 'cash' }, { amount: 5000, method: 'gift_card', card_id: 999999 }], release_line_ids: [analysis] }, cashier));
+  // Сумма покрывает остаток — это оплата, а не долг.
+  assert.throws(() => markInvoiceDebt(db, { invoice_id: invoice.id, tenders: [{ amount: 130000, method: 'cash' }] }, cashier),
+    (e) => e.status === 400 && /покрывает/.test(e.message));
+  assert.deepEqual(payRows(db, invoice.id), [{ amount: 10000, method: 'cash' }], 'кроме первой оплаты — ни одного платежа');
+  assert.deepEqual(invOf(db, invoice.id), { status: 'partial', paid_amount: 10000, total_amount: 140000 }, 'счёт не стал долгом');
+  assert.equal(lineStatus(db, analysis), 'added');
+  // Две части одним долгом — две строки платежей, одна запись журнала.
+  const r = markInvoiceDebt(db, { invoice_id: invoice.id, tenders: [{ amount: 20000, method: 'cash' }, { amount: 15000, method: 'card' }], release_line_ids: [analysis] }, cashier);
+  assert.deepEqual([r.invoice.status, r.invoice.paid_amount], ['debt', 45000]);
+  assert.deepEqual(payRows(db, invoice.id).map((p) => p.amount), [10000, 20000, 15000]);
+  assert.equal(lineStatus(db, analysis), 'queued');
+});
+
+test('RELEASE_SELECT_V1 (ревью): деньги долга с частью те же, что у прежних двух вызовов', () => {
+  const one = seedRelease();
+  const two = seedRelease();
+  markInvoiceDebt(one.db, { invoice_id: one.invoice.id, tenders: [{ amount: 60000, method: 'cash' }], release_line_ids: [one.consult] }, cashier);
+  recordPayment(two.db, { invoice_id: two.invoice.id, amount: 60000, method: 'cash', release_line_ids: [two.consult] }, cashier);
+  markInvoiceDebt(two.db, { invoice_id: two.invoice.id, release_line_ids: [] }, cashier);
+  const money = (s) => ({
+    inv: s.db.prepare('SELECT subtotal, discount_amount, total_amount, paid_amount, status FROM invoices WHERE id = ?').get(s.invoice.id),
+    pays: s.db.prepare('SELECT amount, method, cashier_id, shift_id IS NOT NULL AS shift FROM payments WHERE invoice_id = ? ORDER BY id').all(s.invoice.id),
+  });
+  assert.deepEqual(money(one), money(two));
+  assert.deepEqual([lineStatus(one.db, one.consult), lineStatus(one.db, one.analysis)], ['queued', 'added']);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RELEASE_SELECT_V1 (ревью) — СЧЁТ ИЗМЕНИЛСЯ, ПОКА ОКНО ОПЛАТЫ БЫЛО ОТКРЫТО
+// (INVOICE_APPEND_V1: в тот же неоплаченный счёт дописали услугу). Окно шлёт
+// остаток, который видело (expected_balance); не тот — 409 invoice_changed до
+// записи денег: «полная» оплата по старому остатку не становится молча частичной.
+// ═══════════════════════════════════════════════════════════════════════════
+test('RELEASE_SELECT_V1 (ревью): expected_balance — не тот остаток: 409 invoice_changed, денег не записано; тот — оплата идёт', () => {
+  const { db, vid, consult, analysis, invoice } = seedRelease();   // окно открыто на 140 000
+  const sE = db.prepare("INSERT INTO services (name, price) VALUES ('ЭКГ', 30000)").run().lastInsertRowid;
+  const ecg = Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,?,1,30000,30000,'added')").run(vid, sE).lastInsertRowid);
+  assert.equal(createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [ecg] }, registrar).appended, true, 'дописана в тот же счёт: 170 000');
+  const changed = (e) => e.status === 409 && e.code === 'invoice_changed' && /Счёт изменился/.test(e.message);
+  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: 140000, method: 'cash', expected_balance: 140000 }, cashier), changed);
+  assert.throws(() => billingModule.recordPaymentSplit(db, { invoice_id: invoice.id, tenders: [{ amount: 100000, method: 'cash' }, { amount: 40000, method: 'card' }], expected_balance: 140000 }, cashier), changed);
+  assert.throws(() => markInvoiceDebt(db, { invoice_id: invoice.id, tenders: [{ amount: 50000, method: 'cash' }], release_line_ids: [], expected_balance: 140000 }, cashier), changed);
+  assert.throws(() => markInvoiceDebt(db, { invoice_id: invoice.id, release_line_ids: [consult], expected_balance: 140000 }, cashier), changed);
+  assert.equal(payRows(db, invoice.id).length, 0, 'ни одного платежа');
+  assert.equal(invOf(db, invoice.id).status, 'unpaid');
+  assert.deepEqual([lineStatus(db, consult), lineStatus(db, analysis), lineStatus(db, ecg)], ['added', 'added', 'added']);
+  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: 1000, method: 'cash', expected_balance: 'x' }, cashier), (e) => e.status === 400);
+  // Окно открыто заново с новым остатком — полная оплата отпускает всё.
+  const r = recordPayment(db, { invoice_id: invoice.id, amount: 170000, method: 'cash', expected_balance: 170000, idempotency_key: 'full-key-0001' }, cashier);
+  assert.equal(r.invoice.status, 'paid');
+  assert.deepEqual([lineStatus(db, consult), lineStatus(db, analysis), lineStatus(db, ecg)], ['queued', 'queued', 'queued']);
+  // Повтор той же формы после удачной оплаты — квитанция, а не «счёт изменился».
+  assert.equal(recordPayment(db, { invoice_id: invoice.id, amount: 170000, method: 'cash', expected_balance: 170000, idempotency_key: 'full-key-0001' }, cashier).repeated, true);
+  // Без expected_balance (старые экраны) — как прежде.
+  const b = seedRelease();
+  assert.equal(recordPayment(b.db, { invoice_id: b.invoice.id, amount: 140000, method: 'cash' }, cashier).invoice.status, 'paid');
+});

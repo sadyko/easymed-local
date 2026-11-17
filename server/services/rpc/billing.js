@@ -970,6 +970,41 @@ function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubto
 // Выбор кассира — строка журнала счёта 'release_unpaid': кто и какие услуги.
 const RELEASE_MAX = 500;
 
+// RELEASE_SELECT_V1 (ревью) — СЧЁТ СТАЛ ОПЛАЧЕННЫМ: В РАБОТУ УХОДИТ ТОЛЬКО ТО,
+// ЧТО ЕЩЁ НЕ ОТПУЩЕНО ('added'). Отмеченный при части анализ лаборатория уже
+// могла взять ('collected') или внести по нему результат ('resulted'): прежний
+// запрос оплаты (NOT IN in_progress, completed) возвращал такую строку в
+// 'queued' — «Забор» заново — и оживлял отменённую строку счёта. Одно правило
+// для всех мест, где счёт становится оплаченным: оплата, оплата частями,
+// возврат строки, счёт на ноль, замена и скидка.
+function releaseWholeInvoice(db, invoiceId) {
+  db.prepare(`UPDATE visit_services SET status = 'queued'
+               WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
+                 AND status = 'added'`).run(invoiceId);
+}
+
+// RELEASE_SELECT_V1 (ревью) — СЧЁТ ИЗМЕНИЛСЯ, ПОКА ОКНО ОПЛАТЫ БЫЛО ОТКРЫТО.
+// В неоплаченный счёт дописывают новую услугу того же визита (INVOICE_APPEND_V1),
+// а окно оплаты держит остаток, который видело при открытии: кассир брал «всю»
+// сумму, окно не спрашивало про услуги, а сервер проводил частичную оплату и не
+// отпускал ничего. Окно присылает остаток, который видело (expected_balance);
+// не совпал — отказ 409 с кодом invoice_changed ДО записи денег, и окно
+// открывается заново с новым остатком и списком услуг. Без аргумента — как прежде.
+function expectedBalanceArg(args) {
+  const raw = args ? args.expected_balance : undefined;
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) {
+    throw new RpcError('Остаток счёта указан неверно — откройте оплату заново.', 400);
+  }
+  return round2(raw);
+}
+function assertExpectedBalance(balance, expected) {
+  if (expected === null || Math.abs(round2(balance) - expected) <= 0.005) return;
+  const e = new RpcError('Счёт изменился — откройте оплату заново.', 409);
+  e.code = 'invoice_changed';
+  throw e;
+}
+
 /** Аргумент release_line_ids: null — не прислан; иначе — номера строк без повторов. */
 function releaseIdsArg(args) {
   const raw = args ? args.release_line_ids : undefined;
@@ -1020,7 +1055,7 @@ function assertReleasable(db, invoiceId, ids) {
 
 /**
  * Отпустить отмеченные строки до полной оплаты и записать выбор в журнал счёта.
- * `before` — счёт до операции; `why` — 'partial' | 'debt'. Статус строки — тот же
+ * `before` — счёт до операции; `why` — 'partial' | 'debt' | 'debt_paid'. Статус строки — тот же
  * 'queued', что ставит любая оплата (свой переход у вида услуги дальше ведут
  * экраны). Возвращает, сколько строк отпущено.
  */
@@ -1035,11 +1070,14 @@ function releaseChosenLines(db, before, ids, user, why) {
   if (!n) return 0;
   const after = db.prepare('SELECT * FROM invoices WHERE id = ?').get(before.id);
   const sum = round2(rows.reduce((a, r) => a + (Number(r.item_total) || 0), 0));
+  // RELEASE_SELECT_V1 (ревью) — 'debt_paid': долг, при котором записана и часть денег
+  // (одна операция mark_invoice_debt) — отпущено при долге, а не «частичной оплатой».
   // i18n-exempt: запись журнала счёта хранится в базе (как остальные lineAudit)
+  const whyWords = why === 'debt_paid' ? 'Долг с частичной оплатой' : why === 'debt' ? 'Долг' : 'Частичная оплата';
   lineAudit(db, {
     inv: after, number: before.invoice_number, visitId: before.visit_id, action: 'release_unpaid',
     fromStatus: before.status, toStatus: after.status, amount: 0,
-    notes: (why === 'debt' ? 'Долг' : 'Частичная оплата') + ' — в работу до полной оплаты: '
+    notes: whyWords + ' — в работу до полной оплаты: '
       + rows.map((r) => lineLabel(db, r, { description: r.item_description })).join('; ') + ' · ' + moneyWords(sum),
   }, user);
   return n;
@@ -1071,6 +1109,7 @@ export function recordPayment(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
   { const seen = idemReplay(db, 'record_payment', args); if (seen) return seen; }   // V3120_FIX — повтор той же формы
   const releaseIds = releaseIdsArg(args);   // RELEASE_SELECT_V1 — что кассир отпускает при частичной оплате
+  const expected = expectedBalanceArg(args);   // RELEASE_SELECT_V1 (ревью) — остаток, который видело окно
 
   const amount = args && args.amount;
   if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
@@ -1109,6 +1148,7 @@ export function recordPayment(db, args, user) {
     if (balance <= 0) {
       throw new RpcError('Счёт уже оплачен — к оплате 0.', 400);
     }
+    assertExpectedBalance(balance, expected);   // RELEASE_SELECT_V1 (ревью) — до записи денег
     if (amt > balance) {
       throw rpcT(RpcError, 'Сумма больше остатка к оплате ({balance}).', { balance }, 400);
     }
@@ -1155,15 +1195,11 @@ export function recordPayment(db, args, user) {
       `).run(newPaid, status, invoiceId);
     }
 
-    // RELEASE_SELECT_V1 — счёт оплачен полностью: в работу всё, как прежде (тот же
-    // запрос). Оплачен частично (или это доля долга) — только отмеченное кассиром.
+    // RELEASE_SELECT_V1 — счёт оплачен полностью: в работу всё неотпущенное
+    // (ревью: начатое и отменённое не трогается). Оплачен частично (или это доля
+    // долга) — только отмеченное кассиром.
     if (status === 'paid') {
-      db.prepare(`
-        UPDATE visit_services
-        SET status = 'queued'
-        WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
-          AND status NOT IN ('in_progress', 'completed')
-      `).run(invoiceId);
+      releaseWholeInvoice(db, invoiceId);
     } else {
       releaseChosenLines(db, invoice, releaseIds, user, 'partial');
     }
@@ -1188,19 +1224,12 @@ export function recordPayment(db, args, user) {
 // в ОДНОЙ транзакции по тем же правилам, что record_payment: сумма частей не
 // может превысить остаток счёта, каждая часть становится отдельной строкой
 // payments (итоги смены по способам считаются как обычно).
-export function recordPaymentSplit(db, args, user) {
-  requireRole(user, PAYMENT_ROLES);
-  { const seen = idemReplay(db, 'record_payment_split', args); if (seen) return seen; }   // V3120_FIX — повтор той же формы
-
-  const invoiceId = args && args.invoice_id;
-  if (!isPositiveInt(invoiceId)) {
-    throw new RpcError('Счёт указан неверно.', 400);
-  }
-  const raw = args && args.tenders;
+/** Части оплаты (SPLIT_PAY_V1): проверены и округлены; отказ — словами части. Чистая. */
+function parseTenders(raw) {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > 5) {
     throw new RpcError('Укажите от одной до пяти частей оплаты.', 400);
   }
-  const tenders = raw.map((t, i) => {
+  return raw.map((t, i) => {
     const amount = t && t.amount;
     if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
       throw rpcT(RpcError, 'Часть {n}: сумма должна быть положительным числом.', { n: i + 1 }, 400);
@@ -1213,8 +1242,20 @@ export function recordPaymentSplit(db, args, user) {
     const notes = typeof (t && t.notes) === 'string' ? t.notes.slice(0, 200) : '';
     return { amt, method, notes, cardId: t && t.card_id };   // CARD_BALANCE_V1
   });
+}
+
+export function recordPaymentSplit(db, args, user) {
+  requireRole(user, PAYMENT_ROLES);
+  { const seen = idemReplay(db, 'record_payment_split', args); if (seen) return seen; }   // V3120_FIX — повтор той же формы
+
+  const invoiceId = args && args.invoice_id;
+  if (!isPositiveInt(invoiceId)) {
+    throw new RpcError('Счёт указан неверно.', 400);
+  }
+  const tenders = parseTenders(args && args.tenders);
   const totalTendered = round2(tenders.reduce((s2, t) => s2 + t.amt, 0));
   const releaseIds = releaseIdsArg(args);   // RELEASE_SELECT_V1 — как у record_payment
+  const expected = expectedBalanceArg(args);   // RELEASE_SELECT_V1 (ревью) — остаток, который видело окно
 
   const run = db.transaction(() => {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
@@ -1226,6 +1267,7 @@ export function recordPaymentSplit(db, args, user) {
     }
     const balance = round2(invoice.total_amount - invoice.paid_amount);
     if (balance <= 0) throw new RpcError('Счёт уже оплачен — к оплате 0.', 400);
+    assertExpectedBalance(balance, expected);   // RELEASE_SELECT_V1 (ревью) — до первой части
     if (totalTendered > balance) {
       throw rpcT(RpcError, 'Сумма больше остатка к оплате ({balance}).', { balance }, 400);
     }
@@ -1267,14 +1309,9 @@ export function recordPaymentSplit(db, args, user) {
       db.prepare('UPDATE invoices SET paid_amount = ?, status = ? WHERE id = ?').run(newPaid, status, invoiceId);
     }
 
-    // RELEASE_SELECT_V1 — полная оплата отпускает всё (прежний запрос), часть — отмеченное.
+    // RELEASE_SELECT_V1 — полная оплата отпускает всё неотпущенное, часть — отмеченное.
     if (status === 'paid') {
-      db.prepare(`
-        UPDATE visit_services
-        SET status = 'queued'
-        WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
-          AND status NOT IN ('in_progress', 'completed')
-      `).run(invoiceId);
+      releaseWholeInvoice(db, invoiceId);
     } else {
       releaseChosenLines(db, invoice, releaseIds, user, 'partial');
     }
@@ -1294,14 +1331,28 @@ export function recordPaymentSplit(db, args, user) {
 // отметил («Что можно оказать сейчас», release_line_ids); без отметок — ни одна:
 // неотмеченные ждут оплаты и в лабораторию / к врачу не попадают. Нажать долг
 // ещё раз с новыми отметками можно — счёт остаётся долгом.
+// RELEASE_SELECT_V1 (ревью) — ДОЛГ С ЧАСТЬЮ ДЕНЕГ — ОДНА ОПЕРАЦИЯ. Окно кассы
+// проводило часть (record_payment), брало новый ключ повтора и только потом звало
+// долг: упал долг — повторное нажатие писало ВТОРОЙ платёж. Теперь части оплаты
+// приходят сюда же (`tenders`, как у record_payment_split) и проводятся тем же
+// путём (смена, баланс, карта, кэшбэк) в ОДНОЙ транзакции с долгом: отказ где
+// угодно — ни платежа, ни долга. Ключ повтора (`idempotency_key`) — на всю
+// операцию: повтор той же формы отвечает прежней квитанцией, другая форма — 409.
+// Отмеченное несёт долг — одна запись журнала «Долг с частичной оплатой».
+// Сумма, покрывающая остаток, — это оплата, а не долг: отказ.
 export function markInvoiceDebt(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
+  { const seen = idemReplay(db, 'mark_invoice_debt', args); if (seen) return seen; }   // RELEASE_SELECT_V1 (ревью)
 
   const invoiceId = args && args.invoice_id;
   if (!isPositiveInt(invoiceId)) {
     throw new RpcError('Счёт указан неверно.', 400);
   }
   const releaseIds = releaseIdsArg(args);   // RELEASE_SELECT_V1
+  const expected = expectedBalanceArg(args);   // RELEASE_SELECT_V1 (ревью)
+  const rawTenders = args && args.tenders != null ? args.tenders : null;
+  const tenders = rawTenders !== null ? parseTenders(rawTenders) : null;   // RELEASE_SELECT_V1 (ревью) — часть денег
+  const tendered = tenders ? round2(tenders.reduce((s2, t) => s2 + t.amt, 0)) : 0;
 
   const run = db.transaction(() => {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
@@ -1312,15 +1363,24 @@ export function markInvoiceDebt(db, args, user) {
     }
     const balance = round2(invoice.total_amount - invoice.paid_amount);
     if (balance <= 0) throw new RpcError('Счёт уже оплачен — к оплате 0.', 400);
+    assertExpectedBalance(balance, expected);   // RELEASE_SELECT_V1 (ревью)
+    if (tenders && tendered >= balance) {
+      throw new RpcError('Сумма покрывает остаток счёта — примите её оплатой, а не долгом.', 400);
+    }
     assertReleasable(db, invoiceId, releaseIds);   // RELEASE_SELECT_V1 — до записи
 
-    db.prepare("UPDATE invoices SET status = 'debt' WHERE id = ?").run(invoiceId);
-    releaseChosenLines(db, invoice, releaseIds, user, 'debt');   // RELEASE_SELECT_V1 — только отмеченное
+    // RELEASE_SELECT_V1 (ревью) — часть денег: тот же путь, что «Разделить оплату»
+    // (вложенная транзакция — точка сохранения внутри этой). Списка нет — в работу
+    // она не отпускает ничего; отмеченное отпускает долг ниже.
+    if (tenders) recordPaymentSplit(db, { invoice_id: invoiceId, tenders: rawTenders }, user);
 
-    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
+    db.prepare("UPDATE invoices SET status = 'debt' WHERE id = ?").run(invoiceId);
+    releaseChosenLines(db, invoice, releaseIds, user, tenders ? 'debt_paid' : 'debt');   // RELEASE_SELECT_V1 — только отмеченное
+
+    return idemRemember(db, 'mark_invoice_debt', args, user, { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) });
   });
 
-  const out = run();
+  const out = tenders ? run.immediate() : run();   // DEPOSIT_WALLET_V1 — с деньгами баланс читается под блокировкой записи
   // CRM_REAL_BOOKING_V1 — «Оставить как долг» нажимают ПЕРЕД ПАЦИЕНТОМ:
   // кассир договаривается с человеком, что тот заплатит позже. Денег при
   // этом не появилось, поэтому crmInvoiceEvidence (он требует оплаты) тут не
@@ -1476,11 +1536,7 @@ function settleZeroTotal(db, invoiceId) {
   const total = round2(Number(inv.total_amount) || 0);
   if (total <= 0 && inv.status !== 'paid') {
     db.prepare("UPDATE invoices SET status = 'paid', paid_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoiceId);
-    db.prepare(`
-      UPDATE visit_services SET status = 'queued'
-       WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
-         AND status NOT IN ('in_progress', 'completed', 'collected', 'resulted')
-    `).run(invoiceId);
+    releaseWholeInvoice(db, invoiceId);   // RELEASE_SELECT_V1 (ревью) — и отменённая строка не оживает
   } else if (total > 0 && inv.status === 'paid') {
     db.prepare("UPDATE invoices SET status = 'unpaid', paid_at = NULL WHERE id = ?").run(invoiceId);
     // CASHIER_HEAD_V1 (ревью I1) — счёт снова к оплате, значит и его
@@ -2484,17 +2540,18 @@ function swapPaidLineTx(db, args, user, { rpc, dryRun = false, rebill = false })
     creditCashbackOnPaid(db, final0, user);
   }
   // RELEASE_SELECT_V1 (3.25.0) — замена не решает за кассира, что идёт в работу.
-  // Счёт стал (остался) оплаченным — в работу всё, как прежде. Частично / долг —
-  // строки счёта остаются, как их отпустила касса: обычная замена — та же строка
-  // со своим статусом; у «вернуть и выставить новую» новая строка наследует
-  // решение кассы о прежней (та уже в работе — и новая в работе; прежняя в
-  // смете — и новая ждёт оплаты). Остальные неотпущенные строки не трогаются.
+  // Счёт стал (остался) оплаченным — в работу всё неотпущенное, как прежде.
+  // RELEASE_SELECT_V1 (ревью, решение владельца) — счёт НЕ оплачен полностью
+  // (частично, долг): ДРУГАЯ услуга ждёт оплаты или отметки кассира, «отпущено»
+  // прежней строки она не наследует. У «вернуть и выставить новую» новая строка
+  // остаётся в смете ('added', как её вставили выше); у обычной замены на другую
+  // услугу отпущенная, но не начатая строка ('queued' — начатую обычной заменой
+  // не меняют) возвращается в смету без номера очереди. Смена только врача —
+  // услуга та же, решение кассы о ней остаётся. Остальные строки не трогаются.
   if (final0.status === 'paid') {
-    db.prepare(`UPDATE visit_services SET status = 'queued'
-                 WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
-                   AND status NOT IN ('queued', 'cancelled', 'in_progress', 'completed', 'collected', 'resulted')`).run(inv.id);
-  } else if ((final0.status === 'partial' || final0.status === 'debt') && rebill && vs.status !== 'added' && vs.status !== 'cancelled') {
-    db.prepare("UPDATE visit_services SET status = 'queued' WHERE id = ? AND status = 'added'").run(lineId);
+    releaseWholeInvoice(db, inv.id);
+  } else if (serviceChanges && !rebill) {
+    db.prepare("UPDATE visit_services SET status = 'added', queue_key = NULL, queue_no = NULL WHERE id = ? AND status = 'queued'").run(lineId);
   }
   // Номер очереди — новый: прежний был у прежнего врача / услуги.
   const lineNow = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(lineId);
@@ -3101,11 +3158,7 @@ export function refundInvoiceLine(db, args, user) {
       const status = invoiceStatusFor(newTotal, newPaid, inv.status);
       if (status === 'paid') {
         db.prepare("UPDATE invoices SET paid_amount = ?, status = 'paid', paid_at = COALESCE(paid_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id = ?").run(newPaid, inv.id);
-        db.prepare(`
-          UPDATE visit_services SET status = 'queued'
-           WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
-             AND status NOT IN ('in_progress', 'completed', 'collected', 'resulted')
-        `).run(inv.id);
+        releaseWholeInvoice(db, inv.id);   // RELEASE_SELECT_V1 (ревью) — и отменённая строка не оживает
       } else {
         db.prepare('UPDATE invoices SET paid_amount = ?, status = ?, paid_at = NULL WHERE id = ?').run(newPaid, status, inv.id);
       }
@@ -3729,11 +3782,7 @@ function discountChangeTx(db, args, user, { rpc, dryRun = false }) {
   // RELEASE_SELECT_V1 (3.25.0) — скидка не решает за кассира, что идёт в работу:
   // счёт стал оплаченным — в работу всё, как прежде; частично / долг — строки
   // остаются, как их отпустила касса (отпущенные — в работе, неотпущенные ждут).
-  if (final0.status === 'paid') {
-    db.prepare(`UPDATE visit_services SET status = 'queued'
-                 WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
-                   AND status NOT IN ('queued', 'cancelled', 'in_progress', 'completed', 'collected', 'resulted')`).run(inv.id);
-  }
+  if (final0.status === 'paid') releaseWholeInvoice(db, inv.id);
 
   // 5. Журнал счёта.
   const final = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);

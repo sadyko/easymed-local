@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { RPC } from './index.js';
-import { createInvoiceForVisit, recordPayment, recordPaymentSplit, refundPayment } from './billing.js';
+import { createInvoiceForVisit, recordPayment, recordPaymentSplit, refundPayment, invoiceReleaseLines } from './billing.js';
 import { openCashShift, shiftReport, voidInvoice } from './cashier.js';
 import { createDeposit, acceptDeposit } from './deposits.js';
 import { sellCard } from './card-sales.js';
@@ -180,9 +180,42 @@ test('дороже: счёт частично оплачен с точной р�
   const i = inv(db, invoiceId);
   assert.deepEqual([i.total_amount, i.paid_amount, i.status], [200000, 120000, 'partial']);
   assert.equal(pays(db, invoiceId).filter((p) => p.amount < 0).length, 0, 'денег никто не возвращал');
-  assert.equal(vsRow(db, vs).status, 'queued', 'частично оплаченный счёт работу не останавливает');
+  // RELEASE_SELECT_V1 (ревью, решение владельца) — была правило «частично оплаченный
+  // счёт работу не останавливает». Теперь другая услуга, поставленная заменой в
+  // неоплаченный полностью счёт, ждёт оплаты (или отметки кассира): КТ за 200 000
+  // при оплаченных 120 000 в работу сама не уходит.
+  assert.equal(vsRow(db, vs).status, 'added', 'другая услуга в частично оплаченном счёте ждёт оплаты');
+  assert.equal(vsRow(db, vs).queue_no, null, 'номера очереди у ждущей оплаты нет');
   recordPayment(db, { invoice_id: invoiceId, amount: 80000, method: 'card' }, cashier);
   assert.equal(inv(db, invoiceId).status, 'paid');
+  assert.equal(vsRow(db, vs).status, 'queued', 'доплата отпускает её в работу');
+});
+
+// RELEASE_SELECT_V1 (ревью, решение владельца; проба P8) — замена ОТПУЩЕННОЙ строки на
+// другую услугу в частично оплаченном счёте: новая услуга ждёт оплаты; соседняя
+// неотпущенная строка — тоже; смена только врача отпущенную строку не останавливает.
+test('RELEASE_SELECT_V1 (ревью): замена отпущенной строки на другую услугу при частичной оплате — новая ждёт оплаты; только врач — остаётся в работе', () => {
+  const { db, pid, CONS, USG, CT } = clinic();
+  const vid = Number(db.prepare('INSERT INTO visits (patient_id, visit_date) VALUES (?, ?)').run(pid, DAY).lastInsertRowid);
+  const c = Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (?, ?, ?, 1, 0, 0, 'added')").run(vid, CONS, DOC).lastInsertRowid);
+  const u = Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (?, ?, ?, 1, 0, 0, 'added')").run(vid, USG, DOC).lastInsertRowid);
+  const invoiceId = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [c, u] }, registrar).invoice.id;   // 150 000 + 80 000
+  recordPayment(db, { invoice_id: invoiceId, amount: 150000, method: 'cash', release_line_ids: [c] }, cashier);
+  assert.equal(vsRow(db, c).status, 'queued');
+  // Смена врача (услуга та же): отпущенная строка в работе и остаётся.
+  call('cashier_line_swap_paid', db, { visit_service_id: c, doctor_id: DOC2 }, cashier);
+  assert.equal(inv(db, invoiceId).status, 'partial');
+  assert.equal(vsRow(db, c).status, 'queued', 'та же услуга у другого врача — кассир её уже отпустил');
+  // Другая услуга (КТ) в счёте, который так и не оплачен полностью, — ждёт оплаты.
+  call('cashier_line_swap_paid', db, { visit_service_id: c, new_service_id: CT }, cashier);
+  assert.equal(inv(db, invoiceId).status, 'partial');
+  assert.equal(vsRow(db, c).status, 'added', 'другая услуга ждёт оплаты или отметки кассира');
+  assert.equal(vsRow(db, u).status, 'added', 'неотпущенная соседняя строка не отпущена заменой');
+  assert.ok(invoiceReleaseLines(db, { invoice_id: invoiceId }, cashier).lines.some((l) => l.id === c), 'кассир видит её среди «Что можно оказать сейчас»');
+  // Доплата до полной — обе в работе.
+  const left = inv(db, invoiceId).total_amount - inv(db, invoiceId).paid_amount;
+  recordPayment(db, { invoice_id: invoiceId, amount: left, method: 'card' }, cashier);
+  assert.deepEqual([vsRow(db, c).status, vsRow(db, u).status], ['queued', 'queued']);
 });
 
 test('та же сумма — деньги не двигаются', () => {

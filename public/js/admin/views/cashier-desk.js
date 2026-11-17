@@ -2314,6 +2314,23 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
     render();
 
     let closePay = null;   // CASHIER_DISCOUNT_V1 — окно оплаты закрывается после скидки и открывается с новой суммой
+    // RELEASE_SELECT_V1 (ревью) — СЧЁТ ИЗМЕНИЛСЯ, ПОКА ОКНО БЫЛО ОТКРЫТО (сервер:
+    // 409 invoice_changed — в тот же неоплаченный счёт дописали услугу, INVOICE_APPEND_V1).
+    // Денег не записано. Окно закрывается и открывается заново с новым остатком и
+    // новым списком «Что можно оказать сейчас»: прежняя «полная» сумма теперь может
+    // быть частичной, и кассир решает, что отпустить. Счёт закрыт или пропал — касса
+    // перерисовывается.
+    const reopenChanged = async (error) => {
+        toast((error && error.message) || tr('Счёт изменился — откройте оплату заново.'), 'fail');
+        if (closePay) closePay();
+        try {
+            const { data } = await supabase.from('invoices').select('*').eq('id', inv.id).maybeSingle();
+            const fresh = data ? { ...inv, ...data } : null;
+            const due = fresh ? Math.round(((Number(fresh.total_amount) || 0) - (Number(fresh.paid_amount) || 0)) * 100) / 100 : 0;
+            if (fresh && due > 0 && !['paid', 'void', 'refunded'].includes(fresh.status)) { payModal(root, fresh, due, opts); return; }
+        } catch (e) { /* ниже — перерисовка кассы */ }
+        await after();
+    };
     modal(trf('Оплата · {no}', { no: inv.invoice_number || ('#' + inv.id) }), 'Receipt',
         [
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px' } },
@@ -2353,9 +2370,11 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
             const chosen = partial ? rel.ids() : null;
             const relArg = partial ? { release_line_ids: chosen } : {};
 
+            // RELEASE_SELECT_V1 (ревью) — expected_balance: остаток, который видит окно.
             const { error } = parts.length === 1
-                ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), ...relArg, idempotency_key: idem.key })
-                : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, ...relArg, idempotency_key: idem.key });
+                ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), ...relArg, expected_balance: balance, idempotency_key: idem.key })
+                : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, ...relArg, expected_balance: balance, idempotency_key: idem.key });
+            if (error && error.code === 'invoice_changed') { reopenChanged(error); return true; }   // RELEASE_SELECT_V1 (ревью)
             if (error) { toast((error.message) || 'Не удалось принять оплату.', 'fail'); return false; }
             idem.next();
             toast(!partial ? 'Оплата принята'
@@ -2369,9 +2388,13 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
         // DEBT_BTN_V1 — «Оставить как долг» рядом с «Отмена»: записать введённую
         // часть (если есть), перевести счёт в долг.
         // RELEASE_SELECT_V1 — в работу уходят только услуги, отмеченные в «Что можно
-        // оказать сейчас». Есть часть денег — отмеченное несёт она (отказ по
-        // отметкам не запишет и денег: одна транзакция), долг идёт с пустым списком;
-        // денег нет — отмеченное несёт долг. Одно решение — одна запись журнала.
+        // оказать сейчас»; одно решение — одна запись журнала.
+        // RELEASE_SELECT_V1 (ревью) — часть денег, отмеченное и долг — ОДИН вызов
+        // mark_invoice_debt (tenders): сервер проводит их одной транзакцией. Прежде
+        // часть уходила record_payment, окно брало новый ключ повтора, и упавший
+        // долг при повторном нажатии писал ВТОРОЙ платёж. Ключ окна сменяется только
+        // после удачи: повтор после сбоя — та же форма с тем же ключом, и сервер
+        // отвечает квитанцией, если первый вызов всё-таки прошёл.
         (close) => (closePay = close, h('button', {
             class: 'btn', type: 'button',
             style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-300, #fca5a5)', fontWeight: 700 },
@@ -2401,17 +2424,13 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
                 const chosen = rel.ids();   // RELEASE_SELECT_V1
                 btn.disabled = true;
                 try {
-                    if (parts.length) {
-                        const { error } = parts.length === 1
-                            ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), release_line_ids: chosen, idempotency_key: idem.key })
-                            : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, release_line_ids: chosen, idempotency_key: idem.key });
-                        if (error) throw new Error(error.message || 'Оплата не записана');
-                        // V3120_FINAL (I1) — часть записана: следующая операция окна
-                        // (остаток после упавшего долга) — уже другая, с новым ключом.
-                        idem.next();
-                    }
-                    const { error: dErr } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id, release_line_ids: parts.length ? [] : chosen });
+                    const { error: dErr } = await supabase.rpc('mark_invoice_debt', {
+                        invoice_id: inv.id, ...(parts.length ? { tenders: parts } : {}), release_line_ids: chosen,
+                        expected_balance: balance, idempotency_key: idem.key,
+                    });
+                    if (dErr && dErr.code === 'invoice_changed') { btn.disabled = false; reopenChanged(dErr); return; }   // RELEASE_SELECT_V1 (ревью)
                     if (dErr) throw new Error(dErr.message || 'Не удалось оформить долг');
+                    idem.next();   // V3120_FINAL (I1) — операция удалась: следующая — с новым ключом
                     toast(chosen.length
                         ? trf(parts.length ? 'Счёт оставлен как долг (частичная оплата записана) — в работу переданы услуги: {n}.' : 'Счёт оставлен как долг — в работу переданы услуги: {n}.', { n: chosen.length })
                         : tr(parts.length ? 'Счёт оставлен как долг (частичная оплата записана) — услуги ждут оплаты.' : 'Счёт оставлен как долг — услуги ждут оплаты.'), 'ok');
