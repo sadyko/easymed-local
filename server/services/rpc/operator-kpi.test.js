@@ -120,6 +120,51 @@ test('доступ: оператор — только себя; руководи
   assert.throws(() => operatorKpi(db, {}, { id: 4, role: 'nobody_role' }), (e) => e.status === 403);
 });
 
+// KPI_SCOPE_V1 — чужие показатели (с окладом и процентом из карточки) открываются
+// только у операторов колл-центра — тех же, кого предлагает выбор руководителя
+// (operatorList). Зарплату главного врача руководитель колл-центра, врач с правом
+// «вся доска CRM» и администратор через этот вызов не получают.
+test('KPI_SCOPE_V1: чужой KPI — только оператора из списка выбора; врача — отказ 403', () => {
+  const d = seed();
+  try {
+    d.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)')
+      .run('head_cc', JSON.stringify({ sections: ['crm'], levels: {}, grants: { 'crm.all': 'edit' } }));
+    d.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)')
+      .run('doc_crm', JSON.stringify({ sections: ['crm'], levels: {}, grants: { 'crm.all': 'edit' } }));
+    d.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (6,'head','x','Руководитель КЦ','head_cc')").run();
+    d.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, salary_type, salary_fixed, salary_percent)
+               VALUES (5,'chief','x','Главврач','doctor','fix_plus_kpi',9000000,30)`).run();
+    d.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, salary_type, salary_fixed)
+               VALUES (7,'drcrm','x','Врач с CRM','doc_crm','fixed',5000000)`).run();
+    const HEAD = { id: 6, role: 'head_cc' };
+    const DRCRM = { id: 7, role: 'doc_crm' };
+    const ADMIN = { id: 1, role: 'admin' };
+
+    // Разрешено: руководитель — оператора из списка; администратор — оператора; каждый — себя.
+    const anna = operatorKpi(d, { user_id: 2, period: 'month' }, HEAD);
+    assert.equal(anna.operator.id, 2);
+    assert.equal(anna.pay.fixed, 3000000, 'оклад оператора руководителю виден, как и раньше');
+    assert.ok(anna.operators.some((o) => o.id === 2));
+    assert.ok(!anna.operators.some((o) => o.id === 5), 'главврач не в списке выбора');
+    assert.equal(operatorKpi(d, { user_id: 3 }, ADMIN).operator.id, 3);
+    assert.equal(operatorKpi(d, {}, HEAD).operator.id, 6, 'свой KPI — всегда');
+    assert.equal(operatorKpi(d, { user_id: 7, period: 'month' }, DRCRM).pay.fixed, 5000000, 'врач видит свою оплату');
+
+    // Отказ: оклад главврача не уходит никому, кто его не он сам.
+    for (const [who, u] of [['руководитель КЦ', HEAD], ['врач с crm.all', DRCRM], ['администратор', ADMIN]]) {
+      assert.throws(() => operatorKpi(d, { user_id: 5, period: 'month' }, u), (e) => {
+        assert.equal(e.status, 403, who + ': не 403');
+        assert.equal(e.message, 'Показатели и оплату открывают только у операторов колл-центра.');
+        return true;
+      }, who + ' прочитал оплату главврача');
+    }
+    // Несуществующий и выключенный — тоже отказ, без подсказки, есть ли такой сотрудник.
+    assert.throws(() => operatorKpi(d, { user_id: 999 }, HEAD), (e) => e.status === 403);
+    d.prepare('UPDATE users SET is_active = 0 WHERE id = 3').run();
+    assert.throws(() => operatorKpi(d, { user_id: 3 }, HEAD), (e) => e.status === 403);
+  } finally { d.close(); }
+});
+
 test('RPC зарегистрирован', () => {
   assert.equal(typeof getRpc('crm_operator_kpi'), 'function');
 });

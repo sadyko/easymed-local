@@ -8,7 +8,8 @@
 // ЧЬИ ЦИФРЫ. Оператор видит ТОЛЬКО себя. Тот, кто видит всю доску CRM
 // (canSeeAllLeads — администратор, руководитель колл-центра), может выбрать
 // любого оператора: это та же граница, что у «Операторов» отчёта колл-центра
-// (rpc/callcenter.js CRM_HEAD_MERGE_TAGS_V1).
+// (rpc/callcenter.js CRM_HEAD_MERGE_TAGS_V1). KPI_SCOPE_V1 — именно оператора:
+// чужой user_id вне списка выбора (operatorList) сервер не открывает никому.
 //
 // ОПРЕДЕЛЕНИЯ — те же, что у отчёта колл-центра, не свои:
 //   * заявка оператора — та, которую он ВЕДЁТ (crm_requests.assigned_to), а не
@@ -87,6 +88,18 @@ export function operatorKpi(db, args, user) {
   const want = args && args.user_id != null && args.user_id !== '' ? Number(args.user_id) : me;
   if (!Number.isInteger(want) || want <= 0) throw new RpcError('Не указан оператор.', 400);
   if (want !== me && !seeAll) throw new RpcError('Чужие показатели видит только руководитель колл-центра.', 403);
+  // KPI_SCOPE_V1 (2026-11-17) — В ОТВЕТЕ ОКЛАД И ПРОЦЕНТ ИЗ КАРТОЧКИ СОТРУДНИКА. Право
+  // «вся доска CRM» (руководитель колл-центра, врач с crm.all) открывало по user_id
+  // оплату ЛЮБОГО сотрудника — например, оклад главного врача: выбор скрывал
+  // не-операторов, сервер — нет. Чужие показатели — только у тех, кого предлагает
+  // выбор (operatorList); себя видит каждый. РЕШЕНИЕ: и администратору — только
+  // операторы: экран другого не просит, а зарплаты остальных — в карточке сотрудника.
+  // Отказ одинаков для не-оператора и для несуществующего id: перебором не узнать,
+  // кто есть в клинике.
+  const operators = seeAll ? operatorList(db) : [];
+  if (want !== me && !operators.some((o) => Number(o.id) === want)) {
+    throw new RpcError('Показатели и оплату открывают только у операторов колл-центра.', 403);
+  }
 
   const op = db.prepare(`SELECT id, COALESCE(NULLIF(full_name, ''), username) AS name, role, pbx_extension,
       salary_type, salary_fixed, salary_percent, kpi_links FROM users WHERE id = ?`).get(want);
@@ -209,6 +222,6 @@ export function operatorKpi(db, args, user) {
     pay,
     rank: pos >= 0 && leads.came > 0 ? { place: pos + 1, of: ranks.filter((x) => (x.came || 0) > 0).length } : null,
     can_pick: seeAll,
-    operators: seeAll ? operatorList(db) : [],
+    operators,
   };
 }
