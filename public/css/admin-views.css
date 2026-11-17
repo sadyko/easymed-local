@@ -9787,6 +9787,8 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
 }
 .reg-tab-badge[hidden] { display: none; }
 .reg-tab.on .reg-tab-badge { background: #fff; color: var(--crit-700, #b91c1c); }
+/* В тёмном баннере «Пациентов» активная вкладка белая — счётчик остаётся красным. */
+.phub-hero .reg-tab.on .reg-tab-badge { background: var(--crit-600, #dc2626); color: #fff; }
 .rwait { display: flex; flex-direction: column; gap: 14px; }
 .rwait-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 14px 18px; }
 .rwait-head-text { min-width: 0; flex: 1 1 320px; }
