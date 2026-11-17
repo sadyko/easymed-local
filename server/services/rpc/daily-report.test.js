@@ -14,6 +14,7 @@ import { buildReport, delta, money } from '../daily-report/report.js';
 import { getRpc } from './index.js';
 import { today } from '../domain/day.js';
 import { dashboardOverview } from './dashboard-overview.js';   // DAILY_REPORT_SUMS_V1 — те же числа, что у сводки
+import { readSettingsRow } from '../daily-report/settings.js';   // DAILY_REPORT_FAIL_V1
 
 const TOKEN = '1234567890:AAEabcdefghijklmnopqrstuvwxyz0123456';
 const OTHER = '9876543210:AAEabcdefghijklmnopqrstuvwxyz0123456';
@@ -245,6 +246,89 @@ test('DAILY_REPORT_SUMS_V1: только возврат за день — мин
   assert.match(text, /<b>Принято за день: −20 000 сум<\/b>/);
   assert.match(text, /\nКарта — −20 000\n/);
   assert.doesNotMatch(text, /не новые деньги/, 'с баланса не платили — строки нет');
+});
+
+// DAILY_REPORT_FAIL_V1 — отчёт не собрался (сбой запроса сводки). Раньше buildReport
+// стоял вне try: попытка не записывалась, tick глотал ошибку, isDue оставался
+// true — тяжёлый запрос сводки повторялся каждую минуту до полуночи, на экране
+// ни слова, «Отправить сейчас» отвечал 500.
+async function armed() {
+  const db = fresh();
+  await dailyReportSettingsSave(db, { bot_token: TOKEN, chat_id: '-1001', send_time: '00:00' }, admin, fakeTg({ getMe: { id: 1234567890, username: 'b' } }));
+  await dailyReportSettingsSave(db, { enabled: true }, admin);
+  db.prepare('UPDATE daily_report_settings SET last_sent_day = NULL WHERE id = 1').run();
+  return db;
+}
+
+test('DAILY_REPORT_FAIL_V1: отчёт не собрался — попытка и ошибка записаны, повтор не раньше чем через 10 минут; «Отправить сейчас» — ошибка словами, не 500', async () => {
+  const db = await armed();
+  db.exec('DROP TABLE payments');   // сводка руководителя падает на «Принято»
+  assert.throws(() => buildReport(db, {}), /payments/, 'предпосылка: отчёт не собирается');
+  const tg = fakeTg({ sendMessage: { message_id: 1 } });
+
+  const r = await tick(db, tg);
+  assert.ok(r, 'сбой проглочен — попытка не записана');
+  assert.equal(r.ok, false);
+  assert.match(r.error, /Отчёт не собран/);
+  const row = readSettingsRow(db);
+  assert.ok(row.last_attempt_at, 'время попытки не записано');
+  assert.match(row.last_error, /Отчёт не собран/);
+  assert.equal(row.last_sent_day, null, 'неотправленный отчёт не отмечен отправленным');
+  assert.equal(tg.calls.length, 0);
+
+  // Следующая минута — не повторяет; через 10 минут — снова пора.
+  assert.equal(await tick(db, tg), null);
+  const now = { day: today(db), hm: '23:59' };
+  assert.equal(isDue(row, { ...now, ms: Date.now() + 60 * 1000 }), false);
+  assert.equal(isDue(row, { ...now, ms: Date.parse(row.last_attempt_at) + 11 * 60 * 1000 }), true);
+
+  // «Отправить сейчас» — ответ с ошибкой и настройками, а не исключение (500).
+  const sent = await dailyReportSendNow(db, {}, admin, tg);
+  assert.equal(sent.ok, false);
+  assert.match(sent.error, /Отчёт не собран/);
+  assert.match(sent.settings.last_error, /Отчёт не собран/);
+  assert.equal(tg.calls.length, 0);
+});
+
+/** Telegram, который отвечает только по команде: отправка «висит», пока её не отпустят. */
+function slowTg() {
+  const calls = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const fetchImpl = async (url, init) => {
+    calls.push({ method: String(url).split('/').pop(), body: JSON.parse(init.body) });
+    await gate;
+    return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: calls.length } }) };
+  };
+  return { fetchImpl, calls, release: () => release() };
+}
+
+test('DAILY_REPORT_FAIL_V1: «Отправить сейчас» и расписание в одну и ту же минуту — в группу уходит одно сообщение', async () => {
+  // Сначала «Отправить сейчас», пока она идёт — такт расписания.
+  const db = await armed();
+  const tg = slowTg();
+  const manual = dailyReportSendNow(db, {}, admin, tg);
+  const sched = tick(db, tg);
+  await new Promise((r) => setTimeout(r, 30));
+  tg.release();
+  const [m, s] = await Promise.all([manual, sched]);
+  assert.equal(tg.calls.filter((c) => c.method === 'sendMessage').length, 1, 'ушло два отчёта');
+  assert.equal(m.ok, true);
+  assert.equal(s, null, 'такт, заставший отправку, ничего не делает');
+
+  // Наоборот: идёт отправка по расписанию — «Отправить сейчас» отвечает словами и не шлёт.
+  const db2 = await armed();
+  const tg2 = slowTg();
+  const sched2 = tick(db2, tg2);
+  const manual2 = dailyReportSendNow(db2, {}, admin, tg2);
+  await new Promise((r) => setTimeout(r, 30));
+  tg2.release();
+  const [s2, m2] = await Promise.all([sched2, manual2]);
+  assert.equal(tg2.calls.filter((c) => c.method === 'sendMessage').length, 1, 'ушло два отчёта');
+  assert.equal(s2.ok, true);
+  assert.equal(m2.ok, false);
+  assert.match(m2.error, /уже отправляется/);
+  assert.equal(readSettingsRow(db2).last_sent_day, today(db2), 'отправка по расписанию отмечена');
 });
 
 test('сохранённый список первого формата получает блоки «Итога дня» целиком', async () => {

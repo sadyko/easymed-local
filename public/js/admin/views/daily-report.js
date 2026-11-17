@@ -90,7 +90,8 @@ function statusBanner() {
         h('div', null,
             h('b', null, trf('Каждый день в {time} · {day}', { time: s.send_time, day: s.period === 'yesterday' ? tr('за вчера') : tr('за сегодня') })),
             h('div', { class: 'drb-sub' }, s.last_error
-                ? trf('Последняя попытка не удалась: {msg}', { msg: s.last_error })
+                // DAILY_REPORT_FAIL_V1 — причина от сервера — фраза словаря (tr; незнакомая — как есть).
+                ? trf('Последняя попытка не удалась: {msg}', { msg: tr(s.last_error) })
                 : s.last_sent_at ? trf('Последний отчёт ушёл {at}', { at: fmtDateTime(s.last_sent_at) }) : tr('Отчётов ещё не было.'))));
 }
 

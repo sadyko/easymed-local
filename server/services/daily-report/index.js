@@ -50,12 +50,47 @@ export function armForNextRun(db) {
   }
 }
 
+// DAILY_REPORT_FAIL_V1 (2026-11-17) — ЛЮБОЙ СБОЙ — ЭТО ПОПЫТКА, И ОТПРАВКА ОДНА ЗА РАЗ.
+//
+// buildReport стоял вне try: сбой сводки руководителя (её запрос — самый тяжёлый
+// в отчёте) не записывал попытку, tick глотал ошибку, isDue оставался true — и
+// тяжёлый запрос повторялся каждую минуту до полуночи; на экране настроек ни
+// слова, «Отправить сейчас» отвечал 500. Теперь сбой сборки или отправки пишет
+// last_attempt_at и last_error (дальше — обычная пауза 10 минут, isDue), а
+// «Отправить сейчас» получает ответ { ok: false, error } словами.
+//
+// Флаг running берёг только tick от второго tick. «Отправить сейчас» в ту же
+// минуту, что и расписание, уходила вторым сообщением в группу совета
+// директоров. Замок — на базу, у самой отправки: кто пришёл вторым, не шлёт
+// (tick — тихо, «Отправить сейчас» — словами «Отчёт уже отправляется»). Замок
+// берётся до первого await, поэтому два вызова в одну и ту же секунду его
+// не проскакивают.
+const BUILD_FAILED = 'Отчёт не собран: сбой на сервере. Подробности — в журнале сервера.';
+const BUSY = 'Отчёт уже отправляется — подождите минуту.';
+const sending = new WeakSet();
+
 /**
  * Собрать и отправить отчёт. scheduled — по расписанию (ставит «сегодня
  * отправлено»); иначе — «Отправить сейчас» с экрана, расписание не трогает.
- * Возвращает { ok, day, error? }.
+ * Возвращает { ok, day, error?, busy? } и не бросает.
  */
-export async function sendReport(db, { scheduled = false, deps = {} } = {}) {
+export async function sendReport(db, opts = {}) {
+  if (sending.has(db)) return { ok: false, busy: true, error: BUSY };
+  sending.add(db);
+  try {
+    return await sendOnce(db, opts);
+  } catch (e) {
+    console.error('[daily-report] отчёт не собран или не отправлен:', e && (e.stack || e.message));
+    try { recordAttempt(db, { ok: false, error: BUILD_FAILED }); } catch (e2) {
+      console.error('[daily-report] попытка не записана:', e2 && e2.message);
+    }
+    return { ok: false, error: BUILD_FAILED };
+  } finally {
+    sending.delete(db);
+  }
+}
+
+async function sendOnce(db, { scheduled = false, deps = {} } = {}) {
   const row = readSettingsRow(db);
   const todayDay = today(db);
   if (!row || !row.bot_token_enc) return { ok: false, error: 'Токен бота не задан.' };
@@ -98,7 +133,8 @@ export async function tick(db, deps = {}) {
   try {
     const row = readSettingsRow(db);
     if (!isDue(row, { day: today(db), hm: localHm(db), ms: Date.now() })) return null;
-    return await sendReport(db, { scheduled: true, deps });
+    const res = await sendReport(db, { scheduled: true, deps });
+    return res && res.busy ? null : res;   // DAILY_REPORT_FAIL_V1 — отчёт уже уходит «Отправить сейчас»
   } catch (e) {
     console.warn('[daily-report]', e && e.message);
     return null;
