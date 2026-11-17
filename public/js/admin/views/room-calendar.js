@@ -253,6 +253,10 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         // DOCTOR_REFERRAL_DESK_V1 — в каких записях услуга по направлению врача: id визита -> имя
         // направившего. Одним ответом на всё видимое окно (referral_visit_links).
         refByVisit: {},
+        // SLOT_BUSY_LINES_V1 — строки визитов, держащие время врачей сетки: 'doctor:<id>' ->
+        // [{ day, from_min, to_min, from, to, patient_name, service, visit_id, … }]
+        // (calendar_windows.busy_lines; считает сервер, экран только рисует и сверяет щелчок).
+        lineBusy: {},
     };
 
     clear(container);
@@ -541,6 +545,9 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         else args.room_ids = ids;
         const { data, error } = await supabase.rpc('calendar_windows', args);
         state.windows = (!error && data && data.windows) ? data.windows : {};
+        // SLOT_BUSY_LINES_V1 — отказ: пусто (блоков строк нет, а занятость всё равно проверит
+        // calendar_book); сам отказ назван ниже полосой «Не загрузилось».
+        state.lineBusy = (!error && data && data.busy_lines) ? data.busy_lines : {};
         // Контекст НЕ обнуляется молча при отказе: пустой контекст означал бы
         // «чужих записей нет и всё подтверждено» — самая опасная из возможных
         // неправд на этом экране. Отказ виден в полосе «Не загрузилось».
@@ -758,6 +765,15 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
     }
 
     // ---- booking + open -------------------------------------------------
+    /**
+     * SLOT_BUSY_LINES_V1 — время врача, которое держит строка визита пациента, записанного к
+     * ДРУГОМУ врачу («Добавить в этот визит»), в этот день. Только у оси врачей.
+     */
+    function lineBusyFor(resId, dayIso) {
+        if (state.resType !== 'doctor') return [];
+        return ((state.lineBusy || {})['doctor:' + resId] || []).filter(b => b && b.day === dayIso);
+    }
+
     function bookAt(res, dayIso, min) {
         if (res.id === UNASSIGNED_ID) { toast('Перетащите запись на врача или кабинет, чтобы её назначить.', 'info'); return; }
         // Мгновенная подсказка по уже загруженным записям дня. НЕ ЗАМЕНА
@@ -769,6 +785,13 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         if (clash && state.resType === 'doctor') {
             toast(trf('Это время занято: у врача {doctor} уже есть приём {from}–{to}. Выберите другое время.',
                 { doctor: res.name, from: fmtHM(clash.start), to: fmtHM(clash.start + clash.dur) }), 'fail');
+            return;
+        }
+        // SLOT_BUSY_LINES_V1 — и строка визита другого пациента к этому врачу (тот же отказ).
+        const lineClash = lineBusyFor(res.id, dayIso).find(b => min < b.to_min && b.from_min < min + state.step);
+        if (lineClash) {
+            toast(trf('Это время занято: у врача {doctor} уже есть приём {from}–{to}. Выберите другое время.',
+                { doctor: res.name, from: lineClash.from, to: lineClash.to }), 'fail');
             return;
         }
         const letter = targetLetter(res);
@@ -1338,6 +1361,12 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             from = Math.min(from, a.start);
             to = Math.max(to, a.start + a.dur);
         }
+        // SLOT_BUSY_LINES_V1 — и блок строки визита в колонке врача.
+        for (const r of sel) {
+            for (const d of days) {
+                for (const b of lineBusyFor(r.id, d)) { from = Math.min(from, b.from_min); to = Math.max(to, b.to_min); }
+            }
+        }
         if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) { from = CANVAS_FROM; to = CANVAS_TO; }
         canvas = { from: Math.max(0, Math.floor(from / step) * step), to: Math.min(24 * 60, Math.ceil(to / step) * step) };
         if (canvas.to <= canvas.from) canvas = { from: CANVAS_FROM, to: CANVAS_TO };
@@ -1731,6 +1760,32 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             block.addEventListener('mouseleave', hideTip);
             body.appendChild(block);
         }
+        // SLOT_BUSY_LINES_V1 — ВРЕМЯ ВРАЧА ДЕРЖИТ СТРОКА ВИЗИТА ПАЦИЕНТА, ЗАПИСАННОГО К ДРУГОМУ
+        // ВРАЧУ («Добавить в этот визит»): визит стоит в колонке своего врача, а здесь — блок
+        // строки, чтобы 15:00 врача Б не выглядело свободным. Блок — не запись: его не тянут и
+        // не растягивают, в счёт и статистику он не входит; щелчок открывает визит пациента,
+        // если тот в загруженном окне. Пунктир — отличие от записи без опоры на цвет.
+        for (const b of lineBusyFor(res.id, dayIso)) {
+            if (aq && !((b.patient_name || '') + ' ' + (b.service || '')).toLowerCase().includes(aq)) continue;
+            const vs = Math.max(b.from_min, canvas.from), ve = Math.min(b.to_min, canvas.to);
+            if (ve <= vs) continue;
+            const owner = state.appts.find(a => a.id === b.visit_id) || null;
+            const meta = STATUS_META[normStatus(b.status)] || STATUS_META.scheduled;
+            body.appendChild(h('div', {
+                class: 'rcal-appt rcal-appt-line ' + pastelFor(res.id),
+                'data-line-busy': String(b.visit_id),
+                'data-status': normStatus(b.status),
+                title: trf('Добавлено в визит: {name}, {time}', { name: b.patient_name || '—', time: b.from }),
+                style: {
+                    top: ((vs - canvas.from) * ppm) + 'px', height: (Math.max((ve - vs) * ppm, 22) - 2) + 'px',
+                    borderStyle: 'dashed', borderLeft: `3px dashed ${meta.color}`, cursor: owner ? 'pointer' : 'default',
+                },
+                ...(owner ? { onclick: () => openApptModal(owner) } : {}),
+            },
+                h('div', { class: 'rcal-appt-t' }, h('span', null, `${b.from}–${b.to}`)),
+                h('div', { class: 'rcal-appt-p' }, b.patient_name || '—'),
+                b.service ? h('div', { class: 'rcal-appt-s', title: b.service }, b.service) : null));
+        }
         return body;
     }
 
@@ -1932,11 +1987,13 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const win = windowFor(res, state.dayIso);
         const key = state.resType === 'doctor' ? 'doctorId' : 'roomId';
         const busy = state.appts.filter(a => a[key] === res.id && a.date === state.dayIso && BUSY.includes(a.status));
+        const lines = lineBusyFor(res.id, state.dayIso);   // SLOT_BUSY_LINES_V1
         const floor = state.dayIso === todayIso() ? minutesOfLocal(new Date()) : canvas.from;
         for (let m = canvas.from; m < canvas.to; m += state.step) {
             if (m < floor) continue;
             if (isOffHour(win, m)) continue;
             if (busy.some(a => m < a.start + a.dur && a.start < m + state.step)) continue;
+            if (lines.some(b => m < b.to_min && b.from_min < m + state.step)) continue;
             bookAt(res, state.dayIso, m);
             return;
         }

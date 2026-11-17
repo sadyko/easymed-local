@@ -30,6 +30,7 @@ import { loadPatientById } from '../data.js';
 // заведения карты (patient-create-modal.js).
 import { bookVisit, setVisitStatus } from './visit-booking.js';   // BOOKING_DAY_CANCEL_V1 — отмена той же дверью
 import { loadSlotDay, forgetSlots, askAddToDayVisit } from './service-picker-modal.js?v=ownrep4';   // один клиент слотов на продукт · BOOKING_DAY_JOIN_V1 — вопрос календаря «Добавить в этот визит»
+import { bookErrorText } from './service-picker-modal.js?v=ownrep4';   // SLOT_BUSY_LINES_V1 — отказ slot_taken шаблоном
 import { isOn } from '../../shared/flags.js';   // BOOKING_DAY_JOIN_V1 — флаг is_doctor из базы — 1, а не true
 import { consultMinutes } from '../../shared/consultation-price.js';   // длительность вида консультации — то же правило, что у сервера
 import { runPatientSearch, openPatientCreateModal } from './patient-create-modal.js?v=onewin1';
@@ -55,6 +56,8 @@ export function shiftDay(dayIso, delta) {
     return ymd(new Date(y, m - 1, d + delta));
 }
 const toMin = (hhmm) => { const [a, b] = String(hhmm || '').split(':').map(Number); return (a || 0) * 60 + (b || 0); };
+/** SLOT_BUSY_LINES_V1 — ключ услуг строки визита в state.svc (у визита ключ — его id). */
+const lineKey = (ids) => 'l:' + [...ids].map(String).sort().join(',');
 
 /**
  * Врач ли это для «Бронирования».
@@ -80,6 +83,9 @@ export function dayTimeline(day) {
     const busy = (day.busy || []).map((b) => ({
         kind: 'busy', from: b.from, to: b.to, at: b.from_min != null ? b.from_min : toMin(b.from),
         patient_id: b.patient_id, patient_name: b.patient_name || '', status: b.status, visit_id: b.visit_id,
+        // SLOT_BUSY_LINES_V1 — время держит не запись к этому врачу, а строка визита пациента,
+        // записанного к другому врачу («Добавить в этот визит»): visit_id — его визит.
+        lineIds: Array.isArray(b.visit_service_ids) && b.visit_service_ids.length ? b.visit_service_ids : null,
     }));
     return free.concat(busy).sort((x, y) => x.at - y.at || (x.kind === 'busy' ? -1 : 1));
 }
@@ -345,7 +351,8 @@ export async function renderBookingDay(host, ctx = {}, deps = {}) {
             // of patient and name of service too») — у записи видны номер карты
             // пациента и услуги визита (или вид консультации).
             const mrn = t.patient_id != null ? state.mrn.get(String(t.patient_id)) : '';
-            const svcs = t.visit_id != null ? state.svc.get(String(t.visit_id)) : null;
+            // SLOT_BUSY_LINES_V1 — у строки визита — её услуги, а не все услуги визита у другого врача.
+            const svcs = t.lineIds ? state.svc.get(lineKey(t.lineIds)) : (t.visit_id != null ? state.svc.get(String(t.visit_id)) : null);
             // BOOKING_DAY_TO_WIZARD_V1 — «when you press it, it should come to service
             // added place as service added and continue process». Строка СЕГОДНЯШНЕЙ
             // записи открывает окно услуг («Услуги и пациент → Подтверждение»): оно
@@ -382,7 +389,9 @@ export async function renderBookingDay(host, ctx = {}, deps = {}) {
                     // строки: только у «Записан» и «Подтверждён» (пришедшего уже
                     // обслуживают) и только тому, кто вправе менять записи. Нажатие
                     // не открывает окно услуг — у кнопки своё действие.
-                    canBook() && CANCELLABLE.includes(String(t.status || '')) && t.visit_id
+                    // SLOT_BUSY_LINES_V1 — у строки визита к другому врачу корзины нет: «Отменить
+                    // запись» отменила бы ВЕСЬ визит пациента (и приём у его врача).
+                    canBook() && CANCELLABLE.includes(String(t.status || '')) && t.visit_id && !t.lineIds
                         ? h('button', { type: 'button', class: 'bkd-cancel', 'data-bkd-cancel': String(t.visit_id),
                             title: tr('Отменить запись'), 'aria-label': tr('Отменить запись'),
                             onclick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); cancelBooking(t); },
@@ -515,7 +524,9 @@ export async function renderBookingDay(host, ctx = {}, deps = {}) {
             // Визита дня к этой секунде уже не было, и calendar_book завёл новый — пустым его
             // не оставляем (как калькулятор календаря, discard_empty_visit).
             if (day.created) { try { await supabase.rpc('discard_empty_visit', { visit_id: day.visit.id }); } catch (_) { /* останется пустая запись */ } }
-            throw new Error(error.message || tr('Не удалось добавить услуги.'));
+            // SLOT_BUSY_LINES_V1 — строку к врачу на занятое время сервер отвергает кодом slot_taken
+            // (время заняли между проверкой и строкой): слова — шаблоном на языке экрана.
+            throw new Error(error.code === 'slot_taken' ? bookErrorText(error) : (error.message || tr('Не удалось добавить услуги.')));
         }
         forgetSlots();
         if (!((data && data.added) || []).length) {
@@ -536,21 +547,28 @@ export async function renderBookingDay(host, ctx = {}, deps = {}) {
         const [pts, lines] = await Promise.all([
             pids.length ? supabase.from('patients').select('id, mrn').in('id', pids).then((r) => r, () => ({ data: [] })) : { data: [] },
             vids.length ? supabase.from('visit_services')
-                .select('visit_id, status, services(name), consultation_types(name)')
+                .select('id, visit_id, status, services(name), consultation_types(name)')   // id — SLOT_BUSY_LINES_V1
                 .in('visit_id', vids).then((r) => r, () => ({ data: [] })) : { data: [] },
         ]);
         if (token !== reqToken) return;   // день уже сменили
         for (const p of (pts && pts.data) || []) if (p && p.mrn) state.mrn.set(String(p.id), p.mrn);
         const byVisit = new Map();
+        const byLine = new Map();   // SLOT_BUSY_LINES_V1 — id строки → название услуги
         for (const l of (lines && lines.data) || []) {
             if (!l || ['cancelled', 'removed', 'refunded'].includes(String(l.status || ''))) continue;
             const name = (l.services && l.services.name) || (l.consultation_types && l.consultation_types.name) || '';
             if (!name) continue;
+            if (l.id != null) byLine.set(String(l.id), name);
             const k = String(l.visit_id);
             if (!byVisit.has(k)) byVisit.set(k, []);
             if (!byVisit.get(k).includes(name)) byVisit.get(k).push(name);
         }
         for (const [k, v] of byVisit) state.svc.set(k, v);
+        for (const b of busy) {
+            if (!Array.isArray(b.visit_service_ids) || !b.visit_service_ids.length) continue;
+            const names = [...new Set(b.visit_service_ids.map((id) => byLine.get(String(id))).filter(Boolean))];
+            if (names.length) state.svc.set(lineKey(b.visit_service_ids), names);
+        }
         paintBody();
     }
 
