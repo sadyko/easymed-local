@@ -5,12 +5,16 @@
 // окно визита. Ревью (проба P3): пришедший пациент, счёт оплачен 100 000 —
 // визит стал «Отменён», счёт остался «Оплачен». Что утверждается здесь:
 //   1. отказывает САМ сервер (409, код cancel_refused, слова для экрана), визит
-//      и счёт не меняются, если: пациент пришёл; строка ушла дальше сметы
-//      (очередь, работа, результат); по счёту есть оплата; счёт в долг;
-//      выставлен неоплаченный счёт (сначала его отменяет касса);
-//   2. отменяется по-прежнему запись до прихода без денег и работы — со строкой
-//      в смете, с отменённым или возвращённым счётом; повторная отмена отменённой
-//      записи — не ошибка.
+//      и счёт не меняются, если: строка ушла дальше сметы (очередь, работа,
+//      результат); по счёту есть оплата; счёт в долг; выставлен неоплаченный
+//      счёт (сначала его отменяет касса);
+//   2. отменяется по-прежнему запись без денег и работы — со строкой в смете, с
+//      отменённым или возвращённым счётом; повторная отмена отменённой записи —
+//      не ошибка;
+//   3. RELEASE_SELECT_V1 (ревью, решение владельца) — «пациент пришёл» отказом
+//      больше не служит: пришёл и ушёл (все строки в смете или отменены, денег и
+//      долга нет) — визит отменяется; пришёл, а работа, деньги, долг или счёт есть —
+//      отказ по ним, как у записи до прихода.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
@@ -59,7 +63,7 @@ test('BOOKING_CANCEL_GUARD_V1: проба P3 — пришёл и оплатил 
   const env = fresh();
   const x = visit(env, { status: 'arrived' });
   const inv = invoice(env, x, { paid: 100000, status: 'paid', pay: 100000 });
-  await refused(env, x, /уже пришёл|оплат/);
+  await refused(env, x, /есть оплата/);   // RELEASE_SELECT_V1 (ревью) — отказ по деньгам, а не по приходу
   assert.equal(statusOf(env.db, x.v), 'arrived');
   assert.deepEqual(env.db.prepare('SELECT status, paid_amount FROM invoices WHERE id = ?').get(inv), { status: 'paid', paid_amount: 100000 });
 });
@@ -84,12 +88,38 @@ test('BOOKING_CANCEL_GUARD_V1: выставлен неоплаченный сч�
   await refused(env, x, /отмените счёт в кассе/);
 });
 
-test('BOOKING_CANCEL_GUARD_V1: пришёл; строка в очереди, в работе или выполнена — отказ', async () => {
+test('BOOKING_CANCEL_GUARD_V1: строка в очереди, в работе или выполнена — отказ', async () => {
   const env = fresh();
-  await refused(env, visit(env, { status: 'arrived' }), /уже пришёл/);
   for (const st of ['queued', 'collected', 'in_progress', 'resulted', 'completed']) {
     await refused(env, visit(env, { line: st }), /идёт работа/);
   }
+});
+
+// RELEASE_SELECT_V1 (ревью, решение владельца) — пациент пришёл и ушёл, ничего не сделано,
+// денег и долга нет: визит отменяется. Остальные отказы — те же и у пришедшего.
+test('BOOKING_CANCEL_GUARD_V1 (ревью): пришёл и ушёл без работы, денег и долга — отменяется; с работой, деньгами, долгом, счётом — отказ', async () => {
+  const env = fresh();
+  const left = visit(env, { status: 'arrived' });
+  assert.equal((await cancel(env.db, left)).visit.status, 'cancelled', 'строка в смете — не работа');
+  const bare = visit(env, { status: 'arrived', line: null });
+  assert.equal((await cancel(env.db, bare)).visit.status, 'cancelled', 'пришёл, строк нет');
+  const dropped = visit(env, { status: 'arrived', line: 'cancelled' });
+  assert.equal((await cancel(env.db, dropped)).visit.status, 'cancelled', 'отменённая строка — не работа');
+  const voided = visit(env, { status: 'arrived' });
+  invoice(env, voided, { status: 'void' });
+  assert.equal((await cancel(env.db, voided)).visit.status, 'cancelled', 'отменённый кассой счёт отмену не держит');
+  for (const st of ['queued', 'collected', 'in_progress', 'completed']) {
+    await refused(env, visit(env, { status: 'arrived', line: st }), /идёт работа/);
+  }
+  const paid = visit(env, { status: 'arrived' });
+  invoice(env, paid, { paid: 40000, status: 'partial', pay: 40000 });
+  await refused(env, paid, /есть оплата/);
+  const debt = visit(env, { status: 'arrived' });
+  invoice(env, debt, { status: 'debt' });
+  await refused(env, debt, /в долг/);
+  const billed = visit(env, { status: 'arrived' });
+  invoice(env, billed, { status: 'unpaid' });
+  await refused(env, billed, /отмените счёт в кассе/);
 });
 
 test('BOOKING_CANCEL_GUARD_V1: запись до прихода без денег и работы отменяется, как раньше', async () => {

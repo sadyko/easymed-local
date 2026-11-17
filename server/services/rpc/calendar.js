@@ -1160,9 +1160,8 @@ export async function extendBookingForJoin(db, user, visit, requested = [], deps
 // Той же дверью отменяют календарь «Записи» и окно визита, поэтому правило
 // живёт здесь, а не в экране.
 //
-// Отменить можно только ЗАПИСЬ: до прихода, без работы и без денег. Отказ — 409,
-// код cancel_refused (params.reason), слова для экрана — если
-//   • пациент пришёл (visits.status 'arrived');
+// Отменить можно только визит без работы и без денег. Отказ — 409, код
+// cancel_refused (params.reason), слова для экрана — если
 //   • строка визита ушла дальше сметы — в очереди, в работе, выполнена — или это
 //     выданный товар; отменённая строка работой не считается;
 //   • по счёту визита есть оплата (в т. ч. частичная) — сначала возврат в кассе;
@@ -1172,11 +1171,12 @@ export async function extendBookingForJoin(db, user, visit, requested = [], deps
 //     Иначе визит «Отменён», а живой счёт висел бы в кассе к оплате.
 // Отменённый кассой или полностью возвращённый счёт (void / refunded без денег)
 // отмену не держит. Как хранятся прежние отмены — не меняется.
+// RELEASE_SELECT_V1 (ревью, решение владельца) — отказа «пациент пришёл» больше
+// нет: пациент пришёл и ушёл, ничего не сделано (все строки в смете или
+// отменены), денег и долга нет — визит отменяется. Пришёл, а работа, деньги,
+// долг или живой счёт есть — отказ по ним, как у записи до прихода.
 const CANCEL_FREE_LINE = ['added', 'cancelled'];
 function cancelRefusal(db, visit) {
-  if (visit.status === 'arrived') {
-    return new RpcError('Пациент уже пришёл — эту запись отменить нельзя.', 409, 'cancel_refused', { reason: 'arrived' });
-  }
   const worked = db.prepare(`SELECT 1 FROM visit_services
       WHERE visit_id = ? AND (status NOT IN (${CANCEL_FREE_LINE.map(() => '?').join(',')}) OR clinic_item_id IS NOT NULL)
       LIMIT 1`).get(visit.id, ...CANCEL_FREE_LINE);
