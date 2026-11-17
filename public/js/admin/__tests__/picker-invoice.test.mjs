@@ -279,13 +279,89 @@ test('окно визита: оплата — record_payment, долг — mark_
     const pay = DB.prepare('SELECT * FROM payments WHERE invoice_id = ?').get(inv.id);
     assert.equal(pay.method, 'card');
     assert.ok(pay.shift_id, 'платёж обязан лечь в смену кассира');
-    assert.equal(DB.prepare("SELECT status FROM visit_services WHERE id = 101").get().status, 'queued', 'услуга не отпущена в очередь');
+    // RELEASE_SELECT_V1 — частичная оплата без выбора кассира в работу не отпускает.
+    assert.equal(DB.prepare("SELECT status FROM visit_services WHERE id = 101").get().status, 'added', 'частичная без отметки отпустила услугу');
 
-    await VM.markAsDebt(vmState(), row, () => {});
+    // Окно долга (openDebtDialog) отдаёт отмеченное — в работу уходит только оно.
+    await VM.markAsDebt(vmState(), row, () => {}, [101]);
     row = DB.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
     assert.equal(row.status, 'debt');
     assert.ok(RPC.some((r) => r.name === 'record_payment') && RPC.some((r) => r.name === 'mark_invoice_debt'));
+    assert.deepEqual(RPC.find((r) => r.name === 'mark_invoice_debt').body.release_line_ids, [101]);
+    assert.equal(DB.prepare("SELECT status FROM visit_services WHERE id = 101").get().status, 'queued', 'отмеченная услуга не отпущена в очередь');
     assert.ok(!DBWRITES.some((t) => ['invoices', 'invoice_items', 'payments'].includes(t)), 'клиентская запись в деньги: ' + DBWRITES.join(','));
+  } finally {
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+  }
+});
+
+// RELEASE_SELECT_V1 (3.25.0) — окно визита берёт часть денег и оставляет долг по
+// тому же правилу, что касса: «Что можно оказать сейчас», ничего не отмечено, в
+// работу — только отмеченное. Окна — настоящие, сервер — настоящий (реестр RPC).
+const vmWalk = (e, o = []) => { if (!e || typeof e !== 'object') return o; o.push(e); for (const c of e.children || []) vmWalk(c, o); return o; };
+const vmText = (e) => vmWalk(e).map((x) => x._t || '').join(' ');
+const vmTick = (ms = 40) => new Promise((r) => setTimeout(r, ms));
+// Окно — по своей отметке: после «Сформировать счёт» окно визита может открыть ещё одно (печать).
+const vmOverlay = (attr) => document.body.children.find((c) => vmWalk(c).some((e) => e.attrs && attr in e.attrs));
+const vmBox = (ov, id) => vmWalk(ov).find((e) => e.tagName === 'INPUT' && e.getAttribute('data-release-line') === String(id));
+const vmClick = (el) => el.dispatchEvent({ type: 'click', currentTarget: el, target: el, preventDefault() {}, stopPropagation() {} });
+
+test('RELEASE_SELECT_V1: окно визита — «Mark as debt» спрашивает, что оказать сейчас; в работу только отмеченное', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101, 102]), () => {});
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  try {
+    RPC.length = 0;
+    document.body.children.length = 0;
+    VM.__test_openDebtDialog(vmState(), inv, () => {});
+    await vmTick();
+    const ov = vmOverlay('data-visit-debt');
+    assert.match(vmText(ov), /Что можно оказать сейчас/);
+    assert.ok(RPC.some((r) => r.name === 'invoice_release_lines'), 'строки счёта спрошены у сервера');
+    for (const id of [101, 102]) assert.ok(vmBox(ov, id), 'нет галочки строки ' + id);
+    assert.equal(vmBox(ov, 101).checked, false, 'по умолчанию ничего не отмечено');
+    const cb = vmBox(ov, 102);
+    cb.checked = true; cb.dispatchEvent({ type: 'change' });
+    vmClick(vmWalk(ov).find((e) => e.tagName === 'BUTTON' && e.getAttribute('data-visit-debt-confirm') !== null));
+    await vmTick(60);
+    assert.equal(DB.prepare('SELECT status FROM invoices WHERE id = ?').get(inv.id).status, 'debt');
+    assert.deepEqual(RPC.find((r) => r.name === 'mark_invoice_debt').body.release_line_ids, [102]);
+    const st = (id) => DB.prepare('SELECT status FROM visit_services WHERE id = ?').get(id).status;
+    assert.deepEqual([st(101), st(102)], ['added', 'queued'], 'отпущена только отмеченная строка');
+    const log = DB.prepare("SELECT actor_user_id, notes FROM invoice_audit_log WHERE invoice_id = ? AND action = 'release_unpaid'").all(inv.id);
+    assert.equal(log.length, 1, 'выбор кассира записан в журнал счёта');
+    assert.match(log[0].notes, /^Долг — в работу до полной оплаты: «Анализ крови»/);
+  } finally {
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+  }
+});
+
+test('RELEASE_SELECT_V1: окно визита — «Partial payment…»: вся сумма — без списка; меньше — список, уходит отмеченное', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101, 102]), () => {});
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  try {
+    RPC.length = 0;
+    document.body.children.length = 0;
+    VM.__test_openPartialPaymentDialog(vmState(), inv, () => {});
+    await vmTick();
+    const ov = vmOverlay('data-release-select');
+    const block = vmWalk(ov).find((e) => e.attrs && 'data-release-select' in e.attrs);
+    assert.equal(block.style.display, 'none', 'вся сумма — блока нет');
+    const amount = vmWalk(ov).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
+    amount.value = '500000'; amount.dispatchEvent({ type: 'input' });
+    assert.equal(block.style.display, '', 'меньше остатка — блок виден');
+    const cb = vmBox(ov, 101);
+    cb.checked = true; cb.dispatchEvent({ type: 'change' });
+    vmClick(vmWalk(ov).find((e) => e.tagName === 'BUTTON' && e.className === 'btn btn-primary'));   // «Confirm payment» (подпись переводится)
+    await vmTick(60);
+    const pay = RPC.find((r) => r.name === 'record_payment');
+    assert.equal(pay.body.amount, 500000);
+    assert.deepEqual(pay.body.release_line_ids, [101]);
+    const st = (id) => DB.prepare('SELECT status FROM visit_services WHERE id = ?').get(id).status;
+    assert.deepEqual([st(101), st(102)], ['queued', 'added']);
   } finally {
     USER = { id: 1, role: 'registrar', extra_roles: [] };
   }

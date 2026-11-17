@@ -462,3 +462,138 @@ test('авто-закрытая смена (auto_closed = 1, over_short = NULL) 
     const red = walk(row).filter((e) => e.style && e.style.color === 'var(--crit-600)');
     assert.equal(red.length, 0, 'NULL не рисуется красным');
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RELEASE_SELECT_V1 (3.25.0) — «Что можно оказать сейчас» в окне оплаты кассы.
+// ═══════════════════════════════════════════════════════════════════════════
+const REL_LINES = [{ id: 501, name: 'Консультация терапевта', total: 100000 }, { id: 502, name: 'Общий анализ крови', total: 40000 }];
+const REL_INV = { ...INV, subtotal: 140000, discount_amount: 0, total_amount: 140000 };
+const relBlock = (ov) => walk(ov).find((e) => e.attrs && 'data-release-select' in e.attrs);
+const relBox = (ov, id) => walk(ov).find((e) => e.tagName === 'INPUT' && e.getAttribute('data-release-line') === String(id));
+const amountInput = (ov) => walk(ov).find((e) => e.tagName === 'INPUT' && e.getAttribute('placeholder') === 'Сумма');
+const typeAmount = (ov, v) => { const a = amountInput(ov); a.value = v; a.fire('input'); };
+async function openRelease(answers = {}) {
+    calls.length = 0;
+    tables = { invoice_items: ITEMS, visit_services: [], payment_providers: [], patient_discounts: [] };
+    rpcAnswers = { deposit_balance: { balance: 0, debt: 0 }, invoice_release_lines: { invoice_id: 1, lines: REL_LINES }, ...answers };
+    desk.__test_payModal(mkEl('div'), REL_INV, 140000);
+    await tick();
+    return lastOverlay();
+}
+
+test('RELEASE_SELECT_V1: полная сумма — списка нет и аргумента нет; меньше — список без отметок', async () => {
+    const ov = await openRelease({ record_payment: { ok: true } });
+    assert.ok(calls.some((c) => c[0] === 'invoice_release_lines' && c[1].invoice_id === 1), 'неотпущенные строки спрошены у сервера');
+    const block = relBlock(ov);
+    assert.ok(block, 'блок «Что можно оказать сейчас» есть в окне');
+    assert.equal(block.style.display, 'none', 'полная сумма — блока не видно');
+    typeAmount(ov, '100 000');
+    assert.equal(block.style.display, '', 'частичная сумма — блок виден');
+    assert.match(textOf(block), /Что можно оказать сейчас/);
+    assert.match(textOf(block), /Консультация терапевта/);
+    assert.match(textOf(block), /Общий анализ крови/);
+    for (const id of [501, 502]) assert.ok(!('checked' in relBox(ov, id).attrs), 'по умолчанию ничего не отмечено');
+    // Подписи галочек: каждая галочка — внутри <label> со своим названием (щелчок и чтение с экрана).
+    const group = walk(block).find((e) => e.attrs && e.attrs.role === 'group');
+    assert.ok(group && group.attrs['aria-labelledby'], 'группа галочек названа заголовком');
+    typeAmount(ov, '140 000');
+    assert.equal(block.style.display, 'none', 'снова полная сумма — блок спрятан');
+    buttonByText(ov, 'Принять оплату').click();
+    await tick(60);
+    const pay = calls.find((c) => c[0] === 'record_payment');
+    assert.ok(pay, 'оплата ушла');
+    assert.ok(!('release_line_ids' in pay[1]), 'полная оплата отпускает всё сама — список не нужен');
+});
+
+test('RELEASE_SELECT_V1: частичная — уходят только отмеченные; сумма отмеченного рядом с внесённым', async () => {
+    const ov = await openRelease({ record_payment: { ok: true } });
+    typeAmount(ov, '100 000');
+    const cb = relBox(ov, 501);
+    cb.checked = true; cb.fire('change');
+    const sum = walk(ov).find((e) => e.attrs && 'data-release-sum' in e.attrs);
+    assert.match(textOf(sum), /Отмечено услуг на 100 000 сум/);
+    buttonByText(ov, 'Принять оплату').click();
+    await tick(60);
+    const pay = calls.find((c) => c[0] === 'record_payment');
+    assert.equal(pay[1].amount, 100000);
+    assert.deepEqual(pay[1].release_line_ids, [501]);
+});
+
+test('RELEASE_SELECT_V1: частичная без отметок — уходит пустой список (сервер не отпустит ничего)', async () => {
+    const ov = await openRelease({ record_payment: { ok: true } });
+    typeAmount(ov, '50 000');
+    buttonByText(ov, 'Принять оплату').click();
+    await tick(60);
+    assert.deepEqual(calls.find((c) => c[0] === 'record_payment')[1].release_line_ids, []);
+});
+
+test('RELEASE_SELECT_V1: разделённая частичная оплата несёт тот же выбор', async () => {
+    const ov = await openRelease({ record_payment_split: { ok: true } });
+    typeAmount(ov, '60 000');
+    buttonByText(ov, '+ Разделить оплату (второй способ)').click();
+    await tick();
+    const inputs = walk(ov).filter((e) => e.tagName === 'INPUT' && e.getAttribute('placeholder') === 'Сумма');
+    inputs[1].value = '20 000'; inputs[1].fire('input');
+    const cb = relBox(ov, 502);
+    cb.checked = true; cb.fire('change');
+    buttonByText(ov, 'Принять оплату').click();
+    await tick(60);
+    const split = calls.find((c) => c[0] === 'record_payment_split');
+    assert.ok(split, 'ушла оплата частями');
+    assert.deepEqual(split[1].tenders.map((t) => t.amount), [60000, 20000]);
+    assert.deepEqual(split[1].release_line_ids, [502]);
+});
+
+test('RELEASE_SELECT_V1: «Оставить как долг» с частью денег — отмеченное несёт оплата части (одна транзакция), долг — пустой список', async () => {
+    const ov = await openRelease({ record_payment: { ok: true }, mark_invoice_debt: { invoice: { id: 1, status: 'debt' } } });
+    typeAmount(ov, '30 000');
+    const cb = relBox(ov, 502);
+    cb.checked = true; cb.fire('change');
+    buttonByText(ov, 'Оставить как долг').click();
+    await tick(60);
+    const pay = calls.find((c) => c[0] === 'record_payment');
+    const debt = calls.find((c) => c[0] === 'mark_invoice_debt');
+    assert.deepEqual(pay[1].release_line_ids, [502], 'отмеченное уходит с оплатой части: отказ по отметке не запишет и денег');
+    assert.deepEqual(debt[1].release_line_ids, [], 'долг второй раз ничего не отпускает');
+});
+
+test('RELEASE_SELECT_V1: долг без денег и без отметок — пустой список', async () => {
+    const ov = await openRelease({ mark_invoice_debt: { invoice: { id: 1, status: 'debt' } } });
+    typeAmount(ov, '');
+    assert.equal(relBlock(ov).style.display, '', 'сумма 0 — блок виден');
+    buttonByText(ov, 'Оставить как долг').click();
+    await tick(60);
+    assert.ok(!calls.some((c) => c[0] === 'record_payment'));
+    assert.deepEqual(calls.find((c) => c[0] === 'mark_invoice_debt')[1].release_line_ids, []);
+});
+
+test('RELEASE_SELECT_V1: строки не загрузились — окно говорит об этом, в работу не уходит ничего', async () => {
+    const ov = await openRelease({ record_payment: { ok: true }, invoice_release_lines: () => { throw new Error('сеть'); } });
+    typeAmount(ov, '10 000');
+    assert.match(textOf(relBlock(ov)), /Не удалось загрузить услуги счёта/);
+    buttonByText(ov, 'Принять оплату').click();
+    await tick(60);
+    assert.deepEqual(calls.find((c) => c[0] === 'record_payment')[1].release_line_ids, []);
+});
+
+test('RELEASE_SELECT_V1: слова блока — на трёх языках, узбекский и английский без кириллицы', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const k of ['Что можно оказать сейчас', 'Отметьте услуги, которые пациент получит сейчас. Неотмеченные ждут оплаты: в лабораторию и к врачу они не попадут.',
+        'Отмечено услуг на {sum} сум', 'Не удалось загрузить услуги счёта — ни одна не будет передана в работу.', 'Все услуги этого счёта уже переданы в работу.',
+        'Загрузка услуг счёта…']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru === k && e.uz && e.en, 'нет статьи словаря: ' + k);
+        assert.ok(!/[А-Яа-яЁё]/.test(e.uz + e.en), 'кириллица в uz/en: ' + k);
+    }
+});
+
+test('RELEASE_SELECT_V1: долг без денег с отмеченной услугой — отмеченное несёт сам долг', async () => {
+    const ov = await openRelease({ mark_invoice_debt: { invoice: { id: 1, status: 'debt' } } });
+    typeAmount(ov, '');
+    const cb = relBox(ov, 501);
+    cb.checked = true; cb.fire('change');
+    buttonByText(ov, 'Оставить как долг').click();
+    await tick(60);
+    assert.ok(!calls.some((c) => c[0] === 'record_payment'), 'денег нет — оплаты нет');
+    assert.deepEqual(calls.find((c) => c[0] === 'mark_invoice_debt')[1].release_line_ids, [501]);
+});

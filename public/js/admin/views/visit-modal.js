@@ -24,6 +24,7 @@ import { actorShownName } from '../act-as-client.js';   // ADMIN_ACT_AS_V1 — �
 import { printableSheet } from './doc-settings.js?v=noqr1';   // must match every other importer (one module instance)
 import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX — счёт визита той же сборкой, что у кассы
 import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
+import { releaseSelect, releaseChoiceNeeded } from '../release-select.js';   // RELEASE_SELECT_V1 — «Что можно оказать сейчас» при части и долге
 // VISITS_ONE_DOOR_V1 — окно визита правило двойной записи не знало вовсе:
 // «Сохранить» писало visit_date прямым UPDATE, а кнопки статуса — status.
 // Переезд на другой день и возврат отменённой записи в «записан» проходили
@@ -1560,19 +1561,23 @@ function paymentControls(state, inv, onReload) {
                 class: 'btn btn-outline', onclick: () => openPartialPaymentDialog(state, inv, onReload),
             }, Icon('Wallet', { size: 14 }), ' Partial payment…'),
             h('button', {
-                class: 'btn btn-warning', onclick: () => markAsDebt(state, inv, onReload),
+                class: 'btn btn-warning', onclick: () => openDebtDialog(state, inv, onReload),   // RELEASE_SELECT_V1 — сначала «Что можно оказать сейчас»
             }, Icon('Warning', { size: 14 }), ' Mark as debt'),
         ),
     );
 }
 
 // Full or partial payment: insert payments row, recompute paid_amount + status.
-export async function takePayment(state, inv, amount, finalStatus, onReload, method = 'cash') {
+// RELEASE_SELECT_V1 — releaseIds: что кассир отметил в «Что можно оказать сейчас»
+// при частичной оплате (массив, может быть пустым); null — аргумента нет (полная
+// оплата отпускает всё сама; частичная без него не отпускает ничего).
+export async function takePayment(state, inv, amount, finalStatus, onReload, method = 'cash', releaseIds = null) {
     if (!amount || amount <= 0) { toast('Amount must be > 0.', 'fail'); return; }
     // RPC_PORT_V1 (ревью C1) — оплату проводит сервер: record_payment пишет
     // платёж в смену кассира, пересчитывает счёт и отпускает услуги в очередь.
     // Прямые вставки в payments и правка invoices отвергались реестром у всех.
-    const { data: payRes, error: payErr } = await supabase.rpc('record_payment', { invoice_id: inv.id, amount, method });
+    const { data: payRes, error: payErr } = await supabase.rpc('record_payment', { invoice_id: inv.id, amount, method,
+        ...(Array.isArray(releaseIds) ? { release_line_ids: releaseIds } : {}) });   // RELEASE_SELECT_V1
     if (payErr) { toast(invoiceMoneyErrorText(payErr), 'fail'); return; }
     const status = (payRes && payRes.invoice && payRes.invoice.status) || finalStatus || 'partial';
     await logInvoiceAction(state, inv, {
@@ -1599,11 +1604,14 @@ export async function takePayment(state, inv, amount, finalStatus, onReload, met
 // "Mark as debt" — invoice stays open at its current paid_amount; status becomes
 // 'partial' if anything's paid, else 'unpaid'. This makes the outstanding sum a
 // debt against the patient until they come back to pay.
-export async function markAsDebt(state, inv, onReload) {
+// RELEASE_SELECT_V1 — releaseIds: отмеченные в «Что можно оказать сейчас» (окно долга
+// openDebtDialog); без них сервер в работу не отпускает ничего.
+export async function markAsDebt(state, inv, onReload, releaseIds = null) {
     const paid = Number(inv.paid_amount || 0);
     // RPC_PORT_V1 (ревью C1) — долг оформляет сервер (mark_invoice_debt: статус
-    // 'debt' и услуги в очередь). Прямая правка invoices отвергалась у всех.
-    const { data: debtRes, error } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id });
+    // 'debt' и отмеченные услуги в очередь). Прямая правка invoices отвергалась у всех.
+    const { data: debtRes, error } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id,
+        ...(Array.isArray(releaseIds) ? { release_line_ids: releaseIds } : {}) });   // RELEASE_SELECT_V1
     if (error) { toast(invoiceMoneyErrorText(error), 'fail'); return; }
     const status = (debtRes && debtRes.invoice && debtRes.invoice.status) || 'debt';
     await logInvoiceAction(state, inv, {
@@ -1634,6 +1642,11 @@ function openPartialPaymentDialog(state, inv, onReload) {
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => overlay.remove() }));
     const amountInput = h('input', { type: 'number', step: '0.01', min: '0', max: String(owed), value: String(owed), class: 'num',
         style: { width: '100%', height: '38px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '15px' } });
+    // RELEASE_SELECT_V1 — «Что можно оказать сейчас»: вносят меньше остатка — кассир
+    // отмечает, что пациент получит сейчас (по умолчанию ничего); вся сумма — блока нет.
+    const rel = releaseSelect();
+    rel.load(inv.id);
+    amountInput.addEventListener('input', () => rel.setVisible(releaseChoiceNeeded(owed, Number(amountInput.value) || 0)));
     const card = h('div', { class: 'modal-card', style: { width: '420px' } },
         h('header', { class: 'modal-head' },
             h('h2', null, Icon('Wallet', { size: 16 }), ' Take payment'),
@@ -1653,6 +1666,8 @@ function openPartialPaymentDialog(state, inv, onReload) {
             h('div', { class: 'field' },
                 h('label', null, 'Payment method'),
                 paymentMethodSelect(pmDlg)),
+            rel.el,      // RELEASE_SELECT_V1 — виден, когда вносят меньше остатка
+            rel.sumEl,
         ),
         h('footer', { class: 'modal-foot' },
             h('button', { class: 'btn', onclick: () => overlay.remove() }, 'Cancel'),
@@ -1662,7 +1677,9 @@ function openPartialPaymentDialog(state, inv, onReload) {
                     const amt = Number(amountInput.value);
                     if (!amt || amt <= 0 || amt > owed) { toast(trf('Сумма должна быть больше 0 и не больше {max}', { max: owed.toLocaleString('ru-RU') }), 'fail'); return; }
                     // If it covers the whole debt, mark paid. Otherwise partial.
-                    await takePayment(state, inv, amt, amt >= owed ? 'paid' : 'partial', onReload, pmDlg.method);
+                    // RELEASE_SELECT_V1 — частичная: в работу только отмеченное (список уходит всегда).
+                    await takePayment(state, inv, amt, amt >= owed ? 'paid' : 'partial', onReload, pmDlg.method,
+                        releaseChoiceNeeded(owed, amt) ? rel.ids() : null);
                     overlay.remove();
                 } finally { ev.target.disabled = false; }
             } }, Icon('Check', { size: 14 }), ' Confirm payment'),
@@ -1672,6 +1689,48 @@ function openPartialPaymentDialog(state, inv, onReload) {
     document.body.appendChild(overlay);
     setTimeout(() => amountInput.focus(), 30);
 }
+
+// RELEASE_SELECT_V1 (3.25.0, решение владельца) — «Mark as debt» больше не отпускает
+// в работу весь счёт: сначала окно «Что можно оказать сейчас» (ничего не отмечено),
+// и в работу уходят только отмеченные услуги. Неотмеченные ждут оплаты: в
+// лабораторию и к врачу они не попадают. То же правило, что у кассы (cashier-desk.js).
+function openDebtDialog(state, inv, onReload) {
+    const owed = Number(inv.total_amount || 0) - Number(inv.paid_amount || 0);
+    const overlay = h('div', { class: 'modal', style: { zIndex: '140' } });
+    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => overlay.remove() }));
+    const rel = releaseSelect();
+    rel.load(inv.id);
+    rel.setVisible(true);
+    const card = h('div', { class: 'modal-card', role: 'dialog', 'aria-modal': 'true', 'data-visit-debt': String(inv.id), style: { width: '420px' } },
+        h('header', { class: 'modal-head' },
+            h('h2', null, Icon('Warning', { size: 16 }), ' ', tr('Оставить как долг')),
+            h('button', { class: 'modal-close', onclick: () => overlay.remove() }, '×'),
+        ),
+        h('div', { class: 'modal-body' },
+            h('div', { style: { padding: '10px 12px', background: 'var(--ink-25)', borderRadius: '8px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, 'Outstanding'),
+                h('div', { class: 'num', style: { fontSize: '20px', fontWeight: 700, color: 'var(--crit-700)' } }, owed.toLocaleString('ru-RU') + ' UZS'),
+            ),
+            rel.el,
+            rel.sumEl,
+        ),
+        h('footer', { class: 'modal-foot' },
+            h('button', { class: 'btn', type: 'button', onclick: () => overlay.remove() }, 'Cancel'),
+            h('button', { class: 'btn btn-warning', type: 'button', 'data-visit-debt-confirm': '', onclick: async (ev) => {
+                const btn = ev.currentTarget;
+                btn.disabled = true;
+                try {
+                    await markAsDebt(state, inv, onReload, rel.ids());
+                    overlay.remove();
+                } finally { btn.disabled = false; }
+            } }, Icon('Warning', { size: 14 }), ' ', tr('Оставить как долг')),
+        ),
+    );
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+}
+export const __test_openDebtDialog = openDebtDialog;   // RELEASE_SELECT_V1
+export const __test_openPartialPaymentDialog = openPartialPaymentDialog;   // RELEASE_SELECT_V1
 
 // ---------------------------------------------------------------------------
 // Field helpers
@@ -2088,6 +2147,8 @@ function logActionTag(action) {
         refund_line: { kind: 'crit', text: REFUNDED_LINE_MARK },
         // DISCOUNT_CHANGE_PAID_V1 — «Изменить скидку» после оплаты: словами экрана, а не кодом.
         discount_change: { kind: 'warn', text: 'Изменение скидки' },
+        // RELEASE_SELECT_V1 — кассир отпустил услуги в работу до полной оплаты (какие — в «Detail»).
+        release_unpaid: { kind: 'warn', text: tr('Отпущено в работу до оплаты') },
     };
     const m = map[action] || { kind: 'muted', text: action };
     return h('span', { class: 'tag tag-' + m.kind }, m.text);

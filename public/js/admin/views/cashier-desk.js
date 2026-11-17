@@ -36,6 +36,7 @@ import { canCloseOtherShifts, canSwapPaidLines } from '../permissions.js';
 import { canCashierDiscount, canChangePaidDiscount } from '../permissions.js';   // CASHIER_DISCOUNT_V1 — «Кассир может давать скидку»; DISCOUNT_CHANGE_PAID_V1 — и денежная роль   // REFUND_SWAP_V1 — canSwapPaidLines: право строк и денежная роль; CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 import { watchScreen } from '../live.js';   // LIVE_REFRESH_V1 — касса обновляется сама (без ?v=: один клиент потока на вкладку)
 import { tierChipNodes, loadLineTiers } from './tier-chip.js';   // VISIT_TIER_SHOWN_CASHIER_V1 — «Второй визит» / «Повторный визит» у строк кассы
+import { releaseSelect, releaseChoiceNeeded } from '../release-select.js';   // RELEASE_SELECT_V1 — «Что можно оказать сейчас» при частичной оплате и долге
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
 // CARD_BALANCE_V1 — «Подарочная карта»: оплата остатком карты / сертификата.
@@ -2115,6 +2116,15 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
         });
 
     const bodyEl = h('div');
+    // RELEASE_SELECT_V1 (3.25.0, решение владельца) — «Что можно оказать сейчас».
+    // Внесено меньше, чем к оплате (частичная оплата), или «Оставить как долг» — в
+    // работу уходят только услуги, отмеченные здесь; по умолчанию не отмечено
+    // ничего. Полная сумма — блока не видно: полная оплата отпускает всё сама.
+    // Неотпущенные строки называет сервер (invoice_release_lines), он же проверит
+    // выбор (rpc/billing.js). Счёт плательщику сюда не приходит (его строки в
+    // работе с выставления).
+    const rel = releaseSelect();
+    if (!inv.payer_id) rel.load(inv.id);
     // DEBT_BTN_V1 / PAY_SUMMARY_V2 — итог оплаты. Раньше это были две строки
     // моноширинным шрифтом на сером фоне: подпись и сумма сливались, а «Счёт
     // закрывается полностью» читалось как ещё одна цифра. Теперь — сумма
@@ -2142,6 +2152,7 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
             h('span', { style: { flex: '1', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-600)' } }, 'Вносит пациент'),
             payAmountEl,
             h('span', { style: { fontSize: '12.5px', color: 'var(--ink-500)' } }, 'сум')),
+        rel.sumEl,   // RELEASE_SELECT_V1 — сумма отмеченных услуг рядом с внесённым (только сведения)
         statusEl);
 
     const styleBtn = (el, active) => {
@@ -2173,6 +2184,7 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
         statusIcoEl.appendChild(Icon(ico, { size: 15 }));
         statusTxtEl.textContent = text;
         statusAmtEl.textContent = amount;
+        rel.setVisible(left > 0 && !inv.payer_id);   // RELEASE_SELECT_V1 — только когда останется долг
     };
 
     const render = () => {
@@ -2274,6 +2286,7 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
         if (walletDebt > 0) bodyEl.appendChild(h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--crit-600)', margin: '4px 0' } },
             trf('Долг по кэшбэку: {sum} сум', { sum: fmtPrice(walletDebt) })));
         bodyEl.appendChild(hintEl);
+        bodyEl.appendChild(rel.el);   // RELEASE_SELECT_V1 — галочки «Что можно оказать сейчас» (виден, когда останется долг)
         refreshHint();
     };
 
@@ -2334,21 +2347,31 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
             if (walletSum() > walletBal + 0.001) { toast(trf('С баланса можно списать не больше {sum} сум.', { sum: fmtPrice(walletBal) }), 'fail'); return false; }
             const sum = parts.reduce((s2, x) => s2 + x.amount, 0);
             if (sum > balance + 0.001) { toast(trf('Сумма частей больше остатка ({sum} сум).', { sum: fmtPrice(balance) }), 'fail'); return false; }
+            // RELEASE_SELECT_V1 — часть суммы: в работу только отмеченное (список уходит
+            // всегда, может быть пустым — тогда не отпускается ничего). Полная — без списка.
+            const partial = releaseChoiceNeeded(balance, sum);
+            const chosen = partial ? rel.ids() : null;
+            const relArg = partial ? { release_line_ids: chosen } : {};
 
             const { error } = parts.length === 1
-                ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), idempotency_key: idem.key })
-                : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, idempotency_key: idem.key });
+                ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), ...relArg, idempotency_key: idem.key })
+                : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, ...relArg, idempotency_key: idem.key });
             if (error) { toast((error.message) || 'Не удалось принять оплату.', 'fail'); return false; }
             idem.next();
-            toast('Оплата принята', 'ok');
+            toast(!partial ? 'Оплата принята'
+                : chosen.length ? trf('Оплата принята — в работу переданы услуги: {n}.', { n: chosen.length })
+                    : tr('Оплата принята. Услуги в работу не переданы — они ждут полной оплаты.'), 'ok');
             printFiscalCheck(inv, parts, undefined, { subtitle: opts.checkSubtitle });   // CASH_CHECK_PRINT_V1 + V3120_FIX — строка на каждый способ (не блокирует)
             await after();   // REFUND_SWAP_V1 — по умолчанию paint(root)
             return true;
         },
         460,
         // DEBT_BTN_V1 — «Оставить как долг» рядом с «Отмена»: записать введённую
-        // часть (если есть), перевести счёт в долг, услуги отдать в работу —
-        // врач/лаборатория/процедуры видят их, не дожидаясь полной оплаты.
+        // часть (если есть), перевести счёт в долг.
+        // RELEASE_SELECT_V1 — в работу уходят только услуги, отмеченные в «Что можно
+        // оказать сейчас». Есть часть денег — отмеченное несёт она (отказ по
+        // отметкам не запишет и денег: одна транзакция), долг идёт с пустым списком;
+        // денег нет — отмеченное несёт долг. Одно решение — одна запись журнала.
         (close) => (closePay = close, h('button', {
             class: 'btn', type: 'button',
             style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-300, #fca5a5)', fontWeight: 700 },
@@ -2375,20 +2398,23 @@ function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 —
                 }
                 const sum = parts.reduce((s2, x) => s2 + x.amount, 0);
                 if (sum >= balance - 0.001) { toast('Введённая сумма покрывает счёт — нажмите «Принять оплату».', 'info'); return; }
+                const chosen = rel.ids();   // RELEASE_SELECT_V1
                 btn.disabled = true;
                 try {
                     if (parts.length) {
                         const { error } = parts.length === 1
-                            ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), idempotency_key: idem.key })
-                            : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, idempotency_key: idem.key });
+                            ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), release_line_ids: chosen, idempotency_key: idem.key })
+                            : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, release_line_ids: chosen, idempotency_key: idem.key });
                         if (error) throw new Error(error.message || 'Оплата не записана');
                         // V3120_FINAL (I1) — часть записана: следующая операция окна
                         // (остаток после упавшего долга) — уже другая, с новым ключом.
                         idem.next();
                     }
-                    const { error: dErr } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id });
+                    const { error: dErr } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id, release_line_ids: parts.length ? [] : chosen });
                     if (dErr) throw new Error(dErr.message || 'Не удалось оформить долг');
-                    toast(parts.length ? tr('Счёт оставлен как долг (частичная оплата записана) — услуги переданы в работу.') : tr('Счёт оставлен как долг — услуги переданы в работу.'), 'ok');
+                    toast(chosen.length
+                        ? trf(parts.length ? 'Счёт оставлен как долг (частичная оплата записана) — в работу переданы услуги: {n}.' : 'Счёт оставлен как долг — в работу переданы услуги: {n}.', { n: chosen.length })
+                        : tr(parts.length ? 'Счёт оставлен как долг (частичная оплата записана) — услуги ждут оплаты.' : 'Счёт оставлен как долг — услуги ждут оплаты.'), 'ok');
                     if (sum > 0) printFiscalCheck(inv, parts, undefined, { subtitle: opts.checkSubtitle });   // V3120_FIX — все способы, «Остаток» — долг
                     close();
                     await after();   // REFUND_SWAP_V1 — по умолчанию paint(root)
