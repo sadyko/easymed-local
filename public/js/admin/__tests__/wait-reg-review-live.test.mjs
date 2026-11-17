@@ -389,7 +389,8 @@ test('WAIT_REG_V1 (ревью, решение владельца): запись 
     assert.equal(b.status, 200, b.text);
     const vid = b.json.data.visit.id;
     const host = mk('div');
-    await renderRegistrarWaiting(host, {}, {});
+    // CRM_BOOKINGS_TAB_V1 — вкладка по умолчанию показывает записи CRM; запись календаря — при «Все».
+    await renderRegistrarWaiting(host, {}, { filter: { source: 'all' } });
     const row = walk(host).find((n) => n.attrs && n.attrs['data-rwait-row'] === '78');
     assert.ok(row, 'запись без услуги не во вкладке');
     assert.match(textOf(row), /услуга не выбрана/);

@@ -49,7 +49,7 @@ import { grantAllows, isRouteAllowed, hasActorRole, actorRoleCodes } from '../pe
 import { renderPatients } from './patients.js?v=regfit2';
 import { renderQueue } from './queue.js?v=q7';
 import { renderBookingDay } from './booking-day.js';   // BOOKING_DAY_V1 — «Бронирование»: день одного врача
-import { renderRegistrarWaiting, loadRegistrarWaiting, WAITING_ROLES } from './registrar-waiting.js';   // WAIT_REG_V1 — «Ждут регистрации»
+import { renderRegistrarWaiting, loadRegistrarWaiting, WAITING_ROLES, BADGE_ARGS } from './registrar-waiting.js';   // WAIT_REG_V1 — «Ждут регистрации»; CRM_BOOKINGS_TAB_V1 — «Записи CRM», счётчик по фильтру по умолчанию
 import { watchScreen, shownOnScreen } from '../live.js';   // WAIT_REG_V1 — счётчик вкладки свежий без «Обновить»; ревью M6 — спрятанный раздел не опрашивается
 // MOTION_REVEAL_V1 — переход между вкладками: панель проявляется, полоса
 // вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
@@ -67,7 +67,11 @@ const TABS = [
     // that were sent and patients for which we created a booking so registrators won't be
     // confused») — кого сегодня ждёт стойка: записи, анализы «на дату», направления врача
     // (views/registrar-waiting.js), со счётчиком на самой вкладке.
-    { id: 'waiting',  sub: 'waiting',  label: 'Ждут регистрации', icon: 'Bell' },
+    // CRM_BOOKINGS_TAB_V1 (2026-11-17, решение владельца с макета) — вкладка стала «Записи CRM»: список
+    // записей с фильтрами (день, источник, статус, врач, поиск). Адрес прежний — #patients/waiting
+    // (ссылки и закладки регистратуры живут), счётчик — сегодняшние записи CRM, которые ещё ждут
+    // (фильтр вкладки по умолчанию, BADGE_ARGS), а не то, что открыто в фильтрах сейчас.
+    { id: 'waiting',  sub: 'waiting',  label: 'Записи CRM', icon: 'Headset' },
 ];
 const SUB_TO_TAB = { list: 'list', queue: 'queue', calendar: 'calendar', booking: 'booking', waiting: 'waiting' };   // list: WAIT_REG_V1 (ревью) — у регистратуры «Список» не первый
 // WAIT_REG_V1 — вкладку видит стойка (администратор, регистратура): сервер отдаёт список только
@@ -108,7 +112,7 @@ function navHidden(id) {
 //   * всё через tr()/trf() и monthName() — на узбекском и английском баннер
 //     говорит на своём языке, а не по-русски.
 // ---------------------------------------------------------------------------
-const HERO_SUB = { list: 'База пациентов', queue: 'Очередь', calendar: 'Календарь записи', booking: 'Бронирование', waiting: 'Ждут регистрации' };
+const HERO_SUB = { list: 'База пациентов', queue: 'Очередь', calendar: 'Календарь записи', booking: 'Бронирование', waiting: 'Записи CRM' };   // CRM_BOOKINGS_TAB_V1
 
 // SECTION_HERO_V1 — баннер стал общим для клинических разделов
 // (views/section-hero.js); здесь только то, что знает «Пациенты»: подзаголовок
@@ -244,9 +248,9 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         const k = Math.max(0, Number(n) || 0);
         waitBadge.textContent = k > 0 ? String(k) : '';
         if (k > 0) waitBadge.removeAttribute('hidden'); else waitBadge.setAttribute('hidden', '');
-        // ревью L5 — имя вкладки для читалки — с числом: «Ждут регистрации: 3» (сам значок ей не читается).
+        // ревью L5 — имя вкладки для читалки — с числом: «Записи CRM: 3» (сам значок ей не читается).
         const b = buttons.waiting;
-        if (b) b.setAttribute('aria-label', k > 0 ? trf('Ждут регистрации: {n}', { n: k }) : tr('Ждут регистрации'));
+        if (b) b.setAttribute('aria-label', k > 0 ? trf('Записи CRM: {n}', { n: k }) : tr('Записи CRM'));   // CRM_BOOKINGS_TAB_V1
     }
     for (const t of visibleTabs) {
         hosts[t.id] = h('div', {
@@ -417,8 +421,8 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     async function refreshWaiting() {
         if (!hasWaiting) return;
         try {
-            if (waiting && active === 'waiting') { await waiting.reload(); return; }
-            const res = await loadRegistrarWaiting({ countOnly: true });
+            if (waiting && active === 'waiting') { await waiting.reload(); return; }   // вкладка назовёт число сама — по фильтру по умолчанию
+            const res = await loadRegistrarWaiting({ countOnly: true, args: BADGE_ARGS });   // CRM_BOOKINGS_TAB_V1 — сегодняшние записи CRM, которые ждут
             setWaitingCount(res.count);
         } catch (_) { /* число не узнали — вкладка покажет причину сама, когда её откроют */ }
     }

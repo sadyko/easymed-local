@@ -277,7 +277,8 @@ test('каждая вкладка показывает СВОЁ: список п
   // BOOKING_DAY_V1 — четвёртая вкладка «Бронирование»: день одного врача.
   // WAIT_REG_V1 — пятая, у стойки: «Ждут регистрации». Права здесь — полные (администратор): «Список»
   // первым; у регистратуры «Ждут регистрации» первой (ревью, тест ниже).
-  assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование', 'Ждут регистрации'], 'полоса вкладок не та');
+  // CRM_BOOKINGS_TAB_V1 — вкладка стойки называется «Записи CRM» (решение владельца).
+  assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование', 'Записи CRM'], 'полоса вкладок не та');
   assert.equal(hub.activeTab(), 'list', 'по умолчанию открывается не список');
   assert.equal(visiblePanels(box).length, 1, 'видна не ровно одна вкладка');
 
@@ -492,7 +493,7 @@ test('регистратура видит все три вкладки, и ка�
 
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-  assert.deepEqual(tabButtons(box).map(tabLabel), ['Ждут регистрации', 'Список', 'Очередь', 'Записи', 'Бронирование'],
+  assert.deepEqual(tabButtons(box).map(tabLabel), ['Записи CRM', 'Список', 'Очередь', 'Записи', 'Бронирование'],   // CRM_BOOKINGS_TAB_V1 — имя вкладки
     'регистратура недосчиталась вкладок');
   hub.destroy();
 
@@ -785,7 +786,7 @@ test('V3120_FIX: вкладки «Записи» и «Очередь» — то�
     ['cashier',   ['patients', 'queue'],        ['Список', 'Очередь']],
     ['lab',       ['patients', 'labs'],         ['Список']],
     // BOOKING_DAY_V1 — «Бронирование» видят те же, кому открыты «Записи».
-    ['registrar', ['patients', 'queue'],        ['Ждут регистрации', 'Список', 'Очередь', 'Записи', 'Бронирование']],   // WAIT_REG_V1 — вкладка стойки (ревью: у регистратуры — первой)
+    ['registrar', ['patients', 'queue'],        ['Записи CRM', 'Список', 'Очередь', 'Записи', 'Бронирование']],   // WAIT_REG_V1 — вкладка стойки (ревью: у регистратуры — первой); CRM_BOOKINGS_TAB_V1 — имя
     ['doctor',    ['patients'],                 ['Список', 'Записи', 'Бронирование']],
   ];
   try {
@@ -826,13 +827,13 @@ test('ROLE_QUEUE_V1: скрытая в «Видимости разделов» �
     setEffectiveFromRole({ name: 'registrar', permissions: { sections: ['patients', 'queue'], levels: {} } });
     let box = mk('div');
     let hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-    assert.deepEqual(tabButtons(box).map(tabLabel), ['Ждут регистрации', 'Список', 'Очередь', 'Записи', 'Бронирование'], 'подготовка: без скрытия вкладка «Очередь» есть');
+    assert.deepEqual(tabButtons(box).map(tabLabel), ['Записи CRM', 'Список', 'Очередь', 'Записи', 'Бронирование'], 'подготовка: без скрытия вкладка «Очередь» есть');   // CRM_BOOKINGS_TAB_V1 — имя
     hub.destroy();
 
     globalThis.window.easymed.isNavHidden = (id) => hidden.has(id);
     box = mk('div');
     hub = await renderPatientsHub(box, ctxFor({ sub: 'queue' }), { calendarLoader: async () => async () => {} });
-    assert.deepEqual(tabButtons(box).map(tabLabel), ['Ждут регистрации', 'Список', 'Записи', 'Бронирование'], 'скрытая «Очередь» осталась вкладкой «Пациентов»');
+    assert.deepEqual(tabButtons(box).map(tabLabel), ['Записи CRM', 'Список', 'Записи', 'Бронирование'], 'скрытая «Очередь» осталась вкладкой «Пациентов»');   // CRM_BOOKINGS_TAB_V1 — имя
     assert.equal(hub.activeTab(), 'list', 'адрес #patients/queue открыл скрытую доску');
     assert.equal(boards(box).length, 0, 'доска смонтирована, хотя раздел скрыт');
     hub.destroy();
@@ -1286,9 +1287,10 @@ test('WAIT_REG_V1: вкладка «Ждут регистрации» — у с�
     assert.equal(badge.textContent, '2', 'счётчик не говорит, сколько ждут');
     assert.equal('hidden' in badge.attrs, false, 'счётчик спрятан при двух ожидающих');
     assert.ok(rpcCalls.includes('registrar_waiting'), 'счётчик не спросил сервер');
-    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b), [{ count_only: true }], 'счётчик спросил весь список');
+    // CRM_BOOKINGS_TAB_V1 — счётчик по фильтру вкладки по умолчанию (сегодня, «CRM / колл-центр», «Ждут»).
+    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b), [{ count_only: true, sources: ['crm'] }], 'счётчик спросил весь список');
     // ревью L5 — имя вкладки для читалки — с числом; сам значок читалке не виден.
-    assert.equal(btn.attrs['aria-label'], 'Ждут регистрации: 2');
+    assert.equal(btn.attrs['aria-label'], 'Записи CRM: 2');
     assert.equal(badge.attrs['aria-hidden'], 'true');
     btn.click(); await tick(60);
     assert.equal(hub.activeTab(), 'waiting');
@@ -1375,7 +1377,7 @@ test('WAIT_REG_V1 (ревью M6): минутный опрос — только 
     rpcArgs.length = 0;
     poll(); await tick(30);
     assert.equal(calls(), before + 1, 'раздел на экране — опроса нет');
-    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b), [{ count_only: true }], 'открыт «Список», а опрос собирает весь список');
+    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b), [{ count_only: true, sources: ['crm'] }], 'открыт «Список», а опрос собирает весь список');   // CRM_BOOKINGS_TAB_V1 — фильтр по умолчанию
     hub.destroy();
   } finally {
     WAITING = null;
@@ -1443,5 +1445,47 @@ test('WAIT_REG_V1 (ревью L5): запись без услуги, кнопк�
     host.children[0].querySelector = prevQS;
     if (prevActive) Object.defineProperty(globalThis.document, 'activeElement', prevActive);
     else delete globalThis.document.activeElement;
+  }
+});
+
+// CRM_BOOKINGS_TAB_V1 (решение владельца) — «Записи CRM»: фильтры вкладки живут, пока живёт раздел
+// (ушли на «Список» и вернулись — тот же фильтр и перечитывание с ним); счётчик вкладки — по фильтру
+// по умолчанию, а не по открытому; адрес прежний — #patients/waiting.
+test('CRM_BOOKINGS_TAB_V1: фильтры вкладки переживают переход на соседнюю вкладку; счётчик — по фильтру по умолчанию', async () => {
+  const sessionUser = globalThis.window.easymed.state.user;
+  try {
+    reset();
+    globalThis.window.easymed.state.user = { ...sessionUser, role: 'registrar' };
+    setEffectiveFromRole(REGISTRAR);
+    WAITING = { today: '2026-11-17', count: 1, rows: [
+      { patient_id: 'p-1', patient_name: 'Эргашев Жахонгир', mrn: 'MRN-1', phone: '', time: '09:30', day: '2026-11-17', status: 'waiting',
+        sources: [{ kind: 'crm', name: '' }], doctors: [], services: ['УЗИ'], booked_by: [], lines: [], reasons: [] },
+    ] };
+    rpcArgs.length = 0;
+    const box = mk('div');
+    const hub = await renderPatientsHub(box, ctxFor({ sub: 'waiting' }), { calendarLoader: async () => async () => {} });
+    await tick(60);
+    assert.equal(hub.activeTab(), 'waiting');
+    assert.equal(tabLabel(byTab(box).waiting), 'Записи CRM');
+    const panel = panelFor(box, 'waiting');
+    const calls = () => rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b);
+    assert.deepEqual(calls(), [{ sources: ['crm'] }], 'вкладка открылась не с фильтром по умолчанию');
+    walk(panel).find((n) => n.attrs && n.attrs['data-rwait-status'] === 'all').click();
+    await tick(60);
+    assert.deepEqual(calls().slice(1), [{ sources: ['crm'], status: 'all' }, { count_only: true, sources: ['crm'] }],
+      'смена статуса — не перечитывание с фильтром или счётчик пошёл за ним');
+    rpcArgs.length = 0;
+    byTab(box).list.click(); await tick(60);
+    byTab(box).waiting.click(); await tick(60);
+    assert.deepEqual(calls().filter((b) => !b.count_only), [{ sources: ['crm'], status: 'all' }], 'возврат на вкладку сбросил фильтр');
+    assert.equal(walk(panel).find((n) => n.attrs && n.attrs['data-rwait-status'] === 'all').attrs['aria-pressed'], 'true');
+    const badge = walk(box).find((n) => n.attrs && n.attrs['data-tab-badge'] === 'waiting');
+    assert.equal(badge.textContent, '1');
+    assert.ok(String(lastHistoryUrl).endsWith('#patients/waiting'), 'адрес вкладки сменился');
+    hub.destroy();
+  } finally {
+    WAITING = null;
+    globalThis.window.easymed.state.user = sessionUser;
+    setFullAccess('Admin');
   }
 });

@@ -205,7 +205,8 @@ test('WAIT_REG_V1 (настоящий сервер): вкладка → «Офо
     const vid = await calendarBook(t, 'reg', TODAY, { hour: 13, svc: 30, doctor: 10, pid: 78 });
     const [booked] = lines(t, vid).map((r) => r.id);
     const host = mk('div');
-    const tab = await renderRegistrarWaiting(host, {}, {});
+    // CRM_BOOKINGS_TAB_V1 — вкладка по умолчанию показывает записи CRM; запись календаря — при «Все».
+    const tab = await renderRegistrarWaiting(host, {}, { filter: { source: 'all' } });
     const row = walk(host).find((n) => n.attrs && n.attrs['data-rwait-row'] === '78');
     assert.ok(row, 'записанного пациента нет во вкладке: ' + textOf(host));
     assert.match(textOf(row), /Календарёва Анна/);
@@ -353,5 +354,41 @@ test('WAIT_REG_V1 (настоящий сервер): анализ «на дат�
     assert.equal(rpcNames().filter((n) => n === 'ensure_visit').length, 1, 'второй ensure_visit');
     assert.equal(t.db.prepare("SELECT reason FROM invoice_audit_log WHERE action = 'line_wish_released'").get().reason, 'Анализ сдан в другой лаборатории');
     assert.equal(lid > 0, true);
+  } finally { t.close(); }
+});
+
+test('CRM_BOOKINGS_TAB_V1 (настоящий сервер): «Записи CRM» по умолчанию — сегодняшние записи колл-центра; «Завтра» — запись на завтра без «Оформить по записи»; «Все» источники — и календарь', async () => {
+  const t = await live((db) => {
+    db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (86, 'Завтрашний Илья', '+998 90 000 00 86')").run();
+  });
+  try {
+    const { callcenterBook } = await import('../../../../server/test-helpers/crm-link-all.js');
+    await callcenterBook(t, TODAY, { hour: 12, svc: 30, doctor: 10, pid: 77 });
+    await calendarBook(t, 'reg', TODAY, { hour: 13, svc: 30, doctor: 10, pid: 78 });
+    await callcenterBook(t, localDay(1), { hour: 10, svc: 30, doctor: 10, pid: 86 });
+    const host = mk('div');
+    const counts = [];
+    const tab = await renderRegistrarWaiting(host, { onCount: (n) => counts.push(n) }, {});
+    const rowIds = () => walk(host).filter((n) => n.attrs && n.attrs['data-rwait-row'] !== undefined).map((n) => n.attrs['data-rwait-row']);
+    const regIds = () => walk(host).filter((n) => n.attrs && n.attrs['data-rwait-register'] !== undefined).map((n) => n.attrs['data-rwait-register']);
+    assert.deepEqual(rowIds(), ['77'], 'по умолчанию не только сегодняшние записи CRM: ' + textOf(host).slice(0, 300));
+    assert.deepEqual(regIds(), ['77']);
+    assert.deepEqual(counts, [1]);
+    const press = async (attr, v) => {
+      walk(host).find((n) => n.attrs && n.attrs[attr] === v).click();
+      for (let i = 0; i < 120 && tab.state.loading; i++) await wait(25);
+      await wait(100); await flush(20);   // и число вкладки (count_only) после списка
+    };
+    await press('data-rwait-day', 'tomorrow');
+    assert.deepEqual(rowIds(), ['86'], '«Завтра» — не запись на завтра');
+    assert.deepEqual(regIds(), [], 'у завтрашней записи «Оформить по записи»');
+    assert.ok(walk(host).some((n) => n.attrs && n.attrs['data-rwait-card'] === '86'), 'у завтрашней записи нет «Открыть карту»');
+    assert.equal(counts.at(-1), 1, 'счётчик вкладки пошёл за открытым фильтром');
+    await press('data-rwait-day', 'today');
+    await press('data-rwait-src', 'all');
+    assert.deepEqual(rowIds(), ['77', '78']);
+    const rq = SENT.filter((s) => s.kind === 'rpc' && s.name === 'registrar_waiting').map((s) => s.body);
+    assert.deepEqual(rq[0], { sources: ['crm'] });
+    assert.ok(rq.some((b) => b.day === localDay(1) && !b.count_only), 'завтра спрошено не днём сервера');
   } finally { t.close(); }
 });

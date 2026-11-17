@@ -9820,8 +9820,36 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
 .rwait-sub2 { font-size: 12.5px; color: var(--ink-500); overflow-wrap: anywhere; }
 .rwait-act { display: flex; justify-content: flex-end; }
 .rwait-act .btn { white-space: nowrap; }
+/* CRM_BOOKINGS_TAB_V1 — «Записи CRM»: полоса фильтров (день, источник, статус, врач, поиск), статус строки,
+   заголовок дня при нескольких днях. Фильтры — обычные кнопки .segmented и поля: клавиатурой Tab/Enter/пробел. */
+.rwait-filters { display: flex; flex-direction: column; gap: 10px; padding: 12px 18px; }
+.rwait-frow { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 18px; }
+.rwait-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rwait-f-day { flex-direction: row; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.rwait-f-l { font-size: 12px; font-weight: 600; color: var(--ink-500); }
+.rwait-f .segmented { flex-wrap: wrap; }
+.rwait-f .segmented button:focus-visible, .rwait-filters select:focus-visible, .rwait-filters input:focus-visible {
+    outline: 2px solid var(--primary-500, #14b8a6); outline-offset: 1px;
+}
+.rwait-date, .rwait-doctor, .rwait-q {
+    height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid var(--ink-200, #d9e1e4); border-radius: 8px;
+    background: var(--white, #fff); color: var(--ink-900); font-size: 13px;
+}
+.rwait-date.on { border-color: var(--primary-500, #14b8a6); box-shadow: 0 0 0 1px var(--primary-500, #14b8a6) inset; }
+.rwait-doctor { min-width: 200px; max-width: 100%; }
+.rwait-f-q { flex: 1 1 260px; }
+.rwait-q { width: 100%; }
+.rwait-day {
+    display: flex; align-items: center; gap: 6px; padding: 8px 18px; background: var(--ink-50);
+    border-top: 1px solid var(--ink-100); font-size: 12.5px; font-weight: 700; color: var(--ink-700, var(--ink-900));
+}
+.rwait-act { gap: 8px; align-items: center; flex-wrap: wrap; }
+.rwait-status { white-space: nowrap; }
+.rwait-reason { color: var(--ink-600, var(--ink-500)); }
 @media (max-width: 860px) {
     .rwait-row { grid-template-columns: 64px minmax(0, 1fr); }
     .rwait-what { grid-column: 2; }
     .rwait-act { grid-column: 1 / -1; justify-content: flex-start; }
+    .rwait-filters { padding: 12px 16px; }
+    .rwait-doctor { min-width: 0; width: 100%; }
 }
