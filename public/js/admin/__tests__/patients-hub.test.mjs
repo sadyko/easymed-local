@@ -125,7 +125,8 @@ globalThis.history = {
 const liveIntervals = new Map();
 const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
-globalThis.setInterval = (fn, ms, ...rest) => { const id = realSetInterval(fn, ms, ...rest); liveIntervals.set(id, ms); return id; };
+const intervalFns = new Map();   // WAIT_REG_V1 (ревью M6) — тело минутного опроса, чтобы позвать его без ожидания
+globalThis.setInterval = (fn, ms, ...rest) => { const id = realSetInterval(fn, ms, ...rest); liveIntervals.set(id, ms); intervalFns.set(id, fn); return id; };
 globalThis.clearInterval = (id) => { liveIntervals.delete(id); return realClearInterval(id); };
 const queuePolls = () => [...liveIntervals.values()].filter((ms) => ms === 10000).length;
 
@@ -229,7 +230,9 @@ const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(
 const textOf = (el) => walk(el).map((n) => n._t || '').join('');
 const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
 const tabButtons = (root) => walk(root).filter((n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab');
-const tabLabel = (b) => walk(b).filter((n) => n.tagName !== 'SVG').map((n) => n._t || '').join('').trim();
+// WAIT_REG_V1 (ревью) — у регистратуры «Ждут регистрации» первой: вкладки ищутся по имени, а не по месту.
+const byTab = (root) => Object.fromEntries(tabButtons(root).map((b) => [b.attrs['data-tab'], b]));
+const tabLabel = (b) => walk(b).filter((n) => n.tagName !== 'SVG' && !(n.attrs && n.attrs['data-tab-badge'])).map((n) => n._t || '').join('').trim();
 const panelFor = (root, id) => walk(root).find((n) => n.attrs['data-tab-panel'] === id);
 const visiblePanels = (root) => walk(root).filter((n) => n.attrs['data-tab-panel'] && n.style.display !== 'none');
 const boards = (root) => walk(root).filter((n) => 'data-queue-board' in n.attrs);
@@ -270,10 +273,11 @@ test('каждая вкладка показывает СВОЁ: список п
   };
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: stubCalendar });
 
-  const btns = tabButtons(box);
+  const btns = byTab(box);
   // BOOKING_DAY_V1 — четвёртая вкладка «Бронирование»: день одного врача.
-  // WAIT_REG_V1 — пятая, у стойки: «Ждут регистрации».
-  assert.deepEqual(btns.map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование', 'Ждут регистрации'], 'полоса вкладок не та');
+  // WAIT_REG_V1 — пятая, у стойки: «Ждут регистрации». Права здесь — полные (администратор): «Список»
+  // первым; у регистратуры «Ждут регистрации» первой (ревью, тест ниже).
+  assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование', 'Ждут регистрации'], 'полоса вкладок не та');
   assert.equal(hub.activeTab(), 'list', 'по умолчанию открывается не список');
   assert.equal(visiblePanels(box).length, 1, 'видна не ровно одна вкладка');
 
@@ -281,7 +285,7 @@ test('каждая вкладка показывает СВОЁ: список п
   assert.ok(textOf(panelFor(box, 'list')).includes('Эргашев Жахонгир'), 'на вкладке «Список» нет пациента');
 
   // 2. Очередь — живая доска: номер, имя, состояние талона.
-  btns[1].click(); await tick();
+  btns.queue.click(); await tick();
   assert.equal(hub.activeTab(), 'queue');
   const q = textOf(panelFor(box, 'queue'));
   assert.ok(q.includes('Пулатов А.'), 'на доске нет назначения');
@@ -293,7 +297,7 @@ test('каждая вкладка показывает СВОЁ: список п
     'встроенная доска всё ещё рисует собственную шапку раздела');
 
   // 3. Записи — календарь, встроенным (свою полосу вкладок он не рисует).
-  btns[2].click(); await tick();
+  btns.calendar.click(); await tick();
   assert.equal(hub.activeTab(), 'calendar');
   assert.ok(textOf(panelFor(box, 'calendar')).includes('Сетка календаря'), 'вкладка «Записи» пуста');
   assert.deepEqual(calls.map((o) => o.embedded), [true], 'календарь смонтирован не встроенным');
@@ -334,6 +338,60 @@ test('полоса вкладок доступна с клавиатуры: ст
   hub.destroy();
 });
 
+// WAIT_REG_V1 (ревью, решение владельца) — РЕГИСТРАТУРЕ «Ждут регистрации» первой и открытой по
+// умолчанию; стрелки — в том же порядке, что полоса; «Список» пишется в адрес явно (#patients/list).
+// Администратору (и регистратору с ролью администратора) — «Список» первым, как прежде.
+test('WAIT_REG_V1 (ревью): регистратуре «Ждут регистрации» — первой и открытой; стрелки и адрес — по тому же порядку; администратору — «Список»', async () => {
+  const sessionUser = globalThis.window.easymed.state.user;
+  try {
+    reset();
+    globalThis.window.easymed.state.user = { ...sessionUser, role: 'registrar' };
+    setEffectiveFromRole(REGISTRAR);
+    const box = mk('div');
+    const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
+    const btns = tabButtons(box);
+    assert.deepEqual(btns.map((b) => b.attrs['data-tab']), ['waiting', 'list', 'queue', 'calendar', 'booking']);
+    assert.equal(hub.activeTab(), 'waiting', 'регистратуре по умолчанию открылась не «Ждут регистрации»');
+    assert.deepEqual(btns.map((b) => b.attrs.tabindex), ['0', '-1', '-1', '-1', '-1']);
+    assert.equal(replaces, 0, 'монтирование переписало адрес');
+    const press = (b, key) => b.dispatchEvent({ type: 'keydown', key, preventDefault() {} });
+    press(btns[0], 'ArrowRight'); await tick();
+    assert.equal(hub.activeTab(), 'list');
+    assert.equal(lastHistoryUrl, '#patients/list', '«Список» у регистратуры не записан в адрес — F5 увёл бы с него');
+    press(btns[1], 'ArrowRight'); await tick();
+    assert.equal(hub.activeTab(), 'queue');
+    press(btns[2], 'End'); await tick();
+    assert.equal(hub.activeTab(), 'booking');
+    press(btns[4], 'ArrowRight'); await tick();
+    assert.equal(hub.activeTab(), 'waiting', 'стрелка вправо с последней вкладки не вернулась к первой');
+    assert.equal(lastHistoryUrl, '#patients/waiting');
+    press(btns[0], 'ArrowLeft'); await tick();
+    assert.equal(hub.activeTab(), 'booking');
+    press(btns[4], 'Home'); await tick();
+    assert.equal(hub.activeTab(), 'waiting');
+    hub.destroy();
+    // Адрес #patients/list — «Список».
+    const listed = await renderPatientsHub(mk('div'), ctxFor({ sub: 'list' }), { calendarLoader: async () => async () => {} });
+    assert.equal(listed.activeTab(), 'list');
+    listed.destroy();
+
+    // Администратор и регистратор с ролью администратора — «Список» первым и открытым.
+    for (const user of [{ ...sessionUser, role: 'admin' }, { ...sessionUser, role: 'registrar', extra_roles: ['admin'] }]) {
+      reset();
+      globalThis.window.easymed.state.user = user;
+      setEffectiveFromRole(REGISTRAR);
+      const b = mk('div');
+      const h2 = await renderPatientsHub(b, ctxFor(), { calendarLoader: async () => async () => {} });
+      assert.deepEqual(tabButtons(b).map((x) => x.attrs['data-tab']), ['list', 'queue', 'calendar', 'booking', 'waiting'], JSON.stringify(user));
+      assert.equal(h2.activeTab(), 'list');
+      h2.destroy();
+    }
+  } finally {
+    globalThis.window.easymed.state.user = sessionUser;
+    setFullAccess('Admin');
+  }
+});
+
 test('вкладка живёт в адресе: подмаршрут переживает перезагрузку и переходит replaceState', async () => {
   reset();
   // Перезагрузка на '#patients/queue': оболочка отдаёт payload.sub — раздел
@@ -346,7 +404,8 @@ test('вкладка живёт в адресе: подмаршрут переж
   assert.equal(deep.activeTab(), 'calendar', 'глубокая ссылка #patients/calendar не открыла записи');
   deep.destroy();
 
-  // Незнакомый подмаршрут — это не пустой экран: раздел открывается списком.
+  // Незнакомый подмаршрут — это не пустой экран: раздел открывается вкладкой по умолчанию — списком
+  // (WAIT_REG_V1, ревью — у регистратуры это «Ждут регистрации», тест выше).
   const junk = await renderPatientsHub(mk('div'), ctxFor({ sub: 'нет-такой' }), { calendarLoader: async () => async () => {} });
   assert.equal(junk.activeTab(), 'list');
   junk.destroy();
@@ -357,11 +416,11 @@ test('вкладка живёт в адресе: подмаршрут переж
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
   assert.equal(replaces, 0, 'монтирование не должно переписывать адрес — его уже написал navigate()');
 
-  const btns = tabButtons(box);
-  btns[1].click(); await tick();
+  const btns = byTab(box);
+  btns.queue.click(); await tick();
   assert.equal(lastHistoryUrl, '#patients/queue');
   assert.deepEqual(tabSubCalls.at(-1), ['patients', 'queue'], 'оболочке не сообщили о вкладке');
-  btns[0].click(); await tick();
+  btns.list.click(); await tick();
   assert.equal(lastHistoryUrl, '#patients', 'возврат на список не очистил подмаршрут');
   assert.deepEqual(tabSubCalls.at(-1), ['patients', null]);
   assert.equal(pushes, 0, 'вкладка попала в историю через pushState — «Назад» перестанет выводить из раздела');
@@ -375,22 +434,22 @@ test('опрос очереди живёт ровно столько, сколь
 
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-  const btns = tabButtons(box);
+  const btns = byTab(box);
   // Список открыт — доска ещё не смонтирована, значит и опроса нет.
   assert.equal(queuePolls(), 0, 'спрятанная доска опрашивает базу, хотя её никто не открывал');
 
-  btns[1].click(); await tick();
+  btns.queue.click(); await tick();
   assert.equal(queuePolls(), 1, 'открытая доска не обновляет себя');
 
-  btns[0].click(); await tick();
+  btns.list.click(); await tick();
   assert.equal(queuePolls(), 0, 'ушли с вкладки, а доска продолжает ходить в базу каждые 10 секунд');
 
-  btns[1].click(); await tick();
+  btns.queue.click(); await tick();
   assert.equal(queuePolls(), 1, 'вернулись на вкладку, а доска больше не обновляется');
   const callsAfterReturn = rpcCalls.filter((n) => n === 'queue_board').length;
   assert.ok(callsAfterReturn >= 2, 'возврат на вкладку не перечитал доску — она показывала бы минуты давности');
 
-  btns[2].click(); await tick();
+  btns.calendar.click(); await tick();
   assert.equal(queuePolls(), 0, 'уход на «Записи» не остановил опрос очереди');
 
   hub.destroy();
@@ -401,14 +460,14 @@ test('доска не монтируется дважды: возврат на �
   reset();
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-  const btns = tabButtons(box);
-  btns[1].click(); await tick();
+  const btns = byTab(box);
+  btns.queue.click(); await tick();
   assert.equal(boards(box).length, 1);
   const firstBoard = boards(box)[0];
-  btns[0].click(); await tick();
-  btns[1].click(); await tick();
-  btns[0].click(); await tick();
-  btns[1].click(); await tick();
+  btns.list.click(); await tick();
+  btns.queue.click(); await tick();
+  btns.list.click(); await tick();
+  btns.queue.click(); await tick();
   assert.equal(boards(box).length, 1, 'в контейнере вкладки выросла вторая доска');
   // И это ТА ЖЕ доска: вкладка не пересобирается заново, поэтому день, поиск и
   // прокрутка карточек переживают уход на соседнюю вкладку. Пересборка вместо
@@ -416,7 +475,7 @@ test('доска не монтируется дважды: возврат на �
   assert.equal(boards(box)[0], firstBoard, 'вкладку пересобрали заново вместо того, чтобы разбудить');
   assert.equal(queuePolls(), 1, 'у одной доски два таймера — модульные синглтоны разъехались');
   // И два быстрых нажатия подряд тоже не должны развести две доски.
-  btns[0].click(); btns[1].click(); btns[1].click(); await tick();
+  btns.list.click(); btns.queue.click(); btns.queue.click(); await tick();
   assert.equal(boards(box).length, 1);
   hub.destroy();
 });
@@ -433,7 +492,7 @@ test('регистратура видит все три вкладки, и ка�
 
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-  assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование', 'Ждут регистрации'],
+  assert.deepEqual(tabButtons(box).map(tabLabel), ['Ждут регистрации', 'Список', 'Очередь', 'Записи', 'Бронирование'],
     'регистратура недосчиталась вкладок');
   hub.destroy();
 
@@ -461,11 +520,11 @@ test('вкладка «Записи» монтируется, даже когд�
   // И в самом хосте: поломка календаря не уносит список и очередь.
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => { throw new Error('half-written'); } });
-  const btns = tabButtons(box);
-  btns[2].click(); await tick();
+  const btns = byTab(box);
+  btns.calendar.click(); await tick();
   assert.equal(hub.activeTab(), 'calendar');
   assert.ok(textOf(panelFor(box, 'calendar')).includes('Календарь записи не открылся'));
-  btns[0].click(); await tick();
+  btns.list.click(); await tick();
   assert.ok(textOf(panelFor(box, 'list')).includes('Эргашев Жахонгир'), 'список пострадал из-за календаря');
   hub.destroy();
 });
@@ -481,13 +540,13 @@ test('CALENDAR_RETRY_V1: одна неудачная загрузка не га�
   };
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: loader });
-  const btns = tabButtons(box);
-  btns[2].click(); await tick();
+  const btns = byTab(box);
+  btns.calendar.click(); await tick();
   assert.ok(textOf(panelFor(box, 'calendar')).includes('Календарь записи не открылся'), 'первая попытка должна была упасть');
 
   // Возврат на вкладку пробует снова — раньше флаг mounted держал заглушку.
-  btns[0].click(); await tick();
-  btns[2].click(); await tick();
+  btns.list.click(); await tick();
+  btns.calendar.click(); await tick();
   assert.equal(attempt, 2, 'вторая попытка не состоялась — вкладка залипла на заглушке');
   assert.ok(textOf(panelFor(box, 'calendar')).includes('СЕТКА ЗАПИСИ'), 'календарь не поднялся со второй попытки');
   hub.destroy();
@@ -503,7 +562,7 @@ test('CALENDAR_RETRY_V1: кнопка «Повторить» грузит кал
   };
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: loader });
-  tabButtons(box)[2].click(); await tick();
+  byTab(box).calendar.click(); await tick();
   const panel = panelFor(box, 'calendar');
   const again = walk(panel).filter((n) => n.tagName === 'BUTTON').find((b) => textOf(b).includes('Повторить'));
   assert.ok(again, 'кнопки «Повторить» нет — оператору нечем поднять экран');
@@ -655,7 +714,8 @@ test('регистратуре тот же ключ окно ОТКРЫВАЕТ 
   assert.strictEqual(canCreatePatient(), true, 'регистратуре закрыли её собственную работу');
 
   const box = mk('div');
-  const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
+  // WAIT_REG_V1 (ревью) — у регистратуры по умолчанию «Ждут регистрации»: «Список» — по адресу.
+  const hub = await renderPatientsHub(box, ctxFor({ sub: 'list' }), { calendarLoader: async () => async () => {} });
   const createBtn = walk(box).find((n) => n.attrs['data-onb'] === 'create-patient');
   createBtn.click();
   assert.strictEqual(openDialogs('patient-create').length, 1, 'регистратуру не пустили в её собственное окно');
@@ -725,7 +785,7 @@ test('V3120_FIX: вкладки «Записи» и «Очередь» — то�
     ['cashier',   ['patients', 'queue'],        ['Список', 'Очередь']],
     ['lab',       ['patients', 'labs'],         ['Список']],
     // BOOKING_DAY_V1 — «Бронирование» видят те же, кому открыты «Записи».
-    ['registrar', ['patients', 'queue'],        ['Список', 'Очередь', 'Записи', 'Бронирование', 'Ждут регистрации']],   // WAIT_REG_V1 — вкладка стойки
+    ['registrar', ['patients', 'queue'],        ['Ждут регистрации', 'Список', 'Очередь', 'Записи', 'Бронирование']],   // WAIT_REG_V1 — вкладка стойки (ревью: у регистратуры — первой)
     ['doctor',    ['patients'],                 ['Список', 'Записи', 'Бронирование']],
   ];
   try {
@@ -766,13 +826,13 @@ test('ROLE_QUEUE_V1: скрытая в «Видимости разделов» �
     setEffectiveFromRole({ name: 'registrar', permissions: { sections: ['patients', 'queue'], levels: {} } });
     let box = mk('div');
     let hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-    assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование', 'Ждут регистрации'], 'подготовка: без скрытия вкладка «Очередь» есть');
+    assert.deepEqual(tabButtons(box).map(tabLabel), ['Ждут регистрации', 'Список', 'Очередь', 'Записи', 'Бронирование'], 'подготовка: без скрытия вкладка «Очередь» есть');
     hub.destroy();
 
     globalThis.window.easymed.isNavHidden = (id) => hidden.has(id);
     box = mk('div');
     hub = await renderPatientsHub(box, ctxFor({ sub: 'queue' }), { calendarLoader: async () => async () => {} });
-    assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Записи', 'Бронирование', 'Ждут регистрации'], 'скрытая «Очередь» осталась вкладкой «Пациентов»');
+    assert.deepEqual(tabButtons(box).map(tabLabel), ['Ждут регистрации', 'Список', 'Записи', 'Бронирование'], 'скрытая «Очередь» осталась вкладкой «Пациентов»');
     assert.equal(hub.activeTab(), 'list', 'адрес #patients/queue открыл скрытую доску');
     assert.equal(boards(box).length, 0, 'доска смонтирована, хотя раздел скрыт');
     hub.destroy();
@@ -1215,7 +1275,9 @@ test('WAIT_REG_V1: вкладка «Ждут регистрации» — у с�
       { patient_id: 'p-2', patient_name: 'Юсупова Дилноза', mrn: 'MRN-2', phone: '', time: null, sources: [{ kind: 'doctor', name: 'Алиева Нигора' }], doctors: [], services: ['ОАК'], booked_by: [], lines: [] },
     ] };
     const box = mk('div');
-    const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
+    // Открыт «Список» (адрес): счётчик — только числом (count_only), список не собирается.
+    rpcArgs.length = 0;
+    const hub = await renderPatientsHub(box, ctxFor({ sub: 'list' }), { calendarLoader: async () => async () => {} });
     await tick(60);
     const btn = tabButtons(box).find((b) => b.attrs['data-tab'] === 'waiting');
     assert.ok(btn, 'у стойки нет вкладки «Ждут регистрации»');
@@ -1224,6 +1286,10 @@ test('WAIT_REG_V1: вкладка «Ждут регистрации» — у с�
     assert.equal(badge.textContent, '2', 'счётчик не говорит, сколько ждут');
     assert.equal('hidden' in badge.attrs, false, 'счётчик спрятан при двух ожидающих');
     assert.ok(rpcCalls.includes('registrar_waiting'), 'счётчик не спросил сервер');
+    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b), [{ count_only: true }], 'счётчик спросил весь список');
+    // ревью L5 — имя вкладки для читалки — с числом; сам значок читалке не виден.
+    assert.equal(btn.attrs['aria-label'], 'Ждут регистрации: 2');
+    assert.equal(badge.attrs['aria-hidden'], 'true');
     btn.click(); await tick(60);
     assert.equal(hub.activeTab(), 'waiting');
     const panel = panelFor(box, 'waiting');
@@ -1285,4 +1351,97 @@ test('WAIT_REG_V1: «Оформить по записи» открывает о�
   assert.deepEqual(counts, [1, 0], 'после оформления список и счётчик не перечитаны');
   assert.ok(textOf(host).includes('Сегодня никого не ждём'));
   assert.equal(tab.state.rows.length, 0);
+});
+
+// WAIT_REG_V1 (ревью M6) — минутный опрос не ходит в базу, пока раздел спрятан оболочкой; открыт «Список» —
+// спрашивается только число.
+test('WAIT_REG_V1 (ревью M6): минутный опрос — только когда раздел на экране, и только число', async () => {
+  reset();
+  WAITING = { today: '2026-11-17', count: 3, rows: [] };
+  try {
+    const box = mk('div');
+    const hub = await renderPatientsHub(box, ctxFor({ sub: 'list' }), { calendarLoader: async () => async () => {} });
+    await tick(60);
+    const pollId = [...liveIntervals.entries()].filter(([, ms]) => ms === 60000).map(([id]) => id).at(-1);
+    assert.ok(pollId != null, 'минутного опроса нет');
+    const poll = intervalFns.get(pollId);
+    const root = box.children[0];
+    const calls = () => rpcCalls.filter((n) => n === 'registrar_waiting').length;
+    const before = calls();
+    root.getClientRects = () => [];   // раздел спрятан (display:none у панели оболочки)
+    poll(); await tick(30);
+    assert.equal(calls(), before, 'спрятанный раздел опросил сервер');
+    root.getClientRects = () => [1];
+    rpcArgs.length = 0;
+    poll(); await tick(30);
+    assert.equal(calls(), before + 1, 'раздел на экране — опроса нет');
+    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b), [{ count_only: true }], 'открыт «Список», а опрос собирает весь список');
+    hub.destroy();
+  } finally {
+    WAITING = null;
+  }
+});
+
+// WAIT_REG_V1 (ревью L5, решение владельца) — «услуга не выбрана», кнопка гаснет на время открытия окна,
+// фокус клавиатуры переживает перечитывание; «Оформить по записи» у записи без услуги — врач записи, у
+// записи соседнего здания — её услуги набранными строками.
+test('WAIT_REG_V1 (ревью L5): запись без услуги, кнопка гаснет, фокус после перечитывания — на той же кнопке', async () => {
+  reset();
+  const { renderRegistrarWaiting } = await import('../views/registrar-waiting.js');
+  const rows = [
+    { patient_id: 41, patient_name: 'Безуслугова Дина', mrn: '', phone: '', time: '15:00', no_service: true, sources: [{ kind: 'calendar', name: '' }], doctors: ['Иванов'], services: [], booked_by: [],
+      lines: [{ kind: 'booking', visit_id: 9, doctor_id: 10, visit_service_id: null }] },
+    { patient_id: 42, patient_name: 'Соседова Ева', mrn: '', phone: '', time: '16:00', sources: [{ kind: 'calendar', name: '' }], doctors: ['Петров'], services: ['Консультация'], booked_by: [],
+      lines: [{ kind: 'booked', foreign: true, visit_service_id: 77, visit_id: 8, service_id: 21, consultation_type_id: null, doctor_id: 7, name: 'Консультация' }] },
+  ];
+  const opened = [];
+  let release = null;
+  const host = mk('div');
+  const tab = await renderRegistrarWaiting(host, {}, {
+    load: async () => ({ today: '2026-11-17', count: rows.length, rows }),
+    openWizard: (onSaved, patient, opts) => { opened.push({ patient, opts }); return new Promise((r) => { release = r; }); },
+  });
+  const row41 = walk(host).find((n) => n.attrs && n.attrs['data-rwait-row'] === '41');
+  assert.ok(walk(row41).some((n) => n.attrs && 'data-rwait-no-service' in n.attrs), '«услуга не выбрана» не показано');
+  assert.ok(textOf(row41).includes('услуга не выбрана'));
+  const regBtn = (pid) => walk(host).find((n) => n.attrs && n.attrs['data-rwait-register'] === String(pid));
+  assert.equal('disabled' in regBtn(41).attrs, false, 'кнопка погашена без причины');
+  regBtn(41).click(); await tick(30);
+  assert.equal('disabled' in regBtn(42).attrs, true, 'пока окно визита открывается, кнопки не погашены');
+  assert.deepEqual(opened[0].opts, { bookingDoctorId: 10 }, 'запись без услуги открыта не на врача записи');
+  release({}); await tick(30);
+  assert.equal('disabled' in regBtn(42).attrs, false, 'кнопки остались погашены');
+  regBtn(42).click(); await tick(30);
+  assert.deepEqual(opened[1].opts, { presetLines: [{ service_id: 21, consultation_type_id: null, doctor_id: 7, name: 'Консультация' }], presetFromCrm: false },
+    'строки записи соседнего здания не переданы окну визита');
+  release({}); await tick(30);
+  // Фокус: кнопка пациента 42 в фокусе — после перечитывания фокус на новой кнопке того же пациента.
+  const prevActive = Object.getOwnPropertyDescriptor(globalThis.document, 'activeElement');
+  let focused = regBtn(42);
+  Object.defineProperty(globalThis.document, 'activeElement', { configurable: true, get: () => focused });
+  const prevContains = host.children[0].contains;
+  host.children[0].contains = (n) => walk(host).includes(n);
+  const prevQS = host.children[0].querySelector;
+  host.children[0].querySelector = (sel) => {
+    const m = /^\[([a-z-]+)(?:="([^"]*)")?\]$/.exec(sel);
+    return m ? walk(host).find((n) => n.attrs && n.attrs[m[1]] !== undefined && (m[2] === undefined || n.attrs[m[1]] === m[2])) || null : null;
+  };
+  const old = focused;
+  let focusedNow = null;
+  // focus() каждой кнопки (и новых, нарисованных перечитыванием) запоминает, кто в фокусе.
+  const F = Object.getPrototypeOf(old).constructor;
+  const protoFocus = F.prototype.focus;
+  F.prototype.focus = function () { focusedNow = this; };
+  try {
+    await tab.reload();
+    assert.ok(focusedNow, 'после перечитывания фокус никуда не вернули');
+    assert.notEqual(focusedNow, old, 'фокус остался на снятой кнопке');
+    assert.equal(focusedNow.attrs['data-rwait-register'], '42', 'фокус ушёл не на кнопку того же пациента');
+  } finally {
+    F.prototype.focus = protoFocus;
+    host.children[0].contains = prevContains;
+    host.children[0].querySelector = prevQS;
+    if (prevActive) Object.defineProperty(globalThis.document, 'activeElement', prevActive);
+    else delete globalThis.document.activeElement;
+  }
 });
