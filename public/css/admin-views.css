@@ -9774,3 +9774,52 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
     .crm-tv-list .crm-tv-row, .crm-tv-list.has-who .crm-tv-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
     .crm-tv-list .crm-tv-row .crm-tv-due { justify-self: start; }
 }
+
+/* WAIT_REG_V1 (3.25.0) — вкладка «Ждут регистрации» раздела «Пациенты»
+   (views/registrar-waiting.js): шапка со счётчиком и «Обновить», строка на
+   пациента — время, пациент и источник, услуги, «Оформить по записи». И счётчик
+   на самой вкладке (patients-hub.js): сколько пациентов сегодня ещё ждут. */
+.reg-tab-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+    background: var(--crit-600, #dc2626); color: #fff;
+    font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1;
+}
+.reg-tab-badge[hidden] { display: none; }
+.reg-tab.on .reg-tab-badge { background: #fff; color: var(--crit-700, #b91c1c); }
+.rwait { display: flex; flex-direction: column; gap: 14px; }
+.rwait-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 14px 18px; }
+.rwait-head-text { min-width: 0; flex: 1 1 320px; }
+.rwait-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: var(--ink-900); }
+.rwait-count {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 7px;
+    border-radius: 999px; background: var(--primary-50); color: var(--primary-700); font-size: 12.5px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.rwait-sub { margin-top: 4px; font-size: 12.5px; color: var(--ink-500); }
+.rwait-card { padding: 0; overflow: hidden; }
+.rwait-empty { padding: 32px 24px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; color: var(--ink-500); font-size: 13.5px; }
+.rwait-list { display: flex; flex-direction: column; }
+.rwait-row {
+    display: grid; grid-template-columns: 84px minmax(0, 1.2fr) minmax(0, 1fr) auto; gap: 14px; align-items: center;
+    padding: 12px 18px; border-top: 1px solid var(--ink-100);
+}
+.rwait-list > :first-child { border-top: 0; }
+.rwait-time { font-variant-numeric: tabular-nums; }
+.rwait-time b { font-size: 15px; color: var(--ink-900); }
+.rwait-time .muted { font-size: 12.5px; }
+.rwait-who { min-width: 0; display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.rwait-pt { font-size: 13.5px; font-weight: 600; color: var(--primary-700); text-align: left; }
+.rwait-meta { font-size: 12.5px; color: var(--ink-500); font-variant-numeric: tabular-nums; }
+.rwait-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.rwait-tags .tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.rwait-what { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.rwait-svc { font-size: 13.5px; color: var(--ink-800, var(--ink-900)); display: flex; align-items: center; gap: 4px; overflow-wrap: anywhere; }
+.rwait-sub2 { font-size: 12.5px; color: var(--ink-500); overflow-wrap: anywhere; }
+.rwait-act { display: flex; justify-content: flex-end; }
+.rwait-act .btn { white-space: nowrap; }
+@media (max-width: 860px) {
+    .rwait-row { grid-template-columns: 64px minmax(0, 1fr); }
+    .rwait-what { grid-column: 2; }
+    .rwait-act { grid-column: 1 / -1; justify-content: flex-start; }
+}

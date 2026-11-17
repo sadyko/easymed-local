@@ -53,6 +53,12 @@ export const LIVE_RELEVANCE = Object.freeze({
     procedures: Object.freeze({ minIntervalMs: 3000, tables: Object.freeze([
         'visit_services', 'admission_services', 'pay_refund_releases', 'visits',
     ]) }),
+    // WAIT_REG_V1 — «Ждут регистрации» (счётчик вкладки и список стойки): записали, отменили,
+    // пришёл — визиты и строки; оформили — счёт. Анализы «на дату» (заявки CRM) сервер не
+    // наблюдает — список перечитывается и сам, раз в минуту (patients-hub.js).
+    registrar: Object.freeze({ minIntervalMs: 3000, tables: Object.freeze([
+        'visits', 'visit_services', 'invoices', 'invoice_items',
+    ]) }),
 });
 
 /**

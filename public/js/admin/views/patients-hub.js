@@ -43,12 +43,14 @@ import { h, Icon, clear } from '../ui.js';
 // склеивается из кусков: склейка непереводима целиком ни на один язык.
 import { tr, trf } from '../i18n.js';
 import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — общий баннер клинических разделов
-import { grantAllows, isRouteAllowed } from '../permissions.js';   // GRANTS_V1 — окна раздела по матрице прав; V3120_FIX — isRouteAllowed
+import { grantAllows, isRouteAllowed, hasActorRole } from '../permissions.js';   // GRANTS_V1 — окна раздела по матрице прав; V3120_FIX — isRouteAllowed; WAIT_REG_V1 — hasActorRole
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
 // модуля. Разошедшийся ?v= развёл бы состояние экрана на две копии.
 import { renderPatients } from './patients.js?v=regfit2';
 import { renderQueue } from './queue.js?v=q7';
 import { renderBookingDay } from './booking-day.js';   // BOOKING_DAY_V1 — «Бронирование»: день одного врача
+import { renderRegistrarWaiting, loadRegistrarWaiting, WAITING_ROLES } from './registrar-waiting.js';   // WAIT_REG_V1 — «Ждут регистрации»
+import { watchScreen } from '../live.js';   // WAIT_REG_V1 — счётчик вкладки свежий без «Обновить»
 // MOTION_REVEAL_V1 — переход между вкладками: панель проявляется, полоса
 // вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
 import { animateIn, smoothScrollTo } from '../motion.js?v=mo1';
@@ -61,8 +63,20 @@ const TABS = [
     // день ОДНОГО врача: фильтры, дата (сегодня), поиск врача, время приёма и
     // записанные пациенты (views/booking-day.js).
     { id: 'booking',  sub: 'booking',  label: 'Бронирование', icon: 'Stethoscope' },
+    // WAIT_REG_V1 (2026-11-17, владелец: «in the registrator window we should show the patients
+    // that were sent and patients for which we created a booking so registrators won't be
+    // confused») — кого сегодня ждёт стойка: записи, анализы «на дату», направления врача
+    // (views/registrar-waiting.js), со счётчиком на самой вкладке.
+    { id: 'waiting',  sub: 'waiting',  label: 'Ждут регистрации', icon: 'Bell' },
 ];
-const SUB_TO_TAB = { queue: 'queue', calendar: 'calendar', booking: 'booking' };
+const SUB_TO_TAB = { queue: 'queue', calendar: 'calendar', booking: 'booking', waiting: 'waiting' };
+// WAIT_REG_V1 — вкладку видит стойка (администратор, регистратура): сервер отдаёт список только
+// ей (rpc/registrar-waiting.js WAITING_ROLES) — вкладка, за которой сервер откажет, не рисуется
+// (V3120_FIX). Своего ключа прав нет: стойка — роль, а не окно матрицы.
+const TAB_ROLES = { waiting: WAITING_ROLES };
+// WAIT_REG_V1 — анализы «на дату» (заявки CRM) поток изменений не несёт: список перечитывается
+// и сам — раз в минуту, пока раздел на экране.
+const WAITING_POLL_MS = 60000;
 
 // ROLE_QUEUE_V1 — скрыт ли раздел в «Видимости разделов» (FIX_318_V1: правило
 // оболочки, window.easymed.isNavHidden). Нет оболочки — не скрыт.
@@ -94,7 +108,7 @@ function navHidden(id) {
 //   * всё через tr()/trf() и monthName() — на узбекском и английском баннер
 //     говорит на своём языке, а не по-русски.
 // ---------------------------------------------------------------------------
-const HERO_SUB = { list: 'База пациентов', queue: 'Очередь', calendar: 'Календарь записи', booking: 'Бронирование' };
+const HERO_SUB = { list: 'База пациентов', queue: 'Очередь', calendar: 'Календарь записи', booking: 'Бронирование', waiting: 'Ждут регистрации' };
 
 // SECTION_HERO_V1 — баннер стал общим для клинических разделов
 // (views/section-hero.js); здесь только то, что знает «Пациенты»: подзаголовок
@@ -210,7 +224,18 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     const TAB_NAV = { queue: 'queue' };
     const visibleTabs = TABS.filter((t) => (!TAB_GRANT[t.id] || grantAllows(TAB_GRANT[t.id], 'view'))
         && (!TAB_ROUTE[t.id] || isRouteAllowed(TAB_ROUTE[t.id]))
-        && (!TAB_NAV[t.id] || !navHidden(TAB_NAV[t.id])));
+        && (!TAB_NAV[t.id] || !navHidden(TAB_NAV[t.id]))
+        && (!TAB_ROLES[t.id] || hasActorRole(TAB_ROLES[t.id])));   // WAIT_REG_V1
+    // WAIT_REG_V1 — счётчик «Ждут регистрации» на самой вкладке: виден и тогда, когда открыта
+    // другая вкладка (регистратор весь день в «Списке»). «0» не рисуется.
+    const hasWaiting = visibleTabs.some((t) => t.id === 'waiting');
+    const waitBadge = hasWaiting ? h('span', { class: 'reg-tab-badge', 'data-tab-badge': 'waiting', hidden: true }) : null;
+    function setWaitingCount(n) {
+        if (!waitBadge) return;
+        const k = Math.max(0, Number(n) || 0);
+        waitBadge.textContent = k > 0 ? String(k) : '';
+        if (k > 0) waitBadge.removeAttribute('hidden'); else waitBadge.setAttribute('hidden', '');
+    }
     for (const t of visibleTabs) {
         hosts[t.id] = h('div', {
             id: 'phub-panel-' + t.id, role: 'tabpanel',
@@ -223,7 +248,7 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             'aria-selected': 'false', tabindex: '-1', 'data-tab': t.id,
             onclick: () => { select(t.id); },
             onkeydown: (ev) => moveByKey(ev, t.id),
-        }, Icon(t.icon, { size: 14 }), h('span', null, t.label));
+        }, Icon(t.icon, { size: 14 }), h('span', null, t.label), t.id === 'waiting' ? waitBadge : null);
         strip.appendChild(buttons[t.id]);
     }
     // PATIENTS_HERO_V1 — полоса вкладок живёт внутри тёмного баннера.
@@ -234,8 +259,9 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     // Вкладка монтируется при первом показе и дальше ЖИВЁТ: прокрутка списка,
     // страница пагинации и наполовину введённый поиск переживают уход на
     // соседнюю вкладку — ровно как панели переживают уход на соседний экран.
-    const mounted = { list: false, queue: false, calendar: false, booking: false };
+    const mounted = { list: false, queue: false, calendar: false, booking: false, waiting: false };
     let queue = null;        // пульт доски очереди (views/queue.js)
+    let waiting = null;      // WAIT_REG_V1 — пульт списка «Ждут регистрации» (views/registrar-waiting.js)
     let active = SUB_TO_TAB[sub] || 'list';
     // GRANTS_V1 — адрес просит закрытую вкладку: открываем список, а не пустой экран.
     if (!visibleTabs.some((t) => t.id === active)) active = 'list';
@@ -327,6 +353,12 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             await renderBookingDay(hosts.booking, { onNavigate: ctx.onNavigate });
             return;
         }
+        if (id === 'waiting') {   // WAIT_REG_V1
+            if (mounted.waiting) { if (waiting) await waiting.reload(); return; }   // вернулись — свежее чтение
+            mounted.waiting = true;
+            waiting = await renderRegistrarWaiting(hosts.waiting, { onNavigate: ctx.onNavigate, onCount: setWaitingCount });
+            return;
+        }
         if (mounted.calendar) return;
         mounted.calendar = true;
         // CALENDAR_RETRY_V1 — флаг снимается обратно, если смонтировать не
@@ -359,11 +391,40 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
 
     await select(active, { initial: true });
 
+    // WAIT_REG_V1 — СЧЁТЧИК «ЖДУТ РЕГИСТРАЦИИ» ЖИВЁТ, ПОКА РАЗДЕЛ НА ЭКРАНЕ. Вкладка смонтирована —
+    // перечитывается она сама (и называет число); нет — спрашивается только число. Будит его
+    // запись визита, строки или счёта (live-relevance.js 'registrar', поток /api/live), а анализы
+    // «на дату» потоком не приходят — поэтому ещё и раз в минуту. Сбой счётчика экран не роняет.
+    let waitingTimer = null;
+    let liveStop = () => {};
+    async function refreshWaiting() {
+        if (!hasWaiting) return;
+        try {
+            if (waiting) { await waiting.reload(); return; }
+            const res = await loadRegistrarWaiting();
+            setWaitingCount(res.count);
+        } catch (_) { /* число не узнали — вкладка покажет причину сама, когда её откроют */ }
+    }
+    if (hasWaiting) {
+        if (active !== 'waiting') void refreshWaiting();   // открыта сама вкладка — число уже назвала она
+        liveStop = watchScreen({ root, screen: 'registrar', reload: () => refreshWaiting() });
+        waitingTimer = setInterval(() => {
+            if (root.isConnected === false) { clearInterval(waitingTimer); waitingTimer = null; return; }
+            if (typeof document !== 'undefined' && document.hidden) return;
+            void refreshWaiting();
+        }, WAITING_POLL_MS);
+        if (waitingTimer && typeof waitingTimer.unref === 'function') waitingTimer.unref();
+    }
+
     return {
         activeTab: () => active,
         select,
         // Оболочка панель не размонтирует, пока та в кэше; когда размонтирует —
         // доска снимет свой таймер сама (views/queue.js следит за isConnected).
-        destroy() { hero.stop(); if (queue) queue.destroy(); },   // PATIENTS_HERO_V1 — и часы баннера
+        destroy() {
+            hero.stop(); if (queue) queue.destroy();   // PATIENTS_HERO_V1 — и часы баннера
+            if (waitingTimer) { clearInterval(waitingTimer); waitingTimer = null; }   // WAIT_REG_V1
+            liveStop();
+        },
     };
 }

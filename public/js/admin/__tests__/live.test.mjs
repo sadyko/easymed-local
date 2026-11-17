@@ -526,5 +526,9 @@ test('правила экранов: касса — счета и оплаты; 
     assert.equal(is('procedures', ['invoices']), false);
     assert.equal(liveRelevant('cashier')({ reset: true, tables: [], rpc: [] }), true);
     assert.equal(liveRelevant('нет-такого')({ tables: ['invoices'] }), false);
-    assert.deepEqual(Object.keys(LIVE_RELEVANCE).sort(), ['cabinet', 'cabinetDay', 'cashier', 'laboratory', 'procedures']);
+    // WAIT_REG_V1 — «Ждут регистрации»: визиты, строки и счета (оформили — пациент уходит из списка).
+    assert.equal(is('registrar', ['visit_services']), true, 'записали услугу — список стойки');
+    assert.equal(is('registrar', ['invoices']), true, 'выставили счёт — пациент оформлен');
+    assert.equal(is('registrar', ['lab_results']), false);
+    assert.deepEqual(Object.keys(LIVE_RELEVANCE).sort(), ['cabinet', 'cabinetDay', 'cashier', 'laboratory', 'procedures', 'registrar']);
 });

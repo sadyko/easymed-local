@@ -146,6 +146,7 @@ const BOARD = {
 let rpcCalls = [];
 let rpcArgs = [];   // BOOKING_DAY_V1 — с какими аргументами звали RPC
 let AGGS = null;   // V3120_FIX — ответ patient_base_aggregates
+let WAITING = null;   // WAIT_REG_V1 — ответ registrar_waiting («Ждут регистрации»)
 // BOOKING_DAY_V1 — врачи, виды консультаций и день врача (calendar_slots).
 const DOCTORS = [
   { id: 7, full_name: 'Алиева Нигора', specialty: 'Терапевт', role: 'doctor', is_doctor: 1,
@@ -197,6 +198,7 @@ globalThis.fetch = async (url, opts = {}) => {
     if (name === 'patient_bot_status') return ok({ data: { bot: true, sms_ready: false, linked: ['p-1'] } });
     // V3120_FIX — сводка реестра: депозит и долг раздельно (rpc/patient-aggregates.js).
     if (name === 'patient_base_aggregates') return ok({ data: AGGS });
+    if (name === 'registrar_waiting') return ok({ data: WAITING ? JSON.parse(JSON.stringify(WAITING)) : null });   // WAIT_REG_V1
     // V3120_FIX — настоящая форма ответа сервера (rpc/telegram.js telegramChatsList).
     if (name === 'telegram_chats_list') return ok({ data: { chats: [{ chat_id: '1', phone: '+998901112233', patients: [{ id: 'p-1', name: 'Эргашев Жахонгир' }] }], unread: 0, folders: [] } });
     return ok({ data: null });
@@ -270,7 +272,8 @@ test('каждая вкладка показывает СВОЁ: список п
 
   const btns = tabButtons(box);
   // BOOKING_DAY_V1 — четвёртая вкладка «Бронирование»: день одного врача.
-  assert.deepEqual(btns.map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование'], 'полоса вкладок не та');
+  // WAIT_REG_V1 — пятая, у стойки: «Ждут регистрации».
+  assert.deepEqual(btns.map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование', 'Ждут регистрации'], 'полоса вкладок не та');
   assert.equal(hub.activeTab(), 'list', 'по умолчанию открывается не список');
   assert.equal(visiblePanels(box).length, 1, 'видна не ровно одна вкладка');
 
@@ -306,7 +309,7 @@ test('полоса вкладок доступна с клавиатуры: ст
   // В tablist из порядка обхода Tab вынуто всё, кроме активной вкладки, —
   // значит по стрелкам обязано ходить, иначе двух вкладок из трёх для
   // клавиатуры просто не существует.
-  assert.deepEqual(btns.map((b) => b.attrs.tabindex), ['0', '-1', '-1', '-1']);
+  assert.deepEqual(btns.map((b) => b.attrs.tabindex), ['0', '-1', '-1', '-1', '-1']);
   const press = (b, key) => b.dispatchEvent({ type: 'keydown', key, preventDefault() {} });
 
   press(btns[0], 'ArrowRight'); await tick();
@@ -316,16 +319,18 @@ test('полоса вкладок доступна с клавиатуры: ст
   press(btns[2], 'ArrowRight'); await tick();
   assert.equal(hub.activeTab(), 'booking');   // BOOKING_DAY_V1
   press(btns[3], 'ArrowRight'); await tick();
+  assert.equal(hub.activeTab(), 'waiting');   // WAIT_REG_V1
+  press(btns[4], 'ArrowRight'); await tick();
   assert.equal(hub.activeTab(), 'list', 'стрелка вправо с последней вкладки не вернулась к первой');
   press(btns[0], 'ArrowLeft'); await tick();
-  assert.equal(hub.activeTab(), 'booking');
-  press(btns[3], 'Home'); await tick();
+  assert.equal(hub.activeTab(), 'waiting');
+  press(btns[4], 'Home'); await tick();
   assert.equal(hub.activeTab(), 'list');
   press(btns[0], 'End'); await tick();
-  assert.equal(hub.activeTab(), 'booking');
+  assert.equal(hub.activeTab(), 'waiting');
   // Активная вкладка — единственная в порядке обхода, и она же помечена.
-  assert.deepEqual(tabButtons(box).map((b) => b.attrs['aria-selected']), ['false', 'false', 'false', 'true']);
-  assert.deepEqual(tabButtons(box).map((b) => b.attrs.tabindex), ['-1', '-1', '-1', '0']);
+  assert.deepEqual(tabButtons(box).map((b) => b.attrs['aria-selected']), ['false', 'false', 'false', 'false', 'true']);
+  assert.deepEqual(tabButtons(box).map((b) => b.attrs.tabindex), ['-1', '-1', '-1', '-1', '0']);
   hub.destroy();
 });
 
@@ -428,7 +433,7 @@ test('регистратура видит все три вкладки, и ка�
 
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-  assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование'],
+  assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование', 'Ждут регистрации'],
     'регистратура недосчиталась вкладок');
   hub.destroy();
 
@@ -720,7 +725,7 @@ test('V3120_FIX: вкладки «Записи» и «Очередь» — то�
     ['cashier',   ['patients', 'queue'],        ['Список', 'Очередь']],
     ['lab',       ['patients', 'labs'],         ['Список']],
     // BOOKING_DAY_V1 — «Бронирование» видят те же, кому открыты «Записи».
-    ['registrar', ['patients', 'queue'],        ['Список', 'Очередь', 'Записи', 'Бронирование']],
+    ['registrar', ['patients', 'queue'],        ['Список', 'Очередь', 'Записи', 'Бронирование', 'Ждут регистрации']],   // WAIT_REG_V1 — вкладка стойки
     ['doctor',    ['patients'],                 ['Список', 'Записи', 'Бронирование']],
   ];
   try {
@@ -761,13 +766,13 @@ test('ROLE_QUEUE_V1: скрытая в «Видимости разделов» �
     setEffectiveFromRole({ name: 'registrar', permissions: { sections: ['patients', 'queue'], levels: {} } });
     let box = mk('div');
     let hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-    assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование'], 'подготовка: без скрытия вкладка «Очередь» есть');
+    assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование', 'Ждут регистрации'], 'подготовка: без скрытия вкладка «Очередь» есть');
     hub.destroy();
 
     globalThis.window.easymed.isNavHidden = (id) => hidden.has(id);
     box = mk('div');
     hub = await renderPatientsHub(box, ctxFor({ sub: 'queue' }), { calendarLoader: async () => async () => {} });
-    assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Записи', 'Бронирование'], 'скрытая «Очередь» осталась вкладкой «Пациентов»');
+    assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Записи', 'Бронирование', 'Ждут регистрации'], 'скрытая «Очередь» осталась вкладкой «Пациентов»');
     assert.equal(hub.activeTab(), 'list', 'адрес #patients/queue открыл скрытую доску');
     assert.equal(boards(box).length, 0, 'доска смонтирована, хотя раздел скрыт');
     hub.destroy();
@@ -1195,4 +1200,89 @@ test('BOOKING_CANCEL_GUARD_V1: устаревшая строка — стату�
     globalThis.window.confirm = prevConfirm;
     globalThis.document.getElementById = prevById;
   }
+});
+
+// ===========================================================================
+// WAIT_REG_V1 (3.25.0) — «Ждут регистрации»: вкладка стойки со счётчиком; строки пациентов,
+// источник словами, «Оформить по записи» открывает окно визита этого пациента.
+// ===========================================================================
+test('WAIT_REG_V1: вкладка «Ждут регистрации» — у стойки, со счётчиком; кассе, медсестре и врачу — нет', async () => {
+  const sessionUser = globalThis.window.easymed.state.user;
+  try {
+    reset();
+    WAITING = { today: '2026-11-17', count: 2, rows: [
+      { patient_id: 'p-1', patient_name: 'Эргашев Жахонгир', mrn: 'MRN-1', phone: '+998901112233', time: '09:30', sources: [{ kind: 'crm', name: '' }], doctors: ['Алиева Нигора'], services: ['Консультация терапевта'], booked_by: ['Оператор Ким'], lines: [] },
+      { patient_id: 'p-2', patient_name: 'Юсупова Дилноза', mrn: 'MRN-2', phone: '', time: null, sources: [{ kind: 'doctor', name: 'Алиева Нигора' }], doctors: [], services: ['ОАК'], booked_by: [], lines: [] },
+    ] };
+    const box = mk('div');
+    const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
+    await tick(60);
+    const btn = tabButtons(box).find((b) => b.attrs['data-tab'] === 'waiting');
+    assert.ok(btn, 'у стойки нет вкладки «Ждут регистрации»');
+    const badge = walk(btn).find((n) => n.attrs && n.attrs['data-tab-badge'] === 'waiting');
+    assert.ok(badge, 'у вкладки нет счётчика');
+    assert.equal(badge.textContent, '2', 'счётчик не говорит, сколько ждут');
+    assert.equal('hidden' in badge.attrs, false, 'счётчик спрятан при двух ожидающих');
+    assert.ok(rpcCalls.includes('registrar_waiting'), 'счётчик не спросил сервер');
+    btn.click(); await tick(60);
+    assert.equal(hub.activeTab(), 'waiting');
+    const panel = panelFor(box, 'waiting');
+    const txt = textOf(panel);
+    assert.ok(txt.includes('Эргашев Жахонгир') && txt.includes('Юсупова Дилноза'), 'пациентов нет во вкладке');
+    assert.ok(txt.includes('Колл-центр / CRM'), 'источник «Колл-центр / CRM» не назван');
+    assert.ok(txt.includes('Направил врач Алиева Нигора'), 'направивший врач не назван');
+    assert.ok(txt.includes('09:30') && txt.includes('Консультация терапевта') && txt.includes('Оператор Ким'), 'время, услуги или кто записал не показаны');
+    assert.equal(walk(panel).filter((n) => n.attrs && n.attrs['data-rwait-register'] !== undefined).length, 2, 'нет «Оформить по записи»');
+    assert.ok(String(lastHistoryUrl).endsWith('#patients/waiting'), 'вкладка не в адресе');
+    hub.destroy();
+    // Пусто — счётчик спрятан.
+    WAITING = { today: '2026-11-17', count: 0, rows: [] };
+    const box2 = mk('div');
+    const hub2 = await renderPatientsHub(box2, ctxFor({ sub: 'waiting' }), { calendarLoader: async () => async () => {} });
+    await tick(60);
+    assert.equal(hub2.activeTab(), 'waiting', 'адрес #patients/waiting открыл не ту вкладку');
+    const b2 = walk(box2).find((n) => n.attrs && n.attrs['data-tab-badge'] === 'waiting');
+    assert.ok('hidden' in b2.attrs, 'счётчик «0» виден');
+    assert.ok(textOf(panelFor(box2, 'waiting')).includes('Сегодня никого не ждём'), 'пустой список не объяснён');
+    hub2.destroy();
+    // Не стойка — вкладки нет, сервер не спрошен.
+    for (const role of ['cashier', 'nurse', 'doctor']) {
+      reset();
+      globalThis.window.easymed.state.user = { ...sessionUser, role };
+      setEffectiveFromRole({ name: role, permissions: { sections: ['patients', 'queue'], levels: {} } });
+      const b = mk('div');
+      const h3 = await renderPatientsHub(b, ctxFor({ sub: 'waiting' }), { calendarLoader: async () => async () => {} });
+      await tick(30);
+      assert.equal(tabButtons(b).some((x) => x.attrs['data-tab'] === 'waiting'), false, role + ': вкладка стойки видна');
+      assert.equal(h3.activeTab(), 'list', role + ': адрес открыл закрытую вкладку');
+      assert.equal(rpcCalls.includes('registrar_waiting'), false, role + ': закрытая вкладка спросила сервер');
+      h3.destroy();
+    }
+  } finally {
+    WAITING = null;
+    globalThis.window.easymed.state.user = sessionUser;
+    setFullAccess('Admin');
+  }
+});
+
+test('WAIT_REG_V1: «Оформить по записи» открывает окно визита этого пациента; счётчик обновляется вместе со списком', async () => {
+  reset();
+  const { renderRegistrarWaiting } = await import('../views/registrar-waiting.js');
+  let rows = [{ patient_id: 'p-1', patient_name: 'Эргашев Жахонгир', mrn: 'MRN-1', phone: '+998901112233', time: '09:30', sources: [{ kind: 'partner', name: 'med24.uz' }], doctors: [], services: ['УЗИ'], booked_by: [], lines: [] }];
+  const counts = [];
+  const opened = [];
+  const host = mk('div');
+  const tab = await renderRegistrarWaiting(host, { onCount: (n) => counts.push(n) }, {
+    load: async () => ({ today: '2026-11-17', count: rows.length, rows }),
+    openWizard: async (onSaved, patient, opts) => { opened.push({ patient, opts }); rows = []; await onSaved(); },
+  });
+  assert.ok(textOf(host).includes('Сайт / партнёр · med24.uz'), 'партнёр не назван');
+  walk(host).find((n) => n.attrs && n.attrs['data-rwait-register'] === 'p-1').click();
+  await tick(60);
+  assert.equal(opened.length, 1, 'окно визита не открылось');
+  assert.equal(opened[0].patient.id, 'p-1');
+  assert.equal(opened[0].patient.full_name, 'Эргашев Жахонгир');
+  assert.deepEqual(counts, [1, 0], 'после оформления список и счётчик не перечитаны');
+  assert.ok(textOf(host).includes('Сегодня никого не ждём'));
+  assert.equal(tab.state.rows.length, 0);
 });
