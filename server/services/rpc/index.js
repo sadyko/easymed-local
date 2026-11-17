@@ -67,6 +67,7 @@ import { removeOwnVisitLine, visitSetReferralSource } from './visit-lines.js';  
 import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
 import { patientReferralOrders, referralRecommendationAttach, referralVisitLinks } from './referral-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача» у стойки
 import { registrarWaiting } from './registrar-waiting.js';   // WAIT_REG_V1 — «Ждут регистрации»: кого сегодня ждёт стойка
+import { crmWishRelease, referralLineSkip, registrarRegistered } from './registrar-desk.js';   // WAIT_REG_V1 (ревью) — двери стойки при регистрации
 import { myReferrals } from './my-referrals.js';   // MY_REFERRALS_V1 — «Мои направления» кабинета врача
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
 import { doctorUpcomingVisits } from './doctor-upcoming.js';   // REPEAT_VISIT_V1 — «Записи вперёд» кабинета врача
@@ -358,7 +359,13 @@ export const RPC = {
   // WAIT_REG_V1 — «Ждут регистрации»: сегодняшние записи, анализы «на дату» и направления врача,
   // ещё не оформленные стойкой. Только чтение (READ_ONLY_RPCS); стойке — администратор и регистратура.
   registrar_waiting:         (db, args, user) => registrarWaiting(db, args, user),
-  my_referrals:              (db, args, user) => myReferrals(db, args, user),                    // MY_REFERRALS_V1 — «Мои направления» кабинета врача (чтение)
+  // WAIT_REG_V1 (ревью H1, M2, L4, решение владельца) — двери стойки при регистрации (запись, журнал в той же
+  // транзакции): анализ «на дату» — в заявку без даты до ensure_visit; направление врача не оформлено;
+  // пациент оформлен без счёта.
+  crm_wish_release:          (db, args, user) => crmWishRelease(db, args, user),
+  referral_line_skip:        (db, args, user) => referralLineSkip(db, args, user),
+  registrar_registered:      (db, args, user) => registrarRegistered(db, args, user),
+  my_referrals:             (db, args, user) => myReferrals(db, args, user),                    // MY_REFERRALS_V1 — «Мои направления» кабинета врача (чтение)
   visit_set_doctor_referrer: (db, args, user) => visitSetDoctorReferrer(db, args, user),  // REPORTS_V2 ревью I3/I5 · REFERRAL_LINE_V1 (ревью полировки N1) — снят: ничего не пишет (вкладки со старым окном визита)
   owner_report:             (db, args, user) => ownerReport(db, args, user),   // REPORTS_HUB_RU_V1 — «Отчёт владельца» charts
   // BUILDING_REPORTS_V1 — перечень ЗДАНИЙ клиники для выборки в «Отчётах».

@@ -36,7 +36,7 @@ import {
 import { adoptWishes, releaseOrphans, bookLinesOnCard } from '../crm/one-way.js';   // CRM_ONE_WAY_V1
 import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
 import { localDate } from '../domain/day.js';
-import { actingActorName } from '../../../public/js/shared/act-as.js';   // WAIT_REG_V1 — журнал от имени (как logRepeatOrders)
+import { journalLine, lineServiceName } from './registrar-desk.js';   // WAIT_REG_V1 (ревью) — журнал правок строк одной функцией (от имени — actingActorName)
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -158,31 +158,39 @@ export function bookingLinesAdd(db, args, user) {
 // повтора DUP_STOP_V1 line_repeat_order; discard_empty_visit записи line_* визитом не считает) в той
 // же транзакции, что снимает строку. Причина прислана — не короче трёх знаков (как у экстренной
 // записи и повтора), иначе отказ и строка на месте. Без причины — как прежде (календарь, карточка CRM).
+//
+// WAIT_REG_V1 (ревью M3) — ОКНО РЕГИСТРАЦИИ БЕЗ ПРИЧИНЫ НЕ СНИМАЕТ. Окно визита и быстрая регистрация
+// шлют registration: true — тогда причина обязательна (отказ, строка на месте), и забытое окном
+// «спросить причину» не превращается в молча снятую запись. Календарь и карточка CRM флага не шлют
+// и снимают как прежде: правило «сегодняшняя строка — только с причиной» сломало бы календарю
+// правку записи на сегодня по звонку пациента (его выбрали как наименее вторгающееся).
+// WAIT_REG_V1 (ревью L1) — журнал не говорит «при регистрации»: строка снимается ДО ensure_visit, и
+// регистрация после неё может и не состояться; в журнале — номер строки визита (миграция 287).
 const DROP_REASON_MIN = 3;
 const DROP_REASON_MAX = 500;
 function dropReasonArg(args) {
-  if (!args || args.reason === undefined || args.reason === null) return null;
+  const registration = !!(args && (args.registration === true || args.registration === 'true'));
+  if (!args || args.reason === undefined || args.reason === null) {
+    if (registration) throw new RpcError('Укажите причину: не короче трёх знаков.', 400);
+    return null;
+  }
   const r = typeof args.reason === 'string' ? args.reason.trim() : '';
   if (r.length < DROP_REASON_MIN) throw new RpcError('Укажите причину: не короче трёх знаков.', 400);
   return r.slice(0, DROP_REASON_MAX);
 }
 function logBookedDrop(db, row, reason, user) {
-  const actor = user && user.id != null ? db.prepare('SELECT id, full_name, role FROM users WHERE id = ?').get(user.id) : null;
-  const svc = row.service_id != null ? db.prepare('SELECT name FROM services WHERE id = ?').get(row.service_id)
-    : row.consultation_type_id != null ? db.prepare('SELECT COALESCE(name_ru, name) AS name FROM consultation_types WHERE id = ?').get(row.consultation_type_id) : null;
-  const name = (svc && svc.name) || '—';
-  db.prepare(`INSERT INTO invoice_audit_log (visit_id, action, actor_user_id, actor_name, actor_role, reason, notes)
-              VALUES (?, 'line_booked_removed', ?, ?, ?, ?, ?)`)
-    .run(row.visit_id, actor ? actor.id : null, actor ? actingActorName(user, actor.full_name || null) : null, actor ? actor.role || null : null,
-      reason, `Услуга «${name}» снята с записи при регистрации`);
+  /* i18n-exempt-start: строка журнала ПИШЕТСЯ В БАЗУ, а не рисуется */
+  journalLine(db, { visitId: row.visit_id, vsId: Number(row.id), action: 'line_booked_removed', reason,
+    notes: `Услуга «${lineServiceName(db, row)}» снята с записи регистратурой` }, user);
+  /* i18n-exempt-end */
 }
 
-/** booking_line_remove { visit_service_id, reason? } → { removed: true, id } */
+/** booking_line_remove { visit_service_id, reason?, registration? } → { removed: true, id } */
 export function bookingLineRemove(db, args, user) {
   if (!hasAnyRole(user, ROLES)) throw new RpcError('Снимать услуги с записи может колл-центр, регистратура или администратор.', 403);
   const id = Number(args && args.visit_service_id);
   if (!isPosInt(id)) throw new RpcError('Не выбрана услуга записи.', 400);
-  const reason = dropReasonArg(args);   // WAIT_REG_V1
+  const reason = dropReasonArg(args);   // WAIT_REG_V1 · ревью M3 — окну регистрации — обязательна
   const run = db.transaction(() => {
     const row = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(id);
     if (!row) throw new RpcError('Услуга записи не найдена.', 404);
