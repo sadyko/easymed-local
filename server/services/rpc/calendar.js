@@ -1151,6 +1151,56 @@ export async function extendBookingForJoin(db, user, visit, requested = [], deps
   return { ...out, until: formatHhmm(seg ? seg.to : endMin) };
 }
 
+// ─── BOOKING_CANCEL_GUARD_V1 (2026-11-17) — ОТМЕНА ЗАПИСИ, А НЕ ПРИЁМА ──────
+//
+// Отмена визита — calendar_book со status 'cancelled' — пропускала любой визит.
+// «Бронирование» рисует корзину у строки «Записан»/«Подтверждён» и само не
+// обновляется; пока экран стоял, пациент пришёл и заплатил, и корзина отменяла
+// оплаченный приём (ревью, проба P3: визит «Отменён», счёт «Оплачен» 100 000).
+// Той же дверью отменяют календарь «Записи» и окно визита, поэтому правило
+// живёт здесь, а не в экране.
+//
+// Отменить можно только ЗАПИСЬ: до прихода, без работы и без денег. Отказ — 409,
+// код cancel_refused (params.reason), слова для экрана — если
+//   • пациент пришёл (visits.status 'arrived');
+//   • строка визита ушла дальше сметы — в очереди, в работе, выполнена — или это
+//     выданный товар; отменённая строка работой не считается;
+//   • по счёту визита есть оплата (в т. ч. частичная) — сначала возврат в кассе;
+//   • счёт в долг;
+//   • выставлен неоплаченный счёт. РЕШЕНИЕ: отказ, сначала касса отменяет счёт
+//     («Отменить счёт», void_invoice — неначатые услуги уходят вместе с ним).
+//     Иначе визит «Отменён», а живой счёт висел бы в кассе к оплате.
+// Отменённый кассой или полностью возвращённый счёт (void / refunded без денег)
+// отмену не держит. Как хранятся прежние отмены — не меняется.
+const CANCEL_FREE_LINE = ['added', 'cancelled'];
+function cancelRefusal(db, visit) {
+  if (visit.status === 'arrived') {
+    return new RpcError('Пациент уже пришёл — эту запись отменить нельзя.', 409, 'cancel_refused', { reason: 'arrived' });
+  }
+  const worked = db.prepare(`SELECT 1 FROM visit_services
+      WHERE visit_id = ? AND (status NOT IN (${CANCEL_FREE_LINE.map(() => '?').join(',')}) OR clinic_item_id IS NOT NULL)
+      LIMIT 1`).get(visit.id, ...CANCEL_FREE_LINE);
+  if (worked) {
+    return new RpcError('По записи уже идёт работа — отменить её нельзя.', 409, 'cancel_refused', { reason: 'work' });
+  }
+  // Счёт визита — по visit_id и по строкам визита, попавшим в счёт.
+  const invoices = db.prepare(`SELECT status, paid_amount FROM invoices
+      WHERE visit_id = ?
+         OR id IN (SELECT ii.invoice_id FROM invoice_items ii
+                     JOIN visit_services vs ON vs.invoice_item_id = ii.id WHERE vs.visit_id = ?)`).all(visit.id, visit.id);
+  if (invoices.some((i) => Number(i.paid_amount) > 0.005)) {
+    return new RpcError('По записи есть оплата — отменить её нельзя. Сначала оформите возврат в кассе.', 409, 'cancel_refused', { reason: 'paid' });
+  }
+  const live = invoices.filter((i) => i.status !== 'void' && i.status !== 'refunded');
+  if (live.some((i) => i.status === 'debt')) {
+    return new RpcError('Счёт по записи в долг — отменить её нельзя. Сначала решите счёт в кассе.', 409, 'cancel_refused', { reason: 'debt' });
+  }
+  if (live.length) {
+    return new RpcError('По записи выставлен счёт. Сначала отмените счёт в кассе, затем запись.', 409, 'cancel_refused', { reason: 'invoice' });
+  }
+  return null;
+}
+
 /**
  * args:
  *   { visit_id?, patient_id?, doctor_id?, room_id?, service_id?, branch_id?,
@@ -1220,6 +1270,13 @@ export async function calendarBook(db, args, user, deps = {}) {
   const status = typeof a.status === 'string' && a.status
     ? a.status
     : (existing ? existing.status : 'scheduled');
+
+  // BOOKING_CANCEL_GUARD_V1 — отменяется запись, а не приём (cancelRefusal выше).
+  // Уже отменённую запись повторно отменить можно: ничего не меняется.
+  if (existing && status === 'cancelled' && existing.status !== 'cancelled') {
+    const refusal = cancelRefusal(db, existing);
+    if (refusal) throw refusal;
+  }
 
   // (V3120_FIX: проверка поднята выше правила визита дня — отказ по
   // источнику не должен теряться за переносом.)

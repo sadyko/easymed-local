@@ -1134,3 +1134,65 @@ test('BOOKING_DAY_CANCEL_V1: отмена записи в конце строк�
     globalThis.window.confirm = prevConfirm;
   }
 });
+
+// BOOKING_CANCEL_GUARD_V1 — строка нарисована, когда запись была «Подтверждён»;
+// пока экран стоял, пациент пришёл и заплатил. Корзина не должна отменять приём:
+// экран перечитывает статус записи, а отказ сервера показывает словами — и в
+// обоих случаях перечитывает день, чтобы строка показала, как есть.
+test('BOOKING_CANCEL_GUARD_V1: устаревшая строка — статус перечитан, пришедшего не отменяем; отказ сервера — словами, день перечитан', async () => {
+  reset(); rpcArgs = [];
+  const calls = [];
+  let refusal = null;
+  const prevConfirm = globalThis.window.confirm;
+  globalThis.window.confirm = () => true;
+  // Тост пишется в #toast (ui.js toast): подменяем сам элемент, чтобы прочесть
+  // текст — у поддельного DOM поле текста (_t) тост занимает своим таймером.
+  const toasts = [];
+  const toastEl = { set textContent(v) { toasts.push(String(v)); }, dataset: {}, classList: { add() {}, remove() {} }, _t: null };
+  const prevById = globalThis.document.getElementById;
+  globalThis.document.getElementById = (id) => (id === 'toast' ? toastEl : prevById(id));
+  const lastToast = () => toasts[toasts.length - 1] || '';
+  const v101 = VISITS.find((v) => v.id === 101);
+  try {
+    const host = mk('div');
+    const api = await renderBookingDay(host, { onNavigate() {} }, {
+      setVisitStatus: async (v, st) => { calls.push([v && v.id, st]); if (refusal) throw new Error(refusal); },
+    });
+    api.pickDoctor(DOCTORS[0]);
+    await tick(120);
+    const btn = () => byData(host, 'data-bkd-cancel').find((n) => n.attrs['data-bkd-cancel'] === '101');
+
+    // 1. Пациент уже пришёл (строка ещё «Подтверждён») — сервер даже не зовём.
+    v101.status = 'arrived';
+    let before = rpcArgs.filter(([n]) => n === 'calendar_slots').length;
+    btn().click();
+    await tick(120);
+    assert.equal(calls.length, 0, 'устаревшая строка отменила пришедшего');
+    assert.match(lastToast(), /уже пришёл/);
+    assert.ok(rpcArgs.filter(([n]) => n === 'calendar_slots').length > before, 'день не перечитан');
+
+    // 2. Статус ещё «Подтверждён», но сервер отказал (оплата) — слова сервера, день перечитан.
+    v101.status = 'confirmed';
+    refusal = 'По записи есть оплата — отменить её нельзя. Сначала оформите возврат в кассе.';
+    before = rpcArgs.filter(([n]) => n === 'calendar_slots').length;
+    btn().click();
+    await tick(120);
+    assert.equal(calls.length, 1);
+    assert.equal(lastToast(), refusal, 'отказ сервера не показан');
+    assert.ok(rpcArgs.filter(([n]) => n === 'calendar_slots').length > before, 'после отказа день не перечитан');
+
+    // 3. Записи уже нет — тоже перечитываем день (раньше return уходил мимо loadDay).
+    const saved = VISITS.splice(0, VISITS.length);
+    try {
+      before = rpcArgs.filter(([n]) => n === 'calendar_slots').length;
+      btn().click();
+      await tick(120);
+      assert.match(lastToast(), /не найдена/);
+      assert.ok(rpcArgs.filter(([n]) => n === 'calendar_slots').length > before, 'пропавшая запись — день не перечитан');
+    } finally { VISITS.push(...saved); }
+  } finally {
+    v101.status = 'confirmed';
+    globalThis.window.confirm = prevConfirm;
+    globalThis.document.getElementById = prevById;
+  }
+});

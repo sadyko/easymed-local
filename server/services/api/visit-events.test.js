@@ -204,6 +204,12 @@ test('рр-6: предоплата накануне — утром в день �
   const s = bookingSeed();
   const a = await prepaid(s);
   assert.equal(one(s.db, 'SELECT status FROM api_requests WHERE id = ?', a.id).status, 'confirmed', '00:05 — пациента ещё нет');
+  // BOOKING_CANCEL_GUARD_V1 (2026-11-17) — оплаченную запись календарь не отменяет: сначала касса
+  // возвращает предоплату (платёж возврата, счёт «Возвращён»), потом отмена. Было: отмена сразу.
+  await assert.rejects(calendarBook(s.db, { visit_id: a.visit.id, start: a.visit.visit_date, status: 'cancelled' }, s.reg),
+    (e) => e.status === 409 && e.code === 'cancel_refused');
+  s.db.prepare('INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (1, -150000, ?, ?)').run('cash', new Date(localAt('2030-03-12', '08:30')).toISOString());
+  s.db.prepare("UPDATE invoices SET paid_amount = 0, status = 'refunded' WHERE id = 1").run();
   await calendarBook(s.db, { visit_id: a.visit.id, start: a.visit.visit_date, status: 'cancelled' }, s.reg);
   syncVisitOutcomes(s.db, { now: localAt('2030-03-12', '09:00'), kekPath: s.kekPath });
   assert.deepEqual([last(s)[0], last(s)[1].status], ['appointment.cancelled', 'cancelled']);

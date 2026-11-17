@@ -30,10 +30,14 @@ test('CRM_ONE_WAY_V1 (повтор r4) — R4-M5: analysis added from the card t
     assert.equal(ins.status, 200, ins.text);
     const lab = ins.json.data.id;
     assert.deepEqual([lineOf(t, lab).visit_id, lineOf(t, lab).visit_service_id], [v, null], 'held for arrival');
-    // mistaken cancel, then «Записан» again
-    assert.equal((await t.rpc('calendar_book', 'reg', { visit_id: v, start: at(today, 23), status: 'cancelled' })).status, 200);
-    assert.equal((await t.rpc('calendar_book', 'reg', { visit_id: v, start: at(today, 23), status: 'scheduled' })).status, 200);
-    console.log('R4-M5 after restore:', JSON.stringify((({ visit_id, visit_service_id, scheduled_date, released_from_visit_id }) => ({ visit_id, visit_service_id, scheduled_date, released_from_visit_id }))(lineOf(t, lab))));
+    // BOOKING_CANCEL_GUARD_V1 (2026-11-17) — было: «mistaken cancel, then «Записан» again» (200, 200).
+    // Запись с выставленным счётом календарь больше не отменяет: 409 «Сначала отмените счёт в
+    // кассе», визит остаётся «Записан» — ошибочной отмены не бывает, восстанавливать нечего.
+    // Утверждение теста — анализ из карточки доходит до визита при приходе — прежнее.
+    const off = await t.rpc('calendar_book', 'reg', { visit_id: v, start: at(today, 23), status: 'cancelled' });
+    assert.equal(off.status, 409, off.text);
+    assert.equal(t.db.prepare('SELECT status FROM visits WHERE id = ?').get(v).status, 'scheduled');
+    console.log('R4-M5 after refused cancel:', JSON.stringify((({ visit_id, visit_service_id, scheduled_date, released_from_visit_id }) => ({ visit_id, visit_service_id, scheduled_date, released_from_visit_id }))(lineOf(t, lab))));
     // the patient arrives
     assert.equal((await t.rpc('calendar_book', 'reg', { visit_id: v, start: at(today, 23), status: 'arrived' })).status, 200);
     console.log('R4-M5 visit lines at arrival:', JSON.stringify(vsAll(t, v)));

@@ -42,6 +42,9 @@ export const STATUS_META = {
     arrived: { label: 'Пришёл', kind: 'arrived' },
 };
 const STATUS_ORDER = ['scheduled', 'confirmed', 'arrived'];
+// BOOKING_DAY_CANCEL_V1 — отменить можно запись до прихода (корзина в строке и
+// перепроверка перед отменой — BOOKING_CANCEL_GUARD_V1).
+const CANCELLABLE = ['scheduled', 'confirmed'];
 
 const pad2 = (n) => String(n).padStart(2, '0');
 /** 'YYYY-MM-DD' по местному времени. */
@@ -369,7 +372,7 @@ export async function renderBookingDay(host, ctx = {}, deps = {}) {
                     // строки: только у «Записан» и «Подтверждён» (пришедшего уже
                     // обслуживают) и только тому, кто вправе менять записи. Нажатие
                     // не открывает окно услуг — у кнопки своё действие.
-                    canBook() && ['scheduled', 'confirmed'].includes(String(t.status || '')) && t.visit_id
+                    canBook() && CANCELLABLE.includes(String(t.status || '')) && t.visit_id
                         ? h('button', { type: 'button', class: 'bkd-cancel', 'data-bkd-cancel': String(t.visit_id),
                             title: tr('Отменить запись'), 'aria-label': tr('Отменить запись'),
                             onclick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); cancelBooking(t); },
@@ -475,6 +478,14 @@ export async function renderBookingDay(host, ctx = {}, deps = {}) {
     // календаря «Записи» и CRM. Время визита берётся из самой записи (visit_date
     // до секунды): строка расписания знает его только до минуты, а дверь шлёт
     // время как есть — неточное перенесло бы визит, а не отменило.
+    //
+    // BOOKING_CANCEL_GUARD_V1 (2026-11-17) — строка нарисована раньше, а вкладка
+    // сама не обновляется: пока она стояла, пациент мог прийти и заплатить.
+    // Поэтому статус записи перечитывается перед отменой — пришедшего не
+    // отменяем и сервер не зовём; отказ сервера (оплата, работа, счёт —
+    // calendar_book, BOOKING_CANCEL_GUARD_V1) показывается его словами; день
+    // перечитывается при ЛЮБОМ исходе (раньше «запись не найдена» уходила мимо
+    // перечитывания), чтобы строка показала запись такой, какая она сейчас.
     async function cancelBooking(t) {
         if (state.cancelling) return;
         const name = t.patient_name || tr('пациента');
@@ -484,9 +495,14 @@ export async function renderBookingDay(host, ctx = {}, deps = {}) {
             const { data, error } = await supabase.from('visits').select('id, visit_date, status').eq('id', t.visit_id).maybeSingle();
             if (error) throw new Error(error.message);
             const visit = Array.isArray(data) ? data.find((v) => String(v.id) === String(t.visit_id)) : data;
-            if (!visit) { toast(tr('Запись не найдена — возможно, её уже отменили.'), 'warn'); return; }
-            await (deps.setVisitStatus || setVisitStatus)(visit, 'cancelled');
-            toast(trf('Запись отменена: {name}, {time}', { name, time: t.from }), 'ok');
+            const st = visit ? String(visit.status || '') : '';
+            if (!visit) toast(tr('Запись не найдена — возможно, её уже отменили.'), 'warn');
+            else if (st === 'cancelled') toast(tr('Запись уже отменена.'), 'warn');
+            else if (!CANCELLABLE.includes(st)) toast(tr('Пациент уже пришёл или запись закрыта — отменить её нельзя.'), 'warn');
+            else {
+                await (deps.setVisitStatus || setVisitStatus)(visit, 'cancelled');
+                toast(trf('Запись отменена: {name}, {time}', { name, time: t.from }), 'ok');
+            }
         } catch (e) {
             toast((e && e.message) || tr('Не удалось отменить запись.'), 'fail');
         } finally {

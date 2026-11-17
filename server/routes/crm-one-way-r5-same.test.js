@@ -77,7 +77,10 @@ test('CRM_ONE_WAY_V1 (повтор r5) — R5-SYM-c: the CRM line of «конс�
 
 // ── un-cancel to «Пришёл» with a held line ──────────────────────────────────
 
-test('CRM_ONE_WAY_V1 (повтор r5) — R5-UC: held line (invoice before arrival), cancel, then «Пришёл» directly — the analysis is placed in the visit, the card is closed', async () => {
+// BOOKING_CANCEL_GUARD_V1 (2026-11-17) — было: cancel (200), then «Пришёл». Запись с выставленным
+// счётом календарь больше не отменяет (409, визит остаётся «Записан»); «Пришёл» — анализ в визите,
+// карточка закрыта, как и прежде.
+test('CRM_ONE_WAY_V1 (повтор r5) — R5-UC: held line (invoice before arrival), cancel refused (BOOKING_CANCEL_GUARD_V1), then «Пришёл» — the analysis is placed in the visit, the card is closed', async () => {
   const t = await startCrmApp(seed);
   try {
     const rid = addLead(t.db, { assigned: 3 });
@@ -88,7 +91,9 @@ test('CRM_ONE_WAY_V1 (повтор r5) — R5-UC: held line (invoice before arri
     assert.equal(inv.status, 200, inv.text);
     const ins = await t.dbq('cc', { table: 'crm_request_services', op: 'insert', returning: true, single: 'single', values: { request_id: rid, service_id: 40, scheduled_date: TODAY, status: 'pending', visit_id: v } });
     assert.equal(ins.status, 200, ins.text);
-    assert.equal((await t.rpc('calendar_book', 'reg', { visit_id: v, start: at(TODAY, 23), status: 'cancelled' })).status, 200);
+    const off = await t.rpc('calendar_book', 'reg', { visit_id: v, start: at(TODAY, 23), status: 'cancelled' });
+    assert.equal(off.status, 409, off.text);
+    assert.equal(t.db.prepare('SELECT status FROM visits WHERE id = ?').get(v).status, 'scheduled');
     assert.equal((await t.rpc('calendar_book', 'reg', { visit_id: v, start: at(TODAY, 23), status: 'arrived' })).status, 200);
     console.log('R5-UC visit:', JSON.stringify(vsAll(t, v)), 'card:', t.lead(rid).status);
     assert.ok(vsAll(t, v).some((x) => x.service_id === 40), 'analysis not placed');
