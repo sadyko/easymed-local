@@ -37,6 +37,9 @@ function seed() {
   const vsid = db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, notes) VALUES (?,?,3,1,50000,50000,'added',?)")
     .run(vid, sid, JSON.stringify({ history: [{ kind: 'signed', savedAt: '2026-08-12T10:00:00Z', fields: {} }] })).lastInsertRowid;
   db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, entered_by) VALUES (?, 'HGB', '140', 5)").run(vsid);
+  // LAB_DOC_NOT_READY_V1 — значения анализа карта отдаёт только подтверждённого
+  // (отметка проверки); проверки вкладок ниже — про доступ, а не про подтверждение.
+  db.prepare("UPDATE visit_services SET verified_at = '2026-08-12T11:00:00Z' WHERE id = ?").run(vsid);
   const inv = db.prepare("INSERT INTO invoices (patient_id, visit_id, branch_id, invoice_number, subtotal, total_amount, paid_amount, status, created_by) VALUES (?,?,1,'INV-A-26-00001',50000,50000,0,'unpaid',7)")
     .run(pid, vid).lastInsertRowid;
   const item = db.prepare("INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total) VALUES (?,?,'ОАК',1,50000,50000)").run(inv, sid).lastInsertRowid;
@@ -86,6 +89,26 @@ test('по умолчанию карта отдаёт ВСЕ вкладки — 
     assert.equal(out.patient_limited, false, user.role + ': анкета целиком');
     assert.equal(out.patient.address, 'ул. Тестовая 1');
   }
+  db.close();
+});
+
+// LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — внесённый, но не подтверждённый
+// анализ: заказ в карте есть (вкладки «Лаборатория» и «Документы» скажут «Не готов»),
+// а его значения сервер НЕ ОТДАЁТ — ни строкой lab_results, ни где-либо ещё в ответе.
+test('LAB_DOC_NOT_READY_V1: не подтверждённый анализ — заказ в lab_orders, значений нет; подтверждённый — со значениями', () => {
+  const { db, pid, vid, vsid } = seed();
+  const sid = db.prepare("INSERT INTO services (name, price, is_lab) VALUES ('ТТГ', 40000, 1)").run().lastInsertRowid;
+  const pending = db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,?,1,40000,40000,'resulted')")
+    .run(vid, sid).lastInsertRowid;
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, entered_by) VALUES (?, 'Тиреотропин', '7.77', 5)").run(pending);
+  const out = patientCard(db, { patient_id: pid }, DOCTOR);
+  assert.deepEqual(out.lab_results.map((r) => r.visit_service_id), [vsid], 'значения — только подтверждённого');
+  const sent = JSON.stringify(out);
+  assert.ok(!sent.includes('7.77') && !sent.includes('Тиреотропин'), 'значения не подтверждённого анализа ушли в ответ');
+  const order = out.lab_orders.find((o) => o.id === Number(pending));
+  assert.ok(order, 'заказ не подтверждённого анализа в карте есть — по нему скажут «Не готов»');
+  assert.equal(order.status, 'resulted');
+  assert.ok(out.lab_orders.some((o) => o.id === Number(vsid)), 'подтверждённый заказ на месте');
   db.close();
 });
 

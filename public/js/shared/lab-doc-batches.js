@@ -20,13 +20,33 @@
 export const ISSUED_LEGACY = '';
 const SKIP = new Set(['cancelled', 'canceled', 'refunded']);
 
+// LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — «ВНЕСЁН, НО НЕ ПОДТВЕРЖДЁН» — «НЕ ГОТОВ».
+//
+// Владелец: «the saved laboratory analyses (but not confirmed) are available in the
+// documents section». Сохранение листа (rpc save_lab_results) ставит строке 'resulted'
+// и снимает отметку проверки; «Проверить и выдать» / «Подтвердить» лаборатории ставят
+// 'completed' и verified_at. Документ анализа ВЫДАН, когда строка подтверждена
+// ('completed') или на ней стоит отметка проверки; иначе он «Не готов»: в списках он
+// есть (видно, что анализ делается), но без значений, и не открывается и не печатается.
+//
+// ОДНО правило на всех: лента «Документов» и карта пациента (сервер не отдаёт
+// значений не подтверждённого), архив пациента и окно печати, история болезни
+// (пометка «не проверено», как у «Вставить результаты» кабинета врача).
+// Лаборатория, кабинет врача, бот и «Мои направления» правилом не меняются.
+/** Документ анализа строки выдан? status, verified_at — поля строки заказа (visit_services). */
+export function labDocIssued(status, verifiedAt) {
+    return status === 'completed' || !!verifiedAt;
+}
+
 /**
  * @param {Array<{id:number, visitId:any, status:string, verifiedAt?:string|null}>} orders
  *        лабораторные строки заказа (одного или нескольких визитов)
  * @param {{hasResult:(id:number)=>boolean}} o
  * @returns {Array<{key:string, visitId:any, kind:'issued'|'pending', verifiedAt:string|null,
- *                  orderIds:number[], ready:number, total:number, complete:boolean}>}
- *   по визиту (как пришли), внутри — выданные по времени подтверждения, «готовится» — последним
+ *                  orderIds:number[], ready:number, total:number, complete:boolean, printable:boolean}>}
+ *   по визиту (как пришли), внутри — выданные по времени подтверждения, «готовится» — последним.
+ *   complete — у каждого заказа документа есть результат; printable (LAB_DOC_NOT_READY_V1) —
+ *   документ можно открыть и напечатать: выдан и complete.
  */
 export function labDocBatches(orders, { hasResult = () => false } = {}) {
     const visits = new Map();
@@ -41,7 +61,7 @@ export function labDocBatches(orders, { hasResult = () => false } = {}) {
         const issued = new Map();
         const pending = [];
         for (const x of [...list].sort((a, b) => Number(a.id) - Number(b.id))) {
-            if (x.status === 'completed') {
+            if (labDocIssued(x.status, x.verifiedAt)) {   // LAB_DOC_NOT_READY_V1 — то же правило, что у всех
                 const k = x.verifiedAt ? String(x.verifiedAt) : ISSUED_LEGACY;
                 if (!issued.has(k)) issued.set(k, []);
                 issued.get(k).push(x);
@@ -52,10 +72,12 @@ export function labDocBatches(orders, { hasResult = () => false } = {}) {
         const doc = (kind, verifiedAt, xs) => {
             const orderIds = xs.map((x) => Number(x.id));
             const ready = orderIds.filter((id) => hasResult(id)).length;
+            const complete = orderIds.length > 0 && ready === orderIds.length;
             return {
                 key: 'v' + (visitId == null ? '' : visitId) + ':' + kind + ':' + (verifiedAt == null ? '' : verifiedAt),
                 visitId, kind, verifiedAt, orderIds, ready, total: orderIds.length,
-                complete: orderIds.length > 0 && ready === orderIds.length,
+                complete,
+                printable: kind === 'issued' && complete,   // LAB_DOC_NOT_READY_V1 — «готовится» не печатается
             };
         };
         const stamps = [...issued.keys()].sort();

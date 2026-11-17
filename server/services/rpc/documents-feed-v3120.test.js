@@ -5,6 +5,8 @@
 // формата visit_date, чужие здания, фильтр типов, поиск, страницы, границы
 // которых режут дни. Меняется только одно, намеренно: пустой период —
 // последние DEFAULT_DAYS дней, а не вся история; и период не длиннее года.
+// LAB_DOC_NOT_READY_V1 (3.25.0) — и второе, тоже намеренно: внесённый, но не
+// подтверждённый анализ помечен not_ready и приходит без значений (эталон знает это).
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -70,7 +72,11 @@ function referenceFeed(db, a) {
       ${baseSql}${typeWhere}
      ORDER BY ${localDate('v.visit_date')} DESC, vs.id DESC
      LIMIT ? OFFSET ?`).all(...listParams, limit, offset);
-  const ids = rows.map((r) => r.visit_service_id);
+  // LAB_DOC_NOT_READY_V1 (3.25.0) — второе намеренное изменение выдачи: внесённый, но не
+  // подтверждённый анализ помечен not_ready и приходит без значений (results: []).
+  for (const row of rows) row.not_ready = row.result_count > 0 && !(row.status === 'completed' || !!row.verified_at);
+  for (const row of rows) row.results = [];
+  const ids = rows.filter((r) => !r.not_ready).map((r) => r.visit_service_id);
   if (ids.length) {
     const lr = db.prepare(`SELECT id, visit_service_id, parameter, value, unit, flag FROM lab_results WHERE visit_service_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
     const latest = new Map();
@@ -80,7 +86,7 @@ function referenceFeed(db, a) {
       if (!byVs.has(r.visit_service_id)) byVs.set(r.visit_service_id, []);
       byVs.get(r.visit_service_id).push({ parameter: r.parameter || '', value: r.value == null ? '' : String(r.value), unit: r.unit || '', flag: r.flag || '' });
     }
-    for (const row of rows) row.results = byVs.get(row.visit_service_id) || [];
+    for (const row of rows) if (!row.not_ready) row.results = byVs.get(row.visit_service_id) || [];
   }
   for (const row of rows) row.building = ctx.label(row.origin);
   return {
@@ -138,6 +144,9 @@ function seed() {
       }
     }
   }
+  // LAB_DOC_NOT_READY_V1 — каждая четвёртая строка внесена, но не подтверждена: сравнение
+  // идёт и по строкам «не готов» (без rand — прежние данные не сдвигаются).
+  db.prepare("UPDATE visit_services SET status = 'resulted' WHERE id % 4 = 0").run();
   return { db, today, dayOf };
 }
 
@@ -157,14 +166,17 @@ test('лента: выдача совпадает с прежней реализ
     }
   }
   let nonEmpty = 0;
+  let notReady = 0;   // LAB_DOC_NOT_READY_V1
   for (const a of cases) {
     const want = referenceFeed(db, a);
     const got = documentsFeed(db, a, ADMIN);
     assert.deepEqual(strip(got), want, JSON.stringify(a));
     assert.equal(got.range.defaulted, false);
     if (want.rows.length) nonEmpty++;
+    notReady += got.rows.filter((r) => r.not_ready).length;
   }
   assert.ok(nonEmpty > cases.length / 4, 'сравнение обязано идти на непустых страницах');
+  assert.ok(notReady > 0, 'сравнение обязано идти и по строкам «не готов»');
   db.close();
 });
 

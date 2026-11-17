@@ -33,6 +33,8 @@ import { localDate, localRangeWhere } from '../domain/day.js';
 import {
   buildingContext, originExpr, summariseByBuilding, labScopeOf, labScopeWhere,
 } from '../domain/buildings.js';
+// LAB_DOC_NOT_READY_V1 — «документ анализа выдан?» — одно правило с экранами.
+import { labDocIssued } from '../../../public/js/shared/lab-doc-batches.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -222,6 +224,15 @@ export function documentsFeed(db, args, user) {
     rows = pageIds.map((id) => byId.get(id));
   }
 
+  // LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — результат внесён, но лаборатория
+  // его не подтвердила (shared/lab-doc-batches.js labDocIssued): строка в ленте остаётся
+  // (видно, что анализ делается), помечена not_ready, а её значения НЕ ЧИТАЮТСЯ и в ответ
+  // не идут — экран пишет «Не готов» и печатать не даёт. Строка без результатов
+  // лаборатории (подписанное заключение, файл) правилом не помечается. Измерения
+  // исследования (УЗИ с панелью) — та же таблица и тот же путь: их вносят и
+  // подтверждают на экране лаборатории, поэтому правило у них то же.
+  for (const row of rows) row.not_ready = row.result_count > 0 && !labDocIssued(row.status, row.verified_at);
+
   // DOCS_FEED_ANSWERS_V1 — регистратура читает ОТВЕТЫ прямо в строке, не
   // открывая архив пациента. Значения — только для строк текущей страницы
   // (≤ PAGE_MAX), одним батчем, а не подзапросом на строку.
@@ -230,7 +241,8 @@ export function documentsFeed(db, args, user) {
   // услуга\0параметр), что у LAB_DOC_ALL_ANALYTES_V1 в patient-documents.js:
   // повторный ввод того же показателя заменяет строку, но РАЗНЫЕ показатели
   // панели живут все. Порядок — по id, как вводил лаборант.
-  const pageVsIds = rows.map((r) => r.visit_service_id);
+  for (const row of rows) row.results = [];
+  const pageVsIds = rows.filter((r) => !r.not_ready).map((r) => r.visit_service_id);   // LAB_DOC_NOT_READY_V1
   if (pageVsIds.length) {
     const lr = db.prepare(
       `SELECT id, visit_service_id, parameter, value, unit, flag
@@ -252,7 +264,7 @@ export function documentsFeed(db, args, user) {
         flag: r.flag || '',
       });
     }
-    for (const row of rows) row.results = byVs.get(row.visit_service_id) || [];
+    for (const row of rows) if (!row.not_ready) row.results = byVs.get(row.visit_service_id) || [];
   }
   for (const row of rows) row.building = ctx.label(row.origin);
 

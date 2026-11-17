@@ -14093,4 +14093,6 @@ export const STRINGS = {
   // SYMPTEX_FIELDS_V1 — «Настройки → API»: чего подключение не получает
   "Не передаются: {list}": {"en":"Not shared: {list}","ru":"Не передаются: {list}","uz":"Berilmaydi: {list}"},   // SYMPTEX_FIELDS_V1 (ревью L5)
   "Выдать доступ — на вкладке «Доступ».": {"en":"Grant access in the “Access” tab.","ru":"Выдать доступ — на вкладке «Доступ».","uz":"Ruxsatni «Kirish» yorlig‘ida bering."},   // SYMPTEX_FIELDS_V1 (ревью L5)
+  // LAB_DOC_NOT_READY_V1 — документ анализа, не подтверждённого лабораторией («Не готов»), не открывается и не печатается
+  "Анализ ещё не подтверждён лабораторией — документ не готов: открыть и напечатать его нельзя.": {"en":"The test has not been confirmed by the laboratory yet — the document is not ready: it cannot be opened or printed.","ru":"Анализ ещё не подтверждён лабораторией — документ не готов: открыть и напечатать его нельзя.","uz":"Tahlil hali laboratoriya tomonidan tasdiqlanmagan — hujjat tayyor emas: uni ochib ham, chop etib ham bo‘lmaydi."},   // LAB_DOC_NOT_READY_V1
 };

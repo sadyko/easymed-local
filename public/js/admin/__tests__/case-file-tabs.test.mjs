@@ -165,6 +165,46 @@ test('пришедший результат — строка «Результа�
     }
 });
 
+// LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — внесённый, но не подтверждённый
+// анализ (источник помечает его unverified) назывался «Результат готов» и открывался
+// бланком результатов. Теперь — «Не готов», и бланк не открывается, пока лаборатория
+// его не подтвердит; подтверждённый рядом открывается, как прежде.
+test('LAB_DOC_NOT_READY_V1: не подтверждённый анализ — «Не готов», бланк не открывается; подтверждённый — открывается', async () => {
+    SOURCES = { lab: [
+        { name: 'Гормоны щитовидной железы', at: '2026-09-10T09:10:00Z', unverified: true,
+            results: [{ parameter: 'Тиреотропин', value: '7.77', unit: 'мМЕ/л' }] },
+        { name: 'Биохимия крови', at: '2026-09-10T09:10:00Z', unverified: false,
+            results: [{ parameter: 'Глюкоза', value: '6.4', unit: 'ммоль/л' }] },
+    ], imaging: [], functional: [] };
+    const written = [];
+    const openWas = globalThis.window.open;
+    globalThis.window.open = () => ({ document: { open() {}, write(html) { written.push(String(html)); }, close() {} }, focus() {}, print() {} });
+    try {
+        const box = caseExamsPanel(11, { onAdd: () => {}, charges: { lines: [] },
+            patient: { full_name: 'Иванов Иван', mrn: 'ID-1', date_of_birth: '1994-11-15', gender: 'male' } });
+        await settle();
+        const rowOf = (name) => walk(box).find((e) => e.tagName === 'TR' && textOf(e).includes(name));
+        const pending = rowOf('Гормоны щитовидной железы');
+        assert.ok(pending, 'не подтверждённого анализа в реестре нет');
+        assert.ok(textOf(pending).includes('Не готов'), 'не сказано, что анализ не готов: ' + textOf(pending));
+        assert.ok(!textOf(pending).includes('Результат готов'));
+        findBtn(pending, 'Просмотреть').click();
+        await settle();
+        assert.equal(written.length, 0, 'бланк не подтверждённого анализа открылся');
+        assert.match(lastToast(), /не подтверждён/, 'не сказано почему: ' + lastToast());
+
+        const ready = rowOf('Биохимия крови');
+        assert.ok(textOf(ready).includes('Результат готов'));
+        findBtn(ready, 'Просмотреть').click();
+        await settle();
+        assert.equal(written.length, 1, 'подтверждённый анализ не открылся');
+        assert.ok(written[0].includes('Глюкоза') && !written[0].includes('Тиреотропин'));
+    } finally {
+        globalThis.window.open = openWas;
+        SOURCES = { lab: [], imaging: [], functional: [] };
+    }
+});
+
 // TG_LAB_MATRIX_V1 (3.23.0) — посев (панель-таблица) открывается таблицей: источник
 // (admission_doc_sources) отдаёт таблицу у анализа, экран кладёт её в группу бланка.
 test('TG_LAB_MATRIX_V1: посев в истории болезни открывается таблицей посева, а не списком «строка · графа»', async () => {

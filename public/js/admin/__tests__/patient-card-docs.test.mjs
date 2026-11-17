@@ -352,29 +352,98 @@ const labLine = (id, name, status, verified_at) => ({ id, visit_id: 20, service_
   quantity: 1, total: 0, services: { name, is_lab: 1, type: 'lab' } });
 const labRes = (id, vs, parameter, value) => ({ id, visit_service_id: vs, parameter, value, unit: '', flag: 'normal',
   entered_at: '2026-11-07T04:00:00Z', verified_at: null, verified_by: null });
+// LAB_DOC_NOT_READY_V1 — у «Гормонов» (103) в ответе строка результата, хотя сервер
+// не подтверждённого анализа значений больше не отдаёт: экран и такую строку не
+// показывает и не печатает (то же правило, shared/lab-doc-batches.js labDocIssued).
 function labPayload() {
   const lines = [labLine(101, 'ОАК', 'completed', T1), labLine(102, 'Биохимия', 'completed', T2), labLine(103, 'Гормоны', 'resulted', null)];
   return { ...payloadWith([]), services: lines, lab_orders: lines,
-    lab_results: [labRes(1, 101, 'Лейкоциты', '6.1'), labRes(2, 102, 'Глюкоза', '5.2'), labRes(3, 103, 'ТТГ', '2.1')] };
+    lab_results: [labRes(1, 101, 'Лейкоциты', '6.1'), labRes(2, 102, 'Глюкоза', '5.2'), labRes(3, 103, 'ТТГ', '7.77')] };
 }
-
-test('LAB_DOC_SPLIT_V1: визит, подтверждённый в два приёма, и неподтверждённый анализ — три документа анализов', async () => {
+async function renderCard(p, tab = DOCS_TAB) {
   calls = []; opened = [];
-  payload = labPayload();
+  payload = p;
   setFullAccess('Администратор');
   const box = mk('div');
   renderPatientCard(box, { onNavigate() {}, payload: { id: 1 } });
   await tick();
-  openDocsTab(box);
+  const b = buttons(box).find((x) => labelOfTab(x) === tab);
+  assert.ok(b, 'нет вкладки «' + tab + '»');
+  b.click();
   await tick();
-  const rows = walk(box).filter((n) => n.tagName === 'TR' && textOf(n).includes('Результаты анализов'));
+  return box;
+}
+const labDocRows = (box) => walk(box).filter((n) => n.tagName === 'TR' && textOf(n).includes('Результаты анализов'));
+// Тосты — своим элементом (как lab-doc-split.test.mjs): toast() кладёт таймер в el._t,
+// а у поддельной DOM этого файла _t — это текст.
+const toastLog = [];
+function captureToasts() {
+  const el = mk('div');
+  Object.defineProperty(el, 'textContent', { configurable: true, get() { return toastLog[toastLog.length - 1] || ''; }, set(v) { toastLog.push(String(v)); } });
+  const prev = document.getElementById;
+  document.getElementById = (id) => (id === 'toast' ? el : prev(id));
+  return () => { document.getElementById = prev; };
+}
+const lastToastText = () => toastLog[toastLog.length - 1] || '';
+
+// LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — было: третий документ
+// (внесён, не подтверждён) назывался «Готов» и печатался. Теперь — «Не готов».
+test('LAB_DOC_SPLIT_V1 + LAB_DOC_NOT_READY_V1: подтверждённый в два приёма визит и неподтверждённый анализ — три документа; третий «Не готов»', async () => {
+  const box = await renderCard(labPayload());
+  const rows = labDocRows(box);
   assert.equal(rows.length, 3, textOf(box).slice(0, 600));
   const t = rows.map(textOf).join(' | ');
   assert.equal((t.match(/Выдан/g) || []).length, 2, t);
-  assert.match(t, /Готов/);
+  assert.equal((t.match(/Не готов/g) || []).length, 1, t);
+  assert.ok(!t.replace(/Не готов/g, '').includes('Готов'), 'не подтверждённый документ назван «Готов»: ' + t);
 });
 
-test('LAB_PRINT_PICK_V1: «Печать…» — окно с готовыми документами, всё отмечено; сняли «Гормоны» — бланк без них', async () => {
+test('LAB_DOC_NOT_READY_V1: документ «Не готов» не открывается и не печатается — ни названием, ни кнопкой «Печать»; сказано почему', async () => {
+  const printed = [];
+  const prevOpen = globalThis.window.open;
+  globalThis.window.open = () => ({ document: { open() {}, write(s) { printed.push(String(s)); }, close() {} }, focus() {}, print() {} });
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => (String(url).startsWith('/api/db') ? { ok: true, status: 200, json: async () => ({ data: [] }) } : prevFetch(url, opts));
+  const releaseToasts = captureToasts();
+  try {
+    const box = await renderCard(labPayload());
+    const row = labDocRows(box).find((r) => textOf(r).includes('Не готов'));
+    assert.ok(row, 'нет документа «Не готов»');
+    walk(row).find((n) => n.tagName === 'A').click();
+    await tick(80);
+    assert.match(lastToastText(), /не подтверждён/, 'щелчок по названию молчит: ' + lastToastText());
+    toastLog.length = 0;
+    walk(row).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Печать')).click();
+    await tick(80);
+    assert.equal(printed.length, 0, 'не подтверждённый документ открылся или напечатался');
+    assert.match(lastToastText(), /не подтверждён/);
+  } finally {
+    releaseToasts();
+    globalThis.window.open = prevOpen;
+    globalThis.fetch = prevFetch;
+  }
+});
+
+test('LAB_DOC_NOT_READY_V1: вкладка «Лаборатория» — не подтверждённый анализ строкой «Не готов» без значения; подтверждённые — со значениями', async () => {
+  const box = await renderCard({ ...labPayload(), tabs: { ...payloadWith([]).tabs, labs: 'view' } }, 'Лаборатория');
+  const t = textOf(box);
+  assert.ok(t.includes('Лейкоциты') && t.includes('6.1') && t.includes('Глюкоза'), 'подтверждённые анализы — со значениями');
+  const row = walk(box).find((n) => n.tagName === 'TR' && textOf(n).includes('Гормоны'));
+  assert.ok(row, 'не подтверждённого анализа во вкладке нет: ' + t.slice(0, 400));
+  assert.ok(textOf(row).includes('Не готов'), 'не сказано, что анализ не готов');
+  assert.ok(!t.includes('ТТГ') && !t.includes('7.77'), 'значение не подтверждённого анализа на экране');
+});
+
+test('LAB_DOC_NOT_READY_V1: роль без «Услуг» — не подтверждённый анализ тоже документом «Не готов», без значений', async () => {
+  const p = labPayload();
+  const box = await renderCard({ ...p, services: [] });
+  const rows = labDocRows(box);
+  const t = rows.map(textOf).join(' | ');
+  assert.equal((t.match(/Не готов/g) || []).length, 1, t);
+  assert.ok(!textOf(box).includes('ТТГ'));
+});
+
+test('LAB_PRINT_PICK_V1 + LAB_DOC_NOT_READY_V1: «Печать…» — только выданные документы, всё отмечено; сняли «Биохимию» — бланк без неё; не подтверждённого нет', async () => {
   calls = []; opened = [];
   payload = labPayload();
   setFullAccess('Администратор');
@@ -398,10 +467,11 @@ test('LAB_PRINT_PICK_V1: «Печать…» — окно с готовыми д
     const dlg = walk(document.body).find((n) => n.hasAttribute && n.hasAttribute('data-lab-print-pick'));
     assert.ok(dlg, 'окно выбора не открылось');
     const orderBoxes = walk(dlg).filter((n) => n.tagName === 'INPUT' && n.hasAttribute('data-pick-order'));
-    assert.deepEqual(orderBoxes.map((b) => [b.getAttribute('data-pick-order'), b.checked]), [['103', true], ['102', true], ['101', true]]);
-    const hormones = orderBoxes.find((b) => b.getAttribute('data-pick-order') === '103');
-    hormones.checked = false;
-    hormones.dispatchEvent({ type: 'change' });
+    // LAB_DOC_NOT_READY_V1 — было [103, 102, 101]: «Гормоны» (внесены, не подтверждены) предлагались к печати.
+    assert.deepEqual(orderBoxes.map((b) => [b.getAttribute('data-pick-order'), b.checked]), [['102', true], ['101', true]]);
+    const bio = orderBoxes.find((b) => b.getAttribute('data-pick-order') === '102');
+    bio.checked = false;
+    bio.dispatchEvent({ type: 'change' });
     const print = walk(dlg).filter((n) => n.tagName === 'BUTTON').find((b) => textOf(b).includes('Печать'));
     print.click();
     await tick(80);
@@ -411,8 +481,9 @@ test('LAB_PRINT_PICK_V1: «Печать…» — окно с готовыми д
   }
   assert.equal(printed.length, 1, 'бланк не открылся одним окном');
   const html = printed[0].replace(/<style[\s\S]*?<\/style>/g, '');
-  assert.ok(html.includes('Лейкоциты') && html.includes('Глюкоза'), 'отмеченные анализы — на бланке');
-  assert.ok(!html.includes('ТТГ'), 'снятый анализ напечатан');
+  assert.ok(html.includes('Лейкоциты'), 'отмеченный анализ — на бланке');
+  assert.ok(!html.includes('Глюкоза'), 'снятый анализ напечатан');
+  assert.ok(!html.includes('ТТГ') && !html.includes('7.77'), 'не подтверждённый анализ напечатан');
 });
 
 // Ревью S3, M-1 — услугу в очередь лаборатории ставит и отдел, и привязанная панель
@@ -420,10 +491,13 @@ test('LAB_PRINT_PICK_V1: «Печать…» — окно с готовыми д
 // 3.21.1 печатал её результаты в документе визита; разбивка 3.22 строила документы
 // только из заказов с флагом, и результаты «Мазка» не попадали ни в один документ —
 // ни в строку списка, ни в окно «Печать…». Теперь они — отдельным документом визита.
+// LAB_DOC_NOT_READY_V1 — «Мазок» здесь подтверждён (был 'resulted' без отметки: такой
+// документ теперь «Не готов» и в «Печать…» не идёт — это следующий тест); проверка
+// ревью M-1 — что результат анализа без флага доходит до документа и бланка — та же.
+const lineX = (id, name, status, verified_at, svc) => ({ id, visit_id: 20, service_id: id, status, verified_at, visit_date: '2026-11-07',
+  quantity: 1, total: 0, services: { name, ...svc } });
 test('ревью M-1: результаты анализа без флага «лабораторная» (отдел/панель) — в документе и в «Печать…», как в 3.21.1', async () => {
-  const lineX = (id, name, status, verified_at, svc) => ({ id, visit_id: 20, service_id: id, status, verified_at, visit_date: '2026-11-07',
-    quantity: 1, total: 0, services: { name, ...svc } });
-  const lines = [lineX(101, 'ОАК', 'completed', T1, { is_lab: 1, type: 'lab' }), lineX(104, 'Мазок на флору', 'resulted', null, { is_lab: 0, type: 'other' })];
+  const lines = [lineX(101, 'ОАК', 'completed', T1, { is_lab: 1, type: 'lab' }), lineX(104, 'Мазок на флору', 'completed', T2, { is_lab: 0, type: 'other' })];
   calls = []; opened = [];
   payload = { ...payloadWith([]), services: lines, lab_orders: lines,
     lab_results: [labRes(1, 101, 'Лейкоциты', '6.1'), labRes(4, 104, 'Флора', 'кокковая')] };
@@ -459,6 +533,38 @@ test('ревью M-1: результаты анализа без флага «л
   const html = printed[0].replace(/<style[\s\S]*?<\/style>/g, '');
   assert.ok(html.includes('Лейкоциты'), 'ОАК на бланке');
   assert.ok(html.includes('Флора'), 'результат «Мазка» пропал с бланка');
+});
+
+test('LAB_DOC_NOT_READY_V1: анализ без флага «лабораторная» (отдел/панель), не подтверждённый, — документ «Не готов»; в «Печать…» его нет', async () => {
+  const lines = [lineX(101, 'ОАК', 'completed', T1, { is_lab: 1, type: 'lab' }), lineX(104, 'Мазок на флору', 'resulted', null, { is_lab: 0, type: 'other' })];
+  const printed = [];
+  const prevOpen = globalThis.window.open;
+  globalThis.window.open = () => ({ document: { open() {}, write(s) { printed.push(String(s)); }, close() {} }, focus() {}, print() {} });
+  document.body.children.length = 0;
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => (String(url).startsWith('/api/db') ? { ok: true, status: 200, json: async () => ({ data: [] }) } : prevFetch(url, opts));
+  try {
+    const box = await renderCard({ ...payloadWith([]), services: lines, lab_orders: lines,
+      lab_results: [labRes(1, 101, 'Лейкоциты', '6.1'), labRes(4, 104, 'Флора', 'кокковая')] });
+    const rows = labDocRows(box);
+    assert.equal(rows.length, 2, rows.map(textOf).join(' | '));
+    assert.equal(rows.filter((r) => textOf(r).includes('Не готов')).length, 1, rows.map(textOf).join(' | '));
+    walk(box).find((n) => n.tagName === 'BUTTON' && n.hasAttribute('data-docs-print')).click();
+    await tick();
+    const dlg = walk(document.body).find((n) => n.hasAttribute && n.hasAttribute('data-lab-print-pick'));
+    assert.ok(dlg, 'окно выбора не открылось');
+    const ids = walk(dlg).filter((n) => n.tagName === 'INPUT' && n.hasAttribute('data-pick-order')).map((b) => b.getAttribute('data-pick-order'));
+    assert.deepEqual(ids, ['101'], 'не подтверждённый «Мазок» предложен к печати');
+    walk(dlg).filter((n) => n.tagName === 'BUTTON').find((b) => textOf(b).includes('Печать')).click();
+    await tick(80);
+  } finally {
+    globalThis.window.open = prevOpen;
+    globalThis.fetch = prevFetch;
+  }
+  assert.equal(printed.length, 1);
+  const html = printed[0].replace(/<style[\s\S]*?<\/style>/g, '');
+  assert.ok(html.includes('Лейкоциты'));
+  assert.ok(!html.includes('Флора') && !html.includes('кокковая'), 'не подтверждённый «Мазок» на бланке');
 });
 
 // Ревью S3, L-3 — бланк анализов из карты пациента печатал lab_results.value как

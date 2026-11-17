@@ -18,6 +18,7 @@ import { RpcError, loadAdmission } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
 // TG_LAB_MATRIX_V1 — посев (панель-таблица) открывается в истории болезни таблицей.
 import { matrixGroupPart } from '../../../public/js/shared/lab-matrix.js';
+import { labDocIssued } from '../../../public/js/shared/lab-doc-batches.js';   // LAB_DOC_NOT_READY_V1
 
 export const DOC_SOURCE_ROLES = ['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
 
@@ -108,7 +109,12 @@ export function admissionDocSources(db, args, user) {
     if (isLab) {
       const results = byService.get(r.id) || [];
       if (!results.length) continue;   // анализ без показателей вставлять нечем
-      lab.push({ id: r.id, name: r.name, at, results, ...labMatrixPart(r.service_id, results) });   // TG_LAB_MATRIX_V1
+      // LAB_DOC_NOT_READY_V1 (3.25.0) — внесённый, но не подтверждённый лабораторией
+      // анализ помечен unverified — ровно как «Вставить результаты» кабинета врача
+      // (patient-doc-sources.js collectLabs, PASTE_SOURCES_V1): показатели видны, экран
+      // пишет «не проверено» в панели и во вставке, а бланк результатов не открывает.
+      const unverified = !labDocIssued(r.status, r.verified_at);
+      lab.push({ id: r.id, name: r.name, at, results, unverified, ...labMatrixPart(r.service_id, results) });   // TG_LAB_MATRIX_V1
       continue;
     }
     // Заключение исследования пишется В ДОКУМЕНТЕ ВИЗИТА: у услуги своего поля

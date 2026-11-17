@@ -102,6 +102,8 @@ const EXAM_COLS = ['Услуга', 'Назначил', 'Дата', 'Кабине
 const EXAM_ST = {
     ordered: { word: 'Назначена', cls: 'cf-chip-off' },
     ready:   { word: 'Результат готов', cls: 'cf-chip-inv' },
+    // LAB_DOC_NOT_READY_V1 — результат внесён, но лаборатория его не подтвердила.
+    notReady: { word: 'Не готов', cls: 'cf-chip-hot' },
 };
 
 /** Плашка состояния — одна на обе строки реестра. */
@@ -129,6 +131,13 @@ const SEX_WORD = { male: 'Муж.', female: 'Жен.' };
  * в боте и в разделе документов.
  */
 async function openResultDoc(it, kind, patient) {
+    // LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — бланк результатов не подтверждённого
+    // лабораторией анализа (источник пометил его unverified) не открывается; вставить его
+    // показатели в документ истории можно — с пометкой «не проверено» (case-doc-insert.js).
+    if (kind === 'lab' && it && it.unverified) {
+        toast(tr('Анализ ещё не подтверждён лабораторией — документ не готов: открыть и напечатать его нельзя.'), 'info');
+        return;
+    }
     const p = patient || {};
     const head = {
         patientName: p.full_name || '—',
@@ -239,7 +248,7 @@ export function caseExamsPanel(admissionId, { onAdd = null, charges = null, pati
                 h('td', { class: 'num' }, '—'),
                 h('td', { class: 'num' }, '—'),
                 h('td', { class: 'num' }, '—'),
-                h('td', null, examStatus('ready')),
+                h('td', null, examStatus(r.kind === 'lab' && it.unverified ? 'notReady' : 'ready')),   // LAB_DOC_NOT_READY_V1
                 h('td', null, h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: show },
                     Icon('ZoomIn', { size: 13 }), ' ', tr('Просмотреть')))));
         }

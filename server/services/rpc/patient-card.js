@@ -47,6 +47,7 @@ import { isDeskActor, lineBeneficiaries } from '../domain/line-referral.js';   /
 import { actingActorName } from '../../../public/js/shared/act-as.js';   // REFERRAL_LINE_AUDIT_V1 — имя «от имени» в журнале пациента
 import { localMonth } from '../domain/day.js';   // PAY_MONTH_LOCAL_V1 — закрытый месяц — местный, как у выплаты
 import { refuseSignWhileActing, refuseDoctorDocWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документ врача в карте)
+import { labDocIssued } from '../../../public/js/shared/lab-doc-batches.js';   // LAB_DOC_NOT_READY_V1 — «документ анализа выдан?»
 
 const SECTION = 'patients';
 
@@ -319,10 +320,18 @@ export function patientCard(db, args, user) {
 
   if (tabs.labs !== 'none' && vsRows.length && canRead('lab_results', roles)) {
     const vsIds = vsRows.map((r) => r.id);
-    const lr = db.prepare('SELECT ' + cols('lab_results', 'lr') + ' FROM lab_results lr'
-      + ' WHERE lr.visit_service_id IN (' + inClause(vsIds.length) + ')').all(...vsIds);
-    const withResults = new Set(lr.map((x) => x.visit_service_id));
-    out.lab_results = lr;
+    const withResults = new Set(db.prepare('SELECT DISTINCT visit_service_id AS id FROM lab_results'
+      + ' WHERE visit_service_id IN (' + inClause(vsIds.length) + ')').all(...vsIds).map((x) => x.id));
+    // LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — значения отдаются только у
+    // ВЫДАННОГО анализа (shared/lab-doc-batches.js labDocIssued: строка подтверждена или
+    // с отметкой проверки). Внесённый, но не подтверждённый: заказ в lab_orders есть —
+    // вкладки «Лаборатория» и «Документы» называют его «Не готов», — а его строки
+    // lab_results не читаются и в ответ не идут.
+    const issuedIds = vsRows.filter((r) => withResults.has(r.id) && labDocIssued(r.status, r.verified_at)).map((r) => r.id);
+    out.lab_results = issuedIds.length
+      ? db.prepare('SELECT ' + cols('lab_results', 'lr') + ' FROM lab_results lr'
+        + ' WHERE lr.visit_service_id IN (' + inClause(issuedIds.length) + ')').all(...issuedIds)
+      : [];
     // Отдаём ТОЛЬКО те строки услуг, у которых есть результат: вкладка
     // «Лаборатория» — про анализы, а не про весь перечень услуг пациента.
     out.lab_orders = vsRows.filter((r) => withResults.has(r.id)).map(shapeVs);

@@ -117,6 +117,29 @@ test('заключения врача и исследований идут од�
   } finally { db.close(); }
 });
 
+// LAB_DOC_NOT_READY_V1 (3.25.0) — правая панель истории болезни предлагала внесённый,
+// но не подтверждённый анализ БЕЗ пометки. Теперь — как «Вставить результаты» кабинета
+// врача (patient-doc-sources.js collectLabs, PASTE_SOURCES_V1): показатели видны, а
+// анализ помечен unverified — экран пишет «не проверено».
+test('LAB_DOC_NOT_READY_V1: не подтверждённый анализ — unverified: true, показатели на месте; подтверждённый — unverified: false', () => {
+  const db = seed();
+  try {
+    db.prepare("UPDATE visit_services SET status = 'resulted', verified_at = NULL WHERE id = 61").run();
+    let lab = admissionDocSources(db, { admission_id: 10 }, doctor).lab;
+    assert.equal(lab.length, 1);
+    assert.equal(lab[0].unverified, true, 'не подтверждённый анализ не помечен');
+    assert.equal(lab[0].results.length, 2, 'показатели — как в кабинете врача: врач видит, что внесено');
+
+    db.prepare("UPDATE visit_services SET status = 'completed', verified_at = '2026-09-07T10:00:00Z' WHERE id = 61").run();
+    lab = admissionDocSources(db, { admission_id: 10 }, doctor).lab;
+    assert.equal(lab[0].unverified, false);
+
+    // отметка проверки без «completed» — тоже проверен (общее правило labDocIssued)
+    db.prepare("UPDATE visit_services SET status = 'resulted' WHERE id = 61").run();
+    assert.equal(admissionDocSources(db, { admission_id: 10 }, doctor).lab[0].unverified, false);
+  } finally { db.close(); }
+});
+
 // TG_LAB_MATRIX_V1 (3.23.0) — посев (панель-таблица) в истории болезни открывается
 // таблицей, как на бумаге: источник отдаёт таблицу у каждого анализа, чья активная
 // панель — таблица (shared/lab-matrix.js matrixGroupPart); обычный анализ — без неё.

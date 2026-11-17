@@ -176,8 +176,11 @@ test('«Документы»: услуга лаборатории по груп�
     db.prepare("INSERT INTO lab_panels (id, name, service_id, modality, active) VALUES (901, 'Мазок по панели', 61, 'lab', 1)").run();
     db.prepare("INSERT INTO services (id, name, price, type, is_lab, active) VALUES (62, 'Консультация', 1, 'other', 0, 1)").run();
     db.prepare("INSERT INTO services (id, name, price, type, is_lab, active) VALUES (63, 'Мазок по группе', 1, 'lab', 1, 1)").run();
+    // LAB_DOC_NOT_READY_V1 — строки подтверждены: значения внесённого, но не подтверждённого
+    // анализа «Документы» больше не читают (lab-doc-not-ready.test.mjs); здесь проверяется,
+    // какую услугу они считают лабораторной.
     for (const [vs, svc] of [[3001, 60], [3002, 61], [3003, 62], [3004, 63]]) {
-      db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (?, 10, ?, 'resulted')").run(vs, svc);
+      db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status, verified_at) VALUES (?, 10, ?, 'completed', strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(vs, svc);
       db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (?, 'Лейкоциты', '5')").run(vs);
     }
   });

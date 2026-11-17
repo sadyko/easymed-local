@@ -242,6 +242,66 @@ test('услуга с подписанным документом, но без �
   db.close();
 });
 
+// LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — сохранённый, но не подтверждённый
+// анализ в ленте ЕСТЬ: регистратура видит, что он делается. Но он помечен not_ready и
+// приходит БЕЗ значений — показатели не уходят в браузер вовсе, пока лаборатория не
+// подтвердит анализ («Проверить и выдать» / «Подтвердить»).
+const lineSt = (db, visitId, svc, status, verifiedAt = null) => db.prepare(
+  'INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, verified_at) VALUES (?,?,1,0,0,?,?) RETURNING id')
+  .get(visitId, svc, status, verifiedAt).id;
+
+test('LAB_DOC_NOT_READY_V1: внесён, но не подтверждён — в ленте, помечен not_ready, без значений; подтверждённый — со значениями', () => {
+  const db = seed();
+  const d = day(db, 0);
+  const v = visit(db, 1, d);
+  const pending = lineSt(db, v, 1, 'resulted');
+  const issued = lineSt(db, v, 1, 'completed', d + 'T10:00:00Z');
+  const ins = db.prepare('INSERT INTO lab_results (visit_service_id, parameter, value, unit, flag) VALUES (?,?,?,?,?)');
+  ins.run(pending, 'Тиреотропин', '7.77', 'мМЕ/л', 'high');
+  ins.run(issued, 'HGB', '142', 'г/л', 'normal');
+
+  const r = feed(db, { from: d, to: d });
+  assert.equal(r.total, 2, 'не подтверждённый анализ в ленте есть — видно, что он делается');
+  const p = r.rows.find((x) => x.visit_service_id === pending);
+  const i = r.rows.find((x) => x.visit_service_id === issued);
+  assert.equal(p.not_ready, true);
+  assert.deepEqual(p.results, [], 'значения не подтверждённого анализа в строке');
+  const sent = JSON.stringify(r);
+  assert.ok(!sent.includes('7.77') && !sent.includes('Тиреотропин'), 'показатели не подтверждённого анализа ушли в ответ');
+  assert.equal(i.not_ready, false);
+  assert.deepEqual(i.results, [{ parameter: 'HGB', value: '142', unit: 'г/л', flag: 'normal' }]);
+  assert.equal(Object.fromEntries(r.by_type.map((x) => [x.t, x.c])).lab, 2, 'счётчик типа считает и не готовый');
+  db.close();
+});
+
+// Диагностика: измерения исследования (УЗИ с привязанной панелью) лежат в той же
+// таблице lab_results. Их вносят на экране лаборатории (isLabService: панель
+// открывает строке ввод показателей) — saveLabResults ставит 'resulted' — и там же
+// подтверждают; заключение врач подписывает в кабинете ('completed'). Поэтому
+// правило то же: измерения без подтверждения — not_ready. Строка исследования без
+// результатов лаборатории (подписанное заключение, загруженный файл) правилом не
+// помечается — как и раньше.
+test('LAB_DOC_NOT_READY_V1: измерения исследования без подтверждения — not_ready; заключение и файл без измерений — не помечаются', () => {
+  const db = seed();
+  const d = day(db, 0);
+  const v = visit(db, 1, d);
+  const measured = lineSt(db, v, 2, 'resulted');
+  db.prepare('INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (?,?,?)').run(measured, 'Длина правой почки', '11.9 см');
+  const signed = lineSt(db, v, 2, 'completed');
+  addDoc(db, signed, v, 1, 'diag');
+  const uploaded = lineSt(db, v, 2, 'in_progress');
+  addDoc(db, uploaded, v, 1, 'upload');
+
+  const r = feed(db, { from: d, to: d });
+  const by = Object.fromEntries(r.rows.map((x) => [x.visit_service_id, x]));
+  assert.equal(by[measured].not_ready, true);
+  assert.deepEqual(by[measured].results, []);
+  assert.ok(!JSON.stringify(r).includes('Длина правой почки'), 'измерения без подтверждения ушли в ответ');
+  assert.equal(by[signed].not_ready, false);
+  assert.equal(by[uploaded].not_ready, false, 'строка без результатов лаборатории правилом не помечается');
+  db.close();
+});
+
 test('новые документы идут первыми', () => {
   const db = seed();
   const old = day(db, -5), now = day(db, 0);

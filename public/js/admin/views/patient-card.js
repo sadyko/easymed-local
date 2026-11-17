@@ -16,7 +16,7 @@
 // (Рекомендации, Назначения, Документы, Лояльность, Чат) are not ported.
 
 import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1 — подпись бланка анализов — подтвердивший
-import { labDocBatches } from '../../shared/lab-doc-batches.js';   // LAB_DOC_SPLIT_V1 — подтверждённые вместе — один документ
+import { labDocBatches, labDocIssued } from '../../shared/lab-doc-batches.js';   // LAB_DOC_SPLIT_V1 — подтверждённые вместе — один документ; LAB_DOC_NOT_READY_V1 — «выдан?»
 import { openLabPrintPick } from './lab-print-pick.js';   // LAB_PRINT_PICK_V1 — «Печать…» с выбором документов
 import { matrixGroupPart } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 — таблица посева на бланке; TG_LAB_MATRIX_V1 — общая часть группы
 import { labShownValue, labRoundOn } from '../../shared/lab-round.js';   // LAB_ROUND_V1 (ревью S3, L-3) — значение прибора по настройке клиники
@@ -263,6 +263,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     let invoices = [];
     let services = [];   // visit_services rows across this patient's visits
     let labs = [];
+    let labsNotReady = [];   // LAB_DOC_NOT_READY_V1 — заказы с внесённым, но не подтверждённым результатом (без значений)
     let fetchToken = 0;
     // PATIENT_TAB_ACCESS_V1 — уровни вкладок, как их вернул СЕРВЕР:
     // 'none' | 'view' | 'edit' | 'delete'. До первого ответа — пусто, и это
@@ -385,6 +386,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     function shapeServicesAndLabs() {
         services = [];
         labs = [];
+        labsNotReady = [];
 
         // SVC_ROW_ACTIONS_V1 — id/врач/привязка к счёту/слот приезжают со строкой,
         // чтобы она была управляемой (удалить неоплаченную, сменить врача).
@@ -430,7 +432,25 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
         const lrRows = payloadLabResults;
         const labOrders = payloadLabOrders;
-        if (!lrRows.length || !labOrders.length) return;
+        if (!labOrders.length) return;
+
+        // LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — заказ, чей результат внесён, но
+        // лабораторией не подтверждён (shared/lab-doc-batches.js labDocIssued), — «Не готов»:
+        // строкой без значения во вкладке «Лаборатория» и документом «Не готов» в «Документах».
+        // Сервер его значений не присылает; пришли бы (старый сервер) — экран их не берёт.
+        const notReadyIds = new Set();
+        for (const o of labOrders) {
+            if (labDocIssued(o.status, o.verified_at) || ['cancelled', 'canceled', 'refunded'].includes(o.status)) continue;
+            notReadyIds.add(o.id);
+            labsNotReady.push({
+                vsId: o.id, visitId: o.visit_id, status: o.status || '',
+                name: (o.services && o.services.name) || '—',
+                origin: originTag(o),
+                external: o.services ? { external_lab: o.services.external_lab } : null,
+                date: o.visit_date || null,
+            });
+        }
+        if (!lrRows.length) return;
 
         const vsById = new Map(labOrders.map(r => [r.id, r]));
         // LAB_DOC_ALL_ANALYTES_V1 — панель пишет ПО СТРОКЕ lab_results НА КАЖДЫЙ
@@ -440,6 +460,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // ПОВТОРНОМУ вводу того же показателя, поэтому ключ — (услуга, параметр).
         const latest = new Map();
         for (const lr of lrRows) {
+            if (notReadyIds.has(lr.visit_service_id)) continue;   // LAB_DOC_NOT_READY_V1
             const t = new Date(lr.entered_at || lr.created_at || 0).getTime();
             const key = lr.visit_service_id + '\0' + (lr.parameter || '');
             const prev = latest.get(key);
@@ -1523,12 +1544,26 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     function renderLabs() {
         const wrap = h('div', { class: 'card' });
         wrap.appendChild(h('div', { class: 'card-header' }, h('h3', null, Icon('Flask', { size: 15 }), ' Лаборатория')));
-        if (labs.length === 0) {
+        if (labs.length === 0 && labsNotReady.length === 0) {
             wrap.appendChild(h('div', { class: 'empty' }, 'Результатов пока нет.'));
             return wrap;
         }
         const tbody = h('tbody');
-        for (const r of labs) {
+        // LAB_DOC_NOT_READY_V1 — не подтверждённый анализ — строкой с названием и «Не готов»,
+        // без значения, нормы и флага; по дате — вместе с остальными (сортировка устойчивая).
+        const all = [...labs, ...labsNotReady.map(x => ({ ...x, notReady: true }))]
+            .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+        for (const r of all) {
+            if (r.notReady) {
+                tbody.appendChild(h('tr', { 'data-lab-not-ready': String(r.vsId) },
+                    h('td', null, r.name, r.origin ? branchLabel(r.origin) : null, externalLabTag(r.external)),
+                    h('td', null, Tag('Не готов', { kind: 'warn', dot: true })),
+                    h('td', null, '—'),
+                    h('td', null, '—'),
+                    h('td', { class: 'num', style: { fontSize: '12.5px' } }, r.date ? fmtDateTime(r.date) : '—'),
+                ));
+                continue;
+            }
             tbody.appendChild(h('tr', null,
                 // BRANCH_ORIGIN_V1 — не фильтр, а подпись: анализы других зданий здесь и
                 // должны быть видны, но врач обязан знать, чья это лаборатория.
@@ -1748,7 +1783,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
             const byVisit = new Map();
             const take = (key, day) => {
-                if (!byVisit.has(key)) byVisit.set(key, { day, orders: [], rows: [] });
+                if (!byVisit.has(key)) byVisit.set(key, { day, orders: [], rows: [], notReady: [] });   // notReady: LAB_DOC_NOT_READY_V1
                 return byVisit.get(key);
             };
             for (const o of (services || [])) {
@@ -1770,20 +1805,42 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 if (!key) continue;
                 take(key, day).rows.push(r);
             }
+            // LAB_DOC_NOT_READY_V1 — внесённые, но не подтверждённые заказы, которых нет среди
+            // лабораторных строк «Услуг» (в очередь лаборатории их ставит отдел или панель, или
+            // вкладка «Услуги» роли закрыта): своим документом визита «Не готов», без значений.
+            for (const o of (labsNotReady || [])) {
+                if (known.has(o.vsId)) continue;
+                const day = o.date ? String(o.date).slice(0, 10) : '';
+                const key = o.visitId != null ? 'v' + o.visitId : (day ? 'd' + day : '');
+                if (!key) continue;
+                take(key, day).notReady.push(o);
+            }
+            const notReadyDoc = (key, g) => ({
+                _lab: true, notReady: true, printable: false, id: 'lab:' + key + ':not-ready', doc_type: 'lab',
+                title: trf('Результаты анализов · {n} анализ(ов)', { n: g.notReady.length }),
+                created_at: (g.day || '') + 'T12:00:00Z', rows: [],
+                orders: g.notReady.map(o => ({ id: o.vsId, name: o.name, status: o.status })),
+                ready: 0, total: g.notReady.length, complete: false, st: { label: 'Не готов', kind: 'warn' },
+            });
 
             // LAB_DOC_SPLIT_V1 (решение владельца 2026-11-07, п. 8) — визит делится на
             // документы по подтверждению (shared/lab-doc-batches.js): анализы,
             // подтверждённые вместе, — отдельный выданный документ; ещё не подтверждённые —
             // свой документ «готовится», пока их не подтвердят. Каждый анализ — ровно в
             // одном документе. Строки без заказа (старые) — прежним документом визита/дня.
+            // LAB_DOC_NOT_READY_V1 — «готовится» — это «Не готов» (notReady): значений в нём
+            // нет, открыть и напечатать его нельзя; печатается только printable.
             const out = [];
             for (const [key, g] of byVisit.entries()) {
                 if (!g.orders.length) {
-                    const total = new Set(g.rows.map(r => r.vsId)).size || 1;
-                    out.push({ _lab: true, id: 'lab:' + key, doc_type: 'lab',
-                        title: trf('Результаты анализов · {n} анализ(ов)', { n: total }),
-                        created_at: (g.day || '') + 'T12:00:00Z', rows: g.rows, orders: [],
-                        ready: total, total, complete: true, st: labDocStatus([], total, total) });
+                    if (g.rows.length) {
+                        const total = new Set(g.rows.map(r => r.vsId)).size || 1;
+                        out.push({ _lab: true, id: 'lab:' + key, doc_type: 'lab',
+                            title: trf('Результаты анализов · {n} анализ(ов)', { n: total }),
+                            created_at: (g.day || '') + 'T12:00:00Z', rows: g.rows, orders: [],
+                            ready: total, total, complete: true, printable: true, st: labDocStatus([], total, total) });
+                    }
+                    if (g.notReady.length) out.push(notReadyDoc(key, g));   // LAB_DOC_NOT_READY_V1
                     continue;
                 }
                 const byId = new Map(g.orders.map(o => [Number(o.id), o]));
@@ -1798,7 +1855,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                         created_at: b.kind === 'issued' && b.verifiedAt ? b.verifiedAt : (g.day || '') + 'T12:00:00Z',
                         rows: orders.flatMap(o => resultsByVs.get(o.id) || []),
                         orders, ready: b.ready, total: b.total, complete: b.complete,
-                        st: labDocStatus(orders, b.ready, b.total),
+                        printable: b.printable, notReady: b.kind === 'pending',   // LAB_DOC_NOT_READY_V1
+                        st: b.kind === 'pending' ? { label: 'Не готов', kind: 'warn' } : labDocStatus(orders, b.ready, b.total),
                     });
                 }
                 // Ревью S3, M-1 — результаты заказов визита без флага «лабораторная» и без
@@ -1816,8 +1874,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     out.push({ _lab: true, id: 'lab:' + key + ':other', doc_type: 'lab',
                         title: trf('Результаты анализов · {n} анализ(ов)', { n: total }),
                         created_at: (g.day || '') + 'T12:00:00Z', rows: orphans, orders,
-                        ready: total, total, complete: true, st: labDocStatus(orders, total, total) });
+                        ready: total, total, complete: true, printable: true, st: labDocStatus(orders, total, total) });
                 }
+                if (g.notReady.length) out.push(notReadyDoc(key, g));   // LAB_DOC_NOT_READY_V1
             }
             return out;
         }
@@ -1828,7 +1887,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         function labDocStatus(orders, ready, total) {
             if (!ready) return { label: 'Не готов', kind: 'warn' };
             if (ready < total) return { label: trf('Готово {ready} из {total}', { ready, total }), kind: 'warn' };
-            const issued = orders.length && orders.every(o => o.status === 'completed');
+            const issued = orders.length && orders.every(o => labDocIssued(o.status, o.verifiedAt));   // LAB_DOC_NOT_READY_V1 — одно правило
             return issued ? { label: 'Выдан', kind: 'ok' } : { label: 'Готов', kind: 'info' };
         }
         // Локальная копия — patient-card не тянет lab-grouping.js ради одного слова.
@@ -1849,6 +1908,10 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // Документы» (type:'lab'), тот же, что в лаборатории: один бланк, один
         // вид, куда бы пациент за ним ни пришёл.
         async function printLabDay(doc, view = null) {   // PRINT_AUTO_V1
+            // LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — документ «Не готов» (результат
+            // внесён, но лаборатория его не подтвердила) не открывается и не печатается — ни
+            // названием строки, ни её кнопкой «Печать»; экран говорит почему.
+            if (doc && doc.notReady) return toast('Анализ ещё не подтверждён лабораторией — документ не готов: открыть и напечатать его нельзя.', 'info');
             // LAB_DOC_ONE_PER_VISIT_V1 — каждая панель визита своей группой:
             // сплошной таблицей не видно, где кончается ОАК и начинается ТОРЧ.
             const byPanel = new Map();
@@ -1977,10 +2040,12 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             printableSheet({ type: 'conclusion', title: d.title, data, ...view });   // PRINT_AUTO_V1
         }
         // LAB_PRINT_PICK_V1 (решение владельца 2026-11-07, п. 8) — «Печать…» вкладки:
-        // готовые документы анализов (выданные и полностью внесённые) с их анализами,
+        // готовые документы анализов (выданные, внесённые целиком) с их анализами,
         // все отмечены; печатаются отмеченные — одним бланком (printLabDay).
         function openDocsPrintPick() {
-            const ready = labDayRows().filter(d => d.complete && (d.orders || []).length)
+            // LAB_DOC_NOT_READY_V1 — только то, что можно напечатать (printable: выдан и внесён
+            // целиком); «Не готов» в окне не предлагается.
+            const ready = labDayRows().filter(d => d.printable && d.complete && (d.orders || []).length)
                 .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
             const pick = openLabPrintPick({
                 title: 'Что напечатать',

@@ -10,7 +10,7 @@
 // (rpc admission_doc_sources), и отдаёт разметку экрану документа. Отклонения
 // от нормы отмечены цветом — тем же, которым их печатает лабораторный бланк.
 import { supabase } from '../../supabase.js';
-import { h, Icon, clear, toast, fmtDate } from '../ui.js';
+import { h, Icon, clear, toast, fmtDate, Tag } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { escapeHtml } from '../sanitize.js';
 
@@ -39,7 +39,12 @@ function studyHtml(item) {
     return `<p>${head}: ${escapeHtml(item.conclusion || '')}</p>`;
 }
 
-/** Разметка блока анализа: заголовок и таблица показателей с отметкой отклонений. */
+/**
+ * Разметка блока анализа: заголовок и таблица показателей с отметкой отклонений.
+ * LAB_DOC_NOT_READY_V1 — анализ, не подтверждённый лабораторией (источник: unverified),
+ * так и подписан в документе: «Название (не проверено)» — как вставка кабинета врача
+ * (paste-sources.js labInsertHtml).
+ */
 function labHtml(item) {
     const rows = (item.results || []).map((r) => {
         const color = FLAG_COLOR[String(r.flag || '').toLowerCase()];
@@ -48,7 +53,8 @@ function labHtml(item) {
             : escapeHtml(r.value);
         return `<tr><td>${escapeHtml(r.parameter)}</td><td>${value}${r.unit ? ' ' + escapeHtml(r.unit) : ''}</td><td>${escapeHtml(r.reference_range || '')}</td></tr>`;
     }).join('');
-    return `<p><b>${escapeHtml(item.name || '')}</b>${item.at ? ' (' + escapeHtml(dt(item.at)) + ')' : ''}</p>`
+    const mark = item.unverified ? ' (' + escapeHtml(tr('не проверено')) + ')' : '';   // LAB_DOC_NOT_READY_V1
+    return `<p><b>${escapeHtml(item.name || '')}${mark}</b>${item.at ? ' (' + escapeHtml(dt(item.at)) + ')' : ''}</p>`
         + `<table class="a4-restbl"><thead><tr><th>${escapeHtml(tr('Показатель'))}</th>`
         + `<th>${escapeHtml(tr('Значение'))}</th><th>${escapeHtml(tr('Норма'))}</th></tr></thead>`
         + `<tbody>${rows}</tbody></table>`;
@@ -81,13 +87,15 @@ export function caseInsertPanel({ admissionId, onInsert, diagnosisNow = null } =
         toast(ok ? tr('Вставлено в документ.') : tr('Поставьте курсор в раздел документа — блок вставляется туда.'), ok ? 'ok' : 'fail');
     };
 
-    const itemRow = (title, meta, html, disabledWhy) => h('button', {
+    // LAB_DOC_NOT_READY_V1 — mark: пометка у названия («не проверено» — как в окне
+    // «Вставить результаты» кабинета врача, paste-sources.js).
+    const itemRow = (title, meta, html, disabledWhy, mark = null) => h('button', {
         class: 'ci-item', type: 'button', disabled: html ? null : true,
         title: html ? tr('Вставить в документ') : tr(disabledWhy || ''),
         onclick: () => { if (html) put(html); },
     },
         h('span', { class: 'ci-item-main' },
-            h('span', { class: 'ci-item-t' }, title),
+            h('span', { class: 'ci-item-t' }, title, mark ? ' ' : null, mark ? Tag(mark, { kind: 'warn', dot: true }) : null),
             meta ? h('span', { class: 'ci-item-m' }, meta) : null),
         html ? Icon('Plus', { size: 13 }) : null);
 
@@ -123,7 +131,8 @@ export function caseInsertPanel({ admissionId, onInsert, diagnosisNow = null } =
                 const list = Array.isArray(data[b.key]) ? data[b.key] : [];
                 box.appendChild(list.length
                     ? h('div', { class: 'ci-list' }, ...list.map((it) => (b.key === 'lab'
-                        ? itemRow(it.name || tr('Анализ'), trf('{n} показателей · {when}', { n: (it.results || []).length, when: dt(it.at) }), labHtml(it))
+                        ? itemRow(it.name || tr('Анализ'), trf('{n} показателей · {when}', { n: (it.results || []).length, when: dt(it.at) }), labHtml(it),
+                            null, it.unverified ? 'не проверено' : null)   // LAB_DOC_NOT_READY_V1
                         : itemRow(it.name || tr('Заключение'), dt(it.at), it.conclusion ? studyHtml(it) : '', 'Заключение ещё не написано — вставлять нечего'))))
                     : h('div', { class: 'ci-note' }, tr('Результатов пока нет.')));
             }

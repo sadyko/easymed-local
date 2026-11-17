@@ -414,6 +414,37 @@ test('INSERT_SOURCES_V2: три источника, диагноз — ТОЛЬ�
     assert.equal(inserted.length, 3, 'выключенная кнопка ничего не вставила');
 });
 
+// LAB_DOC_NOT_READY_V1 (3.25.0) — внесённый, но не подтверждённый анализ вставлялся в
+// историю болезни без пометки. Теперь — как «Вставить результаты» кабинета врача
+// (paste-sources.js): в панели пометка «не проверено», во вставленном заголовке —
+// «(не проверено)»; подтверждённый — без неё.
+test('LAB_DOC_NOT_READY_V1: не подтверждённый анализ — «не проверено» в панели и во вставке; подтверждённый — без пометки', async () => {
+    const was = SOURCES.lab;
+    SOURCES.lab = [
+        { id: 71, name: 'Гормоны щитовидной железы', at: '2026-09-07T09:00:00Z', unverified: true,
+            results: [{ parameter: 'Тиреотропин', value: '7.77', unit: 'мМЕ/л', reference_range: '0.4–4.0', flag: 'high' }] },
+        { ...was[0], unverified: false },
+    ];
+    try {
+        const inserted = [];
+        const panel = caseInsertPanel({ admissionId: 11, onInsert: (html) => { inserted.push(html); return true; }, diagnosisNow: () => '' });
+        BODY.appendChild(panel);
+        await settle();
+        const items = walk(panel).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('ci-item'));
+        const pending = items.find((x) => textOf(x).includes('Гормоны щитовидной железы'));
+        const issued = items.find((x) => textOf(x).includes('Общий анализ крови'));
+        assert.ok(pending && textOf(pending).includes('не проверено'), 'нет пометки «не проверено»: ' + (pending && textOf(pending)));
+        assert.ok(!textOf(issued).includes('не проверено'), 'подтверждённый анализ помечен');
+        pending.click();
+        issued.click();
+        assert.equal(inserted.length, 2);
+        assert.ok(inserted[0].includes('Гормоны щитовидной железы (не проверено)'), inserted[0].slice(0, 200));
+        assert.ok(!inserted[1].includes('не проверено'), inserted[1].slice(0, 200));
+    } finally {
+        SOURCES.lab = was;
+    }
+});
+
 test('INSERT_SOURCES_V2: без диагноза в документе панель говорит, где его написать', async () => {
     const panel = caseInsertPanel({ admissionId: 11, onInsert: () => true, diagnosisNow: () => '' });
     BODY.appendChild(panel);

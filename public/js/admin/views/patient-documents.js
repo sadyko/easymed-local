@@ -42,7 +42,7 @@ import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, mat
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';
 import { labShownValue, labRoundOn } from '../../shared/lab-round.js';   // LAB_ROUND_V1
 import { labSignerData, labSignerNames } from './lab-signer.js';   // PRINT_PERFORMER_V1
-import { labDocBatches } from '../../shared/lab-doc-batches.js';   // LAB_DOC_SPLIT_V1
+import { labDocBatches, labDocIssued } from '../../shared/lab-doc-batches.js';   // LAB_DOC_SPLIT_V1 · LAB_DOC_NOT_READY_V1
 import { openLabPrintPick } from './lab-print-pick.js';   // LAB_PRINT_PICK_V1
 import { matrixGroupPart } from '../../shared/lab-matrix.js';   // LAB_MATRIX_PANEL_V1 · TG_LAB_MATRIX_V1 — общая часть группы
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_PANEL_DEDUP_V1 — одно правило «лабораторная услуга» с очередью лаборатории
@@ -51,7 +51,7 @@ const refs = { container: null, onNavigate: null, bodyEl: null, docsWrap: null }
 
 const state = {
     patient: null,   // selected patient row ({ id, full_name, mrn, phone, ... })
-    docs:    { visits: [], labByVisit: {}, doctorMap: {} },
+    docs:    { visits: [], labByVisit: {}, labNotReadyByVisit: {}, doctorMap: {} },   // labNotReadyByVisit: LAB_DOC_NOT_READY_V1
     brand:   null,
 };
 
@@ -62,7 +62,7 @@ export async function renderPatientDocuments(container, { onNavigate } = {}) {
     refs.container  = container;
     refs.onNavigate = onNavigate;
     state.patient = null;
-    state.docs = { visits: [], labByVisit: {}, doctorMap: {} };
+    state.docs = { visits: [], labByVisit: {}, labNotReadyByVisit: {}, doctorMap: {} };
     mount();
 }
 
@@ -466,10 +466,11 @@ async function fetchPatientDocs(patientId) {
         .order('visit_date', { ascending: false });
     if (visitsErr) {
         toast(trf('Не удалось загрузить визиты: {msg}', { msg: visitsErr.message || visitsErr }), 'fail');
-        return { visits: [], labByVisit: {}, doctorMap: {} };
+        return { visits: [], labByVisit: {}, labNotReadyByVisit: {}, doctorMap: {} };
     }
     const visits = visitsData || [];
-    const labByVisit = visits.length > 0 ? await fetchLabByVisit(visits.map(v => v.id)) : {};
+    const labNotReadyByVisit = {};   // LAB_DOC_NOT_READY_V1 — внесённые, но не подтверждённые анализы визита
+    const labByVisit = visits.length > 0 ? await fetchLabByVisit(visits.map(v => v.id), { notReady: labNotReadyByVisit }) : {};
 
     // Doctor names — optional, best-effort (no toast on failure: the document
     // still prints fine without a doctor name).
@@ -479,14 +480,20 @@ async function fetchPatientDocs(patientId) {
         if (!docErr) for (const d of (docData || [])) doctorMap[d.id] = d.full_name;
     } catch (e) { /* optional */ }
 
-    return { visits, labByVisit, doctorMap };
+    return { visits, labByVisit, labNotReadyByVisit, doctorMap };
 }
 
 // DOCS_ROW_PRINT_V1 — вынесено из fetchPatientDocs без изменений, потому что
 // печать из строки ленты обязана собирать данные ТЕМ ЖЕ кодом, что и архив
 // пациента: две сборки одного документа неизбежно разошлись бы.
 // LAB_PANEL_DEDUP_V1 — экспорт для теста (lab-worksheet-dedup.test.mjs).
-export async function fetchLabByVisit(visitIds) {
+// LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — значения читаются ТОЛЬКО у выданных
+// анализов (shared/lab-doc-batches.js labDocIssued): у внесённых, но не подтверждённых
+// лабораторией из lab_results спрашивается один номер строки — «результат есть», — и
+// они попадают в opts.notReady ({ [visitId]: [{ vsId, name }] }): архив называет их
+// «Не готов», а значений в браузер не приходит вовсе. Печать собирается из результата
+// функции, поэтому не подтверждённого анализа на бланке быть не может.
+export async function fetchLabByVisit(visitIds, { notReady = null } = {}) {
     const labByVisit = {};
     {
         // LAB_PANEL_DEDUP_V1 — «лабораторная услуга» — по общему правилу
@@ -514,7 +521,21 @@ export async function fetchLabByVisit(visitIds) {
             };
             const panelServices = new Set(((panelsRes && !panelsRes.error && panelsRes.data) || []).map((p) => p.service_id).filter((id) => id != null));
             const labVs = (vsData || []).filter(r => r.services && isLabService(r.services, { ...lookups, hasPanel: () => panelServices.has(r.service_id) }));
-            const labVsIds = labVs.map(r => r.id);
+            // LAB_DOC_NOT_READY_V1 — выданные — со значениями; прочие — только «результат есть».
+            const labVsIds = labVs.filter(r => labDocIssued(r.status, r.verified_at)).map(r => r.id);
+            const pendingVs = labVs.filter(r => !labDocIssued(r.status, r.verified_at) && !['cancelled', 'canceled', 'refunded'].includes(r.status));
+            if (notReady && pendingVs.length > 0) {
+                const { data: hasData, error: hasErr } = await supabase.from('lab_results')
+                    .select('visit_service_id')
+                    .in('visit_service_id', pendingVs.map(r => r.id));
+                if (!hasErr) {
+                    const entered = new Set((hasData || []).map(x => x.visit_service_id));
+                    for (const vs of pendingVs) {
+                        if (!entered.has(vs.id)) continue;
+                        (notReady[vs.visit_id] || (notReady[vs.visit_id] = [])).push({ vsId: vs.id, name: (vs.services && vs.services.name) || '' });
+                    }
+                }
+            }
             if (labVsIds.length > 0) {
                 const { data: lrData, error: lrErr } = await supabase.from('lab_results')
                     .select('*')
@@ -602,6 +623,14 @@ function visitCard(v) {
     const labResults = state.docs.labByVisit[v.id] || [];
     const hasLab = labResults.length > 0;
     const doctorName = v.doctor_id ? (state.docs.doctorMap[v.doctor_id] || null) : null;
+    // LAB_DOC_NOT_READY_V1 — внесённые, но не подтверждённые анализы визита: названием и
+    // «Не готов», без значений и без кнопок — открыть и напечатать их нельзя.
+    const notReady = (state.docs.labNotReadyByVisit || {})[v.id] || [];
+    const notReadyEl = notReady.length ? h('div', {
+        'data-lab-not-ready': '',
+        style: { padding: '0 16px 14px', display: 'flex', flexWrap: 'wrap', gap: '8px 14px', alignItems: 'center', fontSize: '12.5px' },
+    }, ...notReady.map((x) => h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } },
+        Icon('Flask', { size: 13 }), h('span', null, x.name || '—'), Tag('Не готов', { kind: 'warn', dot: true })))) : null;
 
     const labBtn = hasLab ? h('button', {
         class: 'btn btn-outline btn-sm', type: 'button',
@@ -629,6 +658,7 @@ function visitCard(v) {
         h('div', { style: { padding: '12px 16px 16px', display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' } },
             labBtn, conclusionTag(v), editBtn, printBtn,
         ),
+        notReadyEl,
     );
 }
 
@@ -800,9 +830,10 @@ export async function printLabReport(visit, results, brand, patient) {
 
 // LAB_DOC_SPLIT_V1 + LAB_PRINT_PICK_V1 (решение владельца 2026-11-07, п. 8) — «Печать»
 // анализов визита открывает окно выбора: документы визита (подтверждённые вместе —
-// один документ; не подтверждённые, но внесённые полностью — свой) и их анализы,
-// все отмечены; печатаются отмеченные одним бланком. Неготовые (внесено не всё) не
-// предлагаются — их ждут.
+// один документ) и их анализы, все отмечены; печатаются отмеченные одним бланком.
+// LAB_DOC_NOT_READY_V1 (3.25.0) — только ВЫДАННЫЕ документы (printable): внесённые, но
+// не подтверждённые лабораторией — «Не готов», в окне их нет (раньше шли третьим
+// документом «внесены, не подтверждены»).
 export function labPrintDocs(visit, results) {
     const orders = [];
     const seen = new Set();
@@ -813,11 +844,11 @@ export function labPrintDocs(visit, results) {
     }
     const name = new Map(orders.map((o) => [Number(o.id), o.name]));
     return labDocBatches(orders, { hasResult: (id) => seen.has(id) })
-        .filter((b) => b.complete)
+        .filter((b) => b.printable)   // LAB_DOC_NOT_READY_V1
         .map((b) => ({
             key: b.key,
-            title: b.kind === 'issued' ? tr('Результаты анализов') + ' · ' + tr('выдан') : tr('Результаты анализов') + ' · ' + tr('внесены, не подтверждены'),
-            subtitle: b.kind === 'issued' && b.verifiedAt ? fmtDateTime(b.verifiedAt) : '',
+            title: tr('Результаты анализов') + ' · ' + tr('выдан'),
+            subtitle: b.verifiedAt ? fmtDateTime(b.verifiedAt) : '',
             orders: b.orderIds.map((id) => ({ id, name: name.get(id) || '' })),
         }));
 }
@@ -983,12 +1014,16 @@ function paintFeedFoot() {
 
 function feedRow(r) {
     const date = String(r.visit_date || '').slice(0, 10).split('-').reverse().join('.');
-    const done = r.status === 'completed' || !!r.verified_at;
+    const done = labDocIssued(r.status, r.verified_at);   // LAB_DOC_NOT_READY_V1 — одно правило «выдан»
+    // LAB_DOC_NOT_READY_V1 (решение владельца, 3.25.0) — результат внесён, но лаборатория его
+    // не подтвердила: сервер прислал строку без значений (not_ready). Строка остаётся —
+    // видно, что анализ делается, — но «Не готов», без ответов и без «Печать».
+    const notReady = !!r.not_ready;
 
     // DOCS_FEED_ANSWERS_V1 — ответы прямо в строке: регистратура диктует
     // результат по телефону, не открывая архив. Отклонения — красным, тем же
     // словарём флагов, что печатный бланк (всё, что не 'normal' и не пусто).
-    const answers = (r.results || []).length ? h('div', {
+    const answers = !notReady && (r.results || []).length ? h('div', {
         style: { fontSize: '12.5px', marginTop: '2px', lineHeight: '1.5' },
     }, ...(r.results.map((res, i) => {
         const abnormal = res.flag && res.flag !== 'normal';
@@ -1004,7 +1039,7 @@ function feedRow(r) {
     //
     // span, а не button: сама строка — <button>, а <button> внутри <button> —
     // невалидный HTML, и клики по вложенной кнопке ведут себя непредсказуемо.
-    const printBtn = r.result_count ? h('span', {
+    const printBtn = r.result_count && !notReady ? h('span', {   // LAB_DOC_NOT_READY_V1 — не готовый не печатается
         class: 'btn btn-outline btn-sm', role: 'button', title: 'Печать всех результатов визита',
         onclick: (e) => { e.stopPropagation(); printVisitFromFeed(r, e.currentTarget); },
     }, Icon('Print', { size: 13 }), ' Печать') : null;
@@ -1033,7 +1068,9 @@ function feedRow(r) {
             answers || h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 (DOC_TYPE_RU[r.service_type] || r.service_type || '')
                 + (r.doc_type ? ' · заключение' : ''))),
-        h('span', { style: { flex: '0 0 auto' } }, Tag(done ? 'Выдан' : 'Готовится', { kind: done ? 'ok' : 'warn', dot: true })),
+        h('span', { style: { flex: '0 0 auto' } }, notReady
+            ? Tag('Не готов', { kind: 'warn', dot: true })   // LAB_DOC_NOT_READY_V1
+            : Tag(done ? 'Выдан' : 'Готовится', { kind: done ? 'ok' : 'warn', dot: true })),
         printBtn && h('span', { style: { flex: '0 0 auto' }, onclick: (e) => e.stopPropagation() }, printBtn),
         h('span', { style: { flex: '0 0 auto', color: 'var(--ink-400, #9aa7ab)' } }, Icon('ChevronRight', { size: 15 })));
 }
