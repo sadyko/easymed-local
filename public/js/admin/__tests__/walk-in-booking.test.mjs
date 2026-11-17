@@ -520,10 +520,18 @@ test('CRM_LINK_ALL_V1 R7a: строка «из записи» не вставл�
   const keep = Number(ins.run(vid, CONSULT, DOCTOR, 100000, 100000).lastInsertRowid);
   const drop = Number(ins.run(vid, LAB, null, 40000, 40000).lastInsertRowid);
   const drops = [drop];
-  const out = await registerWalkIn({
+  // WAIT_REG_V1 (ревью M3) — окно регистрации снимает строку записи только с причиной.
+  await assert.rejects(registerWalkIn({
     patientId: PATIENT,
     lines: [{ service: svc(CONSULT), doctorId: DOCTOR, bookedVsId: keep, bookedUnitPrice: 100000 }],
     dropVsIds: drops, bookedVisitId: vid, createdBy: USER.id,
+  }), /Укажите причину/);
+  assert.equal(countOf('invoices'), 0, 'счёт выставлен после отказа');
+  assert.deepEqual(drops, [drop]);
+  const out = await registerWalkIn({
+    patientId: PATIENT,
+    lines: [{ service: svc(CONSULT), doctorId: DOCTOR, bookedVsId: keep, bookedUnitPrice: 100000 }],
+    dropVsIds: drops, dropReasons: { [drop]: 'Пациент отказался от анализа' }, bookedVisitId: vid, createdBy: USER.id,
   });
   assert.equal(out.visit.id, vid, 'регистрация завела второй визит');
   assert.deepEqual(all('SELECT id FROM visit_services WHERE visit_id = ? ORDER BY id', vid).map((r) => r.id), [keep], 'вторая строка или убранная строка осталась');

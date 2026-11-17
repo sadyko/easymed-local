@@ -1417,11 +1417,13 @@ test('CRM_LINK_ALL_V1 R7a: убранная строка записи снима
   patientRows = [KARIMOVA];
   visitRows = [{ id: 77, status: 'confirmed', visit_date: todayAt(23) }];
   vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
-  const dlg = openFastRegistrationDialog({});
+  const asked = [];
+  const dlg = openFastRegistrationDialog({ askDropReason: async (what) => { asked.push(what); return 'Пациент отказался от приёма'; } });
   await tick(40);
   await pickKarimova(dlg);
   assert.ok(textOf(dlg.table).includes('Подтверждён'), 'статус записи не показан');
-  dlg.state.removeLine(0);
+  assert.equal(await dlg.state.removeLine(0), true);
+  assert.deepEqual(asked.map((a) => a.kind), ['booked'], 'строку записи убрали без причины (WAIT_REG_V1, ревью M3)');
   dlg.state.addLine(SERVICES[1], null);
   calls.length = 0;
   btnByText(dlg.card, 'Сохранить').click();
@@ -1429,7 +1431,8 @@ test('CRM_LINK_ALL_V1 R7a: убранная строка записи снима
   const names = calls.filter((c) => c.kind === 'rpc').map((c) => c.name);
   assert.ok(names.indexOf('booking_line_remove') >= 0 && names.indexOf('booking_line_remove') < names.indexOf('ensure_visit'),
     'строка записи не снята до визита: ' + names.join(', '));
-  assert.deepEqual(calls.find((c) => c.name === 'booking_line_remove').body, { visit_service_id: 555 });
+  // WAIT_REG_V1 (ревью M3) — с причиной и пометкой окна регистрации: без причины сервер не снимет.
+  assert.deepEqual(calls.find((c) => c.name === 'booking_line_remove').body, { visit_service_id: 555, registration: true, reason: 'Пациент отказался от приёма' });
   const ins = calls.filter((c) => c.kind === 'insert' && c.table === 'visit_services');
   assert.equal(ins.length, 1);
   assert.equal(ins[0].body.service_id, 2);
@@ -1923,7 +1926,7 @@ test('WAIT_REG_V1: «Это он» у пациента с записью на с
   assert.equal(calls.filter((c) => c.kind === 'insert').length, 0, 'окно что-то записало');
   assert.equal(opened.length, 1, '«Оформить по записи» не открылось');
   assert.equal(opened[0].p.id, 42, 'окно визита открыто не на найденного пациента');
-  assert.deepEqual(opened[0].opts.presetServiceIds, [2], 'набранные услуги не ушли в окно визита');
+  assert.deepEqual(opened[0].opts.presetLines.map((l) => l.service_id), [2], 'набранные услуги не ушли в окно визита');
   assert.ok(toasts.some((m) => m.includes('Оформить по записи')), 'не сказано, почему окно закрылось: ' + JSON.stringify(toasts));
   assert.equal(dialogs('fast-registration').length, 0, 'окно быстрой регистрации осталось открытым');
 });
@@ -1941,4 +1944,87 @@ test('WAIT_REG_V1: «Это он» — строк записи в окне не�
   assert.deepEqual(ask.body, { patient_id: 42 });
   assert.equal(calls.some((c) => c.kind === 'rpc' && c.name === 'ensure_visit'), false);
   assert.equal(opened.length, 1);
+});
+
+// ===========================================================================
+// WAIT_REG_V1 (ревью M3) — БЫСТРАЯ РЕГИСТРАЦИЯ НЕ СНИМАЕТ ЗАПИСЬ МОЛЧА: строку «из записи» и направление
+// врача убирают только с причиной (то же окно, что у окна визита); передумали — строка на месте. При
+// сохранении — до визита дня: строка записи снимается с причиной, по направлению сервер пишет «не
+// оформлено» (referral_line_skip) — строка направления остаётся в визите.
+// ===========================================================================
+test('WAIT_REG_V1 (ревью M3): строку записи и направление врача — только с причиной; передумали — на месте; при сохранении — сервер, до визита', async () => {
+  reset();
+  patientRows = [KARIMOVA];
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  let answer = null;
+  const asked = [];
+  const dlg = openFastRegistrationDialog({ askDropReason: async (what) => { asked.push(what); return answer; } });
+  await tick(40);
+  await pickKarimova(dlg);
+  // Передумали — строка записи на месте, снимать нечего.
+  assert.equal(await dlg.state.removeLine(0), false);
+  assert.equal(dlg.state.rows.length, 1, 'строка записи убрана без причины');
+  assert.deepEqual(dlg.state.dropBooked, []);
+  // Направление врача (строка «от врача») — тоже только с причиной.
+  dlg.state.rows.push({ service: SERVICES[1], doctorId: null, doctor: null, sel: null,
+    booked: { vsId: 600, status: 'arrived', unitPrice: 40000, doctorOrder: true, referrerName: 'Иванов' } });
+  answer = 'Пациент сдаст анализ завтра';
+  assert.equal(await dlg.state.removeLine(1), true);
+  assert.deepEqual(asked.map((a) => [a.kind, a.referrer || '']), [['booked', ''], ['doctor', 'Иванов']]);
+  assert.deepEqual(dlg.state.dropBooked, [], 'направление врача снимается с визита — его назначил врач');
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+  const names = calls.filter((c) => c.kind === 'rpc').map((c) => c.name);
+  assert.ok(names.indexOf('referral_line_skip') >= 0 && names.indexOf('referral_line_skip') < names.indexOf('ensure_visit'), 'пропуск направления не записан до визита: ' + names.join(', '));
+  assert.deepEqual(calls.find((c) => c.name === 'referral_line_skip').body, { visit_service_id: 600, reason: 'Пациент сдаст анализ завтра' });
+  assert.equal(names.includes('booking_line_remove'), false, 'строку записи сняли, хотя регистратор передумал');
+  dlg.close();
+});
+
+// WAIT_REG_V1 (ревью L2) — «Это он» → «Оформить по записи»: набранное переезжает целиком (врач строки, пакет,
+// консультация по виду приёма, «Код отправителя»); скидку окно визита выбирает само — сказано; окно быстрой
+// регистрации закрывается, только когда окно визита открылось.
+test('WAIT_REG_V1 (ревью L2): в окно визита — врач, пакет, консультация по виду приёма и код отправителя; не открылось — окно остаётся', async () => {
+  reset();
+  patientRows = [KARIMOVA];
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  const pkg = { id: 3, name: 'Первичный приём', price: 30000, full: 40000 };
+  sheetTables = { patient_discounts: [{ id: 11, name: 'ЛЕТО', kind: 'promo', percent: 15, amount: 0, active: 1, service_ids: [] }] };
+  const opened = [];
+  const openWith = async (handle) => {
+    const dlg = openFastRegistrationDialog({ openWizard: async (p, opts) => { opened.push({ p, opts }); return handle; } });
+    await tick(40);
+    dlg.state.addLine(SERVICES[1], { id: 8, full_name: 'Сидорова Анна' }, pkg);
+    dlg.state.rows.push({ service: { id: 'c|7|5', __consult: true, consultation_type_id: 5, __consultDoctorId: 7, name: 'Первичная консультация', price: 150000, requires_doctor: 1 },
+      doctorId: 7, doctor: null, sel: null });
+    const ref = walk(dlg.card).find((n) => n.tagName === 'SELECT' && n.options.some((o) => o.attrs.value === '5'));
+    if (ref) ref.value = '5';
+    await tick(30);
+    dlg.state.discountChoice = 'promo:11';   // промокод выбран человеком — его окно визита выбирает само
+    dlg.state.discountPicked = true;
+    await dupToExisting(dlg);
+    return { dlg, ref };
+  };
+  // Окно визита не открылось (отказ) — быстрая регистрация остаётся с набранным.
+  const first = await openWith(null);
+  assert.equal(opened.length, 1);
+  assert.equal(dialogs('fast-registration').length, 1, 'окно закрылось, хотя окно визита не открылось');
+  assert.ok(toasts.some((m) => /Не удалось открыть окно визита/.test(m)), JSON.stringify(toasts));
+  const o = opened[0].opts;
+  assert.deepEqual(o.presetLines, [
+    { service_id: 2, doctor_id: 8, package: pkg, name: 'Общий анализ крови' },
+    { service_id: null, consultation_type_id: 5, doctor_id: 7, name: 'Первичная консультация', price: 150000 },
+  ], 'строки ушли не целиком');
+  if (first.ref) assert.equal(String(o.referralSourceId), '5', '«Код отправителя» не передан');
+  first.dlg.close();
+  document.body.children.length = 0;
+  // Открылось — окно закрыто, и сказано, что скидку выбрать заново.
+  toasts.length = 0;
+  await openWith({ overlay: {}, close() {} });
+  assert.equal(opened.length, 2);
+  assert.equal(dialogs('fast-registration').length, 0, 'окно быстрой регистрации осталось открытым');
+  assert.ok(toasts.some((m) => /не перенесено: скидка или промокод/.test(m)), 'не сказано, что скидка не перенесена: ' + JSON.stringify(toasts));
 });

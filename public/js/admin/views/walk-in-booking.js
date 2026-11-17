@@ -201,7 +201,7 @@ async function quoteTiers(patientId, serviceIds, visitId, doctorIds = {}) {
     }
 }
 
-export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedVisitId = null, referralSourceId = null, createdBy = null, actorRole = null, now = () => new Date(), discount = null } = {}) {
+export async function registerWalkIn({ patientId, lines, dropVsIds = [], dropReasons = {}, skipOrders = [], bookedVisitId = null, referralSourceId = null, createdBy = null, actorRole = null, now = () => new Date(), discount = null } = {}) {
     const pid = Number(patientId);
     const items = (Array.isArray(lines) ? lines : []).filter(Boolean);
     // WALK_IN_ROLE_GATE_V1 — раньше всего остального: роль решает, дойдёт ли
@@ -254,12 +254,26 @@ export async function registerWalkIn({ patientId, lines, dropVsIds = [], bookedV
     // CRM_LINK_ALL_V1 (R7a) — строки записи, которые регистратор убрал, снимаются
     // с визита до всего остального — той же дверью, что в календаре
     // (booking_line_remove: только «в смете», без счёта и работы).
+    // WAIT_REG_V1 (ревью M3) — с причиной регистратора (окно причины быстрой регистрации) и пометкой
+    // «окно регистрации»: без причины сервер такую строку не снимает. Направление врача, не оформленное с
+    // причиной, остаётся в визите, а сервер пишет «не оформлено» с номером строки (referral_line_skip).
+    // Всё — до визита дня; отказ — остановка словами, ничего дальше не пишется.
     const drops = Array.isArray(dropVsIds) ? dropVsIds : [];
+    const why = dropReasons && typeof dropReasons === 'object' ? dropReasons : {};
     for (const id of drops.slice()) {
         if (!isPosInt(id)) continue;
-        const { error } = await supabase.rpc('booking_line_remove', { visit_service_id: Number(id) });
+        const args = { visit_service_id: Number(id), registration: true };
+        if (typeof why[id] === 'string' && why[id].trim()) args.reason = why[id];
+        const { error } = await supabase.rpc('booking_line_remove', args);
         if (error) throw new Error(trf('Услугу из записи снять не удалось: {msg}', { msg: msgOf(error) }));
         drops.splice(drops.indexOf(id), 1);
+    }
+    const skips = Array.isArray(skipOrders) ? skipOrders : [];
+    for (const s of skips.slice()) {
+        if (!s || !isPosInt(s.vsId)) continue;
+        const { error } = await supabase.rpc('referral_line_skip', { visit_service_id: Number(s.vsId), reason: s.reason });
+        if (error) throw new Error(trf('Причина по направлению врача «{name}» не записана: {msg}', { name: s.name || '', msg: msgOf(error) }));
+        skips.splice(skips.indexOf(s), 1);
     }
 
     // 1. Филиал — тот же первый действующий, что берёт мастер визита.

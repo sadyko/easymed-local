@@ -259,18 +259,21 @@ test('DOCTOR_REFERRAL_DESK_V1 (настоящий сервер): убранна�
   try {
     const vid = visitToday(t);
     const a = await doctorLine(t, { visit_id: vid, service_id: 50 });
-    const dlg = openFastRegistrationDialog({});
+    // WAIT_REG_V1 (ревью M3) — направление врача убирают только с причиной (окно причины подменено).
+    const dlg = openFastRegistrationDialog({ askDropReason: async () => 'Пациент сдаст анализ завтра' });
     await waitCatalog(dlg);
     await pickPatientOrders(dlg);
     const i = dlg.state.rows.findIndex((r) => r.booked && r.booked.vsId === a);
     assert.ok(i >= 0, 'направление не встало строкой');
-    dlg.state.removeLine(i);
+    assert.equal(await dlg.state.removeLine(i), true);
     assert.deepEqual(dlg.state.dropBooked, [], 'строку врача сняли бы с визита');
+    assert.deepEqual(dlg.state.skipOrders.map((s) => s.vsId), [a], 'причина «не оформлено» не запомнена');
     const add = node(dlg, 'data-doctor-order-add', a);
     assert.ok(add, 'нет «Добавить» у убранного направления: ' + textOf(dlg.card));
     add.click();
     assert.ok(dlg.state.rows.some((r) => r.booked && r.booked.vsId === a), 'направление не вернулось строкой');
     assert.ok(!node(dlg, 'data-doctor-order', a), 'вернувшаяся строка осталась и в группе');
+    assert.deepEqual(dlg.state.skipOrders, [], 'вернувшееся направление всё ещё помечено «не оформлено»');
     dlg.close();
   } finally { t.close(); }
 });

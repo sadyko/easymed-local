@@ -74,6 +74,7 @@ import { registerWalkIn, walkInRoleRefusal, walkInLinesRefusal } from './walk-in
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»
 import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
 import { openRegisterByBooking, patientWaitsToday } from './registrar-waiting.js';   // WAIT_REG_V1 — «Это он» у ожидаемого пациента → «Оформить по записи»
+import { askDropReason } from './booked-drop.js';   // WAIT_REG_V1 (ревью M3) — строку записи и направление врача — только с причиной
 import { surgeryBedRefusal, isSurgeryPick, SURGERY_NEEDS_BED_TEXT } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1   // WALK_IN_BOOKING_V1
 import { doctorPoolFor, performerRequired, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // LAB_NO_DOCTOR_V1 — performerRequired вместо needsPerformer   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
@@ -118,13 +119,15 @@ function nameOf(p) {
  * @param {{onNavigate?:Function, onSaved?:Function}} [opts]
  * @returns {{overlay, card, body, close, state, fields, collect, saveBtn, printBtn}|null}
  */
-export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = null } = {}) {
+export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = null, askDropReason: askOverride = null } = {}) {
     if (!canCreatePatient()) { openAccessDeniedDialog(); return null; }
 
     const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
     const notifySaved = typeof onSaved === 'function' ? onSaved : () => {};
     // WAIT_REG_V1 — «Оформить по записи» (окно визита со строками записи); тесты подменяют.
     const registerByBooking = typeof openWizard === 'function' ? openWizard : openRegisterByBooking;
+    // WAIT_REG_V1 (ревью M3) — окно причины (views/booked-drop.js); тесты подменяют.
+    const askReason = typeof askOverride === 'function' ? askOverride : askDropReason;
 
     // ЭТАЖ ОКНА. Оно открывает поверх себя каталог услуг (130), стража
     // дубликатов и предпросмотр печати (160), выбор пакета (180) — и все они
@@ -205,6 +208,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
         // которые регистратор убрал (снимутся с визита при сохранении).
         bookedVisitId: null,
         dropBooked: [],
+        dropReasons: {},      // WAIT_REG_V1 (ревью M3) — visit_service_id убранной строки записи → причина
+        skipOrders: [],       // WAIT_REG_V1 (ревью M3) — направления врача, не оформленные с причиной
         doctorOrders: null,   // DOCTOR_REFERRAL_DESK_V1 — направления врача пациента (patient_referral_orders)
         addLine, applyTemplate, removeLine,
     };
@@ -785,15 +790,33 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
         return row;
     }
 
-    function removeLine(i) {
-        // CRM_LINK_ALL_V1 (R7a) — строка «из записи» снимется с визита при сохранении.
-        // DOCTOR_REFERRAL_DESK_V1 — строка направления врача остаётся в визите: её назначил
-        // врач, она возвращается в группу «Направления врача» (там — «Добавить»).
+    /**
+     * CRM_LINK_ALL_V1 (R7a) — строка «из записи» снимется с визита при сохранении.
+     * DOCTOR_REFERRAL_DESK_V1 — строка направления врача остаётся в визите: её назначил
+     * врач, она возвращается в группу «Направления врача» (там — «Добавить»).
+     * WAIT_REG_V1 (ревью M3) — ТОЙ ЖЕ ВЫНУЖДАЮЩЕЙ ФУНКЦИЕЙ, ЧТО В ОКНЕ ВИЗИТА: строку записи и
+     * направление врача убирают только с причиной (views/booked-drop.js); при сохранении сервер
+     * снимает строку записи с этой причиной (booking_line_remove, registration: true) и пишет «не
+     * оформлено» по направлению с номером строки (referral_line_skip). Передумали — строка на месте.
+     * → true, если строка убрана.
+     */
+    async function removeLine(i) {
         const gone = state.rows[i];
-        if (gone && gone.booked && !gone.booked.doctorOrder) state.dropBooked.push(gone.booked.vsId);
-        state.rows.splice(i, 1);
+        if (!gone) return false;
+        if (gone.booked) {
+            const kind = gone.booked.doctorOrder ? 'doctor' : 'booked';
+            const reason = await askReason({ kind, name: (gone.service && gone.service.name) || '', referrer: gone.booked.referrerName || '' });
+            const at = state.rows.indexOf(gone);
+            if (!reason || at < 0) return false;
+            if (kind === 'booked') { state.dropBooked.push(gone.booked.vsId); state.dropReasons[gone.booked.vsId] = reason; }
+            else state.skipOrders.push({ vsId: Number(gone.booked.vsId), name: (gone.service && gone.service.name) || '', reason });
+            state.rows.splice(at, 1);
+        } else {
+            state.rows.splice(i, 1);
+        }
         paintTable();
         paintDoctorOrders();
+        return true;
     }
 
     function applyTemplate(template) {
@@ -866,6 +889,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
     function clearBookedRows() {
         state.rows = state.rows.filter((r) => !r.booked && !r.fromRec);   // DOCTOR_REFERRAL_DESK_V1 — и строки из рекомендаций прежнего пациента
         state.dropBooked = [];
+        state.dropReasons = {};   // WAIT_REG_V1 (ревью M3)
+        state.skipOrders = [];
         state.bookedVisitId = null;
         state.doctorOrders = null;   // DOCTOR_REFERRAL_DESK_V1
         bookedNote.textContent = '';
@@ -1031,7 +1056,10 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
                         ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-doctor-order-add': String(l.visit_service_id),
                             onclick: () => {
                                 if (locked()) return;
-                                if (addOrderRow(l) === 'other-visit') toast(tr('Направления врача из другого визита — оформите их в окне визита.'), 'warn');
+                                const back = addOrderRow(l);
+                                if (back === 'other-visit') toast(tr('Направления врача из другого визита — оформите их в окне визита.'), 'warn');
+                                // WAIT_REG_V1 (ревью M3) — вернули строкой: «не оформлено» с причиной больше не правда.
+                                if (back === true) state.skipOrders = state.skipOrders.filter((s) => Number(s.vsId) !== Number(l.visit_service_id));
                                 paintTable();
                                 paintDoctorOrders();
                             } }, Icon('Plus', { size: 12 }), ' ', tr('Добавить'))
@@ -1209,7 +1237,14 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
                 openDuplicatePatientDialog(e, {
                     // WAIT_REG_V1 — пациента сегодня ждут (запись, направление врача, анализ «на дату»):
                     // не сохраняем сами, а ведём в «Оформить по записи» (stopForBooking).
-                    onOpenExisting: async (c) => { await usePatient(c, { load: true }); if (await stopForBooking()) return; await doSave(); },
+                    // ревью L2 — скидку, выбранную человеком до «Это он», карта найденного пациента сбрасывает
+                    // (loadDiscountChoices): окну визита её не передать — помним, чтобы сказать.
+                    onOpenExisting: async (c) => {
+                        const picked = state.discountPicked ? state.discountChoice : null;
+                        await usePatient(c, { load: true });
+                        if (await stopForBooking({ pickedDiscount: picked })) return;
+                        await doSave();
+                    },
                     onForceCreate: async () => {
                         const created = await createPatient(payload, true);
                         if (!created) return;
@@ -1233,21 +1268,45 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
      * знают строки «из записи» / «от врача» этого окна и сервер (registrar_waiting — и анализы
      * «на дату», которых это окно не показывает). → true — окно передано.
      */
-    async function stopForBooking() {
+    //
+    // WAIT_REG_V1 (ревью L2) — НАБРАННОЕ ЗДЕСЬ ПЕРЕЕЗЖАЕТ ЦЕЛИКОМ: строка — с врачом, пакетом, и консультация
+    // по виду приёма тоже (прежде отбрасывалась); «Код отправителя» — направившим окна визита. Скидку и
+    // промокод окно визита выбирает само — регистратору сказано, что их надо выбрать там заново. Окно
+    // быстрой регистрации закрывается, только когда окно визита открылось; не открылось — остаётся с
+    // набранным.
+    async function stopForBooking({ pickedDiscount = null } = {}) {
         const p = state.patient;
         if (!p || !p.id) return false;
         const waits = state.rows.some((r) => r.booked) || await patientWaitsToday(p.id);
         if (!waits) return false;
-        const extra = state.rows
-            .filter((r) => !r.booked && r.service && !r.service.__consult && Number.isInteger(Number(r.service.id)) && Number(r.service.id) > 0)
-            .map((r) => Number(r.service.id));
+        const presetLines = state.rows.filter((r) => !r.booked && r.service).map((r) => {
+            const consult = !!r.service.__consult;
+            if (consult) {
+                return { service_id: null, consultation_type_id: Number(r.service.consultation_type_id) || null,
+                    doctor_id: r.doctorId != null ? Number(r.doctorId) : (r.service.__consultDoctorId ?? null),
+                    name: r.service.name || '', price: Number(r.service.price) || 0 };
+            }
+            const id = Number(r.service.id);
+            if (!Number.isInteger(id) || id <= 0) return null;
+            return { service_id: id, doctor_id: r.doctorId != null ? Number(r.doctorId) : null, package: r.package || null, name: r.service.name || '' };
+        }).filter(Boolean);
+        const lost = [];
+        const chosen = pickedDiscount != null ? pickedDiscount : (state.discountPicked ? state.discountChoice : null);
+        if (chosen && chosen !== 'none' && chosen !== 'group') lost.push(tr('скидка или промокод'));
         toast(tr('У пациента запись или направление врача на сегодня — открываем «Оформить по записи»: записанные услуги уже в смете.'), 'info');
-        dismiss();
+        let handle = null;
         try {
-            await registerByBooking(p, { onSaved: () => notifySaved(p), presetServiceIds: extra });
+            handle = await registerByBooking(p, { onSaved: () => notifySaved(p), presetLines, referralSourceId: referralSel.value || null });
         } catch (e) {
             toast((e && e.message) || tr('Не удалось открыть окно визита.'), 'fail');
+            return true;   // окно быстрой регистрации остаётся: набранное не потеряно
         }
+        if (handle === null) {   // окно визита отказало (права, нет пациента) — остаёмся здесь
+            toast(tr('Не удалось открыть окно визита.'), 'fail');
+            return true;
+        }
+        if (lost.length) toast(trf('В окно визита не перенесено: {fields} — выберите там заново.', { fields: lost.join(', ') }), 'warn');
+        dismiss();
         return true;
     }
 
@@ -1274,6 +1333,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
                     bookedSetDoctor: !!(r.booked && r.booked.setDoctor),   // DIAG_ROUTE_V1 (ревью M-1) — исполнитель строки записи
                     recommendationId: r.fromRec || null })),   // DOCTOR_REFERRAL_DESK_V1 — строка по рекомендации врача
                 dropVsIds: state.dropBooked,
+                dropReasons: state.dropReasons,   // WAIT_REG_V1 (ревью M3) — причина снятия строки записи
+                skipOrders: state.skipOrders,     // WAIT_REG_V1 (ревью M3) — направления врача, не оформленные с причиной
                 bookedVisitId: state.bookedVisitId,
                 referralSourceId: referralSel.value || null,
                 // DISCOUNT_V2 — выбранная скидка (одна); промокод — его стоимость на смете, сервер проверит и зажмёт.
