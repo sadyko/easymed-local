@@ -1722,8 +1722,24 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         // CLINIC_API_FIX_V1 (ревью) — справочные записи создаются после
         // проверки списка сохранённых (выше): отказ не оставляет за собой
         // созданных категорий и отделений.
-        const created = await autoCreatePendingFks(valid);
+        const { created, unlinked } = await autoCreatePendingFks(valid);
         if (created > 0) toast(trf('Создано недостающих справочных записей: {n}.', { n: created }));
+        // IMPORT_CATEGORY_LINK_V1 — строки, записанные без ссылки на справочник
+        // (категория, отделение, тип по «Разделу» не создались и не нашлись):
+        // считаются по тому, что действительно записано, и итог их называет.
+        const unlinkedValues = new Map();   // payload → [значение, …]
+        for (const u of unlinked) {
+            if (!unlinkedValues.has(u.payload)) unlinkedValues.set(u.payload, []);
+            unlinkedValues.get(u.payload).push(u.value);
+        }
+        let unlinkedWritten = 0;
+        const unlinkedNames = new Set();
+        const noteUnlinked = (payload) => {
+            const vals = unlinkedValues.get(payload);
+            if (!vals) return;
+            unlinkedWritten++;
+            for (const v of vals) unlinkedNames.add(v);
+        };
 
         const findExistingId = (payload) => {
             for (const f of matchFields) {
@@ -1778,6 +1794,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 console.warn('[section-import] update failed:', error.message, u);
             } else {
                 updated++;
+                noteUnlinked(u.payload);   // IMPORT_CATEGORY_LINK_V1
             }
         }
 
@@ -1787,7 +1804,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         // which person was at fault.
         if (cfg.restCrud) {
             for (const payload of toInsert) {
-                try { await cfg.restCrud.insert(payload); inserted++; }
+                try { await cfg.restCrud.insert(payload); inserted++; noteUnlinked(payload); }   // IMPORT_CATEGORY_LINK_V1
                 catch (e) {
                     failed++;
                     const who = matchFields.map(f => payload[f]).find(Boolean) || '';
@@ -1808,6 +1825,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 console.warn('[section-import] batch failed:', error.message, batch);
             } else {
                 inserted += batch.length;
+                for (const p of batch) noteUnlinked(p);   // IMPORT_CATEGORY_LINK_V1
             }
         }
         }
@@ -1843,6 +1861,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             if (failed)   parts.push(trf('с ошибкой: {n}', { n: failed }));
             if (refusedInFile) parts.push(trf('не импортировано (ошибки в файле): {n}', { n: refusedInFile }));
             if (warned)   parts.push(trf('с замечаниями: {n}', { n: warned }));
+            if (unlinkedWritten) parts.push(trf('без ссылки на справочник: {n}', { n: unlinkedWritten }));   // IMPORT_CATEGORY_LINK_V1
             msg = trf('Импортировано строк: {n} · {parts}.', { n: ok, parts: parts.join(' · ') });
         } else {
             // Ревью 4 (M2) — и строки, не ввезённые из-за ошибок в самом файле.
@@ -1852,11 +1871,13 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 + (lastError ? ' ' + lastError : '');
         }
         if (afterMsg) msg += ' ' + afterMsg;
-        toast(msg, (ok === 0 || afterFailed) ? 'fail' : (failed || refusedInFile || warned) ? 'warn' : 'info');
+        toast(msg, (ok === 0 || afterFailed) ? 'fail' : (failed || refusedInFile || warned || unlinkedWritten) ? 'warn' : 'info');
 
         if (ok > 0 && typeof onImported === 'function') onImported();
-        if (failed === 0 && refusedInFile === 0 && warned === 0 && !afterFailed) { close(); return; }
-        showResult({ ok, inserted, updated, failed, lastError, refusedInFile, warned, afterMsg });
+        // IMPORT_CATEGORY_LINK_V1 — строки без ссылки на справочник — не чистый
+        // импорт: окно остаётся и называет их.
+        if (failed === 0 && refusedInFile === 0 && warned === 0 && unlinkedWritten === 0 && !afterFailed) { close(); return; }
+        showResult({ ok, inserted, updated, failed, lastError, refusedInFile, warned, afterMsg, unlinked: unlinkedWritten, unlinkedNames: [...unlinkedNames] });
     }
 
     // CLINIC_API_FIX_V1 (ревью 3) — итог импорта в окне: что ввезено, что нет и
@@ -1883,6 +1904,12 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             sum.refusedInFile ? line(trf('Не импортировано — ошибки в файле: {n}', { n: sum.refusedInFile }), 'var(--crit-700)') : null,
             sum.failed ? line(trf('Не записано — ошибка при записи: {n}', { n: sum.failed }) + (sum.lastError ? ' — ' + sum.lastError : ''), 'var(--crit-700)') : null,
             sum.warned ? line(trf('С замечаниями: {n}', { n: sum.warned }), 'var(--warn-700)') : null,
+            // IMPORT_CATEGORY_LINK_V1 — записаны без категории (отделения, типа):
+            // запись справочника не создалась и не нашлась. Названия — первые пять.
+            sum.unlinked ? line(trf('Без ссылки на справочник: {n} — не удалось создать или найти: {list}', {
+                n: sum.unlinked,
+                list: sum.unlinkedNames.slice(0, 5).map((v) => '«' + v + '»').join(', ') + (sum.unlinkedNames.length > 5 ? ', …' : ''),
+            }), 'var(--warn-700)') : null,
             sum.afterMsg ? line(sum.afterMsg) : null,
             (sum.refusedInFile || sum.warned) ? h('div', { class: 'muted' }, 'Строки с ошибками и замечаниями — в таблице ниже.') : null,
         ].filter(Boolean));
@@ -1954,21 +1981,53 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 const lk = normKey(r[keyField]);
                 newIds.set(`${table}|${lk}`, r.id);
             }
-            totalCreated += (data || []).length;
+            // IMPORT_CATEGORY_LINK_V1 — ПАКЕТНАЯ ВСТАВКА СТРОК НЕ ВОЗВРАЩАЕТ.
+            // Владелец: файл на 2 824 услуги со 185 новыми категориями — все 185
+            // созданы, а у каждой услуги category_id пуст; повторный импорт
+            // привязывает (категории тогда уже есть). /api/db этой сборки на
+            // вставку массивом отвечает { data: null } (server/routes/db.js,
+            // meta.multi: пакет — одна транзакция, «всё или ничего»), и id
+            // созданных брать было неоткуда. Договор сервера не меняем: пакет
+            // прошёл без ошибки — значит, создан весь, и id перечитываются из
+            // самой таблицы по тому же normKey. Новые строки — с наибольшими id:
+            // читаем с конца и берём первое совпадение, так что ни потолок
+            // выборки, ни старая запись с тем же названием не подменят только
+            // что созданную.
+            const missing = toCreate.filter(t => !newIds.has(`${table}|${t.lk}`));
+            if (missing.length) {
+                const want = new Set(missing.map(t => t.lk));
+                const { data: fresh, error: reErr } = await supabase.from(table)
+                    .select(`id, ${keyField}`).order('id', { ascending: false })
+                    .limit(Math.min(100000, toCreate.length + 500));
+                if (reErr) console.warn('[section-import] re-read after auto-create failed for', table, '—', reErr.message);
+                for (const r of (fresh || [])) {
+                    const lk = normKey(r[keyField]);
+                    if (!want.has(lk)) continue;
+                    newIds.set(`${table}|${lk}`, r.id);
+                    want.delete(lk);
+                }
+            }
+            totalCreated += toCreate.length;
         }
 
         // Resolve placeholders + refresh the in-memory lookup Map so the
         // success/warn pills shown in the preview also start matching.
+        // IMPORT_CATEGORY_LINK_V1 — заготовка, которой справочник не дал id
+        // (запись отказана, перечитать не вышло), больше не уходит в null
+        // молча: строка и значение запоминаются, и итог импорта их называет.
+        const unlinked = [];   // [{ payload, value }]
         for (const r of rows) {
             for (const [k, v] of Object.entries(r.payload)) {
                 if (v && typeof v === 'object' && v.__autoCreate) {
                     const tag = `${v.__autoCreate.table}|${normKey(v.__autoCreate.value)}`;
-                    r.payload[k] = newIds.get(tag) || null;
+                    const id = newIds.get(tag) || null;
+                    if (id == null) unlinked.push({ payload: r.payload, value: String(v.__autoCreate.value) });
+                    r.payload[k] = id;
                 }
             }
         }
 
-        return totalCreated;
+        return { created: totalCreated, unlinked };
     }
 }
 
