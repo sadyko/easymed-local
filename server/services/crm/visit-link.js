@@ -358,6 +358,24 @@ export function stepACards(db, patientId) {
  *   • не строки карточки, привязанной к этому визиту по телефону (P-6: общий номер — не общий счёт).
  * @returns {Array<{card: {id, status, assigned_to}, lines: object[]}>}
  */
+/**
+ * WAIT_REG_V1 (ревью M6) — УСЛОВИЕ ШАГА A «СТРОКА СВОБОДНА ДЛЯ ВИЗИТА» ОДНИМ ФРАГМЕНТОМ: им читают и
+ * stepALines (одна карточка), и пакетное чтение «Ждут регистрации» (stepALinesForDay — все пациенты
+ * дня одним запросом). Строка `l` ждёт ('pending' проверяет вызывающий) и либо без визита, либо
+ * держит визит `vExpr` без строки визита, либо её визит мёртв («Не пришёл», отменён); и это не
+ * строка отменённой записи того же дня (до CRM_ONE_WAY_V1). Отменённая запись ищется по номерам
+ * визита (w.id IN …: поиск по ключу, а не обход визитов) — то же условие, что прежнее «OR».
+ */
+export function stepAFreeSql(l, vExpr) {
+  return `(${l}.visit_id IS NULL
+            OR (${l}.visit_id = ${vExpr} AND ${l}.visit_service_id IS NULL)
+            OR NOT EXISTS (SELECT 1 FROM visits x WHERE x.id = ${l}.visit_id
+                              AND x.status NOT IN ('cancelled', 'no_show')))
+       AND NOT EXISTS (SELECT 1 FROM visits w
+                        WHERE w.id IN (${l}.visit_id, (SELECT vs.visit_id FROM visit_services vs WHERE vs.id = ${l}.visit_service_id))
+                          AND w.status = 'cancelled' AND ${localDate('w.visit_date')} = date(${l}.scheduled_date))`;
+}
+
 export function stepALines(db, { patientId = null, day, visitId = null, undated = false, cards = null }) {
   const open = openStageKeys(db);
   const noShow = noShowStageKey(db);
@@ -365,18 +383,11 @@ export function stepALines(db, { patientId = null, day, visitId = null, undated 
   // Строки «без даты» — только у ЖИВЫХ карточек (CRM_UNIFY_V1, финальное ревью, A-C2): консультация
   // «когда придёт» карточки в «Пришёл» вставала бы с ценой в каждый следующий визит.
   const takeSql = (withUndated) => db.prepare(`
-    SELECT * FROM crm_request_services
-     WHERE request_id = ? AND status = 'pending'
-       AND (visit_id IS NULL
-            OR (visit_id = ? AND visit_service_id IS NULL)
-            OR NOT EXISTS (SELECT 1 FROM visits x WHERE x.id = crm_request_services.visit_id
-                              AND x.status NOT IN ('cancelled', 'no_show')))
-       AND (${withUndated ? "((scheduled_date IS NULL OR scheduled_date = '') AND released_from_visit_id IS NULL) OR " : ''}date(scheduled_date) = date(?))
-       AND NOT EXISTS (SELECT 1 FROM visits w
-                        WHERE w.status = 'cancelled' AND ${localDate('w.visit_date')} = date(crm_request_services.scheduled_date)
-                          AND (w.id = crm_request_services.visit_id
-                               OR w.id = (SELECT vs.visit_id FROM visit_services vs WHERE vs.id = crm_request_services.visit_service_id)))
-     ORDER BY id`);
+    SELECT * FROM crm_request_services l
+     WHERE l.request_id = ? AND l.status = 'pending'
+       AND ${stepAFreeSql('l', '?')}
+       AND (${withUndated ? "((l.scheduled_date IS NULL OR l.scheduled_date = '') AND l.released_from_visit_id IS NULL) OR " : ''}date(l.scheduled_date) = date(?))
+     ORDER BY l.id`);
   const takeDated = takeSql(false);
   const takeAny = undated ? takeSql(true) : takeDated;
   const live = new Set([...open, noShow].filter(Boolean));
@@ -394,6 +405,55 @@ export function stepALines(db, { patientId = null, day, visitId = null, undated 
   }
   return mine.filter((r) => !(phoneCard != null && Number(r.id) === phoneCard))
     .map((r) => ({ card: r, lines: (live.has(r.status) ? takeAny : takeDated).all(r.id, V, day) }));
+}
+
+/**
+ * WAIT_REG_V1 (ревью M6) — ШАГ A ДЛЯ ВСЕГО ДНЯ ОДНИМ ЗАПРОСОМ: строки заявок С ДАТОЙ `day`, которые
+ * визит дня каждого пациента возьмёт (stepALines(…, undated: false) для каждого пациента — то же
+ * правило: карточки шага A (dayLineStatuses), визит дня — правилом ensure_visit (своё здание, не
+ * отменён, не «не пришёл», первый по номеру), условие stepAFreeSql, карточка по телефону этого
+ * визита пропускается). Прежде «Ждут регистрации» звал stepALines и dayVisitOf на каждого пациента
+ * с заявкой на сегодня (N+1, ~150 мс на 300 пациентах, втрое после ANALYZE).
+ *
+ * Строки дня ищутся ДИАПАЗОНОМ по scheduled_date (индекс idx_crm_req_services_date: 'YYYY-MM-DD' и
+ * 'YYYY-MM-DDTчч:мм' лежат в [day, day+1)), а date(…) = date(day) остаётся точным правилом.
+ * INDEXED BY — нарочно: после ANALYZE планировщик выбирал обход заявок по статусу (статистика по
+ * колонке, где почти все строки ждут), и тот же запрос шёл в десятки раз дольше.
+ * @param {{patientId?: number|null}} [opts] — только этот пациент
+ * @returns {Array<object>} строки crm_request_services + patient_id, assigned_to, card_created_by, day_visit_id
+ */
+export function stepALinesForDay(db, day, { patientId = null, explain = false } = {}) {
+  const stages = dayLineStatuses(db);
+  if (!stages.length) return [];
+  const one = patientId != null && Number(patientId) > 0;
+  // Визит дня каждого пациента (правило dayVisitOf: местный день, своё здание, не отменён и не «не
+  // пришёл», первый по номеру) — ОДНИМ проходом по визитам дня (индекс дня), а не поиском по пациенту на
+  // каждую строку: тот читал все визиты пациента за годы. MATERIALIZED — посчитать один раз.
+  return db.prepare((explain ? 'EXPLAIN QUERY PLAN ' : '') + `
+    WITH dv AS MATERIALIZED (
+      SELECT d.patient_id, MIN(d.id) AS id FROM visits d INDEXED BY idx_visits_date
+       WHERE d.visit_date >= date(@day, '-1 day') AND d.visit_date < date(@day, '+2 days')
+         AND ${localDate('d.visit_date')} = date(@day)
+         AND d.status NOT IN ('cancelled', 'no_show') AND d.sync_origin IS NULL
+         ${one ? 'AND d.patient_id = @pid' : ''}
+       GROUP BY d.patient_id),
+    c AS MATERIALIZED (
+      SELECT l.*, r.patient_id AS patient_id, r.assigned_to AS assigned_to, r.created_by AS card_created_by,
+             dv.id AS day_visit_id
+        FROM crm_request_services l INDEXED BY idx_crm_req_services_date
+        JOIN crm_requests r ON r.id = l.request_id
+        LEFT JOIN dv ON dv.patient_id = r.patient_id
+       WHERE l.scheduled_date >= date(@day) AND l.scheduled_date < date(@day, '+1 day')
+         AND date(l.scheduled_date) = date(@day) AND l.status = 'pending'
+         AND r.patient_id IS NOT NULL AND r.status IN (${stages.map((_, i) => '@s' + i).join(', ')})
+         ${one ? 'AND r.patient_id = @pid' : ''})
+    SELECT * FROM c
+     WHERE ${stepAFreeSql('c', 'COALESCE(c.day_visit_id, -1)')}
+       AND NOT (c.day_visit_id IS NOT NULL
+                AND c.request_id IS (SELECT pb.request_id FROM crm_booking_links pb
+                                      WHERE pb.visit_id = c.day_visit_id AND pb.source = 'phone' LIMIT 1))
+     ORDER BY c.patient_id, c.id`)
+    .all({ day, ...(one ? { pid: Number(patientId) } : {}), ...Object.fromEntries(stages.map((s, i) => ['s' + i, s])) });
 }
 
 /**
