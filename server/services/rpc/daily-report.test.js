@@ -13,6 +13,7 @@ import { isDue, tick, groupHint } from '../daily-report/index.js';
 import { buildReport, delta, money } from '../daily-report/report.js';
 import { getRpc } from './index.js';
 import { today } from '../domain/day.js';
+import { dashboardOverview } from './dashboard-overview.js';   // DAILY_REPORT_SUMS_V1 — те же числа, что у сводки
 
 const TOKEN = '1234567890:AAEabcdefghijklmnopqrstuvwxyz0123456';
 const OTHER = '9876543210:AAEabcdefghijklmnopqrstuvwxyz0123456';
@@ -192,6 +193,58 @@ test('«Итог дня»: принято → кассиры → покрыти�
   for (const line of ['(без отделения) — 300 000', 'Радиология — 300 000', '(без группы) — 300 000', 'Диагностика — 300 000']) {
     assert.ok((text + '\n').includes(line + '\n'), 'нет строки «' + line + '»:\n' + text);
   }
+});
+
+// DAILY_REPORT_SUMS_V1 — строки под «Принято за день» складываются в заголовок.
+// Ревью (проба P2): заголовок 120 000, а под ним «Наличные 100 000 / Карта 50 000 /
+// Кошелёк 40 000 / возвраты 30 000» — ни сложить, ни вычесть до 120 000 нельзя.
+// Теперь: способы, которыми деньги ПРИШЛИ, — за вычетом возвратов своим способом
+// (сумма строк = заголовок); оплата с баланса и подарочной картой — отдельно,
+// с пометкой, что это не новые деньги.
+test('DAILY_REPORT_SUMS_V1: наличные, карта, кошелёк, подарочная карта и возврат — строки сходятся с «Принято за день»', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (id, full_name, mrn) VALUES (1, 'Пациент', 'A-1')").run();
+  const inv = db.prepare("INSERT INTO invoices (patient_id, invoice_number, total_amount, paid_amount, status) VALUES (1, 'INV-1', 185000, 185000, 'paid')").run().lastInsertRowid;
+  const pay = db.prepare("INSERT INTO payments (invoice_id, amount, method, cashier_id, paid_at) VALUES (?, ?, ?, 1, strftime('%Y-%m-%dT%H:%M:%SZ','now'))");
+  pay.run(inv, 100000, 'cash');
+  pay.run(inv, 50000, 'card');
+  pay.run(inv, 40000, 'wallet');
+  pay.run(inv, 25000, 'gift_card');
+  pay.run(inv, -30000, 'cash');   // возврат наличными
+  const { text } = buildReport(db, { sections: ['cash', 'cashiers'] });
+  const block = text.split('<b>Принято за день')[1].split('\n\n')[0];
+  const title = Number(/^: ([\d ]+) сум/.exec(block)[1].replace(/ /g, ''));
+  assert.equal(title, 120000, 'приход: 100 000 + 50 000 − 30 000; кошелёк и карта — не приход');
+
+  const lines = block.split('\n').slice(1);
+  const inflow = lines.slice(0, lines.findIndex((l) => !/^(Наличные|Карта|Эквайринг|Перевод) — /.test(l)));
+  assert.deepEqual(inflow, ['Наличные — 70 000', 'Карта — 50 000'], 'способы прихода — за вычетом возвратов своим способом:\n' + block);
+  const sum = inflow.reduce((s, l) => s + Number(l.split(' — ')[1].replace(/[ −]/g, '')), 0);
+  assert.equal(sum, title, 'строки способов не складываются в заголовок:\n' + block);
+
+  assert.ok(lines.includes('возвраты (уже вычтены) — 30 000'), 'возвраты не названы:\n' + block);
+  const nn = lines.indexOf('не новые деньги, в итог не входят:');
+  assert.ok(nn > inflow.length - 1, 'оплата с баланса не отделена от прихода:\n' + block);
+  assert.deepEqual(lines.slice(nn + 1, nn + 3), ['Кошелёк — 40 000', 'Подарочная карта — 25 000']);
+  assert.match(text, /Админ — 120 000/, 'по кассирам — та же сумма, что заголовок');
+
+  // Сводка руководителя считает те же строки (числа отчёта — не свои).
+  const f = dashboardOverview(db, { days: 1 }, null).finance;
+  assert.equal(f.collected, 120000);
+  assert.deepEqual(f.inflow_methods, [{ method: 'cash', sum: 70000 }, { method: 'card', sum: 50000 }]);
+  assert.equal(f.inflow_methods.reduce((s, m) => s + m.sum, 0), f.collected);
+  assert.deepEqual(f.balance_spent, [{ method: 'wallet', sum: 40000 }, { method: 'gift_card', sum: 25000 }]);
+});
+
+test('DAILY_REPORT_SUMS_V1: только возврат за день — минус у своего способа, сумма всё равно сходится', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (id, full_name, mrn) VALUES (1, 'Пациент', 'A-1')").run();
+  const inv = db.prepare("INSERT INTO invoices (patient_id, invoice_number, total_amount, paid_amount, status) VALUES (1, 'INV-1', 0, 0, 'refunded')").run().lastInsertRowid;
+  db.prepare("INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (?, -20000, 'card', strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(inv);
+  const { text } = buildReport(db, { sections: ['cash'] });
+  assert.match(text, /<b>Принято за день: −20 000 сум<\/b>/);
+  assert.match(text, /\nКарта — −20 000\n/);
+  assert.doesNotMatch(text, /не новые деньги/, 'с баланса не платили — строки нет');
 });
 
 test('сохранённый список первого формата получает блоки «Итога дня» целиком', async () => {

@@ -47,6 +47,8 @@ export function money(n) {
   return (v < 0 ? '−' : '') + String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' сум';
 }
 const num = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+/** Число со знаком «−», как у money(): строка способа бывает отрицательной (за день — только возврат). */
+const snum = (n) => { const v = Math.round(Number(n) || 0); return (v < 0 ? '−' : '') + num(Math.abs(v)); };
 /** «(+12 %)» к прошлому дню; с нуля — «(было 0)»; равно — ничего. */
 export function delta(cur, prev) {
   const c = Number(cur) || 0;
@@ -168,14 +170,28 @@ const BLOCKS = {
   cash(o, b) {
     const f = o.finance;
     if (!f) return null;
-    const methods = f.methods.filter((m) => m.sum).map((m) => `${esc(METHOD_RU[m.method] || m.method || 'Другое')} — ${num(m.sum)}`);
+    // DAILY_REPORT_SUMS_V1 (2026-11-17) — строки под заголовком СКЛАДЫВАЮТСЯ В НЕГО.
+    // Раньше они брались из f.methods — все положительные оплаты, вместе с
+    // кошельком, — а заголовок — приход за вычетом возвратов: «120 000» над
+    // «Наличные 100 000 / Карта 50 000 / Кошелёк 40 000 / возвраты 30 000» (ревью,
+    // проба P2). Теперь:
+    //   • способы, которыми деньги ПРИШЛИ (f.inflow_methods — те же строки, что
+    //     «Принято»), каждый за вычетом своих возвратов: их сумма = заголовок;
+    //   • возвраты — справкой, с пометкой, что они уже вычтены;
+    //   • оплата с баланса и подарочной картой (f.balance_spent) — отдельно и
+    //     подписана: это не новые деньги, в заголовок не входит.
+    const label = (m) => esc(METHOD_RU[m.method] || m.method || 'Другое');
+    const live = (rows) => (rows || []).filter((m) => Math.round(Number(m.sum) || 0) !== 0);
+    const inflow = live(f.inflow_methods).map((m) => `${label(m)} — ${snum(m.sum)}`);
+    const spent = live(f.balance_spent).map((m) => `${label(m)} — ${snum(m.sum)}`);
     return {
       // DAILY_REPORT_OWNER_V1 (владелец: «make it more appropriate to owner, it
       // is now too detailed») — сравнение со вчера только у итога, словами.
       title: `Принято за день: ${money(f.collected)}${vsYesterday(f.collected, f.collected_prev)}`,
       lines: [
-        ...methods,
-        f.refunds ? `возвраты — ${num(f.refunds)}` : null,
+        ...inflow,
+        Math.round(Number(f.refunds) || 0) ? `возвраты (уже вычтены) — ${num(f.refunds)}` : null,
+        ...(spent.length ? ['не новые деньги, в итог не входят:', ...spent] : []),
         `счетов закрыто — ${num(b.invoices_closed)}`,
       ].filter(Boolean),
     };

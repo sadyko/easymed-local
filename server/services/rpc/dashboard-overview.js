@@ -197,6 +197,19 @@ export function dashboardOverview(db, args, user) {
     const methods = all(`SELECT p.method, COALESCE(SUM(p.amount), 0) s FROM payments p
        WHERE p.amount > 0 AND ${pw.sql} GROUP BY p.method ORDER BY s DESC`, pw.params)
       .map((r) => ({ method: r.method, sum: r2(r.s) }));
+    // DAILY_REPORT_SUMS_V1 (2026-11-17) — «Принято» по способам: ТЕ ЖЕ строки payments, что
+    // у collected (INFLOW_SQL, то же окно), возврат — минусом у своего способа (возврат
+    // пишется платежом с тем способом, которым отдали деньги). Сумма строк = collected.
+    // `methods` выше — все положительные оплаты, вместе с кошельком: в «Принято» не
+    // складывается, отчёт совету директоров (daily-report/report.js) его больше не читает.
+    const inflowMethods = all(`SELECT p.method, COALESCE(SUM(p.amount), 0) s FROM payments p
+       WHERE p.${INFLOW_SQL} AND ${pw.sql} GROUP BY p.method ORDER BY s DESC`, pw.params)
+      .map((r) => ({ method: r.method, sum: r2(r.s) }));
+    // Оплата с баланса (кошелёк) и подарочной картой — не новые деньги: отдельно, в
+    // «Принято» не входит.
+    const balanceSpent = all(`SELECT p.method, COALESCE(SUM(p.amount), 0) s FROM payments p
+       WHERE NOT (p.${INFLOW_SQL}) AND p.amount > 0 AND ${pw.sql} GROUP BY p.method ORDER BY s DESC`, pw.params)
+      .map((r) => ({ method: r.method, sum: r2(r.s) }));
     const iw = win('i.created_at');
     const inv = one(`SELECT COUNT(*) n, COALESCE(AVG(i.total_amount), 0) avg,
          COALESCE(SUM(i.discount_amount), 0) disc
@@ -220,6 +233,7 @@ export function dashboardOverview(db, args, user) {
     out.finance = {
       collected: collected.cur, collected_prev: collected.prev, refunds,
       methods,
+      inflow_methods: inflowMethods, balance_spent: balanceSpent,   // DAILY_REPORT_SUMS_V1
       invoices: inv.n, avg_check: r2(inv.avg), discounts: r2(inv.disc),
       debt_aging: aging,
       shifts_closed: shifts.n, shifts_off: shifts.off || 0,
