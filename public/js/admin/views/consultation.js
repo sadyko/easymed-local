@@ -713,8 +713,9 @@ async function loadServices() {
     // лабораторию и процедуры (shared/service-route.js): тип и отделение решают
     // только у строки без группы. Строка без услуги (вид приёма) — кабинет.
     const _goesElsewhere = (r) => !!r.services && serviceRoute(r.services) !== 'cabinet';
-    // RT2_FIX_V1 — a paid/partial invoice releases the order even when visit_services.status is
-    // still 'added' (a partial payment doesn't flip the status). Cross-check invoice status by item.
+    // RT2_FIX_V1 — a paid invoice releases the order even when visit_services.status is still
+    // 'added'. Cross-check invoice status by item. RELEASE_SELECT_V1 — a partial / debt invoice
+    // does NOT: only the lines the cashier ticked are released, and those are already 'queued'.
     const _rtItemIds = [...new Set((data || []).map(r => r.invoice_item_id).filter(Boolean))];
     const _rtInvByItem = new Map();
     if (_rtItemIds.length) {
@@ -1533,12 +1534,16 @@ export function inStatusFilter(r, filter) {
     return !(r.refunded && WORK_FILTERS.includes(filter));
 }
 
-// Касса закончила: «Запланированную» услугу отпускает оплаченный или частично
-// оплаченный счёт (RT2_FIX_V1), остальные статусы кассу уже прошли. Одно
-// правило на всех, кто о нём спрашивает: открыть приём (openWorkspace), кнопка
-// строки (actionButton) и порядок списка (sortQueue).
+// Касса закончила: «Запланированную» услугу отпускает оплаченный счёт
+// (RT2_FIX_V1), остальные статусы кассу уже прошли. Одно правило на всех, кто
+// о нём спрашивает: открыть приём (openWorkspace), кнопка строки (actionButton)
+// и порядок списка (sortQueue).
+// RELEASE_SELECT_V1 (3.25.0) — правило по строке: частичная оплата и долг
+// отпускают только услуги, отмеченные кассиром, и им касса сама ставит 'queued'.
+// Строка «Запланирована» в частично оплаченном счёте или долге — неотмеченная:
+// она «Ожидает кассу», не начинается и не стоит среди готовых к осмотру.
 export function cashierReleased(r) {
-    return !!r && (r.status !== 'added' || ['paid', 'partial'].includes(r.invoiceStatus));
+    return !!r && (r.status !== 'added' || r.invoiceStatus === 'paid');
 }
 
 // Место строки: 0 — идёт приём, 1 — готов к осмотру, 2 — ждёт кассу,

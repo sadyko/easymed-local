@@ -14,6 +14,10 @@
 //
 // added→queued happens in the cashier (record_payment flips invoiced lines to
 // 'queued'), so the lab queue lights up the moment the счёт is paid.
+// RELEASE_SELECT_V1 (3.25.0, owner: «booked should not appear in the lab list») —
+// unreleased lines ('added': booked, unpaid, or not ticked by the cashier on a
+// partial payment / debt) are not read at all: the list starts at 'queued'
+// (LAB_OPEN_STATUSES). The «Не оплачено» tab is gone with them.
 //
 // Result entry is panel-driven: lab_panels.service_id links the billable
 // service to its panel, lab_panel_analytes carries units, decimals and
@@ -106,15 +110,20 @@ const ST = {
 // waiting for collection, in work, or resulted. Unpaid lines ('added') are
 // nothing the lab can act on, and on the owner's data 23 of them — a month
 // old, their invoices re-issued or voided — sat in «Открытые · 41» forever.
-// They have their own tab now, still visible, still counted, out of the way.
+// RELEASE_SELECT_V1 (3.25.0) — and now they are not in the list at all (owner:
+// «booked should not appear in the lab list»): the read below starts at 'queued',
+// and the «Не оплачено» tab that showed them is removed.
 const FILTERS = [
     { key: 'open',      label: 'Открытые',    match: (s) => s !== 'completed' && s !== 'added' },
     { key: 'collect',   label: 'Забор',       match: (s) => s === 'queued' },
     { key: 'work',      label: 'В работе',    match: (s) => s === 'collected' || s === 'in_progress' },
     { key: 'resulted',  label: 'Результаты',  match: (s) => s === 'resulted' },
-    { key: 'unpaid',    label: 'Не оплачено', match: (s) => s === 'added' },
     { key: 'all',       label: 'Все',         match: () => true },
 ];
+
+// RELEASE_SELECT_V1 — что лаборатория читает как открытую работу: отпущенное кассой
+// и дальше. Строки в смете ('added') сюда не попадают ни одной вкладкой.
+export const LAB_OPEN_STATUSES = Object.freeze(['queued', 'collected', 'in_progress', 'resulted']);
 
 // Tube-colour pill (services.tube_color). Names follow common vacutainer caps.
 const TUBES = {
@@ -731,7 +740,7 @@ async function fetchAndPaint({ quiet = false, canSwap = null } = {}) {   // LIVE
                 // department_id/type_id ride along so the lab-service rule can check
                 // the department and catalogue-type branches (LAB_SERVICE_ROUTING_V1).
                 .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color,external_lab)'), state.labScope)
-                .in('status', ['added', 'queued', 'collected', 'in_progress', 'resulted'])
+                .in('status', [...LAB_OPEN_STATUSES])   // RELEASE_SELECT_V1 — без 'added': неотпущенное в лабораторию не попадает
                 .order('id', { ascending: false })
                 .limit(5000),
             // Та же граница на истории закрытых: отфильтровать только половину

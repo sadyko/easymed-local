@@ -127,9 +127,12 @@ const ITEM_ROWS = [
 ];
 const NAMES = VS_ROWS.map((r) => r.visits.patients.full_name);
 // Ожидаемый порядок «Активных»: идёт приём; готовы к осмотру (очередь и
-// оплаченные / частично оплаченные «Запланирован») — как пришли; ждут кассу.
-const ACTIVE_ORDER = ['Гаипов Тимур', 'Аминов Олим', 'Давлатова Мохира', 'Ергашев Шухрат', 'Зокиров Бобур',
-                      'Валиева Дилноза', 'Жураев Анвар'];
+// оплаченные «Запланирован») — как пришли; ждут кассу.
+// RELEASE_SELECT_V1 — «Запланирован» в частично оплаченном счёте (Ергашев) кассир
+// не отметил: частичная оплата отпускает только отмеченное (а оно уже 'queued'),
+// поэтому он среди ждущих кассу, а не среди готовых к осмотру.
+const ACTIVE_ORDER = ['Гаипов Тимур', 'Аминов Олим', 'Давлатова Мохира', 'Зокиров Бобур',
+                      'Валиева Дилноза', 'Ергашев Шухрат', 'Жураев Анвар'];
 const DONE_ORDER = ['Бакиев Санжар', 'Ибрагимова Нигора'];
 
 function matches(row, f) {
@@ -201,23 +204,26 @@ test('sortQueue: идёт приём → готов к осмотру → ждё
   const before = rows.map((r) => r.id);
   const out = cabinet.sortQueue(rows);
   assert.deepStrictEqual(out.map((r) => r.id),
-    ['p1', 'p2', 'q1', 'a-paid', 'a-part', 'q2', 'a-unpaid', 'a-none', 'c1', 'c2']);
+    ['p1', 'p2', 'q1', 'a-paid', 'q2', 'a-unpaid', 'a-none', 'a-part', 'c1', 'c2']);   // RELEASE_SELECT_V1 — частично оплаченный «Запланирован» ждёт кассу
   assert.deepStrictEqual(rows.map((r) => r.id), before, 'sortQueue переставил исходный массив');
   assert.notStrictEqual(out, rows, 'sortQueue вернул тот же массив, а не копию');
   assert.deepStrictEqual(cabinet.sortQueue([]), []);
 });
 
-test('«касса закончила» — одно правило: «Запланирован» отпускает только оплаченный или частично оплаченный счёт', () => {
+// RELEASE_SELECT_V1 (3.25.0) — правило по строке: частично оплаченный счёт и долг
+// неотмеченную строку не отпускают (отмеченную касса уже перевела в 'queued').
+test('«касса закончила» — одно правило: «Запланирован» отпускает только оплаченный счёт; часть и долг — нет (RELEASE_SELECT_V1)', () => {
   const { cashierReleased, queueRank } = cabinet;
   assert.strictEqual(cashierReleased({ status: 'added', invoiceStatus: 'paid' }), true);
-  assert.strictEqual(cashierReleased({ status: 'added', invoiceStatus: 'partial' }), true);
+  assert.strictEqual(cashierReleased({ status: 'added', invoiceStatus: 'partial' }), false, 'частично оплачен, строку кассир не отметил');
+  assert.strictEqual(cashierReleased({ status: 'added', invoiceStatus: 'debt' }), false, 'долг, строку кассир не отметил');
   assert.strictEqual(cashierReleased({ status: 'added', invoiceStatus: 'unpaid' }), false);
   assert.strictEqual(cashierReleased({ status: 'added', invoiceStatus: null }), false);
   for (const s of ['queued', 'in_progress', 'completed']) assert.strictEqual(cashierReleased({ status: s }), true, s);
   assert.deepStrictEqual(
     [{ status: 'in_progress' }, { status: 'queued' }, { status: 'added', invoiceStatus: 'partial' },
      { status: 'added', invoiceStatus: 'unpaid' }, { status: 'completed' }, { status: 'cancelled' }].map(queueRank),
-    [0, 1, 1, 2, 3, 4], 'неизвестный статус — в конец, а не потерян');
+    [0, 1, 2, 2, 3, 4], 'неизвестный статус — в конец, а не потерян');
 });
 
 test('кабинет открывается на «Активных»: идёт приём, потом готовые к осмотру, потом ждущие кассу; осмотренных нет', async () => {
@@ -228,8 +234,8 @@ test('кабинет открывается на «Активных»: идёт 
   // Кнопка строки — по тому же правилу, что и место строки.
   const rows = bodyRows(root);
   assert.ok(textOf(rows[0]).includes('Продолжить'), 'идёт приём — «Продолжить»');
-  for (const tr of rows.slice(1, 5)) assert.ok(textOf(tr).includes('Начать'), nameOf(tr) + ': готов к осмотру, а «Начать» нет');
-  for (const tr of rows.slice(5)) assert.ok(textOf(tr).includes('Ожидает кассу'), nameOf(tr) + ': ждёт кассу, а подписи нет');
+  for (const tr of rows.slice(1, 4)) assert.ok(textOf(tr).includes('Начать'), nameOf(tr) + ': готов к осмотру, а «Начать» нет');
+  for (const tr of rows.slice(4)) assert.ok(textOf(tr).includes('Ожидает кассу'), nameOf(tr) + ': ждёт кассу, а подписи нет');   // RELEASE_SELECT_V1 — и частично оплаченный неотмеченный
   // «Все статусы» — осмотренные в самом конце, остальное как в «Активных».
   pickStatus(root, 'all');
   assert.deepStrictEqual(visibleNames(root), [...ACTIVE_ORDER, ...DONE_ORDER]);
@@ -296,6 +302,12 @@ test('приём открывается по тому же правилу: жд�
   await tick();
   assert.ok(TOASTS.some((m) => m.includes('Услуга ещё не проведена кассой')), 'ждущий кассу открылся: ' + TOASTS.join(' | '));
   assert.strictEqual(NAV.length, 0, 'ждущий кассу открыт');
+  // RELEASE_SELECT_V1 — частично оплаченный счёт, строку кассир не отметил: тот же отказ.
+  TOASTS.length = 0;
+  nameBtn('Ергашев Шухрат').click();
+  await tick();
+  assert.ok(TOASTS.some((m) => m.includes('Услуга ещё не проведена кассой')), 'неотмеченная строка частично оплаченного счёта открылась: ' + TOASTS.join(' | '));
+  assert.strictEqual(NAV.length, 0, 'неотмеченная строка частично оплаченного счёта открыта');
   nameBtn('Давлатова Мохира').click();
   await tick(60);
   assert.deepStrictEqual(NAV.map(([v, p]) => [v, p.serviceId]), [['service-workspace', 'a2']], 'оплаченный «Запланирован» не открылся');

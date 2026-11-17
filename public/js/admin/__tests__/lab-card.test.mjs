@@ -197,8 +197,8 @@ async function card(rows, results = [], { filter = null, admissions = [] } = {})
 
 // ПЯТЬ СОСТОЯНИЙ, в которых лаборант реально застаёт пробу.
 const STATE_FIXTURES = {
-  // счёт не оплачен — лаборатории делать нечего
-  unpaid:   () => card([vs(805, 'added')], [], { filter: 'Не оплачено' }),   // LAB_UNPAID_TAB_V1 — unpaid lines live on their own tab
+  // RELEASE_SELECT_V1 — «счёт не оплачен» ('added') больше не состояние карточки очереди:
+  // неотпущенный анализ лаборатория не читает вовсе (тест «RELEASE_SELECT_V1» ниже).
   // оплачено, ни одного результата
   fresh:    () => card([vs(805, 'queued'), vs(806, 'collected')]),
   // часть внесена
@@ -329,7 +329,7 @@ test('номер пробы на месте, и он копируется одн
 // ═══ 3. ОДНО ГЛАВНОЕ ДЕЙСТВИЕ НА СОСТОЯНИЕ ══════════════════════════════════
 
 // Ровно этот счётчик и запрещает будущей правке вернуть вторую залитую кнопку.
-const PRIMARY_PER_STATE = { unpaid: 0, fresh: 1, partial: 1, entered: 1, released: 1 };
+const PRIMARY_PER_STATE = { fresh: 1, partial: 1, entered: 1, released: 1 };   // RELEASE_SELECT_V1 — «unpaid» в очередь не попадает
 
 for (const [name, expected] of Object.entries(PRIMARY_PER_STATE)) {
   test(`состояние «${name}»: главных кнопок на карточке ровно ${expected}`, async () => {
@@ -395,7 +395,7 @@ test('решение о главном действии — чистая фун�
 
 test('у каждого состояния своё слово — и оно переводится', async () => {
   const want = {
-    unpaid: 'Ожидает оплату', fresh: 'Результаты не внесены', partial: 'Внесены частично',
+    fresh: 'Результаты не внесены', partial: 'Внесены частично',   // RELEASE_SELECT_V1 — без «unpaid»
     entered: 'Все результаты внесены', released: 'Проверено и выдано',
   };
   for (const [name, label] of Object.entries(want)) {
@@ -531,8 +531,7 @@ const clean = (b) => textOf(b).replace(/<[^>]*>/g, '').trim();
 
 test('все действия карточки на месте в каждом состоянии — изменился только их вес', async () => {
   const want = {
-    unpaid: [],
-    fresh: ['Внести результаты', 'Штрих-код'],
+    fresh: ['Внести результаты', 'Штрих-код'],   // RELEASE_SELECT_V1 — «unpaid» в очередь не попадает
     partial: ['Внести результаты', 'Подтвердить', 'Бланк', 'Штрих-код'],
     entered: ['Подтвердить', 'Внести результаты', 'Бланк', 'Штрих-код'],
     // LAB_TUBE_LABEL_V1 — у выданного визита открытых пробирок нет: этикеток не
@@ -635,9 +634,9 @@ test('EXTERNAL_LAB_V1: строка очереди подписана «Внеш
 });
 
 test('EXTERNAL_LAB_V1: отметка не меняет поведения очереди — те же действия в каждом статусе', async () => {
-  for (const status of ['added', 'queued', 'collected', 'in_progress', 'resulted', 'completed']) {
+  for (const status of ['queued', 'collected', 'in_progress', 'resulted', 'completed']) {   // RELEASE_SELECT_V1 — 'added' лаборатория не читает
     const results = status === 'resulted' || status === 'completed' ? [res(1, 805, 'normal', '138')] : [];
-    const filter = status === 'completed' ? 'Все' : status === 'added' ? 'Не оплачено' : null;
+    const filter = status === 'completed' ? 'Все' : null;
     const off = actionsOf(await card([extVs(805, status, 0)], results, { filter }));
     const on = actionsOf(await card([extVs(805, status, 1)], results, { filter }));
     if (status !== 'added') assert.ok(off.row.length > 0, status + ': стенд не нашёл действий строки — сравнение было бы пустым');
@@ -694,5 +693,43 @@ test('LIVE_AUDIT_FIX_V1: врачу и медсестре — ни «Внест�
   } finally {
     delete user.role;
     perms.setFullAccess(true);
+  }
+});
+
+// RELEASE_SELECT_V1 (3.25.0, владелец: «booked should not appear in the lab list») —
+// неотпущенный анализ ('added': записан, не оплачен или не отмечен кассиром при
+// частичной оплате / долге) лаборатория не читает вовсе: ни «Открытые», ни «Все»,
+// и вкладки «Не оплачено» больше нет. Отпущенный сосед того же визита — на месте.
+test('RELEASE_SELECT_V1: неотпущенный анализ в лабораторию не попадает ни одной вкладкой; вкладки «Не оплачено» нет', async () => {
+  const { LAB_OPEN_STATUSES } = await import('../views/laboratory.js');
+  assert.deepStrictEqual([...LAB_OPEN_STATUSES], ['queued', 'collected', 'in_progress', 'resulted'], 'лист читает строки только с «ждёт забора»');
+  const mount = async (rows) => {
+    VISIT_SERVICES = rows; LAB_RESULTS = []; ADMISSIONS = [];
+    VISITS = [{ id: 'v-1', visit_date: '2026-09-05', patients: PATIENT }];
+    fakeBody.children.length = 0;
+    const root = mk('div');
+    await renderLaboratory(root, { tabId: 't-1' });
+    await tick();
+    return root;
+  };
+  const root = await mount([vs(805, 'added'), vs(806, 'queued')]);
+  const chips = buttons(root).map((b) => textOf(b).trim());
+  assert.ok(!chips.some((t) => t.startsWith('Не оплачено')), 'вкладка «Не оплачено» осталась: ' + chips.join(' | '));
+  for (const filter of ['Открытые', 'Все']) {
+    const chip = buttons(root).find((b) => textOf(b).startsWith(filter));
+    assert.ok(chip, 'нет вкладки «' + filter + '»');
+    chip.click();
+    await tick();
+    const cards = byClass(root, 'lq-card');
+    assert.strictEqual(cards.length, 1, filter + ': карточек ' + cards.length);
+    assert.strictEqual(byClass(cards[0], 'lq-item').length, 1, filter + ': в карточке виден неотпущенный анализ');
+    assert.ok(!textOf(cards[0]).includes('Ожидает оплату'), filter + ': неотпущенный анализ показан как «Ожидает оплату»');
+  }
+  // Визит, у которого нет ни одного отпущенного анализа, — в листе его нет вовсе.
+  const none = await mount([vs(805, 'added')]);
+  for (const filter of ['Открытые', 'Все']) {
+    buttons(none).find((b) => textOf(b).startsWith(filter)).click();
+    await tick();
+    assert.strictEqual(byClass(none, 'lq-card').length, 0, filter + ': неоплаченный визит попал в лабораторию');
   }
 });
