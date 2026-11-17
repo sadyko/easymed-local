@@ -360,8 +360,157 @@ test('RELEASE_SELECT_V1: окно визита — «Partial payment…»: вс�
     const pay = RPC.find((r) => r.name === 'record_payment');
     assert.equal(pay.body.amount, 500000);
     assert.deepEqual(pay.body.release_line_ids, [101]);
+    assert.equal(pay.body.expected_balance, 980000, 'RELEASE_SELECT_V1 (ревью) — остаток, который видело окно');
     const st = (id) => DB.prepare('SELECT status FROM visit_services WHERE id = ?').get(id).status;
     assert.deepEqual([st(101), st(102)], ['queued', 'added']);
+  } finally {
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+  }
+});
+
+// RELEASE_SELECT_V1 (ревью) — в открытый неоплаченный счёт визита дописали услугу
+// (INVOICE_APPEND_V1), а окно держит прежний остаток. Строка из «Ждут счёта» / карты
+// пациента дописывает третью услугу: сервер — настоящий.
+function appendThird() {
+  DB.prepare("INSERT INTO services (id, name, price) VALUES (23,'ЭКГ',50000)").run();
+  DB.prepare("INSERT INTO visit_services (id, visit_id, service_id, quantity, unit_price, total, status) VALUES (103,40,23,1,50000,50000,'added')").run();
+  const out = getRpc('create_invoice_for_visit')(DB, { visit_id: 40, visit_service_ids: [103] }, { id: 1, role: 'registrar', extra_roles: [] });
+  assert.equal(out.appended, true, 'ЭКГ дописана в тот же счёт');
+}
+
+test('RELEASE_SELECT_V1 (ревью): окно визита — «Mark paid (full)» по устаревшему остатку: 409, денег нет, окно перечитывается', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101, 102]), () => {});
+  const stale = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();   // окно видит 980 000
+  appendThird();
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  try {
+    RPC.length = 0; TOASTS.length = 0;
+    document.body.children.length = 0;
+    let reloaded = 0;
+    const controls = VM.__test_paymentControls(vmState(), stale, () => { reloaded += 1; });
+    vmClick(vmWalk(controls).find((e) => e.tagName === 'BUTTON' && e.className === 'btn btn-success'));   // «Mark paid (full)»
+    await vmTick(60);
+    const pay = RPC.find((r) => r.name === 'record_payment');
+    assert.deepEqual([pay.body.amount, pay.body.expected_balance], [980000, 980000]);
+    assert.equal(DB.prepare('SELECT COUNT(*) n FROM payments').get().n, 0, 'денег не записано');
+    assert.ok(TOASTS.some((t) => /Счёт изменился/.test(t)), TOASTS.join(' | '));
+    assert.equal(reloaded, 1, 'окно визита перечитано — новый остаток');
+    // Тот же остаток — оплата идёт и отпускает всё.
+    const fresh = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+    await VM.takePayment(vmState(), fresh, 1030000, 'paid', () => {}, 'cash', null, 1030000);
+    assert.equal(DB.prepare('SELECT status FROM invoices WHERE id = ?').get(fresh.id).status, 'paid');
+  } finally {
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+  }
+});
+
+// RELEASE_SELECT_V1 (ревью) — «Счёт и оплата» (visit-bill.js; «Открыть визит» из
+// «Ждут счёта» / «Возвраты и отмены» и карта пациента) берёт часть денег по тому же
+// правилу, что касса: «Что можно оказать сейчас», ключ повтора, остаток окна.
+const VB = await import('../views/visit-bill.js');
+const vbVisit = () => ({ id: 40, patient_id: 3, visit_date: new Date().toISOString(), sync_origin: null, patients: { full_name: 'Иванов Иван', mrn: 'P-3' } });
+const vbOverlay = () => document.body.children.find((c) => vmWalk(c).some((e) => e.tagName === 'H2' && /Иванов Иван/.test(vmText(e))));
+const vbAmount = (ov) => vmWalk(ov).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number' && e.attrs.step === 'any');
+const vbPay = (ov) => vmWalk(ov).find((e) => e.tagName === 'BUTTON' && /Принять оплату/.test(vmText(e)));
+async function vbOpen() {
+  document.body.children.length = 0;
+  VB.openVisitBillModal(vbVisit(), () => {});
+  await vmTick(80);
+  const ov = vbOverlay();
+  // Стенд: у <select> нет «выбранного по умолчанию» значения — способ ставим, как браузер.
+  const method = ov && vmWalk(ov).find((e) => e.tagName === 'SELECT' && e.children.some((o) => o.attrs && o.attrs.value === 'cash'));
+  if (method) method.value = 'cash';
+  return ov;
+}
+
+test('RELEASE_SELECT_V1 (ревью): «Счёт и оплата» — часть денег: блок «Что можно оказать сейчас», уходит отмеченное, ключ и остаток окна', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101, 102]), () => {});
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  try {
+    RPC.length = 0;
+    const ov = await vbOpen();
+    assert.ok(RPC.some((r) => r.name === 'invoice_release_lines' && r.body.invoice_id === inv.id), 'строки счёта спрошены у сервера');
+    const block = vmWalk(ov).find((e) => e.attrs && 'data-release-select' in e.attrs);
+    assert.ok(block, 'блок «Что можно оказать сейчас» есть в окне');
+    assert.equal(block.style.display, 'none', 'суммы ещё нет — блока не видно');
+    const amt = vbAmount(ov);
+    amt.value = '500000'; amt.dispatchEvent({ type: 'input' });
+    assert.equal(block.style.display, '', 'меньше остатка — блок виден');
+    for (const id of [101, 102]) assert.equal(vmBox(ov, id).checked, false, 'по умолчанию ничего не отмечено');
+    const cb = vmBox(ov, 101);
+    cb.checked = true; cb.dispatchEvent({ type: 'change' });
+    vmClick(vbPay(ov));
+    await vmTick(80);
+    const pay = RPC.find((r) => r.name === 'record_payment');
+    assert.equal(pay.body.amount, 500000);
+    assert.deepEqual(pay.body.release_line_ids, [101]);
+    assert.equal(pay.body.expected_balance, 980000);
+    assert.match(pay.body.idempotency_key, /^[A-Za-z0-9_-]{8,80}$/);
+    const st = (id) => DB.prepare('SELECT status FROM visit_services WHERE id = ?').get(id).status;
+    assert.deepEqual([st(101), st(102)], ['queued', 'added'], 'отпущена только отмеченная');
+    assert.equal(DB.prepare('SELECT status FROM invoices WHERE id = ?').get(inv.id).status, 'partial');
+  } finally {
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+  }
+});
+
+test('RELEASE_SELECT_V1 (ревью): «Счёт и оплата» — сбой ответа: повтор с тем же ключом, платёж один; вся сумма — без списка', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101, 102]), () => {});
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  let lost = true;
+  // Сервер провёл оплату, ответ потерялся (первый раз): окно повторяет ту же форму.
+  FAIL_ON = (name, body) => {
+    if (name !== 'record_payment' || !lost) return null;
+    lost = false;
+    getRpc('record_payment')(DB, body, USER);
+    return { message: 'сеть оборвалась' };
+  };
+  try {
+    RPC.length = 0;
+    const ov = await vbOpen();
+    const amt = vbAmount(ov);
+    amt.value = '980000'; amt.dispatchEvent({ type: 'input' });
+    const block = vmWalk(ov).find((e) => e.attrs && 'data-release-select' in e.attrs);
+    assert.equal(block.style.display, 'none', 'вся сумма — блока нет');
+    const btn = vbPay(ov);
+    vmClick(btn);
+    await vmTick(80);
+    vmClick(btn);
+    await vmTick(80);
+    const pays = RPC.filter((r) => r.name === 'record_payment');
+    assert.equal(pays.length, 2);
+    assert.equal(pays[1].body.idempotency_key, pays[0].body.idempotency_key, 'повтор — тот же ключ');
+    assert.ok(!('release_line_ids' in pays[0].body), 'полная оплата отпускает всё сама');
+    assert.equal(DB.prepare('SELECT COUNT(*) n FROM payments WHERE invoice_id = ?').get(inv.id).n, 1, 'платёж один');
+    assert.equal(DB.prepare('SELECT status FROM invoices WHERE id = ?').get(inv.id).status, 'paid');
+  } finally {
+    FAIL_ON = null;
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+  }
+});
+
+test('RELEASE_SELECT_V1 (ревью): «Счёт и оплата» — счёт изменился, пока окно открыто: 409, денег нет, окно показывает новый остаток', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101, 102]), () => {});
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  try {
+    RPC.length = 0; TOASTS.length = 0;
+    const ov = await vbOpen();
+    appendThird();
+    const amt = vbAmount(ov);
+    amt.value = '980000'; amt.dispatchEvent({ type: 'input' });
+    vmClick(vbPay(ov));
+    await vmTick(100);
+    assert.equal(RPC.find((r) => r.name === 'record_payment').body.expected_balance, 980000);
+    assert.equal(DB.prepare('SELECT COUNT(*) n FROM payments WHERE invoice_id = ?').get(inv.id).n, 0, 'денег не записано');
+    assert.ok(TOASTS.some((t) => /Счёт изменился/.test(t)), TOASTS.join(' | '));
+    assert.match(vmText(ov), /1 030 000/, 'окно перечитано — новый остаток');
   } finally {
     USER = { id: 1, role: 'registrar', extra_roles: [] };
   }

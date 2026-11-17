@@ -1555,7 +1555,9 @@ function paymentControls(state, inv, onReload) {
             paymentMethodSelect(pm)),
         h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } },
             h('button', {
-                class: 'btn btn-success', onclick: () => takePayment(state, inv, owed, 'paid', onReload, pm.method),
+                // RELEASE_SELECT_V1 (ревью) — «полная» — по остатку, который видит окно:
+                // счёт за это время вырос (дописали услугу) — сервер откажет, окно перечитается.
+                class: 'btn btn-success', onclick: () => takePayment(state, inv, owed, 'paid', onReload, pm.method, null, owed),
             }, Icon('Check', { size: 14 }), ' Mark paid (full)'),
             h('button', {
                 class: 'btn btn-outline', onclick: () => openPartialPaymentDialog(state, inv, onReload),
@@ -1571,13 +1573,18 @@ function paymentControls(state, inv, onReload) {
 // RELEASE_SELECT_V1 — releaseIds: что кассир отметил в «Что можно оказать сейчас»
 // при частичной оплате (массив, может быть пустым); null — аргумента нет (полная
 // оплата отпускает всё сама; частичная без него не отпускает ничего).
-export async function takePayment(state, inv, amount, finalStatus, onReload, method = 'cash', releaseIds = null) {
+// RELEASE_SELECT_V1 (ревью) — expected: остаток, который видит окно. Счёт за это время
+// изменился (в него дописали услугу) — сервер отказывает 409 invoice_changed до
+// записи денег, окно визита перечитывается с новым остатком.
+export async function takePayment(state, inv, amount, finalStatus, onReload, method = 'cash', releaseIds = null, expected = null) {
     if (!amount || amount <= 0) { toast('Amount must be > 0.', 'fail'); return; }
     // RPC_PORT_V1 (ревью C1) — оплату проводит сервер: record_payment пишет
     // платёж в смену кассира, пересчитывает счёт и отпускает услуги в очередь.
     // Прямые вставки в payments и правка invoices отвергались реестром у всех.
     const { data: payRes, error: payErr } = await supabase.rpc('record_payment', { invoice_id: inv.id, amount, method,
-        ...(Array.isArray(releaseIds) ? { release_line_ids: releaseIds } : {}) });   // RELEASE_SELECT_V1
+        ...(Array.isArray(releaseIds) ? { release_line_ids: releaseIds } : {}),   // RELEASE_SELECT_V1
+        ...(Number.isFinite(expected) ? { expected_balance: expected } : {}) });   // RELEASE_SELECT_V1 (ревью)
+    if (payErr && payErr.code === 'invoice_changed') { toast(payErr.message || tr('Счёт изменился — откройте оплату заново.'), 'fail'); onReload(); return; }
     if (payErr) { toast(invoiceMoneyErrorText(payErr), 'fail'); return; }
     const status = (payRes && payRes.invoice && payRes.invoice.status) || finalStatus || 'partial';
     await logInvoiceAction(state, inv, {
@@ -1606,12 +1613,14 @@ export async function takePayment(state, inv, amount, finalStatus, onReload, met
 // debt against the patient until they come back to pay.
 // RELEASE_SELECT_V1 — releaseIds: отмеченные в «Что можно оказать сейчас» (окно долга
 // openDebtDialog); без них сервер в работу не отпускает ничего.
-export async function markAsDebt(state, inv, onReload, releaseIds = null) {
+export async function markAsDebt(state, inv, onReload, releaseIds = null, expected = null) {
     const paid = Number(inv.paid_amount || 0);
     // RPC_PORT_V1 (ревью C1) — долг оформляет сервер (mark_invoice_debt: статус
     // 'debt' и отмеченные услуги в очередь). Прямая правка invoices отвергалась у всех.
     const { data: debtRes, error } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id,
-        ...(Array.isArray(releaseIds) ? { release_line_ids: releaseIds } : {}) });   // RELEASE_SELECT_V1
+        ...(Array.isArray(releaseIds) ? { release_line_ids: releaseIds } : {}),   // RELEASE_SELECT_V1
+        ...(Number.isFinite(expected) ? { expected_balance: expected } : {}) });   // RELEASE_SELECT_V1 (ревью)
+    if (error && error.code === 'invoice_changed') { toast(error.message || tr('Счёт изменился — откройте оплату заново.'), 'fail'); onReload(); return; }
     if (error) { toast(invoiceMoneyErrorText(error), 'fail'); return; }
     const status = (debtRes && debtRes.invoice && debtRes.invoice.status) || 'debt';
     await logInvoiceAction(state, inv, {
@@ -1679,7 +1688,7 @@ function openPartialPaymentDialog(state, inv, onReload) {
                     // If it covers the whole debt, mark paid. Otherwise partial.
                     // RELEASE_SELECT_V1 — частичная: в работу только отмеченное (список уходит всегда).
                     await takePayment(state, inv, amt, amt >= owed ? 'paid' : 'partial', onReload, pmDlg.method,
-                        releaseChoiceNeeded(owed, amt) ? rel.ids() : null);
+                        releaseChoiceNeeded(owed, amt) ? rel.ids() : null, owed);   // RELEASE_SELECT_V1 (ревью) — остаток окна
                     overlay.remove();
                 } finally { ev.target.disabled = false; }
             } }, Icon('Check', { size: 14 }), ' Confirm payment'),
@@ -1720,7 +1729,7 @@ function openDebtDialog(state, inv, onReload) {
                 const btn = ev.currentTarget;
                 btn.disabled = true;
                 try {
-                    await markAsDebt(state, inv, onReload, rel.ids());
+                    await markAsDebt(state, inv, onReload, rel.ids(), owed);   // RELEASE_SELECT_V1 (ревью) — остаток окна
                     overlay.remove();
                 } finally { btn.disabled = false; }
             } }, Icon('Warning', { size: 14 }), ' ', tr('Оставить как долг')),
@@ -1731,6 +1740,7 @@ function openDebtDialog(state, inv, onReload) {
 }
 export const __test_openDebtDialog = openDebtDialog;   // RELEASE_SELECT_V1
 export const __test_openPartialPaymentDialog = openPartialPaymentDialog;   // RELEASE_SELECT_V1
+export const __test_paymentControls = paymentControls;   // RELEASE_SELECT_V1 (ревью) — «Mark paid (full)» по остатку окна
 
 // ---------------------------------------------------------------------------
 // Field helpers

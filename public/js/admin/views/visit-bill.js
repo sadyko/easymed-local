@@ -27,6 +27,15 @@ import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1
 import { isOwnBuilding, originTag } from '../record-origin.js';
 // OWN_SHELF_ONLY_V1 — «Выдать» у врача и медсестры: только товары своих полок.
 import { loadShelves, shelfItems, fmtShelfQty, warehouseStock, isOwnShelfShort, showOwnShelfRefusal } from './own-shelf.js';
+import { releaseSelect, releaseChoiceNeeded } from '../release-select.js';   // RELEASE_SELECT_V1 (ревью) — часть денег по правилу кассы
+
+// RELEASE_SELECT_V1 (ревью) — ключ повтора оплаты (как у кассы, cashier-desk.js
+// idemKeeper): повтор после обрыва связи приходит с тем же ключом, и сервер
+// отвечает прежним результатом, не проводя деньги второй раз.
+function newIdemKey() {
+    try { if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID(); } catch (e) { /* ниже запасной */ }
+    return 'k' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12);
+}
 
 /**
  * Ревью M2 — строка товара в «Выдать» у того, кто берёт со склада: с числом
@@ -412,6 +421,16 @@ export function openVisitBillModal(visit, onChanged) {
         );
     }
 
+    // RELEASE_SELECT_V1 (ревью) — ЧАСТЬ ДЕНЕГ ЗДЕСЬ — ПО ПРАВИЛУ КАССЫ. Окно
+    // открывают из «Ждут счёта» / «Возвраты и отмены» кассы («Открыть визит») и из
+    // карты пациента, и оно брало часть денег без выбора услуг (сервер не отпускал
+    // ничего) и без ключа повтора (обрыв связи и второе нажатие — второй платёж).
+    // Теперь — как окно оплаты кассы (cashier-desk.js payModal): вносят меньше
+    // остатка — блок «Что можно оказать сейчас» (release-select.js, ничего не
+    // отмечено), в работу уходит отмеченное; вся сумма — блока нет, полная оплата
+    // отпускает всё сама. Ключ повтора живёт до удачной оплаты; остаток, который
+    // видит окно, едет на сервер (expected_balance): счёт изменился — отказ 409, и
+    // окно перечитывается с новым остатком и новым списком.
     function paymentRow(inv, balance) {
         const amtInp = h('input', { type: 'number', min: '0', step: 'any', placeholder: String(balance) });
         const methodSel = h('select', null,
@@ -420,10 +439,17 @@ export function openVisitBillModal(visit, onChanged) {
             h('option', { value: 'transfer' }, 'Перевод'),
         );
         const payBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Принять оплату');
+        const rel = releaseSelect();
+        if (!inv.payer_id) rel.load(inv.id);
+        const partialOf = (amt) => amt > 0 && releaseChoiceNeeded(balance, amt);
+        amtInp.addEventListener('input', () => rel.setVisible(partialOf(Number(amtInp.value) || 0)));
+        let idemKey = newIdemKey();
 
         payBtn.addEventListener('click', async () => {
             const amt = Number(amtInp.value);
             if (!Number.isFinite(amt) || amt <= 0) { toast('Введите корректную сумму.', 'fail'); return; }
+            const partial = partialOf(amt);
+            const chosen = partial ? rel.ids() : null;
 
             payBtn.disabled = true;
             const prevLabel = payBtn.textContent;
@@ -431,9 +457,19 @@ export function openVisitBillModal(visit, onChanged) {
             try {
                 const { error } = await supabase.rpc('record_payment', {
                     invoice_id: inv.id, amount: amt, method: methodSel.value,
+                    ...(partial ? { release_line_ids: chosen } : {}),
+                    expected_balance: balance, idempotency_key: idemKey,
                 });
+                if (error && error.code === 'invoice_changed') {
+                    toast(error.message || tr('Счёт изменился — откройте оплату заново.'), 'fail');
+                    await reloadAll();
+                    return;
+                }
                 if (error) throw error;
-                toast('Оплата проведена', 'ok');
+                idemKey = newIdemKey();
+                toast(!partial ? 'Оплата проведена'
+                    : chosen.length ? trf('Оплата принята — в работу переданы услуги: {n}.', { n: chosen.length })
+                        : tr('Оплата принята. Услуги в работу не переданы — они ждут полной оплаты.'), 'ok');
                 await reloadAll();
                 if (typeof onChanged === 'function') await onChanged();
             } catch (e) {
@@ -443,13 +479,14 @@ export function openVisitBillModal(visit, onChanged) {
             }
         });
 
-        return h('div', { class: 'row', style: {
-            alignItems: 'flex-end',
-            borderTop: '1px solid var(--ink-100)', paddingTop: '10px', marginTop: '2px',
-        } },
-            h('div', { style: { width: '140px' } }, field('Сумма', amtInp, { required: true })),
-            h('div', { style: { width: '120px' } }, field('Способ', methodSel)),
-            payBtn,
+        return h('div', { style: { borderTop: '1px solid var(--ink-100)', paddingTop: '10px', marginTop: '2px' } },
+            h('div', { class: 'row', style: { alignItems: 'flex-end' } },
+                h('div', { style: { width: '140px' } }, field('Сумма', amtInp, { required: true })),
+                h('div', { style: { width: '120px' } }, field('Способ', methodSel)),
+                payBtn,
+            ),
+            rel.el,
+            rel.sumEl,
         );
     }
 
