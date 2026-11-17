@@ -251,3 +251,6 @@ globalThis.fetch = async (url, opts) => {
 // CRM_PERIOD_DEFAULT_TODAY_V1 — доска открывается на «Сегодня»; заявки стенда записаны задним
 // числом, и тесты (писанные под «Всё время» по умолчанию) смотрят всё время.
 globalThis.__CRM_TEST_PERIOD__ = 'all';
+// CRM_PERIOD_BOOKED_V1 — тест, которому нужен НАСТОЯЩИЙ период по умолчанию («Сегодня», как у
+// клиники), снимает подмену до импорта вида: crm.js читает её один раз, при загрузке модуля.
+export function useDefaultPeriod() { delete globalThis.__CRM_TEST_PERIOD__; }

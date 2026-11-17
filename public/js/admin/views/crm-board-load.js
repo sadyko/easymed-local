@@ -164,6 +164,46 @@ export async function loadBoard({ db = supabase, closedKeys = [], bounds = { fro
     return { rows: [...byId.values()].sort((x, y) => Number(y.id) - Number(x.id)), counts, capped, outside: outsideRows };
 }
 
+// CRM_PERIOD_BOOKED_V1 (3.25.0) — ЗАПИСАННЫЕ ВНЕ ПЕРИОДА.
+//
+// «Период» сужает доску по дню ПОСТУПЛЕНИЯ: при «Сегодня» (по умолчанию) грузятся
+// только сегодняшние заявки. Фильтр «Запись» (день, на который записаны услуги)
+// обязан найти ВСЕ заявки, записанные на эти дни, когда бы они ни поступили: во
+// вторник «Запись: Завтра» — и заявка, поступившая в понедельник и записанная на
+// среду. Здесь они — заявки, записанные с дня `from` (по дню самой заявки,
+// scheduled_date, или по дню её строки услуги — `ids` из crm_request_services) и
+// поступившие ВНЕ периода (внутри периода их уже загрузил loadBoard). Тот же фильтр
+// «Оператор» и та же видимость, что у доски; без предела. Периода нет («Всё
+// время») — открытые загружены все, спрашивать нечего.
+const BOOKED_ID_CHUNK = 200;   // как у меток заявок: in (…) не упирается в предел параметров SQLite
+/**
+ * @param {object} o
+ * @param {string} o.from  'YYYY-MM-DD' — с какого дня записи
+ * @param {{from:string|null, to:string|null}} o.bounds  период доски (periodBounds)
+ * @param {Array<string|number>} [o.ids]  заявки, у которых строка услуги записана с `from`
+ * @param {Set<string>} [o.have]  id уже загруженных карточек — их не спрашиваем и не возвращаем
+ * @returns {Promise<{rows: object[], error?: object}>}
+ */
+export async function loadBookedOutside({ db = supabase, from = '', bounds = { from: null, to: null }, ids = [], have = new Set(),
+    operator = 'all', me = null } = {}) {
+    const b = bounds || {};
+    if ((!b.from && !b.to) || !from) return { rows: [] };
+    const jobs = [];
+    const byDay = (edge) => withOperator(edge(db.from('crm_requests').select(BOARD_SELECT).gte('scheduled_date', from)), operator, me);
+    if (b.from) jobs.push(byDay((q) => q.lt('created_at', b.from)));
+    if (b.to) jobs.push(byDay((q) => q.gte('created_at', b.to)));
+    const want = [...new Set((ids || []).map(Number))].filter((n) => Number.isInteger(n) && n > 0 && !have.has(String(n)));
+    for (let i = 0; i < want.length; i += BOOKED_ID_CHUNK) {
+        jobs.push(withOperator(db.from('crm_requests').select(BOARD_SELECT).in('id', want.slice(i, i + BOOKED_ID_CHUNK)), operator, me));
+    }
+    const res = await Promise.all(jobs);
+    const failed = res.find((r) => !r || r.error);
+    if (failed) return { rows: [], error: (failed && failed.error) || { message: 'нет ответа' } };
+    const byId = new Map();
+    for (const r of res) for (const x of r.data || []) if (x && x.id != null && !have.has(String(x.id))) byId.set(String(x.id), x);
+    return { rows: [...byId.values()].sort((x, y) => Number(y.id) - Number(x.id)) };
+}
+
 // CRM_UNIFY_V1 (задача 8) — СТРОКИ «ОТЧЁТА» (Р14). Отчёт считал state.rows — то,
 // что загрузила доска (раньше 800 последних, теперь закрытые только за период
 // доски), и его числа зависели от того, что открыто на экране. Теперь у отчёта

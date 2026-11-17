@@ -14161,4 +14161,6 @@ export const STRINGS = {
   "Время {time} у врача {doctor} уже занято — выберите другое время.": {"en":"{time} with {doctor} is already taken — choose another time.","ru":"Время {time} у врача {doctor} уже занято — выберите другое время.","uz":"{doctor} shifokorida {time} vaqti allaqachon band — boshqa vaqtni tanlang."},   // BOOKING_DAY_JOIN_V1
   "Добавлено в визит: {name}, {time}": {"en":"Added to the visit: {name}, {time}","ru":"Добавлено в визит: {name}, {time}","uz":"Tashrifga qo‘shildi: {name}, {time}"},   // BOOKING_DAY_JOIN_V1
   "Эта услуга уже есть в визите пациента на этот день — второй строкой она не добавляется.": {"en":"This service is already in the patient’s visit for this day — it is not added a second time.","ru":"Эта услуга уже есть в визите пациента на этот день — второй строкой она не добавляется.","uz":"Bu xizmat bemorning shu kungi tashrifida allaqachon bor — u ikkinchi marta qo‘shilmaydi."},   // BOOKING_DAY_JOIN_V1
+  // CRM_PERIOD_BOOKED_V1 — CRM: выбранная «Запись» — по всем датам поступления (crm.js periodLine)
+  "Запись — по всем датам поступления": {"en":"Booking filter covers all creation dates","ru":"Запись — по всем датам поступления","uz":"Yozuv — barcha kelib tushgan sanalar bo‘yicha"},   // CRM_PERIOD_BOOKED_V1
 };

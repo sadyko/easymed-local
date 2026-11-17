@@ -201,3 +201,41 @@ test('closedLimit 0 («Всё время» для выгрузки): закры�
   assert.equal(closed.limit, null);
   assert.ok(!closed.filters.some(([, col]) => col === 'created_at'));
 });
+
+// CRM_PERIOD_BOOKED_V1 (3.25.0) — записанные вне периода для фильтра «Запись»: по дню самой
+// заявки (scheduled_date) — только поступившие ВНЕ периода (до «с» и с «по»), по строке
+// услуги — по id, кроме уже загруженных; тот же оператор, без предела. Без периода — ничего.
+test('CRM_PERIOD_BOOKED_V1: записанные вне периода — по дню заявки вне границ и по id строк, кроме загруженных', async () => {
+  const { loadBookedOutside } = await import('../views/crm-board-load.js');
+  const F = '2026-11-17T00:00:00.000Z';
+  const T = '2026-11-18T00:00:00.000Z';
+  const db = fakeDb((d) => {
+    const ids = d.filters.find(([op, col]) => op === 'in' && col === 'id');
+    if (ids) return { data: ids[2].map((id) => lead(id, 'in_process')), error: null };
+    const before = d.filters.some(([op, col, val]) => op === 'lt' && col === 'created_at' && val === F);
+    return { data: before ? [lead(1, 'scheduled'), lead(5, 'scheduled')] : [lead(2, 'scheduled')], error: null };
+  });
+  const res = await loadBookedOutside({ db, from: '2026-11-17', bounds: { from: F, to: T }, ids: ['3', 5, 9, 'x'], have: new Set(['5']), operator: 'me', me: 21 });
+  const byDay = db.calls.filter((c) => c.filters.some(([op, col, val]) => op === 'gte' && col === 'scheduled_date' && val === '2026-11-17'));
+  assert.equal(byDay.length, 2, 'по дню заявки — до «с» и с «по»');
+  assert.ok(byDay.some((c) => c.filters.some(([op, col, val]) => op === 'lt' && col === 'created_at' && val === F)));
+  assert.ok(byDay.some((c) => c.filters.some(([op, col, val]) => op === 'gte' && col === 'created_at' && val === T)));
+  const byId = db.calls.find((c) => c.filters.some(([op, col]) => op === 'in' && col === 'id'));
+  assert.deepEqual(byId.filters.find(([op, col]) => op === 'in' && col === 'id')[2], [3, 9], 'спрошены уже загруженные или мусор');
+  for (const c of db.calls) {
+    assert.equal(c.select, BOARD_SELECT);
+    assert.equal(c.limit, null);
+    assert.ok(c.filters.some(([op, col, val]) => op === 'eq' && col === 'assigned_to' && val === 21), 'без фильтра «Оператор»');
+  }
+  assert.deepEqual(res.rows.map((r) => r.id), [9, 3, 2, 1], 'строки без загруженных (5) и без повторов, по убыванию id');
+
+  // «Всё время» — периода нет, спрашивать нечего.
+  const none = fakeDb(() => ({ data: [], error: null }));
+  assert.deepEqual(await loadBookedOutside({ db: none, from: '2026-11-17', bounds: { from: null, to: null }, ids: [3] }), { rows: [] });
+  assert.equal(none.calls.length, 0);
+  // Сбой — ошибка, а не «записанных нет».
+  const bad = fakeDb(() => ({ data: null, error: { message: 'boom' } }));
+  const out = await loadBookedOutside({ db: bad, from: '2026-11-17', bounds: { from: F, to: null } });
+  assert.deepEqual(out.rows, []);
+  assert.equal(out.error.message, 'boom');
+});

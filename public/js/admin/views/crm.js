@@ -65,7 +65,7 @@ import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso, task
 // CRM_UNIFY_V1 — вид «Задачи»: третий вид раздела (Канбан / Список / Задачи).
 import { renderTasksView } from './crm-tasks-view.js';
 // CRM_UNIFY_V1 — загрузка доски: все открытые, закрытые за период, настоящие числа.
-import { loadBoard, periodBounds, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT, loadReportRows } from './crm-board-load.js';   // CRM_PERIOD_ALL_COLUMNS_V1 — границы периода только из periodBounds
+import { loadBoard, periodBounds, CLOSED_ALL_TIME_LIMIT, BOARD_SELECT, loadReportRows, loadBookedOutside } from './crm-board-load.js';   // CRM_PERIOD_ALL_COLUMNS_V1 — границы периода только из periodBounds · CRM_PERIOD_BOOKED_V1 — записанные вне периода
 // CRM_MULTI_SOURCE_V1 — несколько источников у заявки (миграция 231). Правило
 // чтения одно на экран и сервер: sources, иначе [source], иначе ['other'].
 import { leadSources, leadHasAnySource, sourceTally } from '../crm-sources.js';   // CRM_SOURCE_SINGLE_V1 — toggleLeadSource/MAX_LEAD_SOURCES форме больше не нужны
@@ -221,7 +221,11 @@ const state = { view: 'kanban', boardView: 'kanban', search: '', rows: [], sourc
                 // CRM_BOOKED_FILTER_V1 — фильтр «Запись»: на какой день записаны услуги
                 // заявки ('' = все | 'today' | 'tomorrow' | 'week' | 'day' + bookedDay),
                 // и дни строк услуг каждой заявки: Map(String(request_id) → Set('YYYY-MM-DD')).
-                booked: '', bookedDay: '', lineDays: new Map() };
+                booked: '', bookedDay: '', lineDays: new Map(),
+                // CRM_PERIOD_BOOKED_V1 — заявки, записанные с сегодняшнего дня (или с прошлого
+                // «Своего дня»), но поступившие ВНЕ выбранного периода: их доска при «Сегодня» не
+                // грузит, а «Запись» обязана показать (и посчитать в своих вариантах).
+                bookedRows: [] };
 // CRM_PERIOD_DEFAULT_TODAY_V1 (2026-11-14, владелец: «random period in CRM should be today») —
 // доска открывается на «Сегодня»: регистратура работает с сегодняшними заявками,
 // а давние открытые называет строка над доской (periodLine) с «Показать все».
@@ -310,6 +314,18 @@ function inBooked(r) {
     for (const d of bookedDaysOf(r)) if (d >= from && d <= to) return true;
     return false;
 }
+// CRM_PERIOD_BOOKED_V1 (3.25.0) — ВЫБРАННАЯ «ЗАПИСЬ» — ПО ВСЕМ ДАТАМ ПОСТУПЛЕНИЯ. Доска
+// открывается на «Сегодня», а «Период» сужает по дню поступления — и «Запись: Завтра» во
+// вторник прятала заявку, поступившую в понедельник и записанную на среду («Завтра · 0»).
+// Выбрана «Запись» — период её не сужает (как поиск: inPeriod); без «Записи» — как прежде.
+function inPeriodOrBooked(r) {
+    return bookedActive() || inPeriod(r);
+}
+/** CRM_BOOKED_FILTER_V1 — с какого дня читаются дни записи: сегодня или выбранный «Свой день» в прошлом. */
+function lineDaysFrom() {
+    const today = ymdLocal(new Date());
+    return state.bookedDay && state.bookedDay < today ? state.bookedDay : today;
+}
 const periodActive = () => !!(state.bounds && (state.bounds.from || state.bounds.to));
 /** CRM_PERIOD_ALL_COLUMNS_V1 — created_at в границах (from включительно, to исключительно). */
 function inBounds(r, b) {
@@ -372,6 +388,11 @@ function periodLine() {
     // давних открытых — что поиск идёт по всем датам.
     if (isSearching()) {
         return h('div', { class: 'muted crm-period-line', 'data-crm-search-all': '' }, Icon('Search', { size: 13 }), ' ', 'Поиск — по всем датам');
+    }
+    // CRM_PERIOD_BOOKED_V1 — выбрана «Запись»: период записанные карточки не сужает — так и
+    // сказано вместо «показаны заявки, поступившие сегодня».
+    if (bookedActive()) {
+        return h('div', { class: 'muted crm-period-line', 'data-crm-booked-all': '' }, Icon('Calendar', { size: 13 }), ' ', 'Запись — по всем датам поступления');
     }
     // Ревью 3.23.0 (решение координатора, Q2) — строка только когда давних
     // открытых больше нуля; сервер не ответил (null) — строки нет, доска на месте.
@@ -723,7 +744,8 @@ async function load() {
     // Ответ устаревшей загрузки отбрасывается целиком; false — «не рисовать».
     const my = ++loadSeq;
     const bounds = periodBounds(state.period, state.customFrom, state.customTo);   // CRM_PERIOD_ALL_COLUMNS_V1 (ревью) — один раз на загрузку
-    const [res, tasks, tags, apiMarks, lineDays] = await Promise.all([
+    const bookedFrom = lineDaysFrom();   // CRM_PERIOD_BOOKED_V1 — один день начала у строк и у записанных вне периода
+    const [res, tasks, tags, apiMarks, booked] = await Promise.all([
         loadBoard({
             closedKeys: closedKeys(),
             bounds,
@@ -735,14 +757,25 @@ async function load() {
         loadOpenTasks(),
         loadLeadTags(),   // CRM_HEAD_MERGE_TAGS_V1
         loadApiMarks(),   // PUBLIC_API_V1 — строки онлайн-записи; отказ — доска без них
-        loadLineDays(),   // CRM_BOOKED_FILTER_V1
+        // CRM_BOOKED_FILTER_V1 — дни строк услуг; CRM_PERIOD_BOOKED_V1 — следом карточки, записанные
+        // с того же дня, но поступившие вне периода. Отказ — «Запись» по загруженным, как прежде.
+        loadLineDays(bookedFrom).then(async (lineDays) => ({
+            lineDays,
+            outside: await loadBookedOutside({ from: bookedFrom, bounds, ids: [...lineDays.keys()], operator: state.operator, me: selfUserId() })
+                .catch(() => ({ rows: [] })),
+        })),
     ]);
     if (my !== loadSeq) return false;
+    const lineDays = booked.lineDays;
     if (res.error) {
         toast(trf('Не удалось загрузить заявки: {msg}', { msg: res.error.message }), 'fail');
         state.rows = []; state.counts = {}; state.capped = {}; state.outside = null; state.bounds = bounds;
+        state.bookedRows = [];   // CRM_PERIOD_BOOKED_V1
         return true;
     }
+    // CRM_PERIOD_BOOKED_V1 — записанные вне периода, которых нет среди загруженных за период.
+    const loaded = new Set(res.rows.map((r) => String(r.id)));
+    state.bookedRows = ((booked.outside && !booked.outside.error && booked.outside.rows) || []).filter((r) => !loaded.has(String(r.id)));
     state.rows = res.rows; state.counts = res.counts; state.capped = res.capped;
     state.outside = res.outside || null;   // CRM_PERIOD_ALL_COLUMNS_V1
     state.bounds = bounds;                 // CRM_PERIOD_ALL_COLUMNS_V1 (ревью) — по ним сужает экран
@@ -756,9 +789,7 @@ async function load() {
 // CRM_BOOKED_FILTER_V1 — дни строк услуг для фильтра «Запись». Только с сегодняшнего
 // дня (или с выбранного «Своего дня», если он в прошлом): прошедших строк тысячи,
 // а фильтр — про ближайшие записи. Отказ — фильтр работает по дню самой заявки.
-async function loadLineDays() {
-    const today = ymdLocal(new Date());
-    const from = state.bookedDay && state.bookedDay < today ? state.bookedDay : today;
+async function loadLineDays(from = lineDaysFrom()) {
     const map = new Map();
     try {
         const { data, error } = await supabase.from('crm_request_services')
@@ -792,7 +823,17 @@ export async function crmExportRows() {
         operator: state.operator, me: selfUserId(), closedLimit: 0,
     });
     if (res.error) return { rows: [], error: res.error };
-    return { rows: res.rows.filter((r) => leadMatchesQuery(r, state.search) && inSource(r) && inBounds(r, bounds) && inTag(r) && inOperator(r) && inBooked(r)) };   // CRM_BOOKED_FILTER_V1
+    // CRM_PERIOD_BOOKED_V1 — при выбранной «Записи» выгрузка, как и доска, — все записанные на
+    // эти дни, когда бы ни поступили: к строкам периода — записанные вне его.
+    const booked = bookedActive();
+    let rows = res.rows;
+    if (booked) {
+        const extra = await loadBookedOutside({ from: lineDaysFrom(), bounds, ids: [...state.lineDays.keys()],
+            have: new Set(rows.map((r) => String(r.id))), operator: state.operator, me: selfUserId() });
+        if (extra.error) return { rows: [], error: extra.error };
+        rows = rows.concat(extra.rows).sort((x, y) => Number(y.id) - Number(x.id));
+    }
+    return { rows: rows.filter((r) => leadMatchesQuery(r, state.search) && inSource(r) && (booked || inBounds(r, bounds)) && inTag(r) && inOperator(r) && inBooked(r)) };   // CRM_BOOKED_FILTER_V1
 }
 
 // CRM_CARD_V2 — КТО это и КАК до него дозвониться, одним ответом на две строки.
@@ -1141,8 +1182,20 @@ async function paint() {
         paintFilters();
         paintBody();
     }
+    // CRM_PERIOD_BOOKED_V1 — к загруженным за период — записанные вне его (state.bookedRows):
+    // ими пользуется только «Запись» (её варианты и выбранная), при поиске — нет (поиск и так
+    // по всем датам и сам отменяет «Запись»).
+    function withBooked(base) {
+        if (isSearching() || !state.bookedRows.length) return base;
+        const have = new Set(base.map((r) => String(r.id)));
+        return base.concat(state.bookedRows.filter((r) => !have.has(String(r.id))));
+    }
+    /** CRM_PERIOD_BOOKED_V1 — откуда доска берёт карточки: выбрана «Запись» — и записанные вне периода. */
+    function boardBase() {
+        return bookedActive() ? withBooked(searchBase()) : searchBase();
+    }
     function filtered() {
-        return searchBase().filter(r => matchesSearch(r) && inSource(r) && inPeriod(r) && inTag(r) && inOperator(r) && inBooked(r));   // CRM_UNIFY_V1, CRM_BOOKED_FILTER_V1
+        return boardBase().filter(r => matchesSearch(r) && inSource(r) && inPeriodOrBooked(r) && inTag(r) && inOperator(r) && inBooked(r));   // CRM_UNIFY_V1, CRM_BOOKED_FILTER_V1, CRM_PERIOD_BOOKED_V1
     }
 
     // CRM_FILTERS_V1 — «Источник» и «Период» над доской.
@@ -1161,7 +1214,7 @@ async function paint() {
         // перезагрузки доски (CRM_PERIOD_DROPDOWN_V1 — был рядом чипов).
         periodChips.length = 0;
 
-        const byPeriodAll = searchBase().filter(r => matchesSearch(r) && inPeriod(r) && inOperator(r) && inBooked(r));   // CRM_UNIFY_V1, CRM_BOOKED_FILTER_V1
+        const byPeriodAll = boardBase().filter(r => matchesSearch(r) && inPeriodOrBooked(r) && inOperator(r) && inBooked(r));   // CRM_UNIFY_V1, CRM_BOOKED_FILTER_V1, CRM_PERIOD_BOOKED_V1 — числа те же, что на доске
         // CRM_HEAD_MERGE_TAGS_V1 — счётчики источников учитывают выбранную
         // метку, а счётчики меток — выбранный источник: каждый ряд считается по
         // ОСТАЛЬНЫМ фильтрам, как и раньше.
@@ -1260,7 +1313,9 @@ async function paint() {
         // варианта — сколько карточек остальных фильтров записано на эти дни.
         const bkRow = h('div', { class: 'row', 'data-crm-booked-row': '', style: { gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, lbl('Запись'));
         const keepBooked = state.booked;
-        const bkBase = searchBase().filter(r => matchesSearch(r) && inSource(r) && inPeriod(r) && inTag(r) && inOperator(r) && inVisibleColumn(r));
+        // CRM_PERIOD_BOOKED_V1 — число варианта — сколько карточек он покажет: выбранная «Запись»
+        // период не учитывает, значит и её число — по всем датам поступления (с записанными вне периода).
+        const bkBase = withBooked(searchBase()).filter(r => matchesSearch(r) && inSource(r) && inTag(r) && inOperator(r) && inVisibleColumn(r));
         const bkCount = (key) => { state.booked = key; const n = bkBase.filter(inBooked).length; state.booked = keepBooked; return n; };
         const bkOptions = BOOKED.map(([k, label]) => [k, (isAllValue(k) || k === 'day' || isSearching()) ? label : tr(label) + ' · ' + bkCount(k)]);
         bkRow.appendChild(dropdown({ 'aria-label': 'Запись', 'data-booked-select': '' }, bkOptions, state.booked || CRM_FILTER_ALL, (v) => {
@@ -1371,7 +1426,8 @@ async function paint() {
         });
     }
     async function openLeadById(id) {
-        let r = state.rows.find((x) => String(x.id) === String(id)) || null;
+        let r = state.rows.find((x) => String(x.id) === String(id))
+            || state.bookedRows.find((x) => String(x.id) === String(id)) || null;   // CRM_PERIOD_BOOKED_V1
         if (!r) {
             const { data } = await supabase.from('crm_requests')
                 .select(BOARD_SELECT)
@@ -1685,7 +1741,7 @@ async function paint() {
         const rows = filtered();
         if (!rows.length) {
             return h('div', { class: 'card', style: { padding: '26px' } },
-                h('div', { class: 'empty', 'data-list-empty': '' }, (state.rows.length || isSearching()) ? 'Ничего не найдено.'
+                h('div', { class: 'empty', 'data-list-empty': '' }, (state.rows.length || isSearching() || bookedActive()) ? 'Ничего не найдено.'   // CRM_PERIOD_BOOKED_V1 — «Запись» — не период
                     // ревью 3.23.0 — за выбранный период пусто, а заявки за другие дни есть: так и сказать
                     : periodActive() ? 'За этот период заявок нет'
                     : 'Заявок пока нет — зафиксируйте первое обращение.'));
