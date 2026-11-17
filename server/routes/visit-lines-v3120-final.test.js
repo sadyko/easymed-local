@@ -1,6 +1,7 @@
 // V3120_FINAL — строки визита у двери /api/db и визит дня (2026-09-28).
 //
-//   G1  неоплаченную строку не проводят в работу через «queued»;
+//   G1  неоплаченную строку не проводят в работу через «queued»; RELEASE_SELECT_V1 —
+//       при части и долге в работу идёт только отмеченная кассиром строка;
 //   G2  строку визита не заводят сразу в работе;
 //   S2  строку в счёте и выданный товар табличным путём не удаляют; строку
 //       без услуги/товара/вида приёма («свободная цена») не заводят;
@@ -107,7 +108,7 @@ test('G1: неоплаченную строку нельзя провести ч
   } finally { t.close(); }
 });
 
-test('G1: законные пути не закрыты — бесплатная, в счёте плательщика, частично оплаченный счёт, долг', async () => {
+test('G1: законные пути не закрыты — бесплатная, в счёте плательщика, отпущенная кассой при части и долге', async () => {
   const t = await start();
   try {
     const v = visit(t);
@@ -121,16 +122,59 @@ test('G1: законные пути не закрыты — бесплатная
     assert.equal(statusOf(t, covered), 'queued', 'счёт плательщику сам ставит строку в очередь');
     assert.equal((await upd(t, 'lab', covered, { status: 'collected' })).status, 200);
 
-    // Строка в частично оплаченном счёте — касса своё решение приняла.
+    // RELEASE_SELECT_V1 — частичная оплата: в работу идёт отмеченная кассиром строка.
     const part = line(t, v);
     const inv = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: v, visit_service_ids: [part], discount_amount: 0 });
-    t.db.prepare("UPDATE invoices SET status = 'partial', paid_amount = 10000 WHERE id = ?").run(inv.json.data.invoice.id);
-    assert.equal((await upd(t, 'lab', part, { status: 'queued' })).status, 200, 'частично оплаченный счёт');
+    const p = await t.rpc('record_payment', 'boss', { invoice_id: inv.json.data.invoice.id, amount: 10000, method: 'cash', release_line_ids: [part] });
+    assert.equal(p.status, 200, JSON.stringify(p.json));
+    assert.equal(statusOf(t, part), 'queued', 'отмеченная строка отпущена');
+    assert.equal((await upd(t, 'lab', part, { status: 'collected' })).status, 200, 'частично оплаченный счёт, строка отмечена');
 
     const debt = line(t, v);
     const inv2 = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: v, visit_service_ids: [debt], discount_amount: 0 });
-    t.db.prepare("UPDATE invoices SET status = 'debt' WHERE id = ?").run(inv2.json.data.invoice.id);
-    assert.equal((await upd(t, 'lab', debt, { status: 'collected' })).status, 200, 'долг');
+    const d = await t.rpc('mark_invoice_debt', 'boss', { invoice_id: inv2.json.data.invoice.id, release_line_ids: [debt] });
+    assert.equal(d.status, 200, JSON.stringify(d.json));
+    assert.equal((await upd(t, 'lab', debt, { status: 'collected' })).status, 200, 'долг, строка отмечена');
+  } finally { t.close(); }
+});
+
+// RELEASE_SELECT_V1 (3.25.0) — «частично = отпущено» больше нет: строка, которую
+// касса не отметила при частичной оплате или долге, в работу не идёт — ни через
+// «queued», ни сразу в «collected». Старый частично оплаченный счёт (до
+// обновления) свои строки уже отпустил в 'queued' — они работают, как вчера.
+test('G1 / RELEASE_SELECT_V1: неотмеченная строка частично оплаченного счёта и долга — в работу не идёт; старая отпущенная — идёт', async () => {
+  const t = await start();
+  try {
+    const v = visit(t);
+    const ticked = line(t, v, { svc: 30, price: 100000, doctor: 10 });
+    const unticked = line(t, v);
+    const inv = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: v, visit_service_ids: [ticked, unticked], discount_amount: 0 });
+    const invId = inv.json.data.invoice.id;
+    const p = await t.rpc('record_payment', 'boss', { invoice_id: invId, amount: 100000, method: 'cash', release_line_ids: [ticked] });
+    assert.equal(p.status, 200, JSON.stringify(p.json));
+    assert.equal(p.json.data.invoice.status, 'partial');
+    assert.equal(statusOf(t, unticked), 'added');
+    for (const st of ['queued', 'collected']) {
+      const r = await upd(t, 'lab', unticked, { status: st });
+      assert.equal(r.status, 409, st + ': ' + JSON.stringify(r.json));
+      assert.match(r.json.error.message, /не оплачен/);
+    }
+    assert.equal(statusOf(t, unticked), 'added');
+    assert.equal((await upd(t, 'boss', ticked, { status: 'in_progress' })).status, 200, 'отмеченная консультация начинается');
+
+    const v2 = visit(t);
+    const owed = line(t, v2);
+    const inv2 = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: v2, visit_service_ids: [owed], discount_amount: 0 });
+    const d = await t.rpc('mark_invoice_debt', 'boss', { invoice_id: inv2.json.data.invoice.id, release_line_ids: [] });
+    assert.equal(d.status, 200, JSON.stringify(d.json));
+    assert.equal((await upd(t, 'lab', owed, { status: 'collected' })).status, 409, 'долг без отметки — пробу не берут');
+
+    // Счёт 3.24: оплачен частично, строки уже отпущены.
+    const old = line(t, v2);
+    const inv3 = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: v2, visit_service_ids: [old], discount_amount: 0 });
+    t.db.prepare("UPDATE invoices SET status = 'partial', paid_amount = 10000 WHERE id = ?").run(inv3.json.data.invoice.id);
+    t.db.prepare("UPDATE visit_services SET status = 'queued' WHERE id = ?").run(old);
+    assert.equal((await upd(t, 'lab', old, { status: 'collected' })).status, 200, 'старая отпущенная строка работает');
   } finally { t.close(); }
 });
 

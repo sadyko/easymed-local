@@ -7,6 +7,7 @@ import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDe
   rebillPaidLine, rebillPaidLineQuote,   // REFUND_SWAP_V1 — «Вернуть эту услугу и выставить новую»
   invoiceLineWork } from './billing.js';   // REFUND_ANY_V1 — что уже сделано по строкам счёта
 import { refundedLines } from './billing.js';   // REFUND_ANY_V1 — «услуга возвращена»
+import { invoiceReleaseLines } from './billing.js';   // RELEASE_SELECT_V1 — неотпущенные строки счёта для окна оплаты
 import { cashierInvoiceDiscount } from './billing.js';   // CASHIER_DISCOUNT_V1 — скидка кассы при оплате
 import { cashierInvoiceDiscountChange, cashierInvoiceDiscountChangeQuote } from './billing.js';   // DISCOUNT_CHANGE_PAID_V1 — «Изменить скидку» после оплаты
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
@@ -180,6 +181,7 @@ export const RPC = {
   record_payment:           (db, args, user) => recordPayment(db, args, user),
   record_payment_split:     (db, args, user) => recordPaymentSplit(db, args, user),
   mark_invoice_debt:        (db, args, user) => markInvoiceDebt(db, args, user),   // DEBT_BTN_V1
+  invoice_release_lines:    (db, args, user) => invoiceReleaseLines(db, args, user),   // RELEASE_SELECT_V1 — «Что можно оказать сейчас»: неотпущенные строки счёта; чтение
   // SVC_CHANGE_V1 — замена услуги + пересчёт счёта.
   // PATIENT_TAB_ACCESS_V1 — обе «неоплаченные» операции зовёт РОВНО ОДИН экран,
   // карта пациента, вкладка «Услуги» (grep по репозиторию), поэтому право

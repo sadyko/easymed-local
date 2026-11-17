@@ -312,3 +312,27 @@ test('филиалы: дописанный счёт уезжает соседя�
   assert.ok(j.some((r) => r.tbl === 'invoices' && r.uid === inv.uid && /total_amount/.test(r.cols)), 'новая сумма счёта не попала в журнал: ' + JSON.stringify(j));
   assert.ok(j.some((r) => r.tbl === 'invoice_items' && r.uid === item.uid), 'новая позиция не попала в журнал');
 });
+
+// RELEASE_SELECT_V1 (3.25.0) — ровно тот случай, ради которого правило: к
+// неоплаченному счёту дописали анализ, а кассир взял прежнюю сумму (частичная
+// оплата). Окно оплаты спрашивает неотпущенные строки (invoice_release_lines) —
+// обе части счёта; в работу идёт только отмеченное, анализ ждёт оплаты.
+test('RELEASE_SELECT_V1: дописанный счёт, взята прежняя сумма — список обеих строк, в работу только отмеченная', () => {
+  const { db, CONS, LAB, vid } = seed();
+  const a = line(db, vid, CONS);
+  bill(db, vid, [a]);
+  const b = line(db, vid, LAB);
+  const appended = bill(db, vid, [b]);
+  assert.equal(appended.appended, true);
+  const inv = appended.invoice;
+  assert.equal(inv.total_amount, 140000);
+  const before = RPC.invoice_release_lines(db, { invoice_id: inv.id }, cashier);
+  assert.deepEqual(before.lines.map((l) => [l.id, l.name, l.total]), [[a, 'Приём терапевта', 100000], [b, 'Анализ крови', 40000]]);
+  const r = recordPayment(db, { invoice_id: inv.id, amount: 100000, method: 'cash', release_line_ids: [a] }, cashier);
+  assert.equal(r.invoice.status, 'partial');
+  const st = (id) => db.prepare('SELECT status FROM visit_services WHERE id = ?').get(id).status;
+  assert.deepEqual([st(a), st(b)], ['queued', 'added'], 'дописанный анализ без отметки ждёт оплаты');
+  assert.deepEqual(RPC.invoice_release_lines(db, { invoice_id: inv.id }, cashier).lines.map((l) => l.id), [b], 'в окне доплаты — только неотпущенный анализ');
+  recordPayment(db, { invoice_id: inv.id, amount: 40000, method: 'cash' }, cashier);
+  assert.deepEqual([st(a), st(b)], ['queued', 'queued'], 'доплата отпускает оставшееся');
+});

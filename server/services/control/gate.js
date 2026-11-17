@@ -75,6 +75,7 @@ const READ_ONLY_RPCS = new Set([
   'pay_period_status',   // PAY_PERIOD_CLOSE_V1 — какие месяцы закрыты; чтение
   'visit_refunded_lines',   // FINAL_MONEY_FIX_V1 (I1) — возвращённые строки визита; чтение
   'invoice_line_work',   // REFUND_ANY_V1 — что сделано по строкам счёта (окно «Вернуть услугу»); чтение
+  'invoice_release_lines',   // RELEASE_SELECT_V1 — неотпущенные строки счёта (окно оплаты); чтение
   'refunded_lines',   // REFUND_ANY_V1 — «услуга возвращена»: лист лаборатории, кабинет врача; чтение
   // DOCTOR_LINES_SPECIALTY_V1 — варианты фильтра «Врач» в «Отчётах»; чтение.
   'report_choices',

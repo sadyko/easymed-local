@@ -39,7 +39,9 @@ test('split: cash + acquiring fully pays the invoice, two ledger rows', () => {
   assert.ok(pays[0].shift_id && pays[0].shift_id === pays[1].shift_id, 'both parts in the same auto shift');
 });
 
-test('split: partial sum leaves invoice partial; services released to queued', () => {
+// RELEASE_SELECT_V1 (3.25.0) — частичная оплата частями отпускает в работу только
+// отмеченные кассиром строки (release_line_ids); без выбора — ничего.
+test('split: partial sum leaves invoice partial; without a choice nothing is released (RELEASE_SELECT_V1)', () => {
   const { db, cashier, invoice } = seed();
   const res = recordPaymentSplit(db, {
     invoice_id: invoice.id,
@@ -48,7 +50,33 @@ test('split: partial sum leaves invoice partial; services released to queued', (
   assert.equal(res.invoice.status, 'partial');
   assert.equal(res.invoice.paid_amount, 50000);
   const vsStatus = db.prepare('SELECT status FROM visit_services').get().status;
-  assert.equal(vsStatus, 'queued');
+  assert.equal(vsStatus, 'added', 'частичная оплата без выбора кассира в работу не отпускает');
+});
+
+test('split: partial sum with release_line_ids releases exactly the ticked line; the rest of the money completes the invoice (RELEASE_SELECT_V1)', () => {
+  const { db, cashier, invoice } = seed();
+  const sid2 = db.prepare("INSERT INTO services (name, price, type, is_lab) VALUES ('Анализ', 40000, 'lab', 1)").run().lastInsertRowid;
+  const vid = db.prepare('SELECT visit_id FROM invoices WHERE id = ?').get(invoice.id).visit_id;
+  const first = db.prepare('SELECT id FROM visit_services').get().id;
+  // Строка того же визита, но не из этого счёта, — проверка «только этот счёт».
+  const vsA = db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,?,1,40000,40000,'added')").run(vid, sid2).lastInsertRowid;
+  assert.throws(() => recordPaymentSplit(db, { invoice_id: invoice.id, tenders: [{ method: 'cash', amount: 10000 }], release_line_ids: [Number(vsA)] }, cashier),
+    (e) => e.status === 400 && /не из этого счёта/.test(e.message));
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM payments').get().n, 0, 'отказ — ни одной части не записано');
+  const res = recordPaymentSplit(db, {
+    invoice_id: invoice.id,
+    tenders: [{ method: 'cash', amount: 30000 }, { method: 'card', amount: 20000 }],
+    release_line_ids: [first],
+  }, cashier);
+  assert.equal(res.invoice.status, 'partial');
+  assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = ?').get(first).status, 'queued');
+  const log = db.prepare("SELECT action, actor_user_id, notes FROM invoice_audit_log WHERE invoice_id = ? AND action = 'release_unpaid'").all(invoice.id);
+  assert.equal(log.length, 1);
+  assert.equal(log[0].actor_user_id, cashier.id);
+  assert.match(log[0].notes, /Svc/);
+  const done = recordPaymentSplit(db, { invoice_id: invoice.id, tenders: [{ method: 'acquiring', amount: 50000 }] }, cashier);
+  assert.equal(done.invoice.status, 'paid');
+  assert.equal(db.prepare('SELECT COALESCE(SUM(amount), 0) s FROM payments WHERE invoice_id = ?').get(invoice.id).s, 100000);
 });
 
 test('split: overpay and bad tenders are rejected atomically (no rows written)', () => {
@@ -67,7 +95,8 @@ test('split: overpay and bad tenders are rejected atomically (no rows written)',
 });
 
 // DEBT_BTN_V1 — «Оставить как долг»
-test('debt: zero-payment debt releases services and sets status debt', async () => {
+// RELEASE_SELECT_V1 (3.25.0) — долг отпускает в работу только отмеченные строки.
+test('debt: zero-payment debt sets status debt and releases only the ticked services', async () => {
   const { openDb } = await import('../../db/connection.js');
   const { migrate } = await import('../../db/migrate.js');
   const { createInvoiceForVisit, markInvoiceDebt, recordPaymentSplit } = await import('./billing.js');
@@ -83,6 +112,10 @@ test('debt: zero-payment debt releases services and sets status debt', async () 
   const res = markInvoiceDebt(db, { invoice_id: invoice.id }, cashier);
   assert.equal(res.invoice.status, 'debt');
   assert.equal(res.invoice.paid_amount, 0);
+  assert.equal(db.prepare('SELECT status FROM visit_services WHERE id=?').get(vs).status, 'added', 'долг без выбора — ничего в работу');
+  // Кассир снова нажал «Оставить как долг», теперь отметив услугу.
+  const again = markInvoiceDebt(db, { invoice_id: invoice.id, release_line_ids: [Number(vs)] }, cashier);
+  assert.equal(again.invoice.status, 'debt');
   assert.equal(db.prepare('SELECT status FROM visit_services WHERE id=?').get(vs).status, 'queued');
 
   // частичная оплата + долг: платёж записан, статус остаётся debt после mark

@@ -141,6 +141,11 @@ const KEEP_STATUSES = new Set(['cancelled', 'canceled', 'refunded']);
  * сам он остаётся 'unpaid' (createInvoiceForVisit, V3120_FIX FATAL-2); счёт на
  * ноль (FREE_SERVICE_V1, settleZeroTotal). Аннулированный и возвращённый счёт
  * не отпускает ничего.
+ * RELEASE_SELECT_V1 (3.25.0) — правило по строке: частичная оплата и долг
+ * отпускают только строки, отмеченные кассиром, а этот заказ к прибору пришёл
+ * НЕОТПУЩЕННЫМ ('added') и отмечен быть уже не мог (касса отмечает строки в
+ * смете). Значит отпустить его может только полная оплата, счёт плательщику или
+ * счёт на ноль; частично оплаченный счёт и долг — нет.
  */
 function linePaid(db, vsId) {
   const r = db.prepare(`SELECT i.status, i.payer_id, i.total_amount FROM visit_services vs
@@ -148,7 +153,7 @@ function linePaid(db, vsId) {
                           JOIN invoices i ON i.id = ii.invoice_id
                          WHERE vs.id = ?`).get(vsId);
   if (!r || r.status === 'void' || r.status === 'refunded') return false;
-  return ['paid', 'partial', 'debt'].includes(r.status) || r.payer_id != null || Math.round((Number(r.total_amount) || 0) * 100) <= 0;
+  return r.status === 'paid' || r.payer_id != null || Math.round((Number(r.total_amount) || 0) * 100) <= 0;   // RELEASE_SELECT_V1 — без 'partial' / 'debt'
 }
 
 /**
