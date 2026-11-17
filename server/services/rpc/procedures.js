@@ -402,8 +402,10 @@ export function procedureComplete(db, args, user) {
       throw Object.assign(new RpcError(REFUNDED_WORK_REFUSAL, 409), { code: 'refunded_line' });
     }
     // #15 — pay-first: касса ещё не провела услугу, делать её нельзя.
+    // RELEASE_SELECT_V1 (ревью) — долг сам по себе в работу не отпускает: услугу
+    // отпускает полная оплата или отметка кассира при части денег и долге.
     if (line.status === 'added') {
-      throw new RpcError('Услуга не проведена кассой — сначала оплата или долг.', 400);
+      throw new RpcError('Услуга не проведена кассой — касса должна принять оплату или отпустить услугу в работу.', 400);
     }
     // CABINET_FIX_V1_R5 (ревью 5, B) — заметка медсестры не стирает записи кабинета
     // врача: у строки с его JSON она ложится туда же под своим ключом (nurseNote),

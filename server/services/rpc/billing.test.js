@@ -780,6 +780,23 @@ test('RELEASE_SELECT_V1 (ревью): счёт стал оплаченным в�
   assert.equal(lineStatus(b.db, b.consult), 'cancelled', 'счёт на ноль не оживляет отменённую строку');
 });
 
+// RELEASE_SELECT_V1 (ревью, решение владельца) — выданный товар отмечать нечего: он уже у
+// пациента. Признак — тот, что код уже ведёт: списание со склада / полки по строке
+// (stock_movements 'dispense' на 'visit' / id строки), не возвращённое отменой.
+test('RELEASE_SELECT_V1 (ревью): invoice_release_lines — выданный товар помечен dispensed, невыданный — нет', async () => {
+  const { db, vid, consult } = seedRelease();
+  db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (1,'admin1','x','admin')").run();
+  const { dispenseItem } = await import('./inventory.js');
+  const prod = Number(db.prepare("INSERT INTO products (name, sale_price, on_hand) VALUES ('Бинт', 5000, 10)").run().lastInsertRowid);
+  const given = Number(dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, admin).visit_service_id);
+  const raw = Number(db.prepare("INSERT INTO visit_services (visit_id, clinic_item_id, quantity, unit_price, total, status) VALUES (?, ?, 1, 5000, 5000, 'added')").run(vid, prod).lastInsertRowid);   // строка товара без списания
+  const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [given, raw] }, registrar).invoice;
+  const by = Object.fromEntries(billingModule.invoiceReleaseLines(db, { invoice_id: inv.id }, cashier).lines.map((l) => [l.id, l]));
+  assert.deepEqual([by[given].product, by[given].dispensed], [true, true], 'выданный бинт');
+  assert.deepEqual([by[raw].product, by[raw].dispensed], [true, false], 'не выданный — отмечается, как услуга');
+  if (by[consult]) assert.equal(by[consult].dispensed, false, 'услуга — не товар');
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // RELEASE_SELECT_V1 (ревью) — «ОСТАВИТЬ КАК ДОЛГ» С ДЕНЬГАМИ — ОДНА ОПЕРАЦИЯ.
 // Окно кассы проводило часть денег (record_payment), брало новый ключ повтора и

@@ -15,7 +15,9 @@
 //      внутри открытого кабинета выбор держится.
 //   4. ПЛИТКА «В очереди / готовы к осмотру» ведёт на «Активные», и число на
 //      ней равно числу строк под ней (прежде она считала «Идёт приём», а
-//      щелчок его прятал).
+//      щелчок его прятал). RELEASE_SELECT_V1 (ревью, решение владельца) —
+//      кроме ждущих кассу: неоплаченная / неотмеченная кассиром строка стоит в
+//      «Активных» с серой «Ожидает кассу», но на плитке не считается.
 //   5. «Осмотрен» в выпадающем списке называется «Завершённые», а подпись
 //      строки остаётся «Осмотрен».
 
@@ -269,15 +271,22 @@ test('«Активные» выбираются при КАЖДОМ открыт
   assert.deepStrictEqual(visibleNames(again), ACTIVE_ORDER);
 });
 
-test('плитка «В очереди / готовы к осмотру» ведёт на «Активные»: число на плитке = строк под ней', async () => {
+// RELEASE_SELECT_V1 (ревью, решение владельца) — плитка считает тех, кто готов к
+// осмотру или уже на приёме; неоплаченные и неотмеченные кассиром строки остаются
+// в «Активных» с «Ожидает кассу», но в числе плитки их нет.
+test('плитка «В очереди / готовы к осмотру» ведёт на «Активные»: число на плитке = строк под ней, кроме ждущих кассу', async () => {
   const root = await openWork();
   pickStatus(root, 'completed');
   const tile = tileByLabel(root, 'В очереди / готовы к осмотру');
   assert.ok(tile, 'нет плитки «В очереди / готовы к осмотру»');
-  assert.strictEqual(tileValue(tile), '7');
+  assert.strictEqual(tileValue(tile), '4', 'ждущие кассу (неоплаченный, частично оплаченный неотмеченный, без счёта) посчитаны на плитке');
   tile.click();
   assert.strictEqual(selectedStatus(root), 'active', 'щелчок по плитке ведёт не на «Активные»');
-  assert.strictEqual(visibleNames(root).length, 7, 'число на плитке и строки под ней разошлись');
+  const rows = bodyRows(root);
+  assert.strictEqual(rows.length, 7, '«Активные» по-прежнему показывают и ждущих кассу');
+  const waiting = rows.filter((tr) => textOf(tr).includes('Ожидает кассу'));
+  assert.deepStrictEqual(waiting.map(nameOf), ['Валиева Дилноза', 'Ергашев Шухрат', 'Жураев Анвар'], 'серая «Ожидает кассу» на месте');
+  assert.strictEqual(rows.length - waiting.length, 4, 'число на плитке и готовые строки под ней разошлись');
   assert.ok(visibleNames(root).includes('Гаипов Тимур'), '«Идёт приём» посчитан на плитке, а в список не попал');
   assert.ok(hasClass(tileByLabel(root, 'В очереди / готовы к осмотру'), 'on'), 'плитка «Активных» не отмечена');
 });
@@ -301,6 +310,8 @@ test('приём открывается по тому же правилу: жд�
   nameBtn('Валиева Дилноза').click();
   await tick();
   assert.ok(TOASTS.some((m) => m.includes('Услуга ещё не проведена кассой')), 'ждущий кассу открылся: ' + TOASTS.join(' | '));
+  // RELEASE_SELECT_V1 (ревью) — долг сам по себе не отпускает: касса принимает оплату или отпускает услугу.
+  assert.ok(TOASTS.some((m) => m.includes('касса должна принять оплату или отпустить услугу в работу') && !m.includes('долг')), TOASTS.join(' | '));
   assert.strictEqual(NAV.length, 0, 'ждущий кассу открыт');
   // RELEASE_SELECT_V1 — частично оплаченный счёт, строку кассир не отметил: тот же отказ.
   TOASTS.length = 0;
@@ -322,11 +333,11 @@ test('плитка считает в том же периоде, что и сп�
   ROWS = [...VS_ROWS, future];
   t.after(() => { ROWS = VS_ROWS; });
   const root = await openWork();
-  assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '8');
+  assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '5');   // RELEASE_SELECT_V1 (ревью) — без трёх ждущих кассу
   rangeBtn(root, 'Сегодня').click();
   await tick();
   assert.strictEqual(visibleNames(root).length, 7);
-  assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '7', 'число на плитке разошлось со строками под ней');
+  assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '4', 'число на плитке разошлось со строками под ней');
 });
 
 test('пустая подсказка про «Завершённые» — только если завершённые есть в выбранном периоде', async (t) => {

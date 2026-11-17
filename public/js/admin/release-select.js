@@ -30,11 +30,20 @@ export function releaseSum(lines, ids) {
     return r2((lines || []).filter((l) => want.has(Number(l.id))).reduce((a, l) => a + (Number(l.total) || 0), 0));
 }
 
+/**
+ * RELEASE_SELECT_V1 (ревью, решение владельца) — выданный товар (product, dispensed:
+ * сервер нашёл списание со склада или полки по этой строке) уже у пациента: отмечать
+ * «оказать сейчас» нечего, галочки у него нет. Невыданный товар отмечается, как услуга.
+ */
+export function releasableLine(l) {
+    return !!l && !(l.product && l.dispensed);
+}
+
 /** Неотпущенные строки счёта с сервера: [{ id, name, doctor, total }]. Бросает при отказе. */
 export async function loadReleaseLines(invoiceId) {
     const { data, error } = await supabase.rpc('invoice_release_lines', { invoice_id: Number(invoiceId) });
     if (error) throw new Error(error.message || String(error));
-    return Array.isArray(data && data.lines) ? data.lines : [];
+    return Array.isArray(data && data.lines) ? data.lines.filter(releasableLine) : [];
 }
 
 let seq = 0;

@@ -5444,7 +5444,7 @@ export const STRINGS = {
   "Статус услуги": {"en":"Service status","ru":"Статус услуги","uz":"Xizmat holati"},
   "Суббота": {"en":"Saturday","ru":"Суббота","uz":"Shanba"},
   "Тип услуги": {"en":"Service type","ru":"Тип услуги","uz":"Xizmat turi"},
-  "Услуга ещё не проведена кассой — проведите оплату или долг, затем начните приём.": {"en":"The service has not gone through the cashier yet — take the payment or register the debt, then start the consultation.","ru":"Услуга ещё не проведена кассой — проведите оплату или долг, затем начните приём.","uz":"Xizmat hali kassadan o'tkazilmagan — to'lovni o'tkazing yoki qarzni qayd eting, so'ng qabulni boshlang."},
+  "Услуга ещё не проведена кассой — касса должна принять оплату или отпустить услугу в работу, затем начните приём.": {"en":"The service has not gone through the cashier yet — the cashier must take the payment or release the service to work, then start the consultation.","ru":"Услуга ещё не проведена кассой — касса должна принять оплату или отпустить услугу в работу, затем начните приём.","uz":"Xizmat hali kassadan o‘tmagan — kassa to‘lovni qabul qilishi yoki xizmatni ishga uzatishi kerak, keyin qabulni boshlang."},   // RELEASE_SELECT_V1 (ревью) — долг сам по себе в работу не отпускает (consultation.js)
   "Услуга завершена.": {"en":"Service completed.","ru":"Услуга завершена.","uz":"Xizmat yakunlandi."},
   "Четверг": {"en":"Thursday","ru":"Четверг","uz":"Payshanba"},
   "— выберите врача —": {"en":"— choose a doctor —","ru":"— выберите врача —","uz":"— shifokorni tanlang —"},
@@ -6323,7 +6323,7 @@ export const STRINGS = {
   "Товары (расходные материалы)": {"en":"Items (consumables)","ru":"Товары (расходные материалы)","uz":"Tovarlar (sarf materiallari)"},
   "Убрать (вернуть туда, откуда взят)": {"en":"Remove (return it where it came from)","ru":"Убрать (вернуть туда, откуда взят)","uz":"Olib tashlash (olingan joyiga qaytarish)"},
   "Уже в счёте — убрать нельзя": {"en":"Already on the invoice — cannot remove","ru":"Уже в счёте — убрать нельзя","uz":"Allaqachon hisob-fakturada — olib tashlab bo'lmaydi"},
-  "Услуга не проведена кассой — сначала оплата или долг.": {"en":"The service has not gone through the cashier — payment or debt first.","ru":"Услуга не проведена кассой — сначала оплата или долг.","uz":"Xizmat kassadan o'tkazilmagan — avval to'lov yoki qarz."},
+  "Услуга не проведена кассой — касса должна принять оплату или отпустить услугу в работу.": {"en":"The service has not gone through the cashier — the cashier must take the payment or release the service to work.","ru":"Услуга не проведена кассой — касса должна принять оплату или отпустить услугу в работу.","uz":"Xizmat kassadan o‘tmagan — kassa to‘lovni qabul qilishi yoki xizmatni ishga uzatishi kerak."},   // RELEASE_SELECT_V1 (ревью) — rpc/procedures.js
   "— в наличии": {"en":"— in stock","ru":"— в наличии","uz":"— mavjud"},
   "— движения по складу, партии и заказы останутся в отчётах и журнале.": {"en":"— stock movements, batches and orders stay in the reports and the log.","ru":"— движения по складу, партии и заказы останутся в отчётах и журнале.","uz":"— ombor harakatlari, partiyalar va buyurtmalar hisobotlar va jurnalda qoladi."},
   "· из заказа": {"en":"· from the order","ru":"· из заказа","uz":"· buyurtmadan"},

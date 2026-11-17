@@ -29,6 +29,7 @@ export const REFERRAL_STATUS = Object.freeze({
     not_billed:       { label: 'Не выставлено', kind: '' },
     awaiting_payment: { label: 'Ждёт оплаты',   kind: 'warn' },
     paid:             { label: 'Оплачено',      kind: 'info' },
+    released:         { label: 'Отпущено в работу до оплаты', kind: 'info' },   // RELEASE_SELECT_V1 (ревью) — касса отпустила до полной оплаты
     in_work:          { label: 'В работе',      kind: 'info' },
     done:             { label: 'Готово',        kind: 'ok' },
     cancelled:        { label: 'Отменено',      kind: '' },

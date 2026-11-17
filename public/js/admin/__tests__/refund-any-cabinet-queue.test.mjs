@@ -262,7 +262,8 @@ test('каждое открытие списка — один новый воп�
   t.after(() => { RPC_FAILS = false; });
   const root = await openWork();
   assert.deepStrictEqual(visibleNames(root).sort(), ['Аминов Олим', 'Валиева Дилноза', 'Гаипов Тимур', 'Давлатова Мохира', 'Зокиров Бобур'].sort());
-  assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '5');
+  // RELEASE_SELECT_V1 (ревью, решение владельца) — Валиева «Ожидает кассу»: в списке, но не на плитке.
+  assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '4');
   for (const tr of bodyRows(root)) assert.ok(!marked(tr), nameOf(tr));
 });
 
@@ -271,7 +272,8 @@ test('возвратов нет — список, плитка и кнопки �
   t.after(() => { REFUNDED = new Set([11, 13, 14, 15]); });
   const root = await openWork();
   assert.strictEqual(visibleNames(root).length, 5);
-  assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '5');
+  // RELEASE_SELECT_V1 (ревью, решение владельца) — ждущая кассу Валиева на плитке не считается.
+  assert.strictEqual(tileValue(tileByLabel(root, 'В очереди / готовы к осмотру')), '4');
   assert.ok(textOf(rowOf(root, 'Валиева Дилноза')).includes('Ожидает кассу'));
 });
 

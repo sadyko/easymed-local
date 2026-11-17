@@ -630,6 +630,28 @@ test('RELEASE_SELECT_V1: слова блока — на трёх языках, �
     }
 });
 
+// RELEASE_SELECT_V1 (ревью, решение владельца) — выданный товар (бинт уже у пациента)
+// отмечать нечего: его галочки нет; невыданный товар отмечается, как услуга.
+test('RELEASE_SELECT_V1 (ревью): выданный товар не предлагается к отметке, невыданный — предлагается', async () => {
+    const ov = await openRelease({
+        mark_invoice_debt: { invoice: { id: 1, status: 'debt' } },
+        invoice_release_lines: { invoice_id: 1, lines: [
+            ...REL_LINES,
+            { id: 503, name: 'Бинт', total: 5000, product: true, dispensed: true },
+            { id: 504, name: 'Шприц', total: 3000, product: true, dispensed: false },
+        ] },
+    });
+    typeAmount(ov, '');
+    assert.ok(!relBox(ov, 503), 'выданный товар не отмечают');
+    assert.doesNotMatch(textOf(relBlock(ov)), /Бинт/);
+    assert.ok(relBox(ov, 504), 'невыданный товар отмечается');
+    const cb = relBox(ov, 504);
+    cb.checked = true; cb.fire('change');
+    buttonByText(ov, 'Оставить как долг').click();
+    await tick(60);
+    assert.deepEqual(calls.find((c) => c[0] === 'mark_invoice_debt')[1].release_line_ids, [504]);
+});
+
 test('RELEASE_SELECT_V1: долг без денег с отмеченной услугой — отмеченное несёт сам долг', async () => {
     const ov = await openRelease({ mark_invoice_debt: { invoice: { id: 1, status: 'debt' } } });
     typeAmount(ov, '');

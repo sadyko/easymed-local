@@ -251,8 +251,10 @@ test('BRANCH_ORIGIN_V1 — приехавшая из соседнего здан
 test('кабинетную процедуру нельзя провести до кассы, а после — можно, со штампом', () => {
   const db = seed();
   outLine(db, { id: 1, doctorId: 2, status: 'added' });
+  // RELEASE_SELECT_V1 (ревью) — долг сам по себе в работу не отпускает: отказ
+  // говорит, что касса должна принять оплату или отпустить услугу, а не «или долг».
   assert.throws(() => procedureComplete(db, { kind: 'outpatient', id: 1 }, ACTOR.nurse),
-    (e) => /кассой/.test(e.message));
+    (e) => /кассой/.test(e.message) && /принять оплату или отпустить услугу в работу/.test(e.message) && !/долг/.test(e.message));
   db.prepare("UPDATE visit_services SET status = 'queued' WHERE id = 1").run();
   procedureComplete(db, { kind: 'outpatient', id: 1, notes: 'в/в, реакции нет' }, ACTOR.nurse);
   const row = db.prepare('SELECT * FROM visit_services WHERE id = 1').get();

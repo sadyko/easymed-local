@@ -120,11 +120,18 @@ test('MY_REFERRALS_V1: статусы — не выставлено, ждёт о
   const cancelledVisit = line(db, { visit: 3, performer: 3 });
   const refunded = line(db, { performer: 3, status: 'queued' });
   db.prepare("INSERT INTO pay_refund_releases (kind, line_id, invoice_id) VALUES ('out', ?, 1)").run(refunded);
+  // RELEASE_SELECT_V1 (ревью) — касса отпустила строку до полной оплаты (отметка при части
+  // или долге): она в работе у исполнителя — «Отпущено в работу до оплаты», а не «Ждёт
+  // оплаты»; неотмеченная строка того же долга или части ждёт оплаты.
+  const debtAdded = line(db, { performer: 3 }); bill(db, debtAdded, 'debt');
+  const partQueued = line(db, { performer: 3, status: 'queued' }); bill(db, partQueued, 'partial');
+  const partAdded = line(db, { performer: 3 }); bill(db, partAdded, 'partial');
   const st = Object.fromEntries(Object.entries(byId(myReferrals(db, {}, U.docA))).map(([k, r]) => [k, r.status]));
   assert.deepEqual(st, {
-    [notBilled]: 'not_billed', [unpaid]: 'awaiting_payment', [debt]: 'awaiting_payment', [paid]: 'paid',
+    [notBilled]: 'not_billed', [unpaid]: 'awaiting_payment', [debt]: 'released', [paid]: 'paid',
     [work]: 'in_work', [labWork]: 'in_work', [done]: 'done', [cancelledLine]: 'cancelled', [cancelledVisit]: 'cancelled',
     [refunded]: 'refunded',
+    [debtAdded]: 'awaiting_payment', [partQueued]: 'released', [partAdded]: 'awaiting_payment',
   });
 });
 

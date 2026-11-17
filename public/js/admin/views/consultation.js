@@ -1362,7 +1362,11 @@ function rangeFilter() {
 function kpiSummary() {
     // CABINET_ACTIVE_FIRST_V1 — плитка считает ровно то, что покажет щелчок по
     // ней: тот же состав, что у фильтра «Активные» (STATUS_FILTER.active).
-    const toReview = state.rows.filter(r => inStatusFilter(r, 'active') && inDateRange(r.visitDate)).length;   // и тот же период, что у списка (поиск не считаем) · REFUND_ANY_V1 (поправка 3) — без возвращённых
+    // RELEASE_SELECT_V1 (ревью, решение владельца) — кроме ждущих кассу: строка,
+    // которую касса не отпустила (не оплачена или не отмечена кассиром при части
+    // и долге — cashierReleased), стоит в «Активных» с серой «Ожидает кассу», но
+    // «в очереди / готовы к осмотру» не считается — осмотреть пациента ещё нельзя.
+    const toReview = state.rows.filter(r => inStatusFilter(r, 'active') && cashierReleased(r) && inDateRange(r.visitDate)).length;   // и тот же период, что у списка (поиск не считаем) · REFUND_ANY_V1 (поправка 3) — без возвращённых
     const seenToday = state.rows.filter(r => r.status === 'completed' && isTodayDate(r.visitDate)).length;
     const refs = state.todayReferrals.rows;
     const recsToday = refs.length;
@@ -1795,12 +1799,15 @@ function nameLink(r, extraStyle = {}) {
 
 async function openWorkspace(r) {
     // #15 — pay-first gate (single chokepoint: row click, calendar, and the action button all land here).
-    // An 'added' service is un-released; the cashier must confirm payment OR debt first
-    // (releaseServicesForInvoice then promotes added→queued). Refuse to open it until then.
+    // An 'added' service is un-released; the cashier must take full payment or tick the line
+    // («Что можно оказать сейчас», RELEASE_SELECT_V1) — the server then promotes added→queued.
+    // Refuse to open it until then.
     // REFUND_ANY_V1 (ревью B4) — у возвращённой строки касса не «впереди», а
     // позади: деньги она уже вернула. Отказ — её словами, не «не проведена кассой».
     if (r.refunded && !cashierReleased(r)) { toast(REFUNDED_START_REFUSAL, 'fail'); return; }
-    if (!cashierReleased(r)) { toast('Услуга ещё не проведена кассой — проведите оплату или долг, затем начните приём.', 'fail'); return; }   // RT2_FIX_V1 / CABINET_ACTIVE_FIRST_V1 — правило одно с порядком списка
+    // RELEASE_SELECT_V1 (ревью) — долг сам по себе в работу не отпускает: касса отпускает
+    // услугу оплатой или отметкой «Что можно оказать сейчас» (при части денег и долге).
+    if (!cashierReleased(r)) { toast('Услуга ещё не проведена кассой — касса должна принять оплату или отпустить услугу в работу, затем начните приём.', 'fail'); return; }   // RT2_FIX_V1 / CABINET_ACTIVE_FIRST_V1 — правило одно с порядком списка
     // WS_FULL_PATIENT_V1 — load the COMPLETE patient record (dob, gender, blood,
     // allergies, address…) so the workspace panels and the document blank show
     // real data; the minimal queue-row payload remains the fail-soft fallback.
@@ -1892,7 +1899,7 @@ function actionButton(r) {
     }
     const _rtReleased = cashierReleased(r);   // RT2_FIX_V1 / CABINET_ACTIVE_FIRST_V1 — правило одно с порядком списка
     if (r.status === 'added' && !_rtReleased) {
-        // #15 — un-released (pay-first): visible but not actionable until the cashier confirms (payment/debt).
+        // #15 — un-released (pay-first): visible but not actionable until the cashier releases it (full payment or a tick).
         return h('span', { class: 'tag', style: { gap: '4px', display: 'inline-flex', alignItems: 'center', opacity: '.75' } },
             Icon('Wallet', { size: 11 }), h('span', null, 'Ожидает кассу'));
     }

@@ -1015,13 +1015,24 @@ function releaseIdsArg(args) {
   return [...new Set(raw.map(Number))];
 }
 
-/** Неотпущенные строки счёта: строки визита в смете ('added') при позициях этого счёта. */
+/**
+ * Неотпущенные строки счёта: строки визита в смете ('added') при позициях этого счёта.
+ * RELEASE_SELECT_V1 (ревью, решение владельца) — `dispensed` у товарной строки: товар
+ * уже у пациента — по строке есть списание со склада или полки (stock_movements
+ * 'dispense' на reference 'visit' / id строки), и оно не вернулось отменой ('void').
+ * Это то же, по чему restoreSources возвращает товар. Окно оплаты не предлагает
+ * выданный товар к отметке; невыданный отмечается, как услуга.
+ */
 function unreleasedLines(db, invoiceId) {
   return db.prepare(`
     SELECT vs.id, vs.service_id, vs.consultation_type_id, vs.doctor_id, vs.clinic_item_id,
            ii.id AS invoice_item_id, ii.quantity, ii.total,
            COALESCE(NULLIF(ii.description, ''), s.name, ct.name_ru, ct.name, '') AS name,
-           COALESCE(NULLIF(u.full_name, ''), u.username) AS doctor_name
+           COALESCE(NULLIF(u.full_name, ''), u.username) AS doctor_name,
+           CASE WHEN vs.clinic_item_id IS NULL THEN 0
+                ELSE COALESCE((SELECT SUM(m.qty) FROM stock_movements m
+                                WHERE m.reference_type = 'visit' AND m.reference_id = vs.id
+                                  AND m.kind IN ('dispense', 'void')), 0) < 0 END AS dispensed
       FROM visit_services vs
       JOIN invoice_items ii ON ii.id = vs.invoice_item_id
       LEFT JOIN services s ON s.id = vs.service_id
@@ -1086,8 +1097,9 @@ function releaseChosenLines(db, before, ids, user, why) {
 /**
  * invoice_release_lines({ invoice_id }) — неотпущенные строки счёта для окна
  * оплаты («Что можно оказать сейчас»): { invoice_id, lines: [{ id, name, doctor,
- * total, quantity, product }] }. Только чтение; правило то же, по которому
- * assertReleasable проверит выбор.
+ * total, quantity, product, dispensed }] }. Только чтение; правило то же, по которому
+ * assertReleasable проверит выбор. RELEASE_SELECT_V1 (ревью) — dispensed: товар
+ * уже выдан (окно его не предлагает, release-select.js releasableLine).
  */
 export function invoiceReleaseLines(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
@@ -1101,6 +1113,7 @@ export function invoiceReleaseLines(db, args, user) {
     lines: unreleasedLines(db, invoiceId).map((r) => ({
       id: r.id, name: r.name || null, doctor: r.doctor_name || null,
       total: round2(Number(r.total) || 0), quantity: Number(r.quantity) || 1, product: r.clinic_item_id != null,
+      dispensed: r.clinic_item_id != null && Number(r.dispensed) === 1,   // RELEASE_SELECT_V1 (ревью)
     })),
   };
 }

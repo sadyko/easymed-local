@@ -119,6 +119,19 @@ test('MY_REFERRALS_V1: строки, статусы и «Результат» т
   assert.match(textOf(root), /рекомендация/);
 });
 
+// RELEASE_SELECT_V1 (ревью) — строку, отпущенную кассой до полной оплаты (отметка при
+// части или долге), сервер называет 'released': экран — «Отпущено в работу до оплаты»,
+// а не «Ждёт оплаты»; подпись — словарная, на трёх языках.
+test('RELEASE_SELECT_V1 (ревью): «Отпущено в работу до оплаты» — своя подпись статуса', async () => {
+  const s = M.REFERRAL_STATUS.released;
+  assert.ok(s, 'нет статуса released');
+  assert.strictEqual(s.label, 'Отпущено в работу до оплаты');
+  assert.notStrictEqual(s.kind, 'warn', 'не цвет «ждёт оплаты»');
+  const { STRINGS } = await import('../i18n-strings.js');
+  const e = STRINGS[s.label];
+  assert.ok(e && e.uz && e.en && !/[А-Яа-яЁё]/.test(e.uz + e.en), 'подпись есть в словаре на трёх языках');
+});
+
 test('MY_REFERRALS_V1: группа и поиск фильтруют на экране, без нового чтения', async () => {
   const root = await open();
   const n = ASKED.length;
