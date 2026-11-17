@@ -71,7 +71,9 @@ const DOCTOR_NOT_DESK_SQL = (u) => `((${u}.is_doctor = 1 OR ${u}.role IN (${sqlL
 // Строка — «направление врача»: у неё внутренний источник врача, или её завёл врач к ДРУГОМУ
 // исполнителю (у врача без источника направившего нет, но направление — есть). Алиасы: vs —
 // строка, lrs — её источник, cu — кто завёл.
-const DOCTOR_ORDER_SQL = `((lrs.id IS NOT NULL AND lrs.doctor_id IS NOT NULL)
+// WAIT_REG_V1 — правило экспортируется: им же «Ждут регистрации» (rpc/registrar-waiting.js) узнаёт
+// «направил врач» — одно правило на оба чтения, а не копия.
+export const DOCTOR_ORDER_SQL = `((lrs.id IS NOT NULL AND lrs.doctor_id IS NOT NULL)
    OR (${DOCTOR_NOT_DESK_SQL('cu')} AND COALESCE(vs.doctor_id, 0) <> cu.id))`;
 // К5 — возвращённая строка («Вернуть услугу», и прежняя строка «вернуть и выставить новую»):
 // отпущена со счёта с возвратом и не выставлена заново (pay_refund_releases 'out', то же
@@ -81,11 +83,12 @@ const DOCTOR_ORDER_SQL = `((lrs.id IS NOT NULL AND lrs.doctor_id IS NOT NULL)
 // врач источника строки; иначе — рекомендовавший рекомендацию, которую строка закрыла (врач сам
 // исполняет — источника у строки нет, а направил всё равно он, а не вставивший коллега); иначе —
 // кто завёл строку. Алиасы: vs — строка, lrs — её источник.
-const REFERRER_ID_SQL = `COALESCE(lrs.doctor_id,
+// WAIT_REG_V1 — экспорт (и NOT_REFUNDED_SQL ниже), см. DOCTOR_ORDER_SQL.
+export const REFERRER_ID_SQL = `COALESCE(lrs.doctor_id,
          (SELECT rr.recommended_by FROM recommended_services rr
            WHERE rr.visit_service_id = vs.id AND rr.recommended_by IS NOT NULL ORDER BY rr.id LIMIT 1),
          vs.created_by)`;
-const NOT_REFUNDED_SQL = `NOT (vs.invoice_item_id IS NULL
+export const NOT_REFUNDED_SQL = `NOT (vs.invoice_item_id IS NULL
          AND EXISTS (SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = 'out' AND prr.line_id = vs.id))`;
 
 // DOCTOR_REFERRAL_DESK_V1 (полировка 3.21.0; страж domain/no-drift.test.js) — подпись счёта для

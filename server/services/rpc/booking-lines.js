@@ -36,6 +36,7 @@ import {
 import { adoptWishes, releaseOrphans, bookLinesOnCard } from '../crm/one-way.js';   // CRM_ONE_WAY_V1
 import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
 import { localDate } from '../domain/day.js';
+import { actingActorName } from '../../../public/js/shared/act-as.js';   // WAIT_REG_V1 — журнал от имени (как logRepeatOrders)
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -150,11 +151,38 @@ export function bookingLinesAdd(db, args, user) {
   return out;
 }
 
-/** booking_line_remove { visit_service_id } → { removed: true, id } */
+// WAIT_REG_V1 (3.25.0) — СНЯТЬ СТРОКУ ЗАПИСИ ПРИ РЕГИСТРАЦИИ — ТОЛЬКО С ПРИЧИНОЙ, И ПРИЧИНА — В ЖУРНАЛЕ.
+// Окно визита («Оформить по записи», visit-wizard.js) убирает строку «из записи» или анализ заявки
+// «на дату» только с причиной (views/booked-drop.js) и присылает её сюда: сервер пишет её в журнал
+// визита (invoice_audit_log, действие line_booked_removed — тот же журнал правок строк, что у обхода
+// повтора DUP_STOP_V1 line_repeat_order; discard_empty_visit записи line_* визитом не считает) в той
+// же транзакции, что снимает строку. Причина прислана — не короче трёх знаков (как у экстренной
+// записи и повтора), иначе отказ и строка на месте. Без причины — как прежде (календарь, карточка CRM).
+const DROP_REASON_MIN = 3;
+const DROP_REASON_MAX = 500;
+function dropReasonArg(args) {
+  if (!args || args.reason === undefined || args.reason === null) return null;
+  const r = typeof args.reason === 'string' ? args.reason.trim() : '';
+  if (r.length < DROP_REASON_MIN) throw new RpcError('Укажите причину: не короче трёх знаков.', 400);
+  return r.slice(0, DROP_REASON_MAX);
+}
+function logBookedDrop(db, row, reason, user) {
+  const actor = user && user.id != null ? db.prepare('SELECT id, full_name, role FROM users WHERE id = ?').get(user.id) : null;
+  const svc = row.service_id != null ? db.prepare('SELECT name FROM services WHERE id = ?').get(row.service_id)
+    : row.consultation_type_id != null ? db.prepare('SELECT COALESCE(name_ru, name) AS name FROM consultation_types WHERE id = ?').get(row.consultation_type_id) : null;
+  const name = (svc && svc.name) || '—';
+  db.prepare(`INSERT INTO invoice_audit_log (visit_id, action, actor_user_id, actor_name, actor_role, reason, notes)
+              VALUES (?, 'line_booked_removed', ?, ?, ?, ?, ?)`)
+    .run(row.visit_id, actor ? actor.id : null, actor ? actingActorName(user, actor.full_name || null) : null, actor ? actor.role || null : null,
+      reason, `Услуга «${name}» снята с записи при регистрации`);
+}
+
+/** booking_line_remove { visit_service_id, reason? } → { removed: true, id } */
 export function bookingLineRemove(db, args, user) {
   if (!hasAnyRole(user, ROLES)) throw new RpcError('Снимать услуги с записи может колл-центр, регистратура или администратор.', 403);
   const id = Number(args && args.visit_service_id);
   if (!isPosInt(id)) throw new RpcError('Не выбрана услуга записи.', 400);
+  const reason = dropReasonArg(args);   // WAIT_REG_V1
   const run = db.transaction(() => {
     const row = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(id);
     if (!row) throw new RpcError('Услуга записи не найдена.', 404);
@@ -170,6 +198,7 @@ export function bookingLineRemove(db, args, user) {
     }
     try { db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(id); } catch { /* нет таблицы */ }
     db.prepare('DELETE FROM visit_services WHERE id = ?').run(id);
+    if (reason) logBookedDrop(db, row, reason, user);   // WAIT_REG_V1 — та же транзакция
     return row.visit_id;
   });
   const visitId = run();
