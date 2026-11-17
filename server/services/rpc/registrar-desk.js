@@ -77,6 +77,22 @@ export function lineServiceName(db, row) {
   return (svc && svc.name) || '—';
 }
 
+// CRM_BOOKINGS_TAB_V1 — ТЕКСТ ЖУРНАЛА «АНАЛИЗ ОТПУЩЕН СТОЙКОЙ» — В ОДНОМ МЕСТЕ С ЕГО РАЗБОРОМ. «Записи CRM»
+// (rpc/registrar-waiting.js, статус «Отменены») находят отпущенный анализ по этой строке журнала:
+// номера строки заявки в журнале нет, а у отпущенной строки дата снята, — пациент и услуга берутся из
+// номера заявки и названия в тексте. Текст в базе прежний, слово в слово.
+/* i18n-exempt-start: строка журнала ПИШЕТСЯ В БАЗУ, а не рисуется */
+export function wishReleaseNotes(name, requestId) {
+  return `Услуга «${name}» заявки № ${requestId} снята регистратурой и возвращена в заявку без даты`;
+}
+const WISH_RELEASE_RE = /^Услуга «(.*)» заявки № (\d+) снята регистратурой/;
+/* i18n-exempt-end */
+/** Разбор wishReleaseNotes → { name, requestId } или null (чужой текст). */
+export function parseWishReleaseNotes(notes) {
+  const m = WISH_RELEASE_RE.exec(String(notes || ''));
+  return m ? { name: m[1], requestId: Number(m[2]) } : null;
+}
+
 /** crm_wish_release { crm_line_id, patient_id, reason } → { released: true, id, request_id } */
 export function crmWishRelease(db, args, user) {
   deskGate(db, user, 'Вернуть услугу в заявку при регистрации может регистратура или администратор.');
@@ -107,10 +123,8 @@ export function crmWishRelease(db, args, user) {
                        released_from_visit_id = ?, released_vs_id = NULL, released_held = 0
                  WHERE id = ?`).run(heldVisit ?? 0, lineId);
     const name = lineServiceName(db, line);
-    /* i18n-exempt-start: строка журнала ПИШЕТСЯ В БАЗУ, а не рисуется */
     journalLine(db, { visitId: heldVisit ?? (dv ? Number(dv.id) : null), action: 'line_wish_released', reason,
-      notes: `Услуга «${name}» заявки № ${line.request_id} снята регистратурой и возвращена в заявку без даты` }, user);
-    /* i18n-exempt-end */
+      notes: wishReleaseNotes(name, line.request_id) }, user);   // CRM_BOOKINGS_TAB_V1 — текст прежний
     touchRequest(db, line.request_id);
     return { released: true, id: lineId, request_id: Number(line.request_id) };
   })();

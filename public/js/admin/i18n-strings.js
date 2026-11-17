@@ -14190,4 +14190,26 @@ export const STRINGS = {
   "услуга не выбрана": {"en":"no service selected","ru":"услуга не выбрана","uz":"xizmat tanlanmagan"},   // WAIT_REG_V1 (решение владельца) — запись календаря без услуги
   "скидка или промокод": {"en":"discount or promo code","ru":"скидка или промокод","uz":"chegirma yoki promokod"},   // WAIT_REG_V1 (ревью L2)
   "В окно визита не перенесено: {fields} — выберите там заново.": {"en":"Not carried over to the visit window: {fields} — choose it there again.","ru":"В окно визита не перенесено: {fields} — выберите там заново.","uz":"Tashrif oynasiga o‘tkazilmadi: {fields} — u yerda qaytadan tanlang."},   // WAIT_REG_V1 (ревью L2)
+  // CRM_BOOKINGS_TAB_V1 — «Записи CRM»: вкладка, фильтры, статусы строк (views/registrar-waiting.js, patients-hub.js) и отказы сервера (rpc/registrar-waiting.js)
+  "Записи CRM": {"en":"CRM bookings","ru":"Записи CRM","uz":"CRM yozuvlari"},   // CRM_BOOKINGS_TAB_V1
+  "Записи CRM: {n}": {"en":"CRM bookings: {n}","ru":"Записи CRM: {n}","uz":"CRM yozuvlari: {n}"},   // CRM_BOOKINGS_TAB_V1
+  "CRM / колл-центр": {"en":"CRM / call centre","ru":"CRM / колл-центр","uz":"CRM / call-markaz"},   // CRM_BOOKINGS_TAB_V1
+  "Ждут": {"en":"Waiting","ru":"Ждут","uz":"Kutmoqda"},   // CRM_BOOKINGS_TAB_V1
+  "Оформлены": {"en":"Registered","ru":"Оформлены","uz":"Rasmiylashtirilgan"},   // CRM_BOOKINGS_TAB_V1
+  "Отменены": {"en":"Cancelled","ru":"Отменены","uz":"Bekor qilingan"},   // CRM_BOOKINGS_TAB_V1
+  "Ждёт": {"en":"Waiting","ru":"Ждёт","uz":"Kutmoqda"},   // CRM_BOOKINGS_TAB_V1
+  "Оформлен": {"en":"Registered","ru":"Оформлен","uz":"Rasmiylashtirildi"},   // CRM_BOOKINGS_TAB_V1
+  "Фильтры записей": {"en":"Booking filters","ru":"Фильтры записей","uz":"Yozuv filtrlari"},   // CRM_BOOKINGS_TAB_V1
+  "Имя, телефон или номер карты": {"en":"Name, phone or card number","ru":"Имя, телефон или номер карты","uz":"Ism, telefon yoki karta raqami"},   // CRM_BOOKINGS_TAB_V1
+  "Поиск: имя, телефон или номер карты": {"en":"Search: name, phone or card number","ru":"Поиск: имя, телефон или номер карты","uz":"Qidiruv: ism, telefon yoki karta raqami"},   // CRM_BOOKINGS_TAB_V1
+  "Записей по этим фильтрам нет.": {"en":"No bookings match these filters.","ru":"Записей по этим фильтрам нет.","uz":"Bu filtrlar bo‘yicha yozuvlar yo‘q."},   // CRM_BOOKINGS_TAB_V1
+  "Сегодня никого не ждём: все записи CRM оформлены.": {"en":"Nobody is awaited today: all CRM bookings have been registered.","ru":"Сегодня никого не ждём: все записи CRM оформлены.","uz":"Bugun hech kim kutilmayapti: barcha CRM yozuvlari rasmiylashtirildi."},   // CRM_BOOKINGS_TAB_V1
+  "Записи колл-центра, календаря и сайта и направления врача. Пациент уходит из «Ждут», когда его оформили — со счётом или без.": {"en":"Call-centre, calendar and website bookings and doctor referrals. A patient leaves “Waiting” once registered — with or without an invoice.","ru":"Записи колл-центра, календаря и сайта и направления врача. Пациент уходит из «Ждут», когда его оформили — со счётом или без.","uz":"Call-markaz, kalendar va sayt yozuvlari hamda shifokor yo‘llanmalari. Bemor rasmiylashtirilgach «Kutmoqda»dan chiqadi — hisob bilan yoki hisobsiz."},   // CRM_BOOKINGS_TAB_V1
+  "Укажите либо день, либо период — не оба сразу.": {"en":"Give either a day or a period, not both.","ru":"Укажите либо день, либо период — не оба сразу.","uz":"Yoki kunni, yoki davrni ko‘rsating — ikkalasini birga emas."},   // CRM_BOOKINGS_TAB_V1
+  "День указан неверно: нужна дата вида ГГГГ-ММ-ДД.": {"en":"Invalid day: a date in the form YYYY-MM-DD is required.","ru":"День указан неверно: нужна дата вида ГГГГ-ММ-ДД.","uz":"Kun noto‘g‘ri ko‘rsatilgan: YYYY-MM-DD ko‘rinishidagi sana kerak."},   // CRM_BOOKINGS_TAB_V1
+  "Период указан неверно: нужны обе даты вида ГГГГ-ММ-ДД.": {"en":"Invalid period: both dates in the form YYYY-MM-DD are required.","ru":"Период указан неверно: нужны обе даты вида ГГГГ-ММ-ДД.","uz":"Davr noto‘g‘ri ko‘rsatilgan: YYYY-MM-DD ko‘rinishidagi ikkala sana kerak."},   // CRM_BOOKINGS_TAB_V1
+  "Период указан неверно: начало позже конца.": {"en":"Invalid period: the start is after the end.","ru":"Период указан неверно: начало позже конца.","uz":"Davr noto‘g‘ri ko‘rsatilgan: boshlanishi tugashidan keyin."},   // CRM_BOOKINGS_TAB_V1
+  "Период — не больше 7 дней.": {"en":"The period cannot exceed 7 days.","ru":"Период — не больше 7 дней.","uz":"Davr 7 kundan oshmasligi kerak."},   // CRM_BOOKINGS_TAB_V1
+  "Источник записи указан неверно.": {"en":"Invalid booking source.","ru":"Источник записи указан неверно.","uz":"Yozuv manbasi noto‘g‘ri ko‘rsatilgan."},   // CRM_BOOKINGS_TAB_V1
+  "Статус записи указан неверно.": {"en":"Invalid booking status.","ru":"Статус записи указан неверно.","uz":"Yozuv holati noto‘g‘ri ko‘rsatilgan."},   // CRM_BOOKINGS_TAB_V1
 };

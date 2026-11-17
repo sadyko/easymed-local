@@ -1087,7 +1087,8 @@ function likeContains(s) {
 // вызова JS на каждую запись (30 тыс. пациентов: ~4 мс против ~29). Кириллица
 // — lower_uni (CYRILLIC_ILIKE_V1, db/connection.js): встроенный LIKE её
 // регистр не сворачивает.
-function patientMatchSql(q) {
+// CRM_BOOKINGS_TAB_V1 — экспорт: тем же правилом ищет пациента «Записи CRM» (rpc/registrar-waiting.js).
+export function patientMatchSql(q) {
   const like = likeContains(q);
   const parts = /^[\x00-\x7f]*$/.test(q)
     ? ["pt.full_name LIKE ? ESCAPE '\\'", "COALESCE(pt.mrn, '') LIKE ? ESCAPE '\\'"]
