@@ -55,7 +55,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
-import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm10';   // ROLES_SAVE_TRUTH_V1 — сбор с «показанным при открытии»; ROLES_REVIEW_V1 — семья без ворот по списку ролей, ключи другой сборки переносятся
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants, queueWindowShown } from '../roles-matrix.js?v=rm10';   // ROLE_QUEUE_V1 — queueWindowShown   // ROLES_SAVE_TRUTH_V1 — сбор с «показанным при открытии»; ROLES_REVIEW_V1 — семья без ворот по списку ролей, ключи другой сборки переносятся
 // V3121_ROLES — «Проверьте права этой роли»: «Просмотр» от старого экрана «Роли» (мигр. 215).
 import { roleReviewNotice } from './roles-review.js';
 import { CATALOG, LEVEL_LABELS } from '../../shared/permission-catalog.js';   // ROLES_CLEAR_V1 — метки сводки по строкам матрицы
@@ -304,7 +304,9 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
             closed: state.closedSections,
             initial,
         });
-        const { sections, levels } = legacyFromGrants(shownGrants(), state.prevLegacy || {}, initial);
+        // ROLE_QUEUE_V1 — и то, что уйдёт в grants: записанное «Нет» окна
+        // «Очередь» или «Пациентов» снимает старый ключ queue (roles-matrix.js).
+        const { sections, levels } = legacyFromGrants(shownGrants(), state.prevLegacy || {}, initial, grants);
         // ROLE_SAVE_PRESERVE_V1 — вкладки, которых этот экран не рисует,
         // переносим как есть: иначе сохранение роли молча стирало бы настройку,
         // сделанную где-то ещё.
@@ -673,7 +675,9 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // такими, какими станут, если раздел откроют (if_open): раздел стоит
         // «Нет», строки погашены, а открой его — будут ровно такими.
         const truthShown = truthLost ? {} : { ...truth.levels, ...(truth.ifOpen || {}) };
-        const grants = { ...grantsFromLegacy(perms), ...truthShown, ...(perms.grants || {}) };
+        // ROLE_QUEUE_V1 — окно «Очередь» показывает то, что даёт старый ключ
+        // queue (доску открывает только он), а не вывод из открытой картотеки.
+        const grants = { ...grantsFromLegacy(perms), ...truthShown, ...(perms.grants || {}), 'patients.queue': queueWindowShown(perms) };
         // ROLES_CLEAR_V1 — подписи колонок стоят ровно над колонками уровней
         // (.rm-levels — та же сетка из четырёх ячеек), а не строкой справа.
         main.appendChild(h('div', { class: 'roles-group' },

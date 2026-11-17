@@ -64,6 +64,13 @@ const TABS = [
 ];
 const SUB_TO_TAB = { queue: 'queue', calendar: 'calendar', booking: 'booking' };
 
+// ROLE_QUEUE_V1 — скрыт ли раздел в «Видимости разделов» (FIX_318_V1: правило
+// оболочки, window.easymed.isNavHidden). Нет оболочки — не скрыт.
+function navHidden(id) {
+    const fn = typeof window !== 'undefined' && window.easymed && window.easymed.isNavHidden;
+    return typeof fn === 'function' ? !!fn(id) : false;
+}
+
 // ---------------------------------------------------------------------------
 // PATIENTS_HERO_V1 (2026-10-31) — ТЁМНЫЙ БАННЕР НАД ВКЛАДКАМИ.
 //
@@ -197,8 +204,13 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     // queueBoard). Правило — то же, что у отдельных адресов #appointments и
     // #queue (permissions.js): одна дверь, один ответ.
     const TAB_ROUTE = { queue: 'queue', calendar: 'appointments', booking: 'appointments' };
+    // ROLE_QUEUE_V1 — и «Видимость разделов»: скрытая у клиники «Очередь»
+    // (пункт меню и #queue) не живёт и вкладкой «Пациентов». Правило —
+    // оболочки (window.easymed.isNavHidden), как у меню и плиток «Настроек».
+    const TAB_NAV = { queue: 'queue' };
     const visibleTabs = TABS.filter((t) => (!TAB_GRANT[t.id] || grantAllows(TAB_GRANT[t.id], 'view'))
-        && (!TAB_ROUTE[t.id] || isRouteAllowed(TAB_ROUTE[t.id])));
+        && (!TAB_ROUTE[t.id] || isRouteAllowed(TAB_ROUTE[t.id]))
+        && (!TAB_NAV[t.id] || !navHidden(TAB_NAV[t.id])));
     for (const t of visibleTabs) {
         hosts[t.id] = h('div', {
             id: 'phub-panel-' + t.id, role: 'tabpanel',

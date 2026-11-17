@@ -748,6 +748,43 @@ test('V3120_FIX: вкладки «Записи» и «Очередь» — то�
   }
 });
 
+// ROLE_QUEUE_V1 (3.25.0) — «Видимость разделов» прячет «Очередь» у всей клиники
+// (nav-visibility-logic.js): пункт меню и маршрут #queue. Вкладка «Очередь» внутри
+// «Пациентов» о скрытии не знала и оставалась у всех, кому выдана доска. Правило —
+// оболочки (window.easymed.isNavHidden), то же, что у меню и плиток «Настроек».
+test('ROLE_QUEUE_V1: скрытая в «Видимости разделов» «Очередь» пропадает и вкладкой «Пациентов»', async () => {
+  const sessionUser = globalThis.window.easymed.state.user;
+  const hidden = new Set(['queue']);
+  try {
+    reset();
+    globalThis.window.easymed.state.user = { ...sessionUser, role: 'registrar' };
+    setEffectiveFromRole({ name: 'registrar', permissions: { sections: ['patients', 'queue'], levels: {} } });
+    let box = mk('div');
+    let hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
+    assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование'], 'подготовка: без скрытия вкладка «Очередь» есть');
+    hub.destroy();
+
+    globalThis.window.easymed.isNavHidden = (id) => hidden.has(id);
+    box = mk('div');
+    hub = await renderPatientsHub(box, ctxFor({ sub: 'queue' }), { calendarLoader: async () => async () => {} });
+    assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Записи', 'Бронирование'], 'скрытая «Очередь» осталась вкладкой «Пациентов»');
+    assert.equal(hub.activeTab(), 'list', 'адрес #patients/queue открыл скрытую доску');
+    assert.equal(boards(box).length, 0, 'доска смонтирована, хотя раздел скрыт');
+    hub.destroy();
+
+    // Скрыт другой раздел — «Очередь» на месте.
+    hidden.clear(); hidden.add('labs');
+    box = mk('div');
+    hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
+    assert.ok(tabButtons(box).map(tabLabel).includes('Очередь'), 'скрытие чужого раздела унесло «Очередь»');
+    hub.destroy();
+  } finally {
+    delete globalThis.window.easymed.isNavHidden;
+    globalThis.window.easymed.state.user = sessionUser;
+    setFullAccess('Admin');
+  }
+});
+
 // PATIENT_BOT_INVITE_V1 — отметка Telegram переехала в конец строки и читается
 // из patient_bot_status; разбор ответа telegram_chats_list строке больше не нужен.
 test('V3120_FIX / PATIENT_BOT_INVITE_V1: отметка Telegram в конце строки — по ответу patient_bot_status', async () => {

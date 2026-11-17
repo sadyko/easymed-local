@@ -1062,7 +1062,9 @@ test('ROLES_SAVE_TRUTH_V1: тронутый раздел пишет свои о�
     await tick();
     const saved = JSON.parse(lastUpdate.values.permissions);
     assert.equal(lastUpdate.role, 'lab');
-    assert.deepStrictEqual(saved.grants, { patients: 'edit', 'patients.list': 'view', 'patients.queue': 'view', 'patients.calendar': 'view' },
+    // ROLE_QUEUE_V1 — окно «Очередь» у лаборанта без ключа queue видно «Нет»:
+    // доски у него нет (её открывает только старый ключ), и записано оно тоже «Нет».
+    assert.deepStrictEqual(saved.grants, { patients: 'edit', 'patients.list': 'view', 'patients.queue': 'none', 'patients.calendar': 'view' },
       'окна раздела не записаны такими, какими их видно — «Записи» вывелись бы из нового «editor» в «Изменение»');
     assert.ok(saved.sections.includes('registration'), '«Пациенты: Изменение» не открыли регистрацию');
     assert.ok(!saved.sections.includes('queue'), 'очередь дописана, хотя её вывод не сдвинулся');
@@ -1143,4 +1145,158 @@ test('ревью M1: у раздела, записанного «Нет», ст�
     const saved = JSON.parse(lastUpdate.values.permissions);
     assert.deepStrictEqual(saved.grants, { inpatient: 'view' }, 'открыли раздел — а записаны и его строки');
   } finally { delete SAVED.nurse; delete EFFECTIVE.nurse; delete IF_OPEN.nurse; }
+});
+
+// ===========================================================================
+// ROLE_QUEUE_V1 (3.25.0) — «ОЧЕРЕДЬ» СЛЕДУЕТ РЕШЕНИЮ ЭКРАНА «РОЛИ».
+//
+// Владелец прислал «Кассира»: «Пациенты: Нет», окно «Очередь» погашено на
+// «Нет», а сводка — «Открыто: Очередь (Просмотр)» и «После входа открывается:
+// Очередь». Доску, пункт меню и маршрут #queue открывает СТАРЫЙ ключ `queue`
+// (permissions.js isModuleAllowed, rpc/queue.js queueBoard), а «Сохранить роль»
+// переносил его из прежних прав как ключ, которого справочник не знает.
+// ===========================================================================
+const { landingScreen } = await import('../role-reach.js');
+const { t: tKey } = await import('../i18n.js');
+const permsMod = await import('../permissions.js');
+// Порядок «где начать» — из оболочки (admin.js NAV, дашборд перед «Отчётами»,
+// как NAV_HOME_ORDER), а не переписанный руками: см. role-reach.test.mjs.
+const SHELL_HOME_IDS = await (async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const url = await import('node:url');
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(here, '..', '..', 'admin.js'), 'utf8');
+  const at = src.indexOf('const NAV = [');
+  const ids = [...src.slice(at, src.indexOf('\nconst CRUMBS', at)).matchAll(/id:\s*'([^']+)'/g)].map((m) => m[1]);
+  const rest = ids.filter((id) => id !== 'dashboard');
+  rest.splice(rest.indexOf('reports-hub'), 0, 'dashboard');
+  return rest;
+})();
+// Сводка рисуется, только когда оболочка открыла меню наружу (roles-editor.js paintReach).
+function installShellNav() {
+  window.easymed.NAV = SHELL_HOME_IDS.map((id) => ({ id }));
+  window.easymed.NAV_HOME_ORDER = window.easymed.NAV;
+}
+function removeShellNav() { delete window.easymed.NAV; delete window.easymed.NAV_HOME_ORDER; }
+const chosenIn = (root, key) => ((radiosFor(root, key).find((n) => n.checked) || {}).attrs || {}).value;
+const reachOf = (root) => textOf(byClass(root, 'roles-reach')[0] || mk('div'));
+const opensOf = (root) => textOf(byClass(root, 'roles-reach-list').find((n) => n.classList.contains('is-opens')) || mk('div'));
+const landingLine = (id) => 'После входа открывается: ' + tKey('sidebar.nav.' + id, id) + '.';
+// Кассир свежей базы (мигр. 065 выдала ему доску вместе с картотекой).
+const CASHIER_WITH_QUEUE = () => ({
+  sections: ['cashier', 'dashboard', 'patients', 'queue', 'reports-hub'],
+  levels: { cashier: 'editor', dashboard: 'viewer', patients: 'editor', queue: 'viewer', 'reports-hub': 'viewer' },
+});
+const landingOf = (permissions) => permsMod.previewRole({ name: 'cashier', permissions }, () => {
+  const l = landingScreen(SHELL_HOME_IDS);
+  return l ? { id: l.id, routeOpen: permsMod.isRouteAllowed(l.id) } : null;
+});
+
+test('ROLE_QUEUE_V1: «Пациенты: Нет» у кассира уносит и «Очередь» — из старых полей, из сводки и из «После входа»', async () => {
+  resetServer();
+  SAVED.cashier = CASHIER_WITH_QUEUE();
+  installShellNav();
+  try {
+    const root = await render();
+    roleButton(root, 'cashier').click();
+    await tick();
+    assert.equal(chosenIn(root, 'patients.queue'), 'view', 'подготовка: у кассира с доской окно «Очередь» — «Просмотр»');
+    assert.ok(opensOf(root).includes(tKey('sidebar.nav.queue', 'queue')), 'подготовка: сводка называет открытую «Очередь»');
+
+    pick(root, 'patients', 'none');
+    assert.equal(chosenIn(root, 'patients.queue'), 'none', 'закрытые «Пациенты» не погасили окно «Очередь»');
+    assert.ok(!opensOf(root).includes(tKey('sidebar.nav.queue', 'queue')),
+      'сводка: «Открыто: Очередь» при «Пациенты: Нет» и погашенной «Очереди» — ровно снимок владельца');
+    assert.ok(!reachOf(root).includes(landingLine('queue')), 'сводка обещает вход в «Очередь», которую закрыли');
+    assert.ok(reachOf(root).includes(landingLine('cashier-shifts')), 'вход — не в следующий открытый раздел (Касса)');
+
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    assert.equal(lastUpdate.role, 'cashier');
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.ok(!saved.sections.includes('queue'), 'старый ключ queue перенесён из прежних прав — доска и пункт меню остались открыты');
+    assert.ok(!('queue' in saved.levels), 'уровень queue остался без раздела');
+    assert.equal(saved.grants.patients, 'none');
+    assert.equal(saved.grants['patients.queue'], 'none');
+    // Оболочка входит туда же, куда обещает сводка, и это не стена «Нет доступа».
+    assert.deepEqual(landingOf(saved), { id: 'cashier-shifts', routeOpen: true }, 'после входа — не следующий открытый раздел');
+    assert.deepEqual(landingOf(CASHIER_WITH_QUEUE()), { id: 'patients', routeOpen: true }, 'подготовка: до правки кассир входил в картотеку');
+  } finally { delete SAVED.cashier; removeShellNav(); permsMod.setFullAccess('Admin'); }
+});
+
+test('ROLE_QUEUE_V1: окно «Очередь» решает ключ queue — «Нет» снимает его, «Просмотр» выдаёт уровнем viewer', async () => {
+  resetServer();
+  // Медсестра с картотекой и доской: «Очередь: Нет» при открытых «Пациентах».
+  SAVED.nurse = { sections: ['patients', 'procedures', 'queue'], levels: { patients: 'editor', procedures: 'editor', queue: 'viewer' } };
+  // Лаборант свежей базы: картотека есть, доски нет (мигр. 065 ему её не дала).
+  SAVED.lab = { sections: ['labs', 'patients', 'dashboard'], levels: { labs: 'editor', patients: 'viewer', dashboard: 'viewer' } };
+  try {
+    const root = await render();
+    roleButton(root, 'nurse').click();
+    await tick();
+    assert.equal(chosenIn(root, 'patients.queue'), 'view');
+    pick(root, 'patients.queue', 'none');
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    let saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(lastUpdate.role, 'nurse');
+    assert.ok(!saved.sections.includes('queue'), '«Очередь: Нет» — а ключ queue остался');
+    assert.ok(!('queue' in saved.levels));
+    assert.ok(saved.sections.includes('patients'), 'картотека не тронута');
+
+    roleButton(root, 'lab').click();
+    await tick();
+    // Экран показывает то, что у роли ЕСТЬ: доски у лаборанта нет — окно «Нет»,
+    // а не догадка «Просмотр» из открытой картотеки.
+    assert.equal(chosenIn(root, 'patients.queue'), 'none', 'у лаборанта без доски окно «Очередь» показано «Просмотр»');
+    pick(root, 'patients.queue', 'view');
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(lastUpdate.role, 'lab');
+    assert.ok(saved.sections.includes('queue'), '«Очередь: Просмотр» — а ключа queue нет: доска закрыта');
+    assert.equal(saved.levels.queue, 'viewer', 'доска только читает — уровень viewer');
+  } finally { delete SAVED.nurse; delete SAVED.lab; }
+});
+
+test('ROLE_QUEUE_V1: роль, сохранённая с «Пациенты: Нет» и ключом queue, теряет его при пересохранении; ключ без записанного решения не трогается', async () => {
+  resetServer();
+  // Так «Кассира» записывало сохранение до правки: «Пациенты» и их окна — «Нет»,
+  // а queue перенесён из прежних прав.
+  SAVED.cashier = {
+    sections: ['cashier', 'dashboard', 'queue', 'reports-hub'],
+    levels: { cashier: 'editor', dashboard: 'viewer', queue: 'viewer', 'reports-hub': 'viewer' },
+    grants: { patients: 'none', 'patients.list': 'none', 'patients.queue': 'none', 'patients.calendar': 'none' },
+  };
+  // Доска без картотеки, выданная старым ключом, без записанного решения на экране.
+  SAVED.nurse = { sections: ['procedures', 'queue'], levels: { procedures: 'editor', queue: 'viewer' } };
+  installShellNav();
+  try {
+    const root = await render();
+    roleButton(root, 'cashier').click();
+    await tick();
+    assert.equal(chosenIn(root, 'patients'), 'none');
+    assert.equal(chosenIn(root, 'patients.queue'), 'none');
+    assert.ok(!opensOf(root).includes(tKey('sidebar.nav.queue', 'queue')), 'сводка при открытии: «Открыто: Очередь» при «Пациенты: Нет»');
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    let saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(lastUpdate.role, 'cashier');
+    assert.ok(!saved.sections.includes('queue'), 'пересохранение оставило ключ queue вопреки записанному «Нет»');
+    assert.ok(!('queue' in saved.levels));
+    assert.deepEqual(landingOf(saved), { id: 'cashier-shifts', routeOpen: true });
+
+    roleButton(root, 'nurse').click();
+    await tick();
+    assert.equal(chosenIn(root, 'patients'), 'none');
+    // Окно погашено (раздел закрыт), но показывает правду: доска у роли есть.
+    assert.equal(chosenIn(root, 'patients.queue'), 'view', 'доска, выданная старым ключом, показана «Нет»');
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(lastUpdate.role, 'nurse');
+    assert.ok(saved.sections.includes('queue'), 'пустое сохранение молча отняло доску, которую роль имела');
+    assert.equal(saved.levels.queue, 'viewer');
+  } finally { delete SAVED.cashier; delete SAVED.nurse; removeShellNav(); }
 });

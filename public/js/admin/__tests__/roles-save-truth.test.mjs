@@ -605,3 +605,43 @@ test('ревью 3.22.0 M2: заместитель (своя роль на ос�
   await saveRole(root);
   sameAsServer(db, 'deputy', shown, 'заместитель');
 });
+
+// ROLE_QUEUE_V1 (3.25.0) — снимок владельца, сквозь сервер: «Кассир», «Пациенты:
+// Нет», окно «Очередь» погашено на «Нет», а сводка — «Открыто: Очередь» и
+// «После входа открывается: Очередь». Доску отдаёт старый ключ `queue`
+// (rpc/queue.js queueBoard), а «Сохранить роль» переносил его из прежних прав.
+// Теперь ключ идёт за окном: закрыли «Пациенты» — доска закрыта и у сервера,
+// а вход — в следующий открытый раздел, без стены «Нет доступа».
+test('ROLE_QUEUE_V1: «Кассир» — «Пациенты: Нет» закрывает и доску очереди у сервера; вход — в следующий открытый раздел', async (t) => {
+  const { db, sid } = await world(t);
+  const board = async () => (await realFetch(BASE + '/api/rpc/queue_board', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: sid.cash }, body: '{}' })).status;
+  assert.ok(permsOf(db, 'cashier').sections.includes('queue'), 'стенд неверен: у кассира свежей базы нет доски (мигр. 065)');
+  assert.equal(await board(), 200, 'стенд неверен: кассир не видит доску и до правки');
+
+  const root = await render();
+  await openRole(root, 'cashier', 'Кассир');
+  assert.equal(chosen(root, 'patients.queue'), 'view');
+  pick(root, 'patients', 'none');
+  assert.equal(chosen(root, 'patients.queue'), 'none');
+  await saveRole(root);
+
+  const after = permsOf(db, 'cashier');
+  assert.ok(!after.sections.includes('queue'), 'ключ queue перенесён из прежних прав: ' + JSON.stringify(after.sections));
+  assert.ok(!('queue' in (after.levels || {})), 'уровень queue остался');
+  assert.equal(await board(), 403, 'доска очереди у кассира открыта, хотя «Очередь» закрыта на экране');
+  // Куда кассир попадёт после входа — тем же правилом, что оболочка (role-reach.js
+  // landingScreen); previewRole — того же экземпляра прав, что читает role-reach.js.
+  const { landingScreen } = await import('../role-reach.js');
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../../admin.js', import.meta.url), 'utf8');
+  const at = src.indexOf('const NAV = [');
+  const ids = [...src.slice(at, src.indexOf('\nconst CRUMBS', at)).matchAll(/id:\s*'([^']+)'/g)].map((m) => m[1]).filter((id) => id !== 'dashboard');
+  ids.splice(ids.indexOf('reports-hub'), 0, 'dashboard');
+  const RR = await import('../permissions.js');
+  const landing = RR.previewRole({ name: 'cashier', permissions: after }, () => {
+    const l = landingScreen(ids);
+    return l && { id: l.id, open: RR.isRouteAllowed(l.id), queue: RR.isModuleAllowed('queue') };
+  });
+  assert.deepEqual(landing, { id: 'cashier-shifts', open: true, queue: false }, 'после входа — не следующий открытый раздел');
+});

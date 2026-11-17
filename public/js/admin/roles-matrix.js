@@ -43,8 +43,11 @@ export { grantsFromLegacy };
  * хоть один из них, с самым высоким уровнем.
  *
  * `prev` — прежние sections/levels: ключи, которых справочник не знает
- * ('registration', 'custdev', 'queue'…), переносятся как есть — сохранение
+ * ('registration', 'custdev'…), переносятся как есть — сохранение
  * роли не должно молча стирать настройку, сделанную другим экраном.
+ * ROLE_QUEUE_V1 — кроме `queue`: его хозяин — окно «Пациенты → Очередь» (ниже).
+ * `written` — что «Сохранить роль» запишет в grants (collectGrants): по нему
+ * видно, решено ли окно «Очередь» записью.
  *
  * ROLES_SAVE_TRUTH_V1 (2026-09-29) — `initial`: значения, показанные при
  * открытии роли. ВЫВОД СТАРЫХ ПОЛЕЙ ТЕРЯЕТ СВЕДЕНИЯ: «Кабинет врача» — строка
@@ -58,7 +61,7 @@ export { grantsFromLegacy };
  * сдвинулся от того, что был при открытии (значит, тронули то, из чего он
  * выводится), а у остальных остаётся ровно то, что записано.
  */
-export function legacyFromGrants(grants, prev = {}, initial = null) {
+export function legacyFromGrants(grants, prev = {}, initial = null, written = null) {
     const now = deriveLegacy(grants, prev);
     if (!initial) return now;
     const was = deriveLegacy(initial, prev);
@@ -69,12 +72,65 @@ export function legacyFromGrants(grants, prev = {}, initial = null) {
     const levels = {};
     for (const k of keys) {
         const moved = was.sections.includes(k) !== now.sections.includes(k) || was.levels[k] !== now.levels[k];
-        const on = moved ? now.sections.includes(k) : pSec.includes(k);
-        const lvl = moved ? now.levels[k] : pLv[k];
+        let on = moved ? now.sections.includes(k) : pSec.includes(k);
+        let lvl = moved ? now.levels[k] : pLv[k];
+        // ROLE_QUEUE_V1 — записанное «Нет» у окна «Очередь» или у самих
+        // «Пациентов» — РЕШЕНИЕ, даже когда вывод в этот заход не сдвинулся:
+        // так сохраняло роль прежнее «Сохранить роль» («Пациенты: Нет», а queue
+        // перенесён из прежних прав). Пересохранение такой роли снимает доску —
+        // ровно то, что экран и сводка показывают.
+        if (k === QUEUE_KEY && !moved && queueClosedBy(written)) { on = false; lvl = undefined; }
         if (on) sections.push(k);
         if (lvl !== undefined) levels[k] = lvl;
     }
     return { sections, levels };
+}
+
+// ---------------------------------------------------------------------------
+// ROLE_QUEUE_V1 (3.25.0) — СТАРЫЙ КЛЮЧ `queue` ИДЁТ ЗА ОКНОМ «ПАЦИЕНТЫ → ОЧЕРЕДЬ».
+//
+// Владелец: у «Кассира» «Пациенты: Нет», окно «Очередь» погашено на «Нет», а
+// сводка — «Открыто: Очередь (Просмотр)» и «После входа открывается: Очередь».
+// Доску, пункт меню и маршрут #queue открывает старый ключ `queue`
+// (permissions.js isModuleAllowed, rpc/queue.js queueBoard), а разделом
+// справочника он не значится — и вывод старых полей переносил его из прежних
+// прав как «ключ другого экрана», только добавляя и никогда не снимая. Теперь у
+// ключа один хозяин — окно «Очередь»:
+//   • окно сдвинули в этот заход (сами или закрыв «Пациенты») — ключ следует:
+//     «Нет» снимает его, «Просмотр» выдаёт уровнем viewer (доска только читает);
+//   • окно или «Пациенты» записаны «Нет» — ключ снимается (queueClosedBy);
+//   • ни того ни другого — ключ остаётся как был: пустое сохранение ничего не
+//     меняет (ROLES_SAVE_TRUTH_V1). Роли, которые не пересохраняют, не трогаются
+//     вовсе — миграции нет.
+// Экран показывает в окне то, что ключ даёт сейчас (queueWindowShown), — иначе
+// «Просмотр», выведенный из открытой картотеки, у роли без доски не значил бы
+// ничего, и выдать доску было бы нечем: показанное уже «Просмотр».
+// ---------------------------------------------------------------------------
+const QUEUE_KEY = 'queue';
+const QUEUE_WINDOW = 'patients.queue';
+
+/** Записанное решение закрыло окно «Очередь»: само окно или «Пациенты» — «Нет». */
+function queueClosedBy(written) {
+    if (!written || typeof written !== 'object') return false;
+    return written[QUEUE_WINDOW] === 'none' || written.patients === 'none';
+}
+
+/**
+ * ROLE_QUEUE_V1 — уровень окна «Пациенты → Очередь», который показывает экран:
+ * то, что даёт роли старый ключ `queue`. Нет ключа — доски нет («Нет», что бы ни
+ * говорил вывод из картотеки или прежняя запись окна). Ключ есть — записанное
+ * окно; «Пациенты», записанные «Нет», закрывают и его; иначе «Просмотр» — и у
+ * роли с доской без картотеки тоже: окно погашено закрытым разделом, но говорит
+ * правду (так же экран рисует строки раздела, записанного «Нет», — if_open).
+ */
+export function queueWindowShown(perms) {
+    const p = perms || {};
+    const sections = Array.isArray(p.sections) ? p.sections : [];
+    const g = (p.grants && typeof p.grants === 'object') ? p.grants : {};
+    if (!sections.includes(QUEUE_KEY)) return 'none';
+    if (Object.prototype.hasOwnProperty.call(g, QUEUE_WINDOW)) return g[QUEUE_WINDOW] === 'none' ? 'none' : 'view';
+    if (g.patients === 'none') return 'none';
+    return 'view';
 }
 
 // Прежний вывод старых полей из grants — без оглядки на то, что записано.
@@ -83,6 +139,9 @@ function deriveLegacy(grants, prev = {}) {
     const sections = [];
     const levels = {};
     for (const key of (prev.sections || [])) {
+        // ROLE_QUEUE_V1 — `queue` выводится из окна «Очередь», когда у окна есть
+        // значение; переносить его из прежних прав — значит не снять никогда.
+        if (key === QUEUE_KEY && grants && QUEUE_WINDOW in grants) continue;
         if (!known.has(key)) { sections.push(key); if (prev.levels && prev.levels[key]) levels[key] = prev.levels[key]; }
     }
     const best = {};
