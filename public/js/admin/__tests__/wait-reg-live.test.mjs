@@ -258,7 +258,8 @@ test('WAIT_REG_V1 (настоящий сервер): строку «из зап�
     await pressUntilCreate();
     const rm = SENT.find((s) => s.kind === 'rpc' && s.name === 'booking_line_remove');
     assert.ok(rm, 'строку записи не сняли с визита');
-    assert.deepEqual(rm.body, { visit_service_id: booked, reason: 'Пациент отказался от консультации' });
+    // WAIT_REG_V1 (ревью M3) — окно регистрации помечает себя: без причины сервер такую строку не снимет.
+    assert.deepEqual(rm.body, { visit_service_id: booked, registration: true, reason: 'Пациент отказался от консультации' });
     assert.equal(t.db.prepare('SELECT 1 FROM visit_services WHERE id = ?').get(booked), undefined, 'строка записи осталась в визите');
     const log = t.db.prepare("SELECT visit_id, reason FROM invoice_audit_log WHERE action = 'line_booked_removed'").all();
     assert.deepEqual(log, [{ visit_id: vid, reason: 'Пациент отказался от консультации' }]);
@@ -342,9 +343,15 @@ test('WAIT_REG_V1 (настоящий сервер): анализ «на дат�
     await pressUntilCreate();
     const [v2] = visitsOf(t, 90);
     assert.deepEqual(lines(t, v2).map((r) => r.service_id), [41], 'убранный анализ остался в визите');
+    // WAIT_REG_V1 (ревью H1) — отпущен сервером ДО визита (визита ещё не было): без даты, отметка
+    // «отпущена» без визита (0), журнал — с причиной; визит дня его не взял.
     const back = t.db.prepare('SELECT status, visit_id, scheduled_date, released_from_visit_id FROM crm_request_services WHERE id = ?').get(lid2);
-    assert.deepEqual(back, { status: 'pending', visit_id: null, scheduled_date: null, released_from_visit_id: v2 }, 'строка заявки не вернулась в CRM без даты');
-    assert.equal(t.db.prepare("SELECT reason FROM invoice_audit_log WHERE action = 'line_booked_removed' AND visit_id = ?").get(v2).reason, 'Анализ сдан в другой лаборатории');
+    assert.deepEqual(back, { status: 'pending', visit_id: null, scheduled_date: null, released_from_visit_id: 0 }, 'строка заявки не вернулась в CRM без даты');
+    const rel = SENT.find((s) => s.kind === 'rpc' && s.name === 'crm_wish_release');
+    assert.ok(rel, 'анализ не отпущен сервером');
+    assert.ok(SENT.indexOf(rel) < SENT.findIndex((s) => s.kind === 'rpc' && s.name === 'ensure_visit'), 'анализ отпущен не до визита дня');
+    assert.equal(rpcNames().filter((n) => n === 'ensure_visit').length, 1, 'второй ensure_visit');
+    assert.equal(t.db.prepare("SELECT reason FROM invoice_audit_log WHERE action = 'line_wish_released'").get().reason, 'Анализ сдан в другой лаборатории');
     assert.equal(lid > 0, true);
   } finally { t.close(); }
 });

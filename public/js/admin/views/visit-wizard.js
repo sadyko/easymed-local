@@ -70,8 +70,9 @@ import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX
 import { actSheet, isDmsPayer } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт плательщика одной сборкой с кассой
 import { nearestFree, noFreeText, nearestButtonText, manyDaysWarning } from './pick-day.js';   // PICK_DAY_V1 — нет времени сегодня — день выбирает регистратор
 import { isAppended, invoiceAppendNote } from '../invoice-append.js';   // INVOICE_APPEND_V1 — «Добавлено в счёт № …»
-import { guardedKind, askDropReason } from './booked-drop.js';   // WAIT_REG_V1 — строку записи не убирают молча
-import { logInvoiceAction } from './invoice-actions.js?v=ia3';   // WAIT_REG_V1 — журнал визита («не оформлено» у направления врача); ?v как у visit-modal.js
+import { guardedKind, askDropReason, wishUndated } from './booked-drop.js';   // WAIT_REG_V1 — строку записи не убирают молча; ревью L3 — желание без даты
+import { coveredByHigherModal } from './modal-stack.js';   // WAIT_REG_V1 (ревью M1) — Escape окна поверх мастера мастер не закрывает
+import { isConsultPick, lineIdentity } from './visit-line-row.js';   // WAIT_REG_V1 (ревью H2) — консультация по виду приёма строкой сметы
 
 
 function fmtPrice(n) {
@@ -192,6 +193,18 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     const canSavePatientPayer = hasActorRole(PATIENT_PAYER_ROLES);
     // DOCTOR_REFERRAL_DESK_V1 — мастер открыт из кабинета («Направить на услуги»): направляет врач.
     const referralMode = opts.referrerDoctorId != null && opts.referrerDoctorId !== '';
+    // WAIT_REG_V1 (ревью, решение владельца) — «Оформить по записи» у записи календаря без услуги: врач записи.
+    const bookingDoctorId = Number(opts.bookingDoctorId) > 0 ? Number(opts.bookingDoctorId) : null;
+    /**
+     * WAIT_REG_V1 (ревью H2) — КОНСУЛЬТАЦИЯ ПО ВИДУ ПРИЁМА СТРОКОЙ СМЕТЫ — та же форма, что у быстрой
+     * регистрации (visit-line-row.js isConsultPick / lineIdentity): service_id у неё нет, есть
+     * consultation_type_id и её врач. В счёт строка записи идёт номером строки визита.
+     */
+    function consultSvc({ consultationTypeId, doctorId = null, name = '', price = 0 }) {
+        return { id: 'c|' + (doctorId || '') + '|' + Number(consultationTypeId), __consult: true,
+            consultation_type_id: Number(consultationTypeId), __consultDoctorId: doctorId ? Number(doctorId) : null,
+            name: name || '', price: Number(price) || 0, requires_doctor: 1, duration_minutes: 30 };
+    }
 
     const wiz = {
         step: 1,
@@ -210,8 +223,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         cart: [],            // [{ svc, qty }]
         dropBooked: [],      // CRM_LINK_ALL_V1 (R7a) — visit_service_id строк «из записи», которые убрали
         dropReasons: new Map(),   // WAIT_REG_V1 — visit_service_id убранной строки записи → причина (журнал визита)
-        skipOrders: [],      // WAIT_REG_V1 — сегодняшние направления врача, убранные с причиной (строка остаётся в визите)
-        dropCrm: [],         // WAIT_REG_V1 — строки заявки «на дату», убранные с причиной: снимаются после ensure_visit
+        skipOrders: [],      // WAIT_REG_V1 — сегодняшние направления врача, убранные с причиной (строка остаётся в визите; referral_line_skip)
+        dropCrm: [],         // WAIT_REG_V1 — строки заявки, убранные с причиной: сервер отпускает их ДО ensure_visit (crm_wish_release, ревью H1)
         doctorOrders: null,       // DOCTOR_REFERRAL_DESK_V1 — «Направления врача» пациента (patient_referral_orders)
         doctorOrderVsIds: null,   // DOCTOR_REFERRAL_DESK_V1 — их строки «из записи» второй раз не подставляются
         referralNote: '',         // DOCTOR_REFERRAL_DESK_V1 — «Рекомендация для регистратуры» (мастер направления врача)
@@ -565,7 +578,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         },
     });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    // WAIT_REG_V1 (ревью M1) — Escape принадлежит ВЕРХНЕМУ окну (modal-stack.js): окно причины,
+    // экстренной записи, повтора или шаблона поверх мастера закрывается само, а мастер со сметой
+    // остаётся.
+    const onKey = (e) => { if (e.key === 'Escape' && !coveredByHigherModal(overlay)) close(); };
     document.addEventListener('keydown', onKey);
 
     overlay.appendChild(h('header', {
@@ -793,9 +809,49 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         if (line && presetFromCrm) line.fromCrm = true;
         presetAdded++;
     }
+    // WAIT_REG_V1 (ревью L2) — СТРОКИ ДРУГОГО ОКНА ЦЕЛИКОМ (быстрая регистрация → «Оформить по записи»):
+    // услуга с врачом и пакетом, консультация по виду приёма (её врач — её же), — а не одни номера услуг.
+    // Врач строки берёт ближайшее время сегодня тем же подбором, что и выбор врача в смете.
+    for (const p of (Array.isArray(opts.presetLines) ? opts.presetLines : [])) {
+        if (!p) continue;
+        const doc = Number(p.doctor_id) > 0 ? Number(p.doctor_id) : null;
+        if (p.service_id == null && Number(p.consultation_type_id) > 0) {
+            const svc = consultSvc({ consultationTypeId: p.consultation_type_id, doctorId: doc, name: p.name, price: p.price });
+            if (wiz.cart.some((c) => String(c.svc.id) === String(svc.id))) continue;
+            const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+            const line = { svc, qty: 1, doctorId: doc, when: null, ui: { day: d0.getTime(), pickDoc: false } };
+            wiz.cart.push(line);
+            if (doc) autoPickSlot(line).then(() => { repaintRail(); if (wiz.step === 1) paint(); }).catch(() => {});
+            presetAdded++;
+            continue;
+        }
+        const svc = wiz.services.find((sv) => String(sv.id) === String(p.service_id));
+        if (!svc) continue;
+        addToCart(svc);
+        const line = wiz.cart.find((c) => c.svc.id === svc.id && !c.booked);
+        if (!line) continue;
+        if (p.package && p.package.id != null) line.package = p.package;
+        if (doc && Number(line.doctorId) !== doc) {
+            line.doctorId = doc;
+            if (isLiveQueueDoc(doc)) { if (!line.dateOnly) line.when = null; }
+            else if (!line.dateOnly) autoPickSlot(line).then(() => { repaintRail(); if (wiz.step === 1) paint(); }).catch(() => {});
+        }
+        presetAdded++;
+    }
+    // WAIT_REG_V1 (ревью L2) — «Код отправителя» другого окна — направивший этой регистрации.
+    if (opts.referralSourceId != null && opts.referralSourceId !== '') {
+        const src = (wiz.sources || []).find((s) => String(s.id) === String(opts.referralSourceId));
+        if (src) { wiz.hasReferral = true; wiz.sourceId = String(src.id); wiz.sourceCat = ''; }
+    }
     // CRM_CONVERT_V1 — addToCart перерисовывает только СМЕТУ; без этого каталог
     // остаётся с кнопкой «Добавить» у услуги, которая уже в смете.
     if (presetAdded) paint();
+    // WAIT_REG_V1 (ревью, решение владельца) — запись в календаре без услуги: окно открыто на пациента и
+    // врача записи, услугу выбирает регистратор (врач подставляется в строку сам — addToCart).
+    if (bookingDoctorId) {
+        const d = wiz.doctors.find((x) => Number(x.id) === bookingDoctorId);
+        toast(trf('Запись без услуги — выберите услугу записи (врач {doctor}).', { doctor: (d && (d.full_name || d.username)) || '—' }), 'info');
+    }
 
     // CRM_SCHEDULE_V1 — услуги, записанные колл-центром НА ЭТОТ ДЕНЬ.
     //
@@ -810,6 +866,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     if (!referralMode) await prefillFromDoctorOrders();   // DOCTOR_REFERRAL_DESK_V1 — сначала направления врача: их строки «из записи» не подставляются
     await prefillFromBooking();   // CRM_LINK_ALL_V1 (R7a) — сначала то, что уже в визите записи
     await prefillFromCrm();
+    // WAIT_REG_V1 (ревью L2) — окно открыто и смета подставлена: вызывающий (быстрая регистрация) закрывает
+    // своё окно только теперь. Ниже — только объявления функций (они поднимаются).
+    return { overlay, close };
 
     // ЗДЕСЬ БЫЛА closeCrmLines() — «услуги оформлены, значит заявка дошла».
     // CRM_REAL_BOOKING_V1 (2026-09-21): оформление услуги это не приход, а
@@ -867,16 +926,38 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const names = [];
         for (const r of b.rows) {
             if (wiz.doctorOrderVsIds && wiz.doctorOrderVsIds.has(Number(r.vsId))) continue;   // DOCTOR_REFERRAL_DESK_V1 — это направление врача
-            if (r.billed || r.serviceId == null) continue;
-            const svc = wiz.services.find(sv => Number(sv.id) === r.serviceId);
+            if (r.billed) continue;
+            // WAIT_REG_V1 (ревью H2) — запись на ВИД ПРИЁМА (календарь, колл-центр, «Бронирование»):
+            // строка «из записи» той же формы, что у быстрой регистрации; в счёт — номером строки визита.
+            // Прежде такая строка пропускалась, и «Оформить по записи» открывало пустую смету.
+            let svc = null;
+            if (r.serviceId == null) {
+                if (r.consultationTypeId == null) continue;
+                svc = consultSvc({ consultationTypeId: r.consultationTypeId, doctorId: r.doctorId, name: r.name, price: r.unitPrice });
+            } else {
+                svc = wiz.services.find(sv => Number(sv.id) === r.serviceId);
+            }
             if (!svc) continue;
             const d0 = new Date(); d0.setHours(0, 0, 0, 0);
             // CRM_LINK_ALL_V1 (редакция 2) — услуга уже в смете (направление врача, подстановка):
             // строка сметы становится строкой записи — второй строки нет, вставки нет, время и
-            // врач — записи. Строка того же вида, но к другому врачу — другая запись, её не трогаем.
+            // врач — записи.
             const inCart = wiz.cart.find(c => String(c.svc.id) === String(svc.id));
             if (inCart) {
-                if (inCart.booked || !isBookedTwin({ serviceId: Number(svc.id), doctorId: inCart.doctorId ?? null, needsDoctor: !!Number(svc.requires_doctor) }, r)) continue;   // CRM_LINK_ALL_V1 (ревью денег S1) — правило сети R7b
+                if (inCart.booked) continue;   // уже строка записи / направления
+                const consult = isConsultPick(svc);
+                const key = { serviceId: consult ? null : Number(svc.id), consultationTypeId: consult ? Number(svc.consultation_type_id) : null,
+                    doctorId: inCart.doctorId ?? null, needsDoctor: consult || !!Number(svc.requires_doctor) };
+                // WAIT_REG_V1 (ревью L2) — та же услуга, набранная к ДРУГОМУ врачу (быстрая регистрация передала
+                // свой выбор): строка записи не пропускается молча (она осталась бы в визите без счёта) — строка
+                // сметы становится строкой записи с врачом и временем записи, и регистратор об этом узнаёт.
+                if (!isBookedTwin(key, r)) {   // CRM_LINK_ALL_V1 (ревью денег S1) — правило сети R7b
+                    const was = wiz.doctors.find((x) => String(x.id) === String(inCart.doctorId));
+                    const now = wiz.doctors.find((x) => String(x.id) === String(r.doctorId));
+                    toast(trf('«{name}»: в записи врач {doctor} — строка сметы стала строкой записи, выбранный раньше врач ({was}) не сохранён.',
+                        { name: svc.name || '', doctor: (now && (now.full_name || now.username)) || '—', was: (was && (was.full_name || was.username)) || '—' }), 'warn');
+                    if (inCart.package) delete inCart.package;   // строку записи не вставляют второй раз — пакета ей не дать (ревью денег S3)
+                }
                 inCart.booked = { vsId: r.vsId, visitId: b.visit.id, status: b.visit.status, when: r.when };
                 inCart.qty = r.quantity || 1;
                 if (r.doctorId) inCart.doctorId = r.doctorId;
@@ -930,76 +1011,58 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const kind = guardedKind(c, isoDay(Date.now()));   // WAIT_REG_V1
         let reason = null;
         if (kind) {
-            reason = await (opts.askDropReason || askDropReason)({ kind, name: c.svc.name, referrer: (c.booked && c.booked.referrerName) || '' });
+            reason = await (opts.askDropReason || askDropReason)({ kind, name: c.svc.name, referrer: (c.booked && c.booked.referrerName) || '',
+                undated: kind === 'wish' && wishUndated(c) });   // ревью L3 — «когда придёт» — не «на сегодня»
             if (!reason || !wiz.cart.includes(c)) return false;
         }
         if (dropsBooked) {
             wiz.dropBooked.push(c.booked.vsId);
             if (reason) wiz.dropReasons.set(Number(c.booked.vsId), reason);   // WAIT_REG_V1 — booking_line_remove с причиной
         }
-        // WAIT_REG_V1 — направление врача: причина «не оформлено» — в журнал визита (createVisit).
+        // WAIT_REG_V1 — направление врача: причина «не оформлено» — в журнал визита с номером строки
+        // (createVisit → referral_line_skip; ревью M2, L4 — пишет сервер, не браузер).
         if (kind === 'doctor') {
-            wiz.skipOrders.push({ vsId: Number(c.booked.vsId), visitId: Number(c.booked.visitId), name: c.svc.name || '',
-                referrer: c.booked.referrerName || '', reason });
+            wiz.skipOrders.push({ vsId: Number(c.booked.vsId), name: c.svc.name || '', reason });
         }
-        // WAIT_REG_V1 — строка заявки «на дату»: визит дня возьмёт её сам (шаг связи CRM); createVisit
-        // снимает её с визита с этой причиной, и строка заявки вернётся в CRM без даты.
-        if (kind === 'wish') wiz.dropCrm.push({ svcId: Number(c.svc.id), crmLineId: Number(c.crmLineId), name: c.svc.name || '', reason });
+        // WAIT_REG_V1 (ревью H1) — строка заявки: визит дня взял бы её сам (шаг связи CRM), поэтому
+        // createVisit ДО ensure_visit просит сервер отпустить её по номеру строки заявки с этой причиной
+        // (crm_wish_release): строка — в заявку без даты, журнал, визит её больше не берёт.
+        if (kind === 'wish') wiz.dropCrm.push({ crmLineId: Number(c.crmLineId), name: c.svc.name || '', reason });
         wiz.cart = wiz.cart.filter(x => x !== c);
         return true;
     }
 
     /**
-     * WAIT_REG_V1 — номера строк визитов пациента в местный день `day` ('YYYY-MM-DD') ДО ensure_visit:
-     * после него снимаются только строки, которые завёл сам этот вызов (строка заявки, севшая в визит),
-     * а не строки, стоявшие в визите раньше. Сбой — null (тогда ничего не снимаем).
+     * WAIT_REG_V1 (ревью H1, M2, M3, L1) — ЧТО РЕГИСТРАТОР УБРАЛ С ПРИЧИНОЙ — НА СЕРВЕР ДО ПЕРВОЙ ЗАПИСИ
+     * ВИЗИТА, каждое действие одной транзакцией с журналом: строка записи снимается (booking_line_remove,
+     * registration: true — без причины сервер окну регистрации откажет), анализ заявки отпускается в заявку
+     * без даты (crm_wish_release — ДО ensure_visit, иначе визит дня взял бы его снова), направление врача
+     * остаётся в визите, а «не оформлено» пишется с номером строки (referral_line_skip). Отказ сервера —
+     * остановка словами (а не console.warn и не «успех»): ничего дальше не пишется. Сделанное
+     * вычёркивается из списков — повторное подтверждение его не повторяет. → true — можно дальше.
      */
-    async function dayLineIds(day) {
-        try {
-            const [y, m, d] = String(day).split('-').map(Number);
-            const from = new Date(y, m - 1, d).toISOString();
-            const to = new Date(y, m - 1, d + 1).toISOString();
-            const { data: vs, error } = await supabase.from('visits').select('id')
-                .eq('patient_id', Number(patient.id)).gte('visit_date', from).lt('visit_date', to);
-            if (error) return null;
-            const ids = (vs || []).map((v) => Number(v.id));
-            if (!ids.length) return new Set();
-            const { data: ls, error: lErr } = await supabase.from('visit_services').select('id').in('visit_id', ids);
-            if (lErr) return null;
-            return new Set((ls || []).map((l) => Number(l.id)));
-        } catch (_) { return null; }
-    }
-
-    /**
-     * WAIT_REG_V1 — строки заявки «на дату», убранные регистратором с причиной (wiz.dropCrm), визит
-     * дня взял сам (ensure_visit → шаг связи CRM: строка 'added' без счёта той же услуги). Каждая
-     * снимается той же дверью, что у календаря, — booking_line_remove с причиной: сервер пишет журнал
-     * визита, строка заявки возвращается в CRM без даты (O3). Только строки, которых не было до
-     * ensure_visit (before). Не снялась — предупреждение: строка осталась в визите без счёта.
-     */
-    async function dropWishLines(visitId, drops, before) {
-        if (!before) { for (const d of drops) d.done = true; return; }
-        let rows = [];
-        try {
-            const { data, error } = await supabase.from('visit_services').select('id, service_id, status, invoice_item_id, clinic_item_id')
-                .eq('visit_id', Number(visitId)).eq('status', 'added').order('id');
-            if (error) throw new Error(error.message || String(error));
-            rows = Array.isArray(data) ? data : [];
-        } catch (e) {
-            toast(trf('Услугу из заявки «{name}» снять не удалось: {msg}', { name: drops.map((d) => d.name).join(', '), msg: (e && e.message) || e }), 'warn');
-            for (const d of drops) d.done = true;
-            return;
+    async function applyDeskDrops() {
+        const stop = (text) => { toast(text, 'fail'); return false; };
+        for (const id of wiz.dropBooked.slice()) {
+            const dropArgs = { visit_service_id: Number(id), registration: true };
+            const dropWhy = wiz.dropReasons.get(Number(id));
+            if (dropWhy) dropArgs.reason = dropWhy;
+            const { error: dropErr } = await supabase.rpc('booking_line_remove', dropArgs);
+            if (dropErr) return stop(trf('Услугу из записи снять не удалось: {msg}', { msg: tr(dropErr.message || String(dropErr)) }));
+            wiz.dropBooked.splice(wiz.dropBooked.indexOf(id), 1);
+            wiz.dropReasons.delete(Number(id));
         }
-        const used = new Set();
-        for (const d of drops) {
-            d.done = true;
-            const hit = rows.find((r) => Number(r.service_id) === d.svcId && r.invoice_item_id == null && r.clinic_item_id == null
-                && !before.has(Number(r.id)) && !used.has(Number(r.id)));
-            if (!hit) continue;   // строка заявки в визит не села — снимать нечего
-            used.add(Number(hit.id));
-            const { error } = await supabase.rpc('booking_line_remove', { visit_service_id: Number(hit.id), reason: d.reason });
-            if (error) toast(trf('Услугу из заявки «{name}» снять не удалось: {msg}', { name: d.name, msg: error.message || error }), 'warn');
+        for (const d of wiz.dropCrm.slice()) {
+            const { error } = await supabase.rpc('crm_wish_release', { crm_line_id: d.crmLineId, patient_id: Number(patient.id), reason: d.reason });
+            if (error) return stop(trf('Услугу из заявки «{name}» снять не удалось: {msg}', { name: d.name, msg: tr(error.message || String(error)) }));
+            wiz.dropCrm.splice(wiz.dropCrm.indexOf(d), 1);
         }
+        for (const s of wiz.skipOrders.slice()) {
+            const { error } = await supabase.rpc('referral_line_skip', { visit_service_id: s.vsId, reason: s.reason });
+            if (error) return stop(trf('Причина по направлению врача «{name}» не записана: {msg}', { name: s.name, msg: tr(error.message || String(error)) }));
+            wiz.skipOrders.splice(wiz.skipOrders.indexOf(s), 1);
+        }
+        return true;
     }
 
     /** WAIT_REG_V1 — значок «из заявки» строки сметы с номером строки заявки (data-crm-line-id). */
@@ -2055,7 +2118,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // не обязателен: сам ставится только отмеченный ему врач (H-1), не «все врачи» запасного списка.
         const optional = !performerRequired(svc);
         const pool = optional ? assignedTo(wiz.doctors, svc.id) : doctorsForService(svc.id);
-        if (pool.length === 1 && (!optional || isOn(pool[0].is_doctor))) {
+        // WAIT_REG_V1 (ревью, решение владельца) — запись без услуги: услуге, которую делает врач записи,
+        // он и ставится — строка садится в его запись (BOOKED_JOIN_V1, время записи).
+        const bookingDoc = bookingDoctorId && !line.dateOnly ? pool.find((d) => Number(d.id) === bookingDoctorId) : null;
+        if (bookingDoc) {
+            line.doctorId = bookingDoc.id;
+            if (isLiveQueueDoc(line.doctorId)) line.when = null;
+            else autoPickSlot(line).then(() => { repaintRail(); if (wiz.step === 1) paint(); });
+        } else if (pool.length === 1 && (!optional || isOn(pool[0].is_doctor))) {
             line.doctorId = pool[0].id;
             // DIAG_ROUTE_V1 (D1) — у строки «на дату» день остаётся и у врача живой очереди.
             if (isLiveQueueDoc(line.doctorId)) { if (!line.dateOnly) line.when = null; repaintRail(); }
@@ -2455,7 +2525,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             btn.disabled = true;
             // Сохраняем ВСЮ смету, а не visibleCart(): услуга без врача — это
             // незаконченная строка визита, но для шаблона врач и не нужен.
-            const ids = wiz.cart.map(c => c.svc && c.svc.id).filter(Boolean);
+            const ids = wiz.cart.map(c => c.svc && c.svc.id).filter((id) => Number.isInteger(Number(id)) && Number(id) > 0);   // WAIT_REG_V1 (ревью H2) — вид приёма в шаблон не идёт
             const { error } = await createTemplate(supabase, { name: nameIn.value, serviceIds: ids });
             if (error) { toast(error.message || String(error), 'fail'); btn.disabled = false; return; }
             toast(trf('Шаблон сохранён — услуг: {n}', { n: ids.length }), 'ok');
@@ -2862,7 +2932,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     sub([trf('от врача · {name}', { name: l.referrer_name || '—' }), trf(st.template, st.params), bonus ? trf(bonus.template, bonus.params) : null]),
                     l.referral_note ? h('div', { class: 'muted', style: { fontSize: '12.5px', fontStyle: 'italic' } }, l.referral_note) : null),
                 canAdd ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-doctor-order-add': String(l.visit_service_id),
-                    onclick: () => { if (addOrderLine(l)) { refreshTiers(); repaintRail(); if (wiz.step === 1) paint(); } } },
+                    onclick: () => {
+                        if (!addOrderLine(l)) return;
+                        // WAIT_REG_V1 (ревью M2) — вернули в смету: «не оформлено» с причиной больше не правда.
+                        wiz.skipOrders = wiz.skipOrders.filter((s) => Number(s.vsId) !== Number(l.visit_service_id));
+                        refreshTiers(); repaintRail(); if (wiz.step === 1) paint();
+                    } },
                     Icon('Plus', { size: 12 }), ' ', tr('Добавить')) : null));
         }
         for (const r of recs) {
@@ -3539,7 +3614,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const repeatByDay = new Map();
             for (const [day, lines] of byDay) {
                 const want = lines.filter(c => !c.booked).map(c => ({
-                    service_id: c.svc.id,
+                    ...(lineIdentity(c.svc) || { service_id: c.svc.id }),   // WAIT_REG_V1 (ревью H2) — и консультация по виду приёма
                     doctor_id: Number(c.doctorId || (c.svc.requires_doctor ? wiz.doctorId : null)) || null,
                 }));
                 const pre = await precheckOrders({ patientId: patient.id, day, lines: want, excludeIds: wiz.dropBooked });
@@ -3550,27 +3625,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 }
                 if (pre.reason) repeatByDay.set(day, pre.reason);
             }
-            // CRM_LINK_ALL_V1 (R7a) — убранные строки записи снимаются с визита, как в
-            // календаре (booking_line_remove), до первой записи мастера.
-            for (const id of wiz.dropBooked.slice()) {
-                // WAIT_REG_V1 — причина регистратора уходит с той же дверью: сервер пишет её в журнал визита.
-                const dropArgs = { visit_service_id: Number(id) };
-                const dropWhy = wiz.dropReasons.get(Number(id));
-                if (dropWhy) dropArgs.reason = dropWhy;
-                const { error: dropErr } = await supabase.rpc('booking_line_remove', dropArgs);
-                if (dropErr) { toast(trf('Услугу из записи снять не удалось: {msg}', { msg: dropErr.message || dropErr }), 'fail'); wiz.creating = false; repaintRail(); return; }
-                wiz.dropBooked.splice(wiz.dropBooked.indexOf(id), 1);
-                wiz.dropReasons.delete(Number(id));
-            }
-            // WAIT_REG_V1 — сегодняшнее направление врача, которое регистратор не оформил: строка остаётся
-            // в визите (её назначил врач), а причина — в журнале визита (invoice_audit_log, как обход
-            // повтора DUP_STOP_V1). Пишется один раз: повторное подтверждение её не дублирует.
-            for (const s of wiz.skipOrders.splice(0)) {
-                /* i18n-exempt-start: строка журнала ПИШЕТСЯ В БАЗУ (как notes обхода повтора), а не рисуется */
-                await logInvoiceAction(null, { visitId: s.visitId, action: 'line_referral_skipped', reason: s.reason,
-                    notes: `Направление врача не оформлено: «${s.name || '—'}» (направил ${s.referrer || '—'}), строка визита № ${s.vsId}` });
-                /* i18n-exempt-end */
-            }
+            // CRM_LINK_ALL_V1 (R7a) — убранные строки записи снимаются с визита, как в календаре
+            // (booking_line_remove), до первой записи мастера. WAIT_REG_V1 (ревью) — и анализы заявки
+            // отпускаются, и пропуск направления врача пишется — сервером, до ensure_visit (applyDeskDrops).
+            if (!(await applyDeskDrops())) { wiz.creating = false; repaintRail(); return; }
             const emergencyByDay = await gateDaySlots(byDay);
             if (!emergencyByDay) {   // отказались от экстренной записи
                 toast(tr('Запись не сохранена — время занято.'), 'info');
@@ -3608,6 +3666,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // (карта пациента, CRM), ничего не замечают.
             const booked = [];
             const attachFail = [];   // DOCTOR_REFERRAL_DESK_V1 — рекомендации, которые сервер не закрыл
+            const invoicedVisits = new Set();   // WAIT_REG_V1 (ревью) — визиты, по которым этот вызов выставил счёт
+            const todayVisits = new Set();      // WAIT_REG_V1 (ревью) — сегодняшние визиты, в которые легли строки
             // DISCOUNT_CARRY_V1 — скидка идёт на счета пациента по порядку дней:
             // сколько влезло в первый, остаток — в следующий (см. ниже).
             // PACKAGES_V1 (ревью I-1) — переносится только скидка на строки без
@@ -3678,7 +3738,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 if (timedHead) {
                     evArgs.book = {
                         doctor_id: Number(timedHead.doctorId),
-                        service_id: timedHead.svc.id,
+                        service_id: isConsultPick(timedHead.svc) ? undefined : timedHead.svc.id,   // WAIT_REG_V1 (ревью H2) — у вида приёма услуги каталога нет
                         start: new Date(timedHead.when).toISOString(),
                         duration_minutes: lineDuration(timedHead),
                     };
@@ -3696,7 +3756,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                             doctor_id: Number(r0.doctorId),
                             start: new Date(r0.when).toISOString(),
                             lines: riders.filter((c) => c.doctorId === r0.doctorId && c.when === r0.when)
-                                .map((c) => ({ service_id: Number(c.svc.id) })),
+                                .map((c) => (isConsultPick(c.svc) ? { consultation_type_id: Number(c.svc.consultation_type_id) } : { service_id: Number(c.svc.id) })),
                         };
                     }
                 }
@@ -3709,14 +3769,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 if (isDeskNow({ dayIso: day, todayIso: isoDay(Date.now()), headStartMs: deskHead ? new Date(deskHead.when).getTime() : null, nowMs: Date.now() })) {
                     evArgs.desk = true;
                 }
-                // WAIT_REG_V1 — строки заявки «на дату», убранные регистратором с причиной: визит дня
-                // возьмёт их сам (шаг связи CRM), а «пришёл сейчас» закрыл бы их приходом. Поэтому сначала
-                // визит без «пришёл», затем такие строки снимаются той же дверью, что у календаря (с
-                // причиной — журнал визита; строка заявки — в CRM без даты), и только потом «пришёл».
-                const dropWish = wiz.dropCrm.filter((d) => !d.done);
-                const deskAfterDrop = dropWish.length > 0 && evArgs.desk === true;
-                if (deskAfterDrop) delete evArgs.desk;
-                const linesBefore = dropWish.length ? await dayLineIds(day) : null;   // снимаются только строки, которые завёл этот вызов
+                // WAIT_REG_V1 (ревью H1) — анализы заявки, убранные с причиной, сервер уже отпустил
+                // (applyDeskDrops): визит дня их не берёт, второго вызова ensure_visit больше нет.
                 const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', evArgs);
                 if (evErr) {
                     // ревью M4 — запись изменилась, пока мастер был открыт: записи пациента и
@@ -3732,14 +3786,6 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 }
                 const visit = ev.visit;
                 if (ev.created && visit && visit.id) freshVisitIds.push(visit.id);   // LIVE_AUDIT_FIX_V1
-                if (dropWish.length && visit && visit.id) {   // WAIT_REG_V1 — см. выше
-                    await dropWishLines(visit.id, dropWish, linesBefore);
-                    if (deskAfterDrop) {
-                        const { error: deskErr } = await supabase.rpc('ensure_visit', { patient_id: patient.id, date: earliest,
-                            doctor_id: evArgs.doctor_id, visit_type: wiz.visitType, branch_id: branchId, desk: true });
-                        if (deskErr) console.warn('[visit-wizard] desk arrival after dropping request lines failed:', deskErr.message || deskErr);
-                    }
-                }
                 // CRM_REAL_BOOKING_V1 — ОТВЕТ ЧИТАЕТСЯ ЦЕЛИКОМ (ensure-visit-answer.js).
                 //
                 // Перенос ПУСТОГО визита дня (moved) — успех, о котором говорят
@@ -3810,9 +3856,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         if (isCovered(c)) coveredVsIds.push(bid);
                         continue;
                     }
+                    const consultLine = isConsultPick(c.svc);   // WAIT_REG_V1 (ревью H2) — консультация по виду приёма
                     const row = {
                         visit_id: visit.id,
-                        service_id: c.svc.id,
+                        service_id: consultLine ? null : c.svc.id,
                         quantity: c.qty,
                         // The server re-prices authoritatively when the invoice is
                         // created; seeding the same number here keeps the patient
@@ -3820,8 +3867,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         unit_price: cartLinePrice(c),
                         total: cartLinePrice(c) * c.qty,
                         status: 'added',
-                        price_tier: lineTier(c),   // VISIT_TIER_PRICING_V1 — the till re-prices by this word
                     };
+                    // VISIT_TIER_PRICING_V1 — the till re-prices by this word; у вида приёма — цена врача (B7).
+                    if (consultLine) row.consultation_type_id = Number(c.svc.consultation_type_id);
+                    else row.price_tier = lineTier(c);
                     // PACKAGES_V1 (ревью I-3) — пакет ставится, только если он
                     // действует в день ЭТОЙ строки: строку могли перенести на
                     // другой день, и сервер отказал бы (routes/db.js). Вне срока
@@ -3870,6 +3919,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     if (isCovered(c)) coveredVsIds.push(res.data.id);
                 }
 
+                if (vsIds.length && day === isoDay(Date.now())) todayVisits.add(Number(visit.id));   // WAIT_REG_V1 (ревью)
                 if (billNow && vsIds.length) {   // REFERRAL_BILL_V1 — billNow: без плательщика в карте у врача
                     // COVERAGE_SPLIT_V1 — визит делится на ДВА счёта: покрытые
                     // услуги уходят контрагенту (payer_id), остальные — пациенту.
@@ -3907,6 +3957,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                             continue;
                         }
                         invoicesOk++;
+                        invoicedVisits.add(Number(visit.id));   // WAIT_REG_V1 (ревью) — по визиту выставлен счёт: отметка не нужна
                         billedLines += job.ids.length;   // REFERRAL_BILL_V1
                         // INVOICE_APPEND_V1 — строки легли в уже выставленный
                         // неоплаченный счёт визита: тот же номер, новая сумма.
@@ -3966,6 +4017,17 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // per-врач (консультации), одна на пациента (лаборатория), врач/кабинет
             // (процедуры), per-аппарат (диагностика). Идемпотентно; сбой не
             // блокирует счёт (как в easymed).
+            // WAIT_REG_V1 (ревью, решение владельца) — ОФОРМЛЕН БЕЗ СЧЁТА («Сразу выставить счёт» снят или
+            // счёт не выставился): сегодняшний визит отмечается «оформлен» (registrar_registered), и пациент
+            // уходит из «Ждут регистрации»; строки без счёта ждут кассу («Ждут счёта»). Отметку ставит стойка
+            // (администратор, регистратура), не мастер направления врача. Не записалась — сказать словами.
+            if (!referralMode && hasActorRole(['admin', 'registrar'])) {
+                for (const vid of todayVisits) {
+                    if (invoicedVisits.has(vid)) continue;
+                    const { error: mErr } = await supabase.rpc('registrar_registered', { visit_id: vid });
+                    if (mErr) toast(trf('Услуги записаны, но отметка «оформлен» не поставлена: {msg} — пациент может остаться в «Ждут регистрации».', { msg: tr(mErr.message || String(mErr)) }), 'fail');
+                }
+            }
             if (attachFail.length) toast(trf('Рекомендация врача не закрыта: {msg}', { msg: attachFail.join('; ') }), 'warn');   // DOCTOR_REFERRAL_DESK_V1
             let queueRows = [];
             try {

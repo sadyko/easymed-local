@@ -37,13 +37,16 @@ const SOURCE_ICON = { crm: 'Headset', calendar: 'Calendar', partner: 'Globe', do
 /**
  * Сегодняшние ожидаемые пациенты. Бросает при отказе сервера: пустой ответ — это «никого не ждём»,
  * а отказ — не он. patientId — только этот пациент (быстрая регистрация спрашивает про одного).
+ * WAIT_REG_V1 (ревью M6) — countOnly: только число (счётчик вкладки) — сервер не собирает подписи.
  */
-export async function loadRegistrarWaiting({ patientId = null } = {}) {
+export async function loadRegistrarWaiting({ patientId = null, countOnly = false } = {}) {
     const args = patientId != null ? { patient_id: Number(patientId) } : {};
+    if (countOnly) args.count_only = true;
     const { data, error } = await supabase.rpc('registrar_waiting', args);
     if (error) throw new Error(error.message || String(error));
     const rows = data && Array.isArray(data.rows) ? data.rows : [];
-    return { today: (data && data.today) || null, count: rows.length, rows };
+    const count = countOnly && data && Number.isFinite(Number(data.count)) ? Number(data.count) : rows.length;
+    return { today: (data && data.today) || null, count, rows };
 }
 
 /** Ждёт ли пациент регистрации сегодня (запись, анализ «на дату», направление врача). Сбой — нет. */
@@ -56,9 +59,16 @@ export async function patientWaitsToday(patientId) {
  * строки («из записи»), направления врача («от врача») и анализы «на дату» («из заявки»), а
  * выставляет счёт при подтверждении. opts.presetServiceIds — услуги, набранные до этого в другом
  * окне (быстрая регистрация), без пометки «из заявки».
+ * WAIT_REG_V1 (ревью L2, M5, решение владельца):
+ *   presetLines — строки другого окна целиком ({ service_id | consultation_type_id, doctor_id,
+ *     package, name, price }): врач, пакет и консультация по виду приёма не теряются;
+ *   referralSourceId — «Код отправителя» другого окна;
+ *   bookingDoctorId — запись без услуги: окно открыто на врача записи.
+ * → то, что вернуло окно визита (его пульт — окно открыто), или null.
  */
-export async function openRegisterByBooking(patient, { onSaved = null, presetServiceIds = [], openWizard = null } = {}) {
-    if (!patient || patient.id == null) return;
+export async function openRegisterByBooking(patient, { onSaved = null, presetServiceIds = [], presetLines = [], referralSourceId = null,
+    bookingDoctorId = null, openWizard = null } = {}) {
+    if (!patient || patient.id == null) return null;
     const full = await loadPatientById(patient.id).catch(() => null);
     // Окну — те же поля, что даёт ему карта пациента (patient-card.js patientStub):
     // loadPatientById отдаёт карту в виде экрана (fullName), а не строки базы.
@@ -70,7 +80,28 @@ export async function openRegisterByBooking(patient, { onSaved = null, presetSer
     };
     const open = openWizard || (await import('./visit-wizard.js?v=ownrep4')).openVisitWizard;
     const ids = (presetServiceIds || []).filter((x) => Number.isInteger(Number(x)) && Number(x) > 0).map(Number);
-    await open(typeof onSaved === 'function' ? onSaved : () => {}, stub, ids.length ? { presetServiceIds: ids, presetFromCrm: false } : {});
+    const wizOpts = {};
+    if (ids.length) { wizOpts.presetServiceIds = ids; wizOpts.presetFromCrm = false; }
+    const lines = (presetLines || []).filter((l) => l && (Number(l.service_id) > 0 || Number(l.consultation_type_id) > 0));
+    if (lines.length) { wizOpts.presetLines = lines; wizOpts.presetFromCrm = false; }
+    if (referralSourceId != null && referralSourceId !== '') wizOpts.referralSourceId = referralSourceId;
+    if (Number(bookingDoctorId) > 0) wizOpts.bookingDoctorId = Number(bookingDoctorId);
+    const handle = await open(typeof onSaved === 'function' ? onSaved : () => {}, stub, wizOpts);
+    return handle || null;
+}
+
+/**
+ * WAIT_REG_V1 (ревью M5, решение владельца) — что передать окну визита по строке списка: строки записи
+ * соседнего здания (окно визита их не прочтёт — счёт по визиту соседа не выставить, стойка оформляет
+ * своим визитом) — набранными услугами; запись без услуги — врачом записи.
+ */
+export function registerOptsOf(r) {
+    const lines = (r && r.lines) || [];
+    const presetLines = lines.filter((l) => l.foreign && l.kind === 'booked')
+        .map((l) => ({ service_id: l.service_id ?? null, consultation_type_id: l.consultation_type_id ?? null,
+            doctor_id: l.doctor_id ?? null, name: l.name || '' }));
+    const bare = lines.find((l) => l.kind === 'booking' && Number(l.doctor_id) > 0);
+    return { presetLines, bookingDoctorId: bare ? Number(bare.doctor_id) : null };
 }
 
 /**
@@ -98,7 +129,7 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
             h('div', { class: 'rwait-title' }, Icon('Bell', { size: 16 }), ' ', tr('Ждут регистрации'),
                 h('span', { class: 'rwait-count', 'data-rwait-count': String(state.rows.length) }, String(state.rows.length))),
             h('div', { class: 'rwait-sub' },
-                tr('Сегодня: записанные на сегодня и направленные врачом. Пациент уходит из списка, когда по его записи выставлен счёт.'))),
+                tr('Сегодня: записанные на сегодня и направленные врачом. Пациент уходит из списка, когда его оформили — со счётом или без.'))),
         h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-rwait-refresh': '', onclick: () => { void reload(); } },
             Icon('Refresh', { size: 13 }), ' ', tr('Обновить')));
     }
@@ -134,25 +165,55 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
                 h('div', { class: 'rwait-tags' }, ...sources)),
             h('div', { class: 'rwait-what' },
                 (r.services || []).length ? h('div', { class: 'rwait-svc' }, Icon('Stethoscope', { size: 12 }), ' ', r.services.join(', ')) : null,
+                // WAIT_REG_V1 (ревью, решение владельца) — запись календаря без услуги: услугу выберет регистратор.
+                r.no_service ? h('div', { class: 'rwait-svc rwait-nosvc', 'data-rwait-no-service': '' }, Icon('Warning', { size: 12 }), ' ', tr('услуга не выбрана')) : null,
                 (r.doctors || []).length ? h('div', { class: 'rwait-sub2' }, trf('Врач: {names}', { names: r.doctors.join(', ') })) : null,
                 (r.booked_by || []).length ? h('div', { class: 'rwait-sub2' }, trf('Записал(а): {names}', { names: r.booked_by.join(', ') })) : null),
             h('div', { class: 'rwait-act' },
+                // ревью L5 — disabled логическим значением: h() пустую строку считает «нет» и кнопку не гасил.
                 h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-rwait-register': String(r.patient_id),
-                    disabled: state.busy ? '' : undefined, onclick: () => { void register(r); } },
+                    disabled: !!state.busy, onclick: () => { void register(r); } },
                 Icon('Receipt', { size: 13 }), ' ', tr('Оформить по записи'))));
     }
 
     async function register(r) {
         if (state.busy) return;
         state.busy = true;
+        repaintKeepingFocus(paintList);   // кнопки погашены, пока окно визита открывается
         try {
             await openRegisterByBooking({ id: r.patient_id, full_name: r.patient_name, mrn: r.mrn, phone: r.phone },
-                { onSaved: () => { void reload(); }, openWizard: deps.openWizard || null });
+                { onSaved: () => { void reload(); }, openWizard: deps.openWizard || null, ...registerOptsOf(r) });   // ревью M5 / решение владельца
         } catch (e) {
             toast((e && e.message) || tr('Не удалось открыть окно визита.'), 'fail');
         } finally {
             state.busy = false;
+            repaintKeepingFocus(paintList);
         }
+    }
+
+    // WAIT_REG_V1 (ревью L5) — ПЕРЕЧИТЫВАНИЕ НЕ ОТНИМАЕТ ФОКУС: список перерисовывается целиком (живое
+    // обновление, «Обновить», раз в минуту), и кнопка с фокусом клавиатуры исчезала — фокус падал в body.
+    // Запоминается, ЧТО было в фокусе (кнопка какого пациента), и фокус возвращается на ту же кнопку;
+    // пациента в списке больше нет — на «Обновить» (фокус остаётся во вкладке).
+    function focusedKey() {
+        try {
+            const a = typeof document !== 'undefined' ? document.activeElement : null;
+            if (!a || a === root || typeof root.contains !== 'function' || !root.contains(a) || typeof a.getAttribute !== 'function') return null;
+            for (const k of ['data-rwait-register', 'data-rwait-open', 'data-rwait-refresh']) {
+                const v = a.getAttribute(k);
+                if (v != null) return [k, v];
+            }
+        } catch (_) { /* без документа — нечего беречь */ }
+        return null;
+    }
+    function repaintKeepingFocus(...paints) {
+        const key = focusedKey();
+        for (const p of paints) p();
+        if (!key) return;
+        try {
+            const el = root.querySelector(`[${key[0]}="${String(key[1]).replace(/"/g, '')}"]`) || root.querySelector('[data-rwait-refresh]');
+            if (el && typeof el.focus === 'function') el.focus();
+        } catch (_) { /* фокус вернуть некуда */ }
     }
 
     async function openCard(patientId) {
@@ -172,7 +233,8 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
         } finally {
             state.loading = false;
         }
-        paintHead(); paintList(); report();
+        repaintKeepingFocus(paintHead, paintList);   // ревью L5
+        report();
         return state.rows.length;
     }
 
