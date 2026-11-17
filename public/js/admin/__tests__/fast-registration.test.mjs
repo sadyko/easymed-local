@@ -139,6 +139,7 @@ let crmLines = [];
 let visitRows = [];
 let vsRows = [];
 let failGroupRead = false;   // DISCOUNT_V2 (ревью S1 L-3) — чтение группы пациента падает
+let waitingRows = [];        // WAIT_REG_V1 — чем отвечает registrar_waiting (кого сегодня ждёт стойка)
 let sheetTables = {};      // INVOICE_APPEND_V1 (ревью M2) — счёт с сервера для печати дописанного: invoices, invoice_items, patients, payments
 // { table, message, nth? } — отказ вставки. nth — номер вставки В ЭТУ таблицу
 // (1 — первая): цепочка вставляет строки услуг по одной, и «упала ВТОРАЯ» —
@@ -190,6 +191,7 @@ globalThis.fetch = async (url, opts = {}) => {
     // CRM_REAL_BOOKING_V1 — ответ ensure_visit подменяется целиком: перенос и
     // занятый день — те же три исхода, что у карточки заявки и мастера.
     if (name === 'ensure_visit') return ok({ data: ensureAnswer || { visit: { id: 77 }, created: true } });
+    if (name === 'registrar_waiting') return ok({ data: { today: '', count: waitingRows.length, rows: waitingRows } });   // WAIT_REG_V1
     if (name === 'service_price_quote') {
       if (quoteFail) return { ok: false, status: 400, json: async () => ({ error: { message: quoteFail } }) };
       return ok({ data: { quotes: quotes || { 1: { price: 112000, tier: 'primary' }, 2: { price: 40000, tier: 'primary' } } } });
@@ -262,6 +264,7 @@ function reset() {
   patientRows = []; insertFail = null; quoteFail = null; queueFail = null; focused = null;
   crmRequests = []; crmLines = [];
   visitRows = []; vsRows = [];
+  waitingRows = [];   // WAIT_REG_V1
   quotes = null; invoiceTotal = 152000; queueTickets = null; holdRpc = null;
   invoiceAppended = false;   // INVOICE_APPEND_V1
   sheetTables = {};          // INVOICE_APPEND_V1 (ревью M2)
@@ -1885,4 +1888,57 @@ test('FAST_REG_FOUND_TO_CARD_V1: найденный строкой поиска 
   } finally {
     globalThis.window.confirm = prevConfirm;
   }
+});
+
+// ===========================================================================
+// WAIT_REG_V1 (3.25.0) — ВЫНУЖДАЮЩАЯ ФУНКЦИЯ В БЫСТРОЙ РЕГИСТРАЦИИ. «Это он» в предупреждении о
+// дубле у пациента, которого сегодня ждут (запись, направление врача, анализ «на дату»): окно не
+// сохраняет само — закрывается и открывает «Оформить по записи» (окно визита со строками записи);
+// набранные услуги уходят туда же. Без записи — сохранение как прежде (тест «дубликат» выше).
+// ===========================================================================
+async function dupToExisting(dlg) {
+  fillMinimum(dlg);
+  dlg.fields.phone.value = '+998901112233';
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(60);
+  const dup = dialogs('patient-duplicate');
+  assert.strictEqual(dup.length, 1, 'диалог дубликата не открылся');
+  walk(dup[0]).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'dup-row')).click();
+  await tick(150);
+}
+
+test('WAIT_REG_V1: «Это он» у пациента с записью на сегодня — не сохраняет, а открывает «Оформить по записи» с набранными услугами', async () => {
+  reset();
+  patientRows = [KARIMOVA];
+  visitRows = [{ id: 77, status: 'scheduled', visit_date: todayAt(23) }];
+  vsRows = [{ id: 555, service_id: 1, consultation_type_id: null, doctor_id: 7, quantity: 1, unit_price: 112000, status: 'added', invoice_item_id: null, clinic_item_id: null, scheduled_at: null, services: { id: 1, name: 'Приём терапевта', price: 112000 } }];
+  const opened = [];
+  const dlg = openFastRegistrationDialog({ openWizard: async (p, opts) => { opened.push({ p, opts }); } });
+  await tick(40);
+  dlg.state.addLine(SERVICES[1], null);   // анализ, набранный до «Это он»
+  await dupToExisting(dlg);
+  assert.equal(calls.some((c) => c.kind === 'rpc' && c.name === 'ensure_visit'), false, 'окно само завело визит пациенту с записью');
+  assert.equal(calls.some((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit'), false, 'окно само выставило счёт');
+  assert.equal(calls.filter((c) => c.kind === 'insert').length, 0, 'окно что-то записало');
+  assert.equal(opened.length, 1, '«Оформить по записи» не открылось');
+  assert.equal(opened[0].p.id, 42, 'окно визита открыто не на найденного пациента');
+  assert.deepEqual(opened[0].opts.presetServiceIds, [2], 'набранные услуги не ушли в окно визита');
+  assert.ok(toasts.some((m) => m.includes('Оформить по записи')), 'не сказано, почему окно закрылось: ' + JSON.stringify(toasts));
+  assert.equal(dialogs('fast-registration').length, 0, 'окно быстрой регистрации осталось открытым');
+});
+
+test('WAIT_REG_V1: «Это он» — строк записи в окне нет, но сервер ждёт пациента сегодня (анализ «на дату») — тоже «Оформить по записи»', async () => {
+  reset();
+  patientRows = [KARIMOVA];
+  waitingRows = [{ patient_id: 42, patient_name: 'Каримова Азиза', sources: [{ kind: 'crm', name: '' }], lines: [{ kind: 'wish' }] }];
+  const opened = [];
+  const dlg = openFastRegistrationDialog({ openWizard: async (p, opts) => { opened.push({ p, opts }); } });
+  await tick(40);
+  await dupToExisting(dlg);
+  const ask = calls.find((c) => c.kind === 'rpc' && c.name === 'registrar_waiting');
+  assert.ok(ask, 'окно не спросило сервер, ждут ли пациента');
+  assert.deepEqual(ask.body, { patient_id: 42 });
+  assert.equal(calls.some((c) => c.kind === 'rpc' && c.name === 'ensure_visit'), false);
+  assert.equal(opened.length, 1);
 });

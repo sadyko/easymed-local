@@ -73,6 +73,7 @@ import { resolveTemplate, cartPackage } from './service-templates.js?v=tpl1';   
 import { registerWalkIn, walkInRoleRefusal, walkInLinesRefusal } from './walk-in-booking.js?v=wib1';
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»
 import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
+import { openRegisterByBooking, patientWaitsToday } from './registrar-waiting.js';   // WAIT_REG_V1 — «Это он» у ожидаемого пациента → «Оформить по записи»
 import { surgeryBedRefusal, isSurgeryPick, SURGERY_NEEDS_BED_TEXT } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1   // WALK_IN_BOOKING_V1
 import { doctorPoolFor, performerRequired, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // LAB_NO_DOCTOR_V1 — performerRequired вместо needsPerformer   // DOCTOR_POOL_V1 · DIAG_ROUTE_V1 (D1) — исполнитель у каждой услуги кабинета
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
@@ -117,11 +118,13 @@ function nameOf(p) {
  * @param {{onNavigate?:Function, onSaved?:Function}} [opts]
  * @returns {{overlay, card, body, close, state, fields, collect, saveBtn, printBtn}|null}
  */
-export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
+export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = null } = {}) {
     if (!canCreatePatient()) { openAccessDeniedDialog(); return null; }
 
     const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
     const notifySaved = typeof onSaved === 'function' ? onSaved : () => {};
+    // WAIT_REG_V1 — «Оформить по записи» (окно визита со строками записи); тесты подменяют.
+    const registerByBooking = typeof openWizard === 'function' ? openWizard : openRegisterByBooking;
 
     // ЭТАЖ ОКНА. Оно открывает поверх себя каталог услуг (130), стража
     // дубликатов и предпросмотр печати (160), выбор пакета (180) — и все они
@@ -1204,7 +1207,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         } catch (e) {
             if (!force && e && e.code === 'DUPLICATE_PATIENT' && e.existing) {
                 openDuplicatePatientDialog(e, {
-                    onOpenExisting: async (c) => { await usePatient(c, { load: true }); await doSave(); },
+                    // WAIT_REG_V1 — пациента сегодня ждут (запись, направление врача, анализ «на дату»):
+                    // не сохраняем сами, а ведём в «Оформить по записи» (stopForBooking).
+                    onOpenExisting: async (c) => { await usePatient(c, { load: true }); if (await stopForBooking()) return; await doSave(); },
                     onForceCreate: async () => {
                         const created = await createPatient(payload, true);
                         if (!created) return;
@@ -1217,6 +1222,33 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
             return null;
         }
+    }
+
+    /**
+     * WAIT_REG_V1 (3.25.0) — ВЫНУЖДАЮЩАЯ ФУНКЦИЯ «ЭТО ОН». Регистратор набрал нового пациента, а
+     * предупреждение о дубле нашло карту — и у этого пациента на сегодня запись, направление врача
+     * или анализ «на дату». Сохранить отсюда значило бы оформить визит мимо записи. Поэтому окно
+     * закрывается и открывает «Оформить по записи» — окно визита, где записанные строки уже в
+     * смете (их убирают только с причиной); набранные здесь услуги уходят туда же. Ждут ли пациента,
+     * знают строки «из записи» / «от врача» этого окна и сервер (registrar_waiting — и анализы
+     * «на дату», которых это окно не показывает). → true — окно передано.
+     */
+    async function stopForBooking() {
+        const p = state.patient;
+        if (!p || !p.id) return false;
+        const waits = state.rows.some((r) => r.booked) || await patientWaitsToday(p.id);
+        if (!waits) return false;
+        const extra = state.rows
+            .filter((r) => !r.booked && r.service && !r.service.__consult && Number.isInteger(Number(r.service.id)) && Number(r.service.id) > 0)
+            .map((r) => Number(r.service.id));
+        toast(tr('У пациента запись или направление врача на сегодня — открываем «Оформить по записи»: записанные услуги уже в смете.'), 'info');
+        dismiss();
+        try {
+            await registerByBooking(p, { onSaved: () => notifySaved(p), presetServiceIds: extra });
+        } catch (e) {
+            toast((e && e.message) || tr('Не удалось открыть окно визита.'), 'fail');
+        }
+        return true;
     }
 
     /** Пустая таблица — это обычное заведение карты: сохранили и закрылись. */
