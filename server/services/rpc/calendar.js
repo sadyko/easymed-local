@@ -264,6 +264,9 @@ function parseStart(value) {
  *
  * Занято = статусы scheduled/confirmed/arrived. Отменённый и не пришедший
  * время НЕ занимают — иначе отменённая запись держала бы слот навсегда.
+ *
+ * SLOT_BUSY_LINES_V1 — у врача занятость — ещё и строки визитов со своим врачом и
+ * временем (loadLineBusy ниже) и удержания онлайн-записи.
  */
 function loadBusy(db, { doctorId, roomId, fromMs, toMs, excludeVisitId, excludeHoldId = null }) {   // PUBLIC_API_V1 — excludeHoldId
   const col = doctorId ? 'doctor_id' : 'room_id';
@@ -299,6 +302,15 @@ function loadBusy(db, { doctorId, roomId, fromMs, toMs, excludeVisitId, excludeH
   // удержание не касается. excludeHoldId — подтверждение этой же записи: своё
   // удержание ей не мешает (services/api/bookings.js confirmBooking).
   if (doctorId) {
+    // SLOT_BUSY_LINES_V1 — и строка визита со своим врачом и временем (loadLineBusy ниже):
+    // запись к врачу А с услугой врача Б на 15:00 держит 15:00 врача Б. Только у врача —
+    // у строки нет кабинета. excludeVisitId снимает и строки своей записи.
+    for (const g of loadLineBusy(db, { doctorIds: [doctorId], fromMs, toMs, excludeVisitId })) {
+      out.push({
+        visit_id: g.visit_id, line_ids: g.line_ids, startMs: g.startMs, endMs: g.endMs, durationMin: g.durationMin,
+        status: g.status, patient_id: g.patient_id, patient_name: g.patient_name,
+      });
+    }
     for (const hd of liveHolds(db, { doctorId, fromMs, toMs, excludeHoldId })) {
       out.push({
         visit_id: null, hold_id: hd.hold_id, startMs: hd.startMs, endMs: hd.endMs, durationMin: hd.durationMin,
@@ -308,6 +320,163 @@ function loadBusy(db, { doctorId, roomId, fromMs, toMs, excludeVisitId, excludeH
     out.sort((a, b) => a.startMs - b.startMs);
   }
   return out;
+}
+
+/**
+ * ═══ SLOT_BUSY_LINES_V1 (3.25.0) — СТРОКА ВИЗИТА ДЕРЖИТ ВРЕМЯ СВОЕГО ВРАЧА ════
+ *
+ * Визит дня пациента несёт строки услуг С ДРУГИМ ВРАЧОМ И СВОИМ ВРЕМЕНЕМ:
+ * «Добавить в этот визит» («Бронирование» BOOKING_DAY_JOIN_V1, калькулятор
+ * календаря, CRM, колл-центр — booking_lines_add со scheduled_at). Занятость же
+ * считалась только по visits.doctor_id и времени самого визита, поэтому 15:00
+ * врача Б, взятое строкой визита пациента к врачу А, оставалось «Свободно» в
+ * «Бронировании» и в календаре и записывалось второму пациенту — двойная запись,
+ * которую правило владельца запрещает жёстко.
+ *
+ * СТРОКА ДЕРЖИТ [scheduled_at, + длительность) СВОЕГО ВРАЧА, ЕСЛИ:
+ *   • её врач — НЕ врач самого визита. Время врача визита — это сам визит: его
+ *     длину растит присоединение (JOIN_EXTENDS_BOOKING_V1), а перенос визита
+ *     мышью строки не двигает (scheduled_at строки записи остаётся прежним) —
+ *     считай мы строку врача визита, перенесённая запись держала бы и старое
+ *     время. Строка врача визита за пределами визита (калькулятор: вторая услуга
+ *     того же врача следом) поэтому не держит ничего — как и до этой правки;
+ *   • визит держит время (BUSY_STATUSES: записан, подтверждён, пришёл);
+ *   • строка не отменена, не товар (clinic_item_id), не возвращена кассой
+ *     (pay_refund_releases 'out' без нового счёта — правило refundedOpenLineIds)
+ *     и не «на дату»: строка на местную полночь времени врача не держит
+ *     (LAB_NO_DOCTOR_V1, то же правило у booked-rows.js loadPatientBookings).
+ *
+ * ДЛИТЕЛЬНОСТЬ — правилом resolveDuration: услуга (её duration_minutes, пусто —
+ * 15), иначе вид приёма (consultMinutes, по умолчанию 30), иначе 15. Строки ОДНОЙ
+ * записи у одного врача на одну минуту — одна занятость подряд, длительности
+ * складываются (как у присоединения к записи): консультация и ЭКГ на 15:00 —
+ * это 15:00–15:45, а не две строки «15:00» в «Бронировании».
+ *
+ * СВОЯ ЗАПИСЬ СЕБЕ НЕ МЕШАЕТ: excludeVisitId снимает и визит, и его строки — перенос
+ * и продление записи (exclude_visit_id), «своё время» пациента (EXCLUDE_OWN_VISIT_V1),
+ * вторая услуга в ту же присоединённую запись (assertLineTimeFree).
+ */
+// Только «отменена»: других статусов «снята» у строки нет; возврат — отметкой кассы.
+const LINE_FREE_STATUS = 'cancelled';
+
+/**
+ * Запрос строк, держащих время n врачей: параметры — n id врачей, затем «с» и
+ * «по» (ISO). Константы правила вписаны литералами — это не данные. Экспорт — для
+ * замера плана (EXPLAIN QUERY PLAN).
+ */
+export function lineBusySql(n) {
+  const holes = Array.from({ length: Math.max(1, n) }, () => '?').join(',');
+  return `
+    SELECT vs.id AS line_id, vs.visit_id, vs.doctor_id, vs.scheduled_at,
+           vs.service_id, vs.consultation_type_id,
+           s.duration_minutes AS svc_min, s.name AS svc_name,
+           ct.id AS ct_id, ct.duration_minutes AS ct_min, COALESCE(NULLIF(ct.name_ru, ''), ct.name) AS ct_name,
+           v.status, v.patient_id, v.doctor_id AS visit_doctor_id, p.full_name AS patient_name
+      FROM visit_services vs
+      JOIN visits v ON v.id = vs.visit_id
+      LEFT JOIN services s ON s.id = vs.service_id
+      LEFT JOIN consultation_types ct ON ct.id = vs.consultation_type_id
+      LEFT JOIN patients p ON p.id = v.patient_id
+     WHERE vs.doctor_id IN (${holes})
+       AND vs.scheduled_at >= ? AND vs.scheduled_at < ?
+       AND vs.status <> '${LINE_FREE_STATUS}'
+       AND vs.clinic_item_id IS NULL
+       AND v.status IN (${BUSY_STATUSES.map((s) => `'${s}'`).join(',')})
+       AND (v.doctor_id IS NULL OR v.doctor_id <> vs.doctor_id)
+       AND NOT (vs.invoice_item_id IS NULL
+                AND EXISTS (SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = 'out' AND prr.line_id = vs.id))
+     ORDER BY vs.doctor_id, vs.scheduled_at, vs.visit_id, vs.id`;
+}
+
+/** Строка «на дату» — местная полночь ровно (LAB_NO_DOCTOR_V1): времени врача не держит. */
+const isDateOnly = (ms) => ms % 60000 === 0 && minutesOfLocal(ms) === 0;
+
+/**
+ * Занятость врачей doctorIds строками визитов в [fromMs, toMs) — по одной на (врач,
+ * визит, минута начала). Границы — с запасом в сутки, попадание — в миллисекундах
+ * (та же оговорка про две формы ISO, что у loadBusy). Сбой чтения — пусто и
+ * предупреждение в журнал: старая база без колонок не роняет календарь.
+ * @returns {Array<{doctor_id:number, visit_id:number, line_ids:number[], startMs:number, endMs:number,
+ *   durationMin:number, status:string, patient_id:number, patient_name:string, visit_doctor_id:number|null, names:string[]}>}
+ */
+function loadLineBusy(db, { doctorIds, fromMs, toMs, excludeVisitId = null }) {
+  const ids = [...new Set((doctorIds || []).map(Number).filter(isPosInt))];
+  if (!ids.length) return [];
+  const pad = 24 * 3600 * 1000;
+  let rows = [];
+  try {
+    rows = db.prepare(lineBusySql(ids.length))
+      .all(...ids, new Date(fromMs - pad).toISOString(), new Date(toMs + pad).toISOString());
+  } catch (e) {
+    console.warn('[calendar] visit lines are not counted as busy time:', e && e.message);
+    return [];
+  }
+  const groups = new Map();
+  for (const r of rows) {
+    if (excludeVisitId && r.visit_id === excludeVisitId) continue;   // своя запись себе не мешает
+    const startMs = Date.parse(r.scheduled_at);
+    if (Number.isNaN(startMs) || isDateOnly(startMs)) continue;
+    const minutes = r.service_id
+      ? serviceDurationMinutes({ duration_minutes: r.svc_min }, DEFAULT_DURATION_MIN)
+      : (r.ct_id ? consultMinutes({ duration_minutes: r.ct_min }) : DEFAULT_DURATION_MIN);
+    const key = `${r.doctor_id}:${r.visit_id}:${Math.floor(startMs / 60000)}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        doctor_id: r.doctor_id, visit_id: r.visit_id, line_ids: [], startMs, endMs: startMs, durationMin: 0,
+        status: r.status, patient_id: r.patient_id, patient_name: r.patient_name || '',
+        visit_doctor_id: r.visit_doctor_id == null ? null : r.visit_doctor_id, names: [],
+      };
+      groups.set(key, g);
+    }
+    g.line_ids.push(r.line_id);
+    g.durationMin += minutes;
+    g.endMs = g.startMs + g.durationMin * 60000;
+    const name = r.service_id ? (r.svc_name || '') : (r.ct_name || '');
+    if (name && !g.names.includes(name)) g.names.push(name);
+  }
+  return [...groups.values()]
+    .filter((g) => g.endMs > fromMs && g.startMs < toMs)
+    .sort((a, b) => a.startMs - b.startMs || a.visit_id - b.visit_id);
+}
+
+/**
+ * SLOT_BUSY_LINES_V1 — СВОБОДНО ЛИ ВРЕМЯ ВРАЧА ДЛЯ СТРОКИ ЗАПИСИ (booking_lines_add со
+ * scheduled_at, в том числе «Добавить в этот визит» «Бронирования»). Та же занятость,
+ * что у calendar_book (loadBusy: записи, удержания онлайн-записи, строки других
+ * визитов); своя запись — визит и его строки — не мешает. Не проверяются строка
+ * врача самой записи (её время — сама запись: её проверил calendar_book, а
+ * экстренную записали с причиной) и строка «на дату». Занято — тот же отказ
+ * slot_taken (409), что у calendar_book: экран переводит его по коду.
+ */
+export function assertLineTimeFree(db, { visit, doctorId, scheduledAt, serviceId = null, consultationTypeId = null }) {
+  if (!doctorId || !scheduledAt) return;
+  if (visit && visit.doctor_id != null && Number(visit.doctor_id) === Number(doctorId)) return;
+  const startMs = Date.parse(scheduledAt);
+  if (!Number.isFinite(startMs) || isDateOnly(startMs)) return;
+  const durationMin = resolveDuration(db, { serviceId, consultationTypeId });
+  const busy = loadBusy(db, {
+    doctorId, roomId: null, fromMs: startMs, toMs: startMs + durationMin * 60000,
+    excludeVisitId: visit ? Number(visit.id) : null,
+  });
+  const conflict = busy.find((b) => overlapsMs(startMs, durationMin, b.startMs, b.durationMin));
+  if (!conflict) return;
+  const doctorName = (db.prepare('SELECT full_name FROM users WHERE id = ?').get(doctorId) || {}).full_name || '';
+  throw conflictError(doctorName, conflict);
+}
+
+/** Строка занятости для сетки «Записи» (calendar_windows.busy_lines): местные день и минуты. */
+function lineBusyView(g) {
+  const fromMin = minutesOfLocal(g.startMs);
+  const toMin = Math.min(24 * 60, fromMin + g.durationMin + (g.startMs % 60000 ? 1 : 0));
+  return {
+    visit_id: g.visit_id, visit_service_ids: g.line_ids,
+    patient_id: g.patient_id, patient_name: g.patient_name, visit_doctor_id: g.visit_doctor_id,
+    service: g.names.join(', '), status: g.status,
+    day: localDayIso(g.startMs), from_min: fromMin, to_min: toMin,
+    from: formatHhmm(fromMin), to: formatHhmm(fromMin + g.durationMin),
+    start_iso: new Date(g.startMs).toISOString(), duration_minutes: g.durationMin,
+  };
 }
 
 /**
@@ -937,6 +1106,9 @@ export function calendarSlots(db, args, user, internal = {}) {
       patient_name: b.patient_name,
       // PUBLIC_API_V1 — удержанное онлайн-записью: чьё (подключение) и до какого мгновения.
       ...(b.hold_id ? { hold_id: b.hold_id, held_for: b.held_for, held_until: b.held_until } : {}),
+      // SLOT_BUSY_LINES_V1 — время держит строка визита (visit_id — визит пациента у другого
+      // врача): экран не предлагает её «отменить запись» — так отменился бы весь визит.
+      ...(b.line_ids ? { visit_service_ids: b.line_ids } : {}),
     })),
     at_risk: atRisk.map((b) => ({
       visit_id: b.visit_id,
@@ -984,6 +1156,7 @@ export function calendarWindows(db, args, user) {
         self: selfLetter(db), buildings: networkBuildings(db), visits: {},
         stale_after_minutes: CONFIRMING_STALE_MIN,
       },
+      busy_lines: {},   // SLOT_BUSY_LINES_V1
     };
   }
   if (doctorIds.length + roomIds.length > 200) throw new RpcError('Слишком много врачей и кабинетов за один запрос.', 400);
@@ -1019,7 +1192,16 @@ export function calendarWindows(db, args, user) {
   const fromMs = first.getTime();
   const last = localMidnight(dayIsos[dayIsos.length - 1]);
   const toMs = new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1).getTime();
-  return { days: dayIsos, windows: out, cross: crossContext(db, { fromMs, toMs }) };
+  // SLOT_BUSY_LINES_V1 — строки визитов, держащие время врачей сетки (loadLineBusy): визит
+  // пациента стоит в колонке своего врача, а 15:00 врача Б, взятое его строкой, сетка
+  // обязана показать занятым в колонке врача Б. Ключ — как у windows: 'doctor:<id>'.
+  // Тем же правилом и тем же запросом, что занятость calendar_slots, — одним на всю сетку.
+  const busyLines = {};
+  for (const g of loadLineBusy(db, { doctorIds: doctors.map((d) => d.id), fromMs, toMs })) {
+    const key = 'doctor:' + g.doctor_id;
+    (busyLines[key] || (busyLines[key] = [])).push(lineBusyView(g));
+  }
+  return { days: dayIsos, windows: out, cross: crossContext(db, { fromMs, toMs }), busy_lines: busyLines };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

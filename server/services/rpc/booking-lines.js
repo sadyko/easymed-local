@@ -37,6 +37,7 @@ import { adoptWishes, releaseOrphans, bookLinesOnCard } from '../crm/one-way.js'
 import { crmLinkVisit } from '../crm/visit-link.js';   // CRM_UNIFY_V1
 import { localDate } from '../domain/day.js';
 import { journalLine, lineServiceName } from './registrar-desk.js';   // WAIT_REG_V1 (ревью) — журнал правок строк одной функцией (от имени — actingActorName)
+import { assertLineTimeFree } from './calendar.js';   // SLOT_BUSY_LINES_V1 — строка со временем не ложится на занятое время врача
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -88,6 +89,8 @@ function bookingOrRefuse(db, visitId) {
  * → { visit_id, added: [{ id, service_id, unit_price }], skipped: [service_id] }
  * skipped — услуги, которые в записи уже есть: вторая строка той же услуги —
  * двойной счёт в день приёма.
+ * SLOT_BUSY_LINES_V1 — строка к другому врачу со scheduled_at на занятое время этого
+ * врача — отказ 409 slot_taken (params: doctor, from, to), как у calendar_book.
  */
 export function bookingLinesAdd(db, args, user) {
   if (!hasAnyRole(user, ROLES)) throw new RpcError('Добавлять услуги к записи может колл-центр, регистратура или администратор.', 403);
@@ -134,6 +137,11 @@ export function bookingLinesAdd(db, args, user) {
       if (seen.has(key)) { skipped.push(serviceId || consultId); continue; }
       seen.add(key);
       const scheduledAt = rawAt ? new Date(Date.parse(rawAt)).toISOString() : null;
+      // SLOT_BUSY_LINES_V1 — строка к врачу со временем («Добавить в этот визит») занимает его
+      // время, значит и ложится только на свободное: та же занятость и тот же отказ slot_taken,
+      // что у calendar_book. Своя запись не мешает; строка врача самой записи не проверяется
+      // (rpc/calendar.js assertLineTimeFree). Отказ откатывает весь вызов — строк не остаётся.
+      assertLineTimeFree(db, { visit: v, doctorId, scheduledAt, serviceId, consultationTypeId: consultId });
       const id = insertBookingLine(db, { visit: v, serviceId, consultationTypeId: consultId, doctorId, createdBy: user && user.id, scheduledAt });
       const row = db.prepare('SELECT id, service_id, consultation_type_id, unit_price FROM visit_services WHERE id = ?').get(id);
       added.push(row);
