@@ -29,7 +29,8 @@ import { loadPatientById } from '../data.js';
 // (visit-booking.js → calendar_book), поиск пациента — тот же, что у окна
 // заведения карты (patient-create-modal.js).
 import { bookVisit, setVisitStatus } from './visit-booking.js';   // BOOKING_DAY_CANCEL_V1 — отмена той же дверью
-import { loadSlotDay, forgetSlots } from './service-picker-modal.js?v=ownrep4';   // один клиент слотов на продукт
+import { loadSlotDay, forgetSlots, askAddToDayVisit } from './service-picker-modal.js?v=ownrep4';   // один клиент слотов на продукт · BOOKING_DAY_JOIN_V1 — вопрос календаря «Добавить в этот визит»
+import { isOn } from '../../shared/flags.js';   // BOOKING_DAY_JOIN_V1 — флаг is_doctor из базы — 1, а не true
 import { consultMinutes } from '../../shared/consultation-price.js';   // длительность вида консультации — то же правило, что у сервера
 import { runPatientSearch, openPatientCreateModal } from './patient-create-modal.js?v=onewin1';
 import { grantAllows, canAddVisitLines } from '../permissions.js';
@@ -55,9 +56,18 @@ export function shiftDay(dayIso, delta) {
 }
 const toMin = (hhmm) => { const [a, b] = String(hhmm || '').split(':').map(Number); return (a || 0) * 60 + (b || 0); };
 
-/** Врач ли это — то же правило, что у календаря «Записи» (room-calendar.js). */
+/**
+ * Врач ли это для «Бронирования».
+ * BOOKING_DAY_JOIN_V1 — правило СЕРВЕРА для врача строки записи: «Записать» уходит
+ * calendar_book со строкой (line), а сервер принимает врачом строки только
+ * is_doctor = 1 или роль «Врач» (rpc/calendar.js: «Врач строки не найден среди
+ * врачей клиники»). Прежде список брал и любого со специальностью (как сетка
+ * календаря «Записи», которая пишет строки другой дверью) — медсестра со
+ * специальностью стояла в списке, а «Записать» к ней отказывало. Флаг — не роль:
+ * администратор-врач (is_doctor = 1, роль «Администратор») в списке есть.
+ */
 export function isDoctorLike(u) {
-    return u.is_doctor === true || u.is_doctor === 1 || String(u.role || '').toLowerCase() === 'doctor' || !!String(u.specialty || '').trim();
+    return !!u && (isOn(u.is_doctor) || String(u.role || '') === 'doctor');
 }
 
 /**
@@ -425,6 +435,8 @@ export async function renderBookingDay(host, ctx = {}, deps = {}) {
     async function book(t, patient) {
         if (state.booking || !state.choice) return;   // BOOKING_DAY_SERVICE_REQUIRED_V1
         state.booking = true;
+        const name = [patient.last_name, patient.first_name].filter(Boolean).join(' ') || patient.full_name || '';
+        let reload = true;
         try {
             const args = { patient_id: patient.id, doctor_id: state.doctorId, start: t.start_iso, status: 'scheduled' };
             if (state.day && state.day.duration_minutes) args.duration_minutes = state.day.duration_minutes;
@@ -432,17 +444,86 @@ export async function renderBookingDay(host, ctx = {}, deps = {}) {
             const [kind, id] = String(state.choice || '').split(':');
             if (kind === 'svc') { args.service_id = Number(id); args.line = { service_id: Number(id) }; }
             if (kind === 'ct') { args.consultation_type_id = Number(id); args.line = { consultation_type_id: Number(id) }; }
-            const res = await (deps.bookVisit || bookVisit)(args);
-            if (!res) { state.booking = false; return; }   // отказался от экстренной записи — ничего не создано
-            const name = [patient.last_name, patient.first_name].filter(Boolean).join(' ') || patient.full_name || '';
-            toast(trf('Записан: {name}, {time}', { name, time: t.from }), 'ok');
-            state.bookingAt = null;
+            let res = null;
+            let joined = null;   // BOOKING_DAY_JOIN_V1 — исход «Добавить в этот визит»
+            try {
+                res = await (deps.bookVisit || bookVisit)(args);
+            } catch (e) {
+                // BOOKING_DAY_JOIN_V1 — у пациента в этот день уже есть визит: сервер отказывает
+                // новой записи (один пациент — один день — один визит), экран предлагает то же,
+                // что календарь «Записи», — добавить запись в этот визит.
+                if (!e || e.code !== 'revisit_day_taken') throw e;
+                joined = await joinDayVisit(t, patient, args, e.params || {}, name);
+            }
+            if (joined) {
+                if (joined === 'cancelled') reload = false;   // «Отмена» — ничего не создано, строка записи открыта
+                else if (joined === 'joined') state.bookingAt = null;
+            } else if (!res) {
+                reload = false;   // отказался от экстренной записи — ничего не создано
+            } else {
+                toast(trf('Записан: {name}, {time}', { name, time: t.from }), 'ok');
+                state.bookingAt = null;
+            }
         } catch (e) {
             toast((e && e.message) || tr('Не удалось записать.'), 'fail');
         } finally {
             state.booking = false;
         }
-        await loadDay();
+        if (reload) await loadDay();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // BOOKING_DAY_JOIN_V1 (3.25.0) — ВТОРОЙ ВРАЧ В ТОТ ЖЕ ДЕНЬ — В ТОТ ЖЕ ВИЗИТ.
+    //
+    // Пациент записан на 09:00 к врачу А, регистратор пишет его к врачу Б на 15:00.
+    // Запись «Бронирования» — calendar_book со строкой (визит и услуга одной
+    // транзакцией), и на день, где у пациента уже есть живой визит, сервер ей
+    // отказывает (revisit_day_taken): второй визит на день не заводится. Календарь
+    // «Записи» в этом случае спрашивает «Добавить в этот визит» — теперь и здесь, тем
+    // же окном (askAddToDayVisit) и теми же дверями, что у календаря:
+    //   • врач занят? — присоединение сервер по времени врача строки не проверяет
+    //     (calendar_book с add_to_day_visit отдаёт визит дня сразу), поэтому день
+    //     врача спрашивается заново тем же клиентом слотов (calendar_slots, упаковка
+    //     SLOT_PACK_V1): время заняли, пока решали, — строка не ставится;
+    //   • визит дня — calendar_book с add_to_day_visit: визит как есть, без переноса;
+    //   • строка услуги врача — booking_lines_add: на выбранное время, с этим врачом,
+    //     «в смете», цену ставит сервер по дню визита, СЧЁТА НЕТ — его выставят, когда
+    //     пациент придёт («Оформить по записи»). Визит уже в работе (пациент пришёл,
+    //     выставлен счёт) дверь не принимает — отказ её словами, как у календаря.
+    // Новой серверной двери нет. Исход: 'cancelled' | 'taken' | 'none' | 'skipped' | 'joined';
+    // отказ сервера — исключение (его покажет book).
+    async function joinDayVisit(t, patient, args, p, name) {
+        const doc = state.doctors.find((d) => d.id === state.doctorId) || {};
+        const ask = deps.askAddToDayVisit || askAddToDayVisit;
+        const yes = await ask(trf('У пациента в этот день уже есть приём в {start} у {doctor}. Второй визит на день не заводится — добавить запись к {target} на {time} в этот визит?',
+            { start: p.start || '—', doctor: p.doctor || '—', target: doc.full_name || '—', time: t.from }));
+        if (!yes) return 'cancelled';
+        forgetSlots();
+        const fresh = await loadSlotDay(state.doctorId, state.date, durationMin()).catch(() => null);
+        if (!fresh || !(fresh.slots || []).some((s) => s.start_iso === t.start_iso)) {
+            toast(trf('Время {time} у врача {doctor} уже занято — выберите другое время.', { time: t.from, doctor: doc.full_name || '—' }), 'fail');
+            return 'taken';
+        }
+        const { line, ...rest } = args;
+        const day = await (deps.bookVisit || bookVisit)({ ...rest, add_to_day_visit: true });
+        if (!day || !day.visit) return 'none';
+        const { data, error } = await supabase.rpc('booking_lines_add', {
+            visit_id: day.visit.id, patient_id: patient.id,
+            lines: [{ ...line, doctor_id: state.doctorId, scheduled_at: t.start_iso }],
+        });
+        if (error) {
+            // Визита дня к этой секунде уже не было, и calendar_book завёл новый — пустым его
+            // не оставляем (как калькулятор календаря, discard_empty_visit).
+            if (day.created) { try { await supabase.rpc('discard_empty_visit', { visit_id: day.visit.id }); } catch (_) { /* останется пустая запись */ } }
+            throw new Error(error.message || tr('Не удалось добавить услуги.'));
+        }
+        forgetSlots();
+        if (!((data && data.added) || []).length) {
+            toast(tr('Эта услуга уже есть в визите пациента на этот день — второй строкой она не добавляется.'), 'warn');
+            return 'skipped';
+        }
+        toast(day.created ? trf('Записан: {name}, {time}', { name, time: t.from }) : trf('Добавлено в визит: {name}, {time}', { name, time: t.from }), 'ok');
+        return 'joined';
     }
 
     // BOOKING_DAY_DETAIL_V1 — номера карт и услуги записей дня: две выборки на

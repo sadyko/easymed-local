@@ -4030,6 +4030,14 @@ export function bookErrorText(error) {
     if (tpl) return trf(tpl, (error && error.params) || {});
     return (error && error.message) ? tr(error.message) : tr('Не удалось сохранить запись.');
 }
+// BOOKING_DAY_JOIN_V1 — ошибка записи со словами сервера и его кодом/параметрами
+// (как у setVisitStatus в visit-booking.js): вызывающий решает по коду, а не по тексту.
+function bookError(error) {
+    const e = new Error(bookErrorText(error));
+    if (error && error.code) e.code = error.code;
+    if (error && error.params) e.params = error.params;
+    return e;
+}
 
 /**
  * ЭКСТРЕННАЯ ЗАПИСЬ — ОТДЕЛЬНОЕ ДЕЙСТВИЕ С ПРИЧИНОЙ, а не галочка, снимающая
@@ -4123,7 +4131,9 @@ export async function calendarBookOrAsk(args, opts = {}) {
             if (add.error) throw new Error(bookErrorText(add.error));
             return { ...add.data, emergency: false };
         }
-        if (error.code !== 'slot_taken') throw new Error(bookErrorText(error));
+        // BOOKING_DAY_JOIN_V1 — отказ уходит с кодом и параметрами сервера: «Бронирование» по
+        // коду revisit_day_taken предлагает «Добавить в этот визит» (booking-day.js).
+        if (error.code !== 'slot_taken') throw bookError(error);
 
         if (opts.autoTime && error.params && error.params.to) {
             const next = _startAtSameDay(attempt.start, error.params.to);
