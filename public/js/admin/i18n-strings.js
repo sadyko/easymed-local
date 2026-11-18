@@ -14215,4 +14215,6 @@ export const STRINGS = {
   "Статус записи указан неверно.": {"en":"Invalid booking status.","ru":"Статус записи указан неверно.","uz":"Yozuv holati noto‘g‘ri ko‘rsatilgan."},   // CRM_BOOKINGS_TAB_V1
   // CRM_BOOKINGS_TAB_V1 (направления до оплаты) — направление врача в неоплаченном счёте ждёт кассу (views/registrar-waiting.js)
   "Направил врач — счёт выставлен, к кассе": {"en":"Sent by a doctor — invoice issued, to the cashier","ru":"Направил врач — счёт выставлен, к кассе","uz":"Shifokor yo‘lladi — hisob chiqarildi, kassaga"},   // CRM_BOOKINGS_TAB_V1 (направления до оплаты)
+  // CALLCENTER_NO_DISCOUNT_V1 — отказ сервера колл-центру (routes/db.js → domain/patient-category-guard.js)
+  "Группу пациента со скидкой колл-центр не выбирает и не меняет — её ставят регистратура или администратор.": {"en":"The call centre cannot choose or change a discounted patient group — the reception or an administrator sets it.","ru":"Группу пациента со скидкой колл-центр не выбирает и не меняет — её ставят регистратура или администратор.","uz":"Chegirmali bemor guruhini call-markaz tanlamaydi va o‘zgartirmaydi — uni registratura yoki administrator qo‘yadi."},   // CALLCENTER_NO_DISCOUNT_V1
 };

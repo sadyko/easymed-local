@@ -41,8 +41,10 @@ import { phoneInput, isCodeOnly } from '../phone-input.js?v=ph1';
 // PATIENT_CREATE_GATE_V1 — заведение пациента снова под правом. Ключ тот же,
 // что проверял маршрут #registration до PATIENT_ONE_WINDOW_V1; спрашивается он
 // в openPatientCreateModal() — единственной двери этого окна.
-import { canCreatePatient } from '../permissions.js';
+import { canCreatePatient, actorRoleCodes } from '../permissions.js';   // actorRoleCodes: CALLCENTER_NO_DISCOUNT_V1
 import { openAccessDeniedDialog } from '../access-denied.js';
+// CALLCENTER_NO_DISCOUNT_V1 — «со скидкой» и «только колл-центр» — одно правило с сервером.
+import { categoryCarriesDiscount, callcenterOnly } from '../../shared/patient-category-discount.js';
 // PATIENT_PHOTO_V1 — правила фотографии ОДНИ на браузер и сервер
 // (public/js/shared/), как у вложений карты. Здесь они стоят, чтобы отказ
 // пришёл СРАЗУ и назвал причину, а не после отправки восьми мегабайт по
@@ -409,11 +411,12 @@ export function buildPatientFields(container, {
             // Звёздочка — ОТДЕЛЬНЫЙ узел, а не «подпись + ' *'»: I18N_COVERAGE_V1
             // запрещает склейку русского литерала, да и в словаре подпись со
             // звёздочкой в строке уже не нашлась бы по своему ключу.
-            formEl.appendChild(h('div', { class: 'fr-label' }, tr(label), required ? req() : null));
+            const labelEl = formEl.appendChild(h('div', { class: 'fr-label' }, tr(label), required ? req() : null));
             // Класс .field рядом с .fr-ctl — не украшение: рамка, радиус, высота
             // 38 px и кольцо фокуса описаны ТОЛЬКО там, и телефон (.ph-input)
             // без него остался бы полем вовсе без рамки.
-            formEl.appendChild(h('div', { class: 'fr-ctl field' + (span ? ' fr-span' : '') }, control));
+            const ctlEl = formEl.appendChild(h('div', { class: 'fr-ctl field' + (span ? ' fr-span' : '') }, control));
+            return [labelEl, ctlEl];   // CALLCENTER_NO_DISCOUNT_V1 — ряд «Тип скидки» прячется целиком
         };
 
         // ФИО — одна подпись «Клиент» на три поля, как на образце: фамилия,
@@ -444,7 +447,8 @@ export function buildPatientFields(container, {
         // CATEGORY_DISCOUNT_V1 — на образце это «Тип скидки»: в карте список
         // зовётся «Категория пациента», но процент по нему и есть скидка,
         // которую регистратура здесь и выбирает. На образце он ПОСЛЕДНИЙ.
-        frRow('Тип скидки', reg('category_id', categorySel), { span: true });
+        // CALLCENTER_NO_DISCOUNT_V1 — колл-центру без единой группы без скидки ряда нет.
+        hideWhenNoCategory(categorySel, frRow('Тип скидки', reg('category_id', categorySel), { span: true }));
         container.appendChild(formEl);
     }
 
@@ -506,7 +510,8 @@ export function buildPatientFields(container, {
         // но обе возможности живые: категория считает деньги, а предупреждение
         // читают перед приёмом. Место им здесь — это тоже «учёт пациента».
         mgGrid(3,
-            field('Категория пациента', reg('category_id', categorySel)),
+            // CALLCENTER_NO_DISCOUNT_V1 — колл-центру без единой группы без скидки поля нет.
+            hideWhenNoCategory(categorySel, [field('Категория пациента', reg('category_id', categorySel))])[0],
             field('Поведение / предупреждение',
                 reg('behavior_note', textareaWith({
                     name: 'behavior_note', rows: '1',
@@ -1045,22 +1050,51 @@ function leadSourceSelect(want = '') {
     return sel;
 }
 
+// CALLCENTER_NO_DISCOUNT_V1 (3.25.0, владелец: «they create booking only, they
+// cannot set the discount») — ТОЛЬКО-КОЛЛ-ЦЕНТРУ ГРУППЫ СО СКИДКОЙ НЕ ПРЕДЛАГАЮТСЯ.
+// Оператор заводит карту из заявки CRM этим же блоком реквизитов, и выбранная им
+// «Сотрудники (−100%)» давала скидку на каждый счёт пациента сама; подстановка по
+// возрасту («Взрослый» / «Ребёнок» / «Новорождённый») выбирала группу с её скидкой.
+// Правило «со скидкой» и «только колл-центр» — одно с сервером
+// (shared/patient-category-discount.js); сервер отказывает и сам (routes/db.js).
+//   • только-колл-центр — роль callcenter без администратора и регистратуры среди
+//     ролей вошедшего (actorRoleCodes); роли неизвестны — экран не сужает;
+//   • групп без скидки не осталось — поля нет (sel.categoryEmpty, hideWhenNoCategory);
+//   • подстановка по возрасту ищет только среди предложенного — группу со
+//     скидкой она не выберет;
+//   • у карты, где группа со скидкой уже стоит, она видна, но список закрыт;
+//   • скидку справочник не отдал (старая база) — понять, где скидка, нечем:
+//     колл-центру не предлагается ничего.
 function categorySelect(want = null) {
     const sel = h('select', { name: 'category_id' });
     sel.appendChild(h('option', { value: '' }, '—'));
-    const fill = (rows) => {
+    const ccOnly = callcenterOnly(actorRoleCodes());
+    sel.categoryEmpty = false;
+    sel.onCategoryEmpty = null;
+    const fill = (rows, { discountKnown = true } = {}) => {
         // PATIENT_FORM_ONE_V1 — в режиме правки категория пациента выбирается,
         // как только список приехал.
         const wanted = want != null ? String(want) : '';
+        let offered = 0;
+        let keptWanted = false;
         for (const c of rows) {
             const pct = Number(c.discount_percent) || 0;
+            const isWanted = wanted !== '' && wanted === String(c.id);
+            const barred = ccOnly && (!discountKnown || categoryCarriesDiscount(c));
+            if (barred && !isWanted) continue;
+            if (barred) keptWanted = true; else offered++;
             // Имя лежит на самом варианте: подстановка по возрасту ищет
             // категорию ПО ИМЕНИ, и разбирать ради этого готовую подпись
             // «VIP (−15%)» значило бы ломаться от смены формата подписи.
-            sel.appendChild(h('option', { value: String(c.id), 'data-name': c.name, selected: wanted !== '' && wanted === String(c.id) },
+            sel.appendChild(h('option', { value: String(c.id), 'data-name': c.name, selected: isWanted },
                 pct > 0 ? c.name + '  (−' + pct + '%)' : c.name));
         }
         if (wanted) sel.value = wanted;
+        if (keptWanted) sel.disabled = true;
+        if (ccOnly && !offered && !keptWanted) {
+            sel.categoryEmpty = true;
+            if (typeof sel.onCategoryEmpty === 'function') sel.onCategoryEmpty();
+        }
     };
 
     // CATEGORY_LIST_RESILIENT_V1 — СНАЧАЛА СПИСОК, ПОТОМ СКИДКА.
@@ -1074,21 +1108,43 @@ function categorySelect(want = null) {
     //
     // Список дозагружается: окно обязано открыться сразу, а не ждать базу.
     // Пустой справочник — это пустой список, а не выдуманные значения.
-    supabase.from('patient_categories').select('id, name, discount_percent')
+    // CALLCENTER_NO_DISCOUNT_V1 — первой попыткой и ставки по услугам
+    // (discount_rates, мигр. 274): группа со ставками — тоже «со скидкой».
+    // Колонки — литералом у каждого запроса: их сверяет с реестром
+    // db-query-schema.test.mjs.
+    supabase.from('patient_categories').select('id, name, discount_percent, discount_rates')
         .eq('active', true).order('name')
         .then(({ data, error }) => {
             if (!error && Array.isArray(data)) { fill(data); return null; }
-            console.warn('[patient-categories] со скидкой не вышло, читаем без неё:',
-                (error && error.message) || error);
-            return supabase.from('patient_categories').select('id, name')
+            return supabase.from('patient_categories').select('id, name, discount_percent')
                 .eq('active', true).order('name')
-                .then(({ data: plain, error: e2 }) => {
-                    if (e2 || !Array.isArray(plain)) return;
-                    fill(plain);
+                .then(({ data: pctOnly, error: e1 }) => {
+                    if (!e1 && Array.isArray(pctOnly)) { fill(pctOnly); return null; }
+                    console.warn('[patient-categories] со скидкой не вышло, читаем без неё:',
+                        (e1 && e1.message) || e1);
+                    return supabase.from('patient_categories').select('id, name')
+                        .eq('active', true).order('name')
+                        .then(({ data: plain, error: e2 }) => {
+                            if (e2 || !Array.isArray(plain)) { if (ccOnly) fill([], { discountKnown: false }); return; }
+                            fill(plain, { discountKnown: false });
+                        });
                 });
         })
-        .catch(() => { /* нет справочника — поле просто останется с прочерком */ });
+        .catch(() => {
+            // нет справочника — поле просто останется с прочерком (колл-центру — без поля)
+            if (ccOnly && !sel.categoryEmpty) fill([], { discountKnown: false });
+        });
     return sel;
+}
+
+// CALLCENTER_NO_DISCOUNT_V1 — у только-колл-центра не осталось ни одной группы без
+// скидки: поле (подпись и список) прячется. Список дозагружается — прячем, когда он
+// приехал. Возвращает те же узлы, чтобы ряд можно было построить одной строкой.
+function hideWhenNoCategory(sel, els) {
+    const hide = () => { for (const el of els || []) if (el && el.style) el.style.display = 'none'; };
+    if (sel && sel.categoryEmpty) hide();
+    else if (sel) sel.onCategoryEmpty = hide;
+    return els;
 }
 
 // Возрастная подсказка осталась, но теперь она ИЩЕТ категорию с таким именем в

@@ -394,7 +394,9 @@ export function openQuickPatientModal({
                 });
                 return null;
             }
-            toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
+            // CALLCENTER_NO_DISCOUNT_V1 — отказ сервера («группу со скидкой колл-центр не
+            // выбирает…») — статья словаря: переводится сам, до подстановки.
+            toast(trf('Не удалось сохранить: {msg}', { msg: tr(String((e && e.message) || e)) }), 'fail');
             return null;
         } finally {
             state.saving = false;

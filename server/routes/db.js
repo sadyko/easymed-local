@@ -44,6 +44,7 @@ import { stampWriteBody, stampUpdateRefusal } from '../services/domain/package-l
 import { packageProblem, isPackageRow, packageIds, packageItems } from '../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1
 import { onlineRuleProblem } from '../../public/js/shared/service-public.js';   // SERVICES_PACKAGES_V1 — показ услуги: RU + UZ
 import { liveWrapSync } from '../services/live/bus.js';   // LIVE_REFRESH_V1 — «записано» для живых экранов
+import { isCallcenterOnlyUser, callcenterCategoryRefusal, CALLCENTER_DISCOUNT_REFUSAL } from '../services/domain/patient-category-guard.js';   // CALLCENTER_NO_DISCOUNT_V1
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -126,6 +127,35 @@ function writeTargets(db, meta, body, user, columns) {
     ? compileDeleteTargets(body, user, { db }, columns)
     : compileUpdateTargets(body, user, { db }, columns);
   return db.prepare(sel.sql).all(...sel.params);
+}
+
+// CALLCENTER_NO_DISCOUNT_V1 (3.25.0) — patients.category_id от только-колл-центра
+// (services/domain/patient-category-guard.js — правило и текст отказа):
+//   • вставка (и пачка, и upsert) — категория со скидкой у любой строки — отказ;
+//   • правка — читает категории правимых карт (writeTargets, правилами записи) и не
+//     даёт ни поставить, ни снять, ни сменить категорию со скидкой; не прочиталось —
+//     отказ, а не пропуск. Реестр правку карт колл-центру и так не даёт — замок
+//     стоит на случай, если её когда-нибудь выдадут.
+// Ключа category_id в записи нет — категорию не трогают, проверять нечего.
+function patientCategoryRefusal(db, meta, body, user) {
+  if (!meta || meta.table !== 'patients' || !['insert', 'update', 'upsert'].includes(meta.op)) return null;
+  if (!isCallcenterOnlyUser(user)) return null;
+  const sets = (v) => !!v && typeof v === 'object' && Object.prototype.hasOwnProperty.call(v, 'category_id');
+  const rows = Array.isArray(body && body.values) ? body.values : [(body && body.values) || {}];
+  if (meta.op === 'update') {
+    const v = rows[0];
+    if (!sets(v)) return null;
+    let current;
+    try { current = writeTargets(db, meta, body, user, ['category_id']).map((r) => r.category_id); }
+    catch { return CALLCENTER_DISCOUNT_REFUSAL; }
+    return callcenterCategoryRefusal(db, user, { next: v.category_id, current });
+  }
+  for (const v of rows) {
+    if (!sets(v)) continue;
+    const refusal = callcenterCategoryRefusal(db, user, { next: v.category_id });
+    if (refusal) return refusal;
+  }
+  return null;
 }
 
 function refuseProxyModelWrite(db, meta, body, user) {
@@ -665,6 +695,12 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     // выполнения (services/role-guard.js).
     const roleRefusal = roleWriteRefusal(db, req.user, compiled.meta, req.body);
     if (roleRefusal) return res.status(403).json({ error: { code: 'forbidden', message: roleRefusal } });
+
+    // CALLCENTER_NO_DISCOUNT_V1 — группу пациента со скидкой только-колл-центр не
+    // ставит и не меняет (services/domain/patient-category-guard.js). До выполнения:
+    // база не тронута, и пачка карт с одной такой группой не заводится целиком.
+    const categoryRefusal = patientCategoryRefusal(db, compiled.meta, req.body, req.user);
+    if (categoryRefusal) return res.status(403).json({ error: { code: 'forbidden', message: categoryRefusal } });
 
     // SURGERY_NEEDS_BED_V1 — операция оформляется НА ГОСПИТАЛИЗАЦИЮ.
     //
