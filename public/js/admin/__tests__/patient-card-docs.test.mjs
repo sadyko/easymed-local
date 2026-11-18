@@ -629,3 +629,51 @@ test('TG_LAB_MATRIX_V1: бланк из карты — панель-таблиц
   const plain = await printCardLab(cells, 1, [{ service_id: 101, kind: '', matrix_json: null }]);
   assert.ok(!plain.includes('class="res mx"') && plain.includes('E. coli · Рост'), 'обычная панель — не списком');
 });
+
+// DOC_HISTORY_V1 (3.25.0) — «История изменений» документа приёма и из списка документов карты:
+// у протокола (архивной копии) и у записи кабинета без копии — врачу строки, главному врачу и
+// администратору; регистратуре и другому врачу — нет. Строка услуги и её врач — из doc_notes.
+test('DOC_HISTORY_V1: «История изменений» у документа приёма в карте — врачу строки, главному врачу, администратору; регистратуре и другому врачу — нет', async () => {
+  const HIST_TITLE = 'История изменений документа';
+  const signedNotes = JSON.stringify({ __service_workspace_v1: 1, current: { chief_complaint: 'Кашель' },
+    history: [{ kind: 'signed', savedAt: '2026-11-18T08:00:00.000Z', by: 3, byName: 'Иванова А.', fields: { chief_complaint: 'Кашель' } }] });
+  const PROTOCOL = { id: 70, title: 'Протокол осмотра', doc_type: 'protocol', visit_service_id: 5, created_at: '2026-11-18T08:00:01Z',
+    created_by: 3, created_by_name: 'Иванова А.', voided_at: null, body: { service: 'Консультация' } };
+  const prevUser = globalThis.window.easymed.state.user;
+  const render = async (user, notes) => {
+    globalThis.window.easymed.state.user = user;
+    calls = []; opened = [];
+    payload = { ...payloadWith([PROTOCOL]), doc_notes: notes };
+    setFullAccess('Администратор');
+    const box = mk('div');
+    renderPatientCard(box, { onNavigate() {}, payload: { id: 1 } });
+    await tick();
+    openDocsTab(box);
+    await tick();
+    return buttons(box).filter((b) => (b.attrs.title || '') === HIST_TITLE);
+  };
+  const lines = [{ id: 5, notes: signedNotes, doctor_id: 3, services: { name: 'Консультация' }, users: { full_name: 'Иванова А.' } },
+    { id: 6, notes: signedNotes, doctor_id: 3, services: { name: 'УЗИ' }, users: { full_name: 'Иванова А.' } }];
+  try {
+    for (const [who, user, want] of [
+      ['врач строки', { id: 3, full_name: 'Иванова А.', role: 'doctor', extra_roles: [] }, 2],
+      ['главный врач', { id: 9, full_name: 'Главврач', role: 'doctor', extra_roles: ['head_doctor'] }, 2],
+      ['администратор', { id: 1, full_name: 'Петров', role: 'admin' }, 2],
+      ['регистратура', { id: 7, full_name: 'Регистратор', role: 'registrar' }, 0],
+      ['другой врач', { id: 4, full_name: 'Сидоров', role: 'doctor', extra_roles: [] }, 0],
+    ]) {
+      const btns = await render(user, lines);
+      // протокол строки 5 и запись кабинета строки 6 (копии нет) — по кнопке; у строки 5 запись кабинета не дублируется
+      assert.equal(btns.length, want, who + ': кнопок «История изменений» — ' + btns.length);
+    }
+    // загруженный файл и документ без строки услуги — без кнопки
+    const none = await render({ id: 1, full_name: 'Петров', role: 'admin' }, []);
+    assert.equal(none.length, 0, 'кнопка у документа без записи кабинета');
+    // кнопка открывает окно истории своей строки
+    const [btn] = await render({ id: 3, full_name: 'Иванова А.', role: 'doctor', extra_roles: [] }, lines.slice(0, 1));
+    calls = [];
+    btn.click();
+    await tick();
+    assert.ok(calls.some((c) => c.url === '/api/rpc/document_history_list' && c.body && c.body.visit_service_id === 5), 'окно истории не спросило историю строки 5');
+  } finally { globalThis.window.easymed.state.user = prevUser; }
+});

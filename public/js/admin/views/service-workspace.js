@@ -48,6 +48,7 @@ import { isOn } from '../../shared/flags.js';   // CLINIC_API_FIX_V1 — фла�
 import { consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1 · REPEAT_VISIT_V1 — цену строки повторного визита считает сервер
 import { sanitizeStoredHtml, richHasContent, textBreaks, textIsBlank } from '../../shared/rich-text.js';   // DOC_RICH_FORMAT_V1 — одна очистка разметки разделов с сервером и бланком · PRINT_SKIP_EMPTY_V1 — пустота поля рецепта
 import { fieldText, richForSheet, mainDxText, dxParts as dxPartsCore, entryDxText, docDayText } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — правила листа и для карты пациента
+import { docHistoryButton } from './doc-history.js';   // DOC_HISTORY_V1 — «История изменений» документа строки
 import { fieldIsRich, splitRichField, joinCont, contIsBlank, mergedFieldClone, insertCaretMark, takeCaretMark, gapCaret, edgeHop, breakLines, keepMarks, clearSplitIds } from './blank-split.js';   // DOC_RICH_FORMAT_V1 (T2, F5) — разбивка разметки по страницам бланка
 import { TBL_MAX_ROWS, TBL_MAX_COLS, insertTable, tableChain, tableHasText, cellStep, cellCaret, addRow, canRemoveRow, removeRow, addColumn, removeColumn, deleteTable, insertCellBreak, normalizePasted, beforeTable, rowHasText, columnHasText, stripPastedSplit } from './blank-table.js';   // DOC_RICH_FORMAT_V1 (T3, F6) — таблица в бланке
 
@@ -981,6 +982,11 @@ export function soapForm(ctx) {
         h('span', { 'data-zoom-label': '', style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-700)', minWidth: '42px', textAlign: 'center' } }, Math.round((wsState.docZoom || 1) * 100) + '%'),
         _zoomBtn('+', 'Увеличить документ', 0.1));
 
+    // DOC_HISTORY_V1 — «История изменений» документа строки: врачу строки, главному врачу
+    // и администратору (views/doc-history.js; сервер проверяет сам — rpc/doc-history.js).
+    const docHistBtn = docHistoryButton({ visitServiceId: ctx.visitServiceId, lineDoctorId: ctx.patient?.__service?.doctorId ?? null,
+        title: ctx.patient?.__service?.name || '' });
+
     const pcell = (label, value) => h('div', { class: 'a4-pcell' }, h('b', null, label), value);
 
     // WS_TOPLINE_V1 — patient block + История/Карта пациента share the doc bar's single line with the
@@ -1011,7 +1017,7 @@ export function soapForm(ctx) {
                 h('span', { class: 'ws-doctype-lbl' }, 'Тип документа'),
                 doctypeSel,
                 zoomCtl,
-                tplBtn, draftBtn, printBtn, saveBtn, finishBtn,
+                tplBtn, docHistBtn, draftBtn, printBtn, saveBtn, finishBtn,   // DOC_HISTORY_V1 — docHistBtn
             ),
             // SAVE_STATUS_COLOR_V1 + SAVE_STATUS_MERGED_V1 — the status pill lives
             // INSIDE the doc-bar (same background, no separate strip below); still

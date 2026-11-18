@@ -12,6 +12,36 @@ export const STRINGS = {
   "Историю изменений документа видят врач этой услуги, главный врач и администратор.": {"en":"The document’s change history is visible to the doctor of this service, the head doctor and the administrator.","ru":"Историю изменений документа видят врач этой услуги, главный врач и администратор.","uz":"Hujjat o‘zgarishlari tarixini ushbu xizmat shifokori, bosh shifokor va administrator ko‘radi."},   // DOC_HISTORY_V1
   "Не указана версия документа.": {"en":"No document version was specified.","ru":"Не указана версия документа.","uz":"Hujjat versiyasi ko‘rsatilmagan."},   // DOC_HISTORY_V1
   "Версия документа не найдена.": {"en":"Document version not found.","ru":"Версия документа не найдена.","uz":"Hujjat versiyasi topilmadi."},   // DOC_HISTORY_V1
+  // DOC_HISTORY_V1 — окно «История изменений» кабинета врача и карты пациента (views/doc-history.js, shared/doc-history.js)
+  "История изменений": {"en":"Change history","ru":"История изменений","uz":"O‘zgarishlar tarixi"},   // DOC_HISTORY_V1
+  "История изменений документа": {"en":"Document change history","ru":"История изменений документа","uz":"Hujjat o‘zgarishlari tarixi"},   // DOC_HISTORY_V1
+  "Версия до журнала изменений": {"en":"Version before the change log","ru":"Версия до журнала изменений","uz":"O‘zgarishlar jurnalidan oldingi versiya"},   // DOC_HISTORY_V1
+  "Подписан": {"en":"Signed","ru":"Подписан","uz":"Imzolangan"},   // DOC_HISTORY_V1
+  "Исправлен после подписи": {"en":"Corrected after signing","ru":"Исправлен после подписи","uz":"Imzodan keyin tuzatilgan"},   // DOC_HISTORY_V1
+  "Отметка медсестры": {"en":"Nurse’s mark","ru":"Отметка медсестры","uz":"Hamshira belgisi"},   // DOC_HISTORY_V1
+  "Изменение назначений и диагнозов": {"en":"Prescriptions and diagnoses changed","ru":"Изменение назначений и диагнозов","uz":"Tayinlamalar va tashxislar o‘zgartirildi"},   // DOC_HISTORY_V1
+  "Диагнозы": {"en":"Diagnoses","ru":"Диагнозы","uz":"Tashxislar"},   // DOC_HISTORY_V1
+  "Снимки": {"en":"Images","ru":"Снимки","uz":"Tasvirlar"},   // DOC_HISTORY_V1
+  "Заметка медсестры": {"en":"Nurse’s note","ru":"Заметка медсестры","uz":"Hamshira izohi"},   // DOC_HISTORY_V1
+  "до журнала изменений": {"en":"before the change log","ru":"до журнала изменений","uz":"o‘zgarishlar jurnalidan oldin"},   // DOC_HISTORY_V1
+  "{admin} (администратор) вместо {name}": {"en":"{admin} (administrator) on behalf of {name}","ru":"{admin} (администратор) вместо {name}","uz":"{admin} (administrator) {name} o‘rniga"},   // DOC_HISTORY_V1
+  "документ, написанный до обновления программы": {"en":"document written before the program update","ru":"документ, написанный до обновления программы","uz":"dastur yangilanishidan oldin yozilgan hujjat"},   // DOC_HISTORY_V1
+  "Снимки: +{added} / −{removed}": {"en":"Images: +{added} / −{removed}","ru":"Снимки: +{added} / −{removed}","uz":"Tasvirlar: +{added} / −{removed}"},   // DOC_HISTORY_V1
+  "содержание то же": {"en":"content unchanged","ru":"содержание то же","uz":"mazmun o‘zgarmagan"},   // DOC_HISTORY_V1
+  "Версия {n}": {"en":"Version {n}","ru":"Версия {n}","uz":"{n}-versiya"},   // DOC_HISTORY_V1
+  "Тип документа: {type}": {"en":"Document type: {type}","ru":"Тип документа: {type}","uz":"Hujjat turi: {type}"},   // DOC_HISTORY_V1
+  "Документ пуст.": {"en":"The document is empty.","ru":"Документ пуст.","uz":"Hujjat bo‘sh."},   // DOC_HISTORY_V1
+  "Снимков: {n}": {"en":"Images: {n}","ru":"Снимков: {n}","uz":"Tasvirlar: {n}"},   // DOC_HISTORY_V1
+  "Подписано в документе: {name}, {when}": {"en":"Signed in the document: {name}, {when}","ru":"Подписано в документе: {name}, {when}","uz":"Hujjatda imzolangan: {name}, {when}"},   // DOC_HISTORY_V1
+  "Версия {a} → версия {b}": {"en":"Version {a} → version {b}","ru":"Версия {a} → версия {b}","uz":"{a}-versiya → {b}-versiya"},   // DOC_HISTORY_V1
+  "убрано": {"en":"removed","ru":"убрано","uz":"olib tashlandi"},   // DOC_HISTORY_V1
+  "Было снимков: {a}, стало: {b} (добавлено {added}, убрано {removed})": {"en":"Images before: {a}, after: {b} (added {added}, removed {removed})","ru":"Было снимков: {a}, стало: {b} (добавлено {added}, убрано {removed})","uz":"Tasvirlar avval: {a}, endi: {b} (qo‘shildi {added}, olib tashlandi {removed})"},   // DOC_HISTORY_V1
+  "Содержание этих версий одинаково.": {"en":"These versions have the same content.","ru":"Содержание этих версий одинаково.","uz":"Bu versiyalarning mazmuni bir xil."},   // DOC_HISTORY_V1
+  "Без изменений: {list}": {"en":"Unchanged: {list}","ru":"Без изменений: {list}","uz":"O‘zgarishsiz: {list}"},   // DOC_HISTORY_V1
+  "Отметьте одну версию, чтобы посмотреть её, или две — чтобы сравнить.": {"en":"Tick one version to view it, or two to compare them.","ru":"Отметьте одну версию, чтобы посмотреть её, или две — чтобы сравнить.","uz":"Ko‘rish uchun bitta versiyani, solishtirish uchun ikkitasini belgilang."},   // DOC_HISTORY_V1
+  "Версию не загрузить: {msg}": {"en":"Could not load the version: {msg}","ru":"Версию не загрузить: {msg}","uz":"Versiyani yuklab bo‘lmadi: {msg}"},   // DOC_HISTORY_V1
+  "Историю не загрузить: {msg}": {"en":"Could not load the history: {msg}","ru":"Историю не загрузить: {msg}","uz":"Tarixni yuklab bo‘lmadi: {msg}"},   // DOC_HISTORY_V1
+  "Изменений пока нет: версия появится при первом сохранении документа.": {"en":"No changes yet: a version appears when the document is first saved.","ru":"Изменений пока нет: версия появится при первом сохранении документа.","uz":"Hozircha o‘zgarishlar yo‘q: versiya hujjat birinchi marta saqlanganda paydo bo‘ladi."},   // DOC_HISTORY_V1
   // RELEASE_SELECT_V1 — частичная оплата и долг отпускают в работу только отмеченные услуги (release-select.js, cashier-desk.js, visit-modal.js, rpc/billing.js)
   "Что можно оказать сейчас": {"en":"What can be provided now","ru":"Что можно оказать сейчас","uz":"Hozir nima ko‘rsatish mumkin"},   // RELEASE_SELECT_V1
   "Отметьте услуги, которые пациент получит сейчас. Неотмеченные ждут оплаты: в лабораторию и к врачу они не попадут.": {"en":"Tick the services the patient gets now. Unticked ones wait for payment: they will not reach the laboratory or the doctor.","ru":"Отметьте услуги, которые пациент получит сейчас. Неотмеченные ждут оплаты: в лабораторию и к врачу они не попадут.","uz":"Bemor hozir oladigan xizmatlarni belgilang. Belgilanmaganlari to‘lovni kutadi: ular laboratoriya va shifokorga bormaydi."},   // RELEASE_SELECT_V1

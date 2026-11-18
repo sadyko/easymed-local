@@ -392,6 +392,7 @@ export function patientCard(db, args, user) {
       .filter((r) => r.notes != null && r.notes !== '')
       .map((r) => ({
         id: r.id, notes: r.notes,
+        doctor_id: r.doctor_id ?? null,   // DOC_HISTORY_V1 — врач строки: кому карта показывает «Историю изменений»
         visit_date: visitDate.get(r.visit_id) || null,
         services: { name: r._s_name },
         users: { full_name: r._d_name },

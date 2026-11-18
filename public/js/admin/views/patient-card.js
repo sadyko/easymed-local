@@ -36,6 +36,7 @@ import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMI
 import { caseFilePrintHtml } from './case-docs.js?v=cw1';   // PATIENT_HISTORY_TAB_V1 — печать подшитой истории тем же бланком
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // PATIENT_HISTORY_TAB_V1
 import { notesDocData, docDayText, lastSignedEntry } from '../../shared/cabinet-doc.js';   // DOC_RICH_FORMAT_V1 (ревью T1) — лист приёма из подписанной записи · PRINT_VISIT_DATE_V1 (ревью m6) — день документа · PASTE_SOURCES_V1 — подписанная запись строки одним правилом
+import { docHistoryButton } from './doc-history.js';   // DOC_HISTORY_V1 — «История изменений» документа приёма из списка документов
 import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW_V1 — сумма долга у имени
 import { todayIso } from '../../shared/month-grid.js?v=mg1';   // DATE_LIMITS_V1 — местный день, а не UTC
 import { outcomeTitle } from './discharge.js';   // PATIENT_HISTORY_TAB_V1 — исход словами
@@ -2128,6 +2129,17 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // кнопка «Печать» строки — печать сразу.
             const VIEW_ONLY = { autoPrint: false };
             const openRow = (d, view) => d._lab ? printLabDay(d, view) : (d._ws ? printWsDoc(d, view) : openDoc(d, view));
+            // DOC_HISTORY_V1 — «История изменений» у документа приёма (запись кабинета строки и её
+            // архивная копия): строка услуги и её врач — из doc_notes (rpc patient_card). Кнопка —
+            // врачу строки, главному врачу и администратору (views/doc-history.js; сервер проверяет сам).
+            const lineDoctor = new Map((payloadDocNotes || []).map((r) => [Number(r.id), r.doctor_id ?? null]));
+            const historyBtn = (d) => {
+                const vsId = d._ws ? Number(String(d.id).slice(3)) : Number(d.visit_service_id);
+                if (d.voided_at || !lineDoctor.has(vsId) || !(d._ws || d.doc_type === 'protocol' || d.doc_type === 'diag')) return null;
+                const btn = docHistoryButton({ visitServiceId: vsId, lineDoctorId: lineDoctor.get(vsId), title: rowSvc(d) || d.title || '', small: true });
+                if (btn) btn.style.marginLeft = '6px';
+                return btn;
+            };
             const tbody = h('tbody');
             for (const d of docs) {
                 tbody.appendChild(h('tr', null,
@@ -2157,6 +2169,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                             class: 'btn btn-outline btn-sm', type: 'button', title: 'Печать',
                             onclick: () => openRow(d),
                         }, Icon('Print', { size: 13 }), ' Печать'),
+                        historyBtn(d),   // DOC_HISTORY_V1
                         // PATIENT_TAB_ACCESS_V1 — отзыв документа требует уровня
                         // «Удаление» на вкладке «Документы»; сервер проверяет то же
                         // (rpc patient_card_doc_void).
