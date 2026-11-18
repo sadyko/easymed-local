@@ -172,7 +172,7 @@ test('WAIT_REG_V1: «Оформить по записи» (колл-центр) 
   } finally { t.close(); }
 });
 
-test('WAIT_REG_V1: «Оформить по записи» — анализ «на дату»: визит дня заводит стойка, строка одна, счёт один; направление врача — счёт на строку врача', async () => {
+test('WAIT_REG_V1: «Оформить по записи» — анализ «на дату»: визит дня заводит стойка, строка одна, счёт один; направление врача — счёт на строку врача, ждёт кассу до оплаты', async () => {
   const t = await startCrmApp(seed);
   try {
     const { rid, d81 } = await seedAll(t);
@@ -194,7 +194,12 @@ test('WAIT_REG_V1: «Оформить по записи» — анализ «н�
     assert.equal(inv81.status, 200, inv81.text);
     const after = byPatient(await waiting(t));
     assert.equal(after.has(80), false, 'оформленный анализ «на дату» остался в списке');
-    assert.equal(after.has(81), false, 'оформленное направление врача осталось в списке');
+    // CRM_BOOKINGS_TAB_V1 (направления до оплаты, решение владельца) — направление врача со счётом ждёт кассу:
+    // в списке с пометкой «к кассе», пока счёт не оплачен; оплачен — уходит.
+    assert.equal(after.get(81) && after.get(81).to_cashier, true, 'неоплаченное направление врача не ждёт кассу');
+    const pay81 = await t.rpc('record_payment', 'kassa', { invoice_id: inv81.json.data.invoice.id, amount: inv81.json.data.invoice.total_amount, method: 'cash' });
+    assert.equal(pay81.status, 200, pay81.text);
+    assert.equal(byPatient(await waiting(t)).has(81), false, 'оплаченное направление врача осталось в списке');
   } finally { t.close(); }
 });
 

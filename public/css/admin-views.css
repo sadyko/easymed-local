@@ -9850,6 +9850,8 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
 .rwait-act { gap: 8px; align-items: center; flex-wrap: wrap; }
 .rwait-status { white-space: nowrap; }
 .rwait-reason { color: var(--ink-600, var(--ink-500)); }
+/* CRM_BOOKINGS_TAB_V1 (направления до оплаты) — «Направил врач — счёт выставлен, к кассе». */
+.rwait-tocash { font-size: 12.5px; font-weight: 600; color: var(--info-700, var(--ink-800)); }
 @media (max-width: 860px) {
     .rwait-row { grid-template-columns: 64px minmax(0, 1fr); }
     .rwait-what { grid-column: 2; }

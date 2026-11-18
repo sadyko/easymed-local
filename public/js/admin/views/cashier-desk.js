@@ -1550,7 +1550,9 @@ function refundCard(r, root, reload) {
 
 // REFERRAL_BILL_V1 — «Открыть визит» из «Возвратов и отмен» и из «Ждут счёта»:
 // окно счёта визита (visit-bill.js); после правок там касса перечитывается.
-async function openVisitWindow(visitId, reload) {
+// CRM_BOOKINGS_TAB_V1 (направления до оплаты) — та же дверь у «Записей CRM» стойки (registrar-waiting.js
+// подгружает кассу в момент действия тем же адресом, что admin.js): экспорт, а не копия.
+export async function openVisitWindow(visitId, reload) {
     try {
         const { data: visit } = await supabase.from('visits').select('*, patients(full_name, mrn, phone, date_of_birth)').eq('id', visitId).maybeSingle();
         if (!visit) { toast(tr('Визит не найден.'), 'fail'); return; }

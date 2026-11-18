@@ -11,7 +11,7 @@
 //   • источник — каждый по отдельности и вместе; строка с двумя источниками подходит по любому;
 //   • день — завтра, 7 дней (сегодня … +6), прошлый день; больше 7 дней, «с» позже «по», день и
 //     период вместе, неверная дата — 400;
-//   • статус — «Оформлены» (счёт, отметка «оформлен», «Пришёл», выставленное направление врача; приход
+//   • статус — «Оформлены» (счёт, отметка «оформлен», «Пришёл», оплаченное направление врача; приход
 //     с улицы — не запись), «Не пришли» («Не пришёл» сегодня, неоформленная запись прошлого дня),
 //     «Отменены» (отменённая запись, отменённая строка заявки на дату, анализ, отпущенный стойкой с
 //     причиной, направление врача, не оформленное с причиной), «Все»;
@@ -147,7 +147,7 @@ test('CRM_BOOKINGS_TAB_V1: день — завтра, 7 дней (сегодня
   } finally { t.close(); }
 });
 
-test('CRM_BOOKINGS_TAB_V1: «Оформлены» — счёт, отметка «оформлен», «Пришёл», выставленное направление врача; приход с улицы — не запись; «Ждут» их не показывает', async () => {
+test('CRM_BOOKINGS_TAB_V1: «Оформлены» — счёт, отметка «оформлен», «Пришёл», оплаченное направление врача; приход с улицы — не запись; «Ждут» их не показывает', async () => {
   const t = await startCrmApp(seed);
   try {
     const { v77, d81 } = await seedToday(t);
@@ -162,8 +162,13 @@ test('CRM_BOOKINGS_TAB_V1: «Оформлены» — счёт, отметка �
     // 84 — «Пришёл».
     const v84 = await calendarBook(t, 'reg', TODAY, { hour: 17, svc: 30, doctor: 10, pid: 84 });
     t.db.prepare("UPDATE visits SET status = 'arrived' WHERE id = ?").run(v84);
-    // 81 — направление врача выставлено.
-    assert.equal((await t.rpc('create_invoice_for_visit', 'reg', { visit_id: d81.vid, visit_service_ids: [d81.id], discount_amount: 0, payer_id: null })).status, 200);
+    // 81 — направление врача выставлено и оплачено. CRM_BOOKINGS_TAB_V1 (направления до оплаты): выставленное, но
+    // не оплаченное — в «Ждут» с пометкой «к кассе» (registrar-waiting-refpaid.test.js).
+    const inv81 = await t.rpc('create_invoice_for_visit', 'reg', { visit_id: d81.vid, visit_service_ids: [d81.id], discount_amount: 0, payer_id: null });
+    assert.equal(inv81.status, 200, inv81.text);
+    assert.equal(rowOf(await list(t), 81).to_cashier, true, 'неоплаченное направление врача не ждёт кассу');
+    const pay81 = await t.rpc('record_payment', 'kassa', { invoice_id: inv81.json.data.invoice.id, amount: inv81.json.data.invoice.total_amount, method: 'cash' });
+    assert.equal(pay81.status, 200, pay81.text);
     // 90 — пришёл с улицы: визит стойки и счёт, записи не было.
     const walk = await deskRegister(t, 'reg', { pid: 90 });
     assert.equal((await t.rpc('create_invoice_for_visit', 'reg', { visit_id: walk.vid, visit_service_ids: walk.ids, discount_amount: 0, payer_id: null })).status, 200);

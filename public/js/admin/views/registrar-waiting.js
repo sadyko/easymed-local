@@ -23,6 +23,13 @@
 // заголовок дня над его строками. Счётчик вкладки (patients-hub.js) — по фильтру ПО УМОЛЧАНИЮ, а не по
 // текущему: при других фильтрах вкладка отдельно спрашивает число (count_only, BADGE_ARGS).
 //
+// CRM_BOOKINGS_TAB_V1 (направления до оплаты, 2026-11-18) — решение владельца: направленный врачом пациент ждёт,
+// пока касса не примет оплату. Строка «к кассе» (сервер: to_cashier — все её строки — направления врача в
+// неоплаченном счёте) — «Ждёт» с подписью «Направил врач — счёт выставлен, к кассе» и действием «Открыть
+// визит» (окно счёта визита — дверь кассы, cashier-desk.js openVisitWindow) вместо «Оформить по записи». Строка,
+// где рядом с таким направлением есть запись, — подпись есть, «Оформить по записи» остаётся (запись оформлять).
+// Быстрая регистрация пациента «только к кассе» в «Оформить по записи» не уводит (patientWaitsToday).
+//
 // Что здесь:
 //   • список ожидаемых пациентов — строка на пациента (и день, и статус): время, пациент
 //     (имя открывает карту, номер карты, телефон), откуда он (колл-центр / CRM, календарь, сайт /
@@ -121,10 +128,22 @@ export function isDefaultFilter(f) {
 }
 
 /**
+ * CRM_BOOKINGS_TAB_V1 (направления до оплаты) — строка, в которой всё — направления врача в неоплаченном счёте
+ * (сервер: to_cashier): регистрировать нечего, пациента ждёт касса — «Открыть визит», а не «Оформить по записи».
+ */
+export function isToCashierRow(r) { return !!(r && r.to_cashier === true); }
+/** Есть ли в строке направление врача, выставленное в неоплаченный счёт (подпись «… к кассе»). */
+export function hasBilledReferral(r) {
+    return isToCashierRow(r) || !!(r && (r.lines || []).some((l) => l && l.to_cashier === true));
+}
+
+/**
  * «Оформить по записи» — только у строки «сегодня + Ждёт». Строка прежнего вида (без дня и статуса —
- * старый сервер, подмены тестов) — сегодняшняя «ждёт».
+ * старый сервер, подмены тестов) — сегодняшняя «ждёт». CRM_BOOKINGS_TAB_V1 (направления до оплаты) — у строки
+ * «к кассе» его нет.
  */
 export function canRegisterRow(r, today) {
+    if (isToCashierRow(r)) return false;
     const status = (r && r.status) || 'waiting';
     const day = r && r.day;
     return status === 'waiting' && (!day || !today || day === today);
@@ -148,9 +167,24 @@ export async function loadRegistrarWaiting({ patientId = null, countOnly = false
         count, rows, doctors: data && Array.isArray(data.doctors) ? data.doctors : [] };
 }
 
-/** Ждёт ли пациент регистрации сегодня (запись, анализ «на дату», направление врача). Сбой — нет. */
+/**
+ * Ждёт ли пациент регистрации сегодня (запись, анализ «на дату», направление врача). Сбой — нет.
+ * CRM_BOOKINGS_TAB_V1 (направления до оплаты) — пациента, которого ждёт только касса (строка «к кассе»), стойке
+ * оформлять нечего: быстрая регистрация не уводит его в «Оформить по записи».
+ */
 export async function patientWaitsToday(patientId) {
-    try { return (await loadRegistrarWaiting({ patientId })).count > 0; } catch (_) { return false; }
+    try { return (await loadRegistrarWaiting({ patientId })).rows.some((r) => !isToCashierRow(r)); } catch (_) { return false; }
+}
+
+/**
+ * CRM_BOOKINGS_TAB_V1 (направления до оплаты) — «Открыть визит»: та же дверь, что «Открыть визит» кассы
+ * («Ждут счёта», «Возвраты и отмены» — cashier-desk.js openVisitWindow): окно счёта визита (visit-bill.js).
+ * Касса подгружается в момент действия тем же адресом, что у admin.js (один экземпляр модуля; кольца
+ * импортов нет — no-import-cycles). onChanged — после правок в окне (список перечитывается).
+ */
+export async function openVisitBill(visitId, onChanged = null) {
+    const mod = await import('./cashier-desk.js?v=cash12');
+    await mod.openVisitWindow(Number(visitId), typeof onChanged === 'function' ? onChanged : () => {});
 }
 
 /**
@@ -336,7 +370,7 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
             h('div', { class: 'rwait-title' }, Icon('Headset', { size: 16 }), ' ', tr('Записи CRM'),
                 h('span', { class: 'rwait-count', 'data-rwait-count': String(state.rows.length) }, String(state.rows.length))),
             h('div', { class: 'rwait-sub' },
-                tr('Записи колл-центра, календаря и сайта и направления врача. Пациент уходит из «Ждут», когда его оформили — со счётом или без.'))),
+                tr('Записи колл-центра, календаря и сайта и направления врача. Пациент уходит из «Ждут», когда его оформили — со счётом или без; направленный врачом со счётом — когда касса приняла оплату.'))),
         h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-rwait-refresh': '', onclick: () => { void reload(); } },
             Icon('Refresh', { size: 13 }), ' ', tr('Обновить')));
     }
@@ -388,6 +422,10 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
         const chip = STATUS_CHIP[status] || STATUS_CHIP.waiting;
         const canRegister = canRegisterRow(r, state.today);
         const noService = !!r.no_service || !(r.services || []).length;
+        // CRM_BOOKINGS_TAB_V1 (направления до оплаты) — направление врача в неоплаченном счёте: подпись; строку, где
+        // регистрировать нечего, ведёт «Открыть визит» (окно счёта визита, как у кассы).
+        const toCashier = status === 'waiting' && isToCashierRow(r) && r.visit_id != null;
+        const billedNote = status === 'waiting' && hasBilledReferral(r);
         return h('div', { class: 'rwait-row', role: 'listitem', 'data-rwait-row': String(r.patient_id),
             'data-rwait-key': [r.patient_id, r.day || '', status].join('|') },
             h('div', { class: 'rwait-time' }, r.time ? h('b', null, r.time) : h('span', { class: 'muted' }, tr('за день'))),
@@ -400,6 +438,7 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
                 (r.services || []).length ? h('div', { class: 'rwait-svc' }, Icon('Stethoscope', { size: 12 }), ' ', r.services.join(', ')) : null,
                 // WAIT_REG_V1 (ревью, решение владельца) — запись календаря без услуги: услугу выберет регистратор.
                 noService ? h('div', { class: 'rwait-svc rwait-nosvc', 'data-rwait-no-service': '' }, Icon('Warning', { size: 12 }), ' ', tr('услуга не выбрана')) : null,
+                billedNote ? h('div', { class: 'rwait-svc rwait-tocash', 'data-rwait-to-cashier': '' }, Icon('Receipt', { size: 12 }), ' ', tr('Направил врач — счёт выставлен, к кассе')) : null,
                 (r.doctors || []).length ? h('div', { class: 'rwait-sub2' }, trf('Врач: {names}', { names: r.doctors.join(', ') })) : null,
                 (r.booked_by || []).length ? h('div', { class: 'rwait-sub2' }, trf('Записал(а): {names}', { names: r.booked_by.join(', ') })) : null,
                 (r.reasons || []).length ? h('div', { class: 'rwait-sub2 rwait-reason' }, trf('Причина: {reason}', { reason: r.reasons.join('; ') })) : null),
@@ -410,9 +449,29 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
                     ? h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-rwait-register': String(r.patient_id),
                         disabled: !!state.busy, onclick: () => { void register(r); } },
                     Icon('Receipt', { size: 13 }), ' ', tr('Оформить по записи'))
-                    : h('button', { type: 'button', class: 'btn btn-sm btn-outline', 'data-rwait-card': String(r.patient_id),
-                        onclick: () => openCard(r.patient_id) },
-                    Icon('User', { size: 13 }), ' ', tr('Открыть карту'))));
+                    : toCashier
+                        ? h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-rwait-visit': String(r.patient_id),
+                            disabled: !!state.busy, onclick: () => { void openVisit(r); } },
+                        Icon('Receipt', { size: 13 }), ' ', tr('Открыть визит'))
+                        : h('button', { type: 'button', class: 'btn btn-sm btn-outline', 'data-rwait-card': String(r.patient_id),
+                            onclick: () => openCard(r.patient_id) },
+                        Icon('User', { size: 13 }), ' ', tr('Открыть карту'))));
+    }
+
+    // CRM_BOOKINGS_TAB_V1 (направления до оплаты) — «Открыть визит»: окно счёта визита (дверь кассы); после правок
+    // в окне (оплата, отмена) список перечитывается.
+    async function openVisit(r) {
+        if (state.busy) return;
+        state.busy = true;
+        repaintKeepingFocus(paintList);
+        try {
+            await (deps.openVisit || openVisitBill)(r.visit_id, () => { void reload(); });
+        } catch (e) {
+            toast((e && e.message) || tr('Не удалось открыть окно визита.'), 'fail');
+        } finally {
+            state.busy = false;
+            repaintKeepingFocus(paintList);
+        }
     }
 
     async function register(r) {
@@ -439,7 +498,7 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
         try {
             const a = typeof document !== 'undefined' ? document.activeElement : null;
             if (!a || a === root || typeof root.contains !== 'function' || !root.contains(a) || typeof a.getAttribute !== 'function') return null;
-            for (const k of ['data-rwait-register', 'data-rwait-card', 'data-rwait-open', 'data-rwait-refresh']) {
+            for (const k of ['data-rwait-register', 'data-rwait-visit', 'data-rwait-card', 'data-rwait-open', 'data-rwait-refresh']) {
                 const v = a.getAttribute(k);
                 if (v != null) return [k, v];
             }

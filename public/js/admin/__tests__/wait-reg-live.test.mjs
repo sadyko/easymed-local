@@ -311,6 +311,42 @@ test('WAIT_REG_V1 (настоящий сервер): направление вр
   } finally { t.close(); }
 });
 
+// CRM_BOOKINGS_TAB_V1 (направления до оплаты, решение владельца) — направленный врачом пациент со счётом ждёт
+// кассу: в «Ждут» с подписью, «Открыть визит» — окно счёта визита (та же дверь, что у кассы: cashier-desk.js
+// openVisitWindow → visit-bill.js), «Оформить по записи» нет; касса приняла оплату — пациент ушёл из «Ждут».
+test('CRM_BOOKINGS_TAB_V1 (направления до оплаты, настоящий сервер): направление врача со счётом — «к кассе», «Открыть визит» открывает окно счёта визита; оплачено — ушёл из «Ждут»', async () => {
+  const t = await live();
+  try {
+    const ev = await t.rpc('ensure_visit', 'doc', { patient_id: 81, date: TODAY, doctor_id: 10, visit_type: 'outpatient' });
+    assert.equal(ev.status, 200, ev.text);
+    const vid = ev.json.data.visit.id;
+    t.db.prepare("UPDATE visits SET status = 'arrived' WHERE id = ?").run(vid);
+    const sent = await addVisitLine(t, 'doc', vid, { svc: 40, doctor: null });
+    const inv = await t.rpc('create_invoice_for_visit', 'doc', { visit_id: vid, visit_service_ids: [sent], discount_amount: 0, payer_id: null });
+    assert.equal(inv.status, 200, inv.text);
+    const host = mk('div');
+    const tab = await renderRegistrarWaiting(host, {}, { filter: { source: 'doctor' } });
+    const rowEl = () => walk(host).find((n) => n.attrs && n.attrs['data-rwait-row'] === '81') || null;
+    assert.ok(rowEl(), 'направление врача со счётом не в «Ждут»: ' + textOf(host).slice(0, 300));
+    assert.match(textOf(rowEl()), /Направил врач — счёт выставлен, к кассе/);
+    assert.equal(walk(rowEl()).some((n) => n.attrs && 'data-rwait-register' in n.attrs), false, '«Оформить по записи» у строки, которую ждёт касса');
+    const btn = walk(rowEl()).find((n) => n.attrs && n.attrs['data-rwait-visit'] === '81');
+    assert.ok(btn, 'нет «Открыть визит»');
+    const bill = () => document.body.children.find((n) => n && String(n.className || '').split(/\s+/).includes('modal') && /Счёт и оплата/.test(textOf(n))) || null;
+    btn.click();
+    for (let i = 0; i < 120 && !bill(); i++) await wait(25);
+    await wait(150); await flush(30);
+    assert.ok(bill(), '«Открыть визит» не открыл окно счёта визита: ' + JSON.stringify(TOASTS));
+    assert.match(textOf(bill()), /Направленов Глеб/, 'окно счёта — не того пациента');
+    assert.ok(SENT.some((s) => s.kind === 'select' && s.table === 'visits'), 'визит окна не прочитан с сервера');
+    // Касса приняла оплату — пациент ушёл из «Ждут».
+    const pay = await t.rpc('record_payment', 'kassa', { invoice_id: inv.json.data.invoice.id, amount: inv.json.data.invoice.total_amount, method: 'cash' });
+    assert.equal(pay.status, 200, pay.text);
+    await tab.reload();
+    assert.equal(rowEl(), null, 'оплаченное направление осталось в «Ждут»');
+  } finally { t.close(); }
+});
+
 test('WAIT_REG_V1 (настоящий сервер): анализ «на дату» — окно заводит визит дня с ним: одна строка, один счёт; убранный с причиной — снят, заявка без даты, журнал', async () => {
   const t = await live();
   try {

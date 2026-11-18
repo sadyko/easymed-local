@@ -85,14 +85,15 @@ globalThis.requestAnimationFrame = (fn) => fn();
 globalThis.cancelAnimationFrame = () => {};
 globalThis.history = { state: null, replaceState() {}, pushState() {} };
 const RPC = [];
+let RPC_REPLY = null;   // CRM_BOOKINGS_TAB_V1 (направления до оплаты) — ответ registrar_waiting для patientWaitsToday
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/rpc/')) RPC.push([decodeURIComponent(u.slice('/api/rpc/'.length)), body]);
-  return { ok: true, status: 200, json: async () => ({ data: { today: '2026-11-17', count: 0, rows: [] } }) };
+  return { ok: true, status: 200, json: async () => ({ data: RPC_REPLY ? JSON.parse(JSON.stringify(RPC_REPLY)) : { today: '2026-11-17', count: 0, rows: [] } }) };
 };
 
-const { renderRegistrarWaiting, loadRegistrarWaiting, filterArgs, DEFAULT_FILTER, BADGE_ARGS, canRegisterRow } = await import('../views/registrar-waiting.js');
+const { renderRegistrarWaiting, loadRegistrarWaiting, filterArgs, DEFAULT_FILTER, BADGE_ARGS, canRegisterRow, patientWaitsToday } = await import('../views/registrar-waiting.js');
 const { setLang } = await import('../i18n.js');
 
 const TODAY = '2026-11-17';
@@ -308,4 +309,97 @@ test('CRM_BOOKINGS_TAB_V1 (вид): перерисовка фильтров не
   assert.equal(has('uidate-native'), true, 'после «Сегодня» — тоже');
   assert.equal(has('on'), false);
   assert.ok(date.attrs.placeholder, 'у поля даты есть подпись (её показывает календарь программы)');
+});
+
+// ─── CRM_BOOKINGS_TAB_V1 (направления до оплаты) ─────────────────────────────
+// Решение владельца: направленный врачом пациент ждёт, пока касса не примет оплату. Строка, где всё —
+// направления врача в неоплаченном счёте (сервер: to_cashier), — «Ждёт» с подписью «Направил врач — счёт
+// выставлен, к кассе» и действием «Открыть визит» (окно счёта визита, как «Открыть визит» кассы), а не
+// «Оформить по записи». Строка с выставленным направлением И записью — подпись есть, «Оформить по записи» —
+// тоже (запись ещё оформлять). Быстрая регистрация пациента «только к кассе» в «Оформить по записи» не уводит.
+const BILLED = (pid, visitId, extra = {}) => ROW(pid, { sources: [{ kind: 'doctor', name: 'Иванов' }], services: ['Анализ крови'], visit_id: visitId,
+  to_cashier: true, lines: [{ kind: 'doctor', visit_service_id: pid * 10, visit_id: visitId, service_id: 40, doctor_id: null, name: 'Анализ крови',
+    to_cashier: true, invoice_id: 500 + pid, invoice_number: 'INV-' + pid }], ...extra });
+
+test('CRM_BOOKINGS_TAB_V1 (направления до оплаты): canRegisterRow — нет у строки «к кассе»; есть у строки с записью и выставленным направлением', () => {
+  assert.equal(canRegisterRow(BILLED(6, 66), TODAY), false, '«Оформить по записи» у строки, которую ждёт касса');
+  const mixed = ROW(7, { to_cashier: false, lines: [ROW(7).lines[0], { kind: 'doctor', visit_service_id: 71, visit_id: 7, to_cashier: true }] });
+  assert.equal(canRegisterRow(mixed, TODAY), true, 'запись рядом с выставленным направлением осталась без «Оформить по записи»');
+  assert.equal(canRegisterRow(ROW(1), TODAY), true);
+});
+
+test('CRM_BOOKINGS_TAB_V1 (направления до оплаты): строка «к кассе» — подпись, «Открыть визит» (окно счёта визита), без «Оформить по записи»; после правок окна — список перечитан', async () => {
+  const rows = [
+    ROW(1),
+    BILLED(6, 66),
+    ROW(7, { to_cashier: false, sources: [{ kind: 'crm', name: '' }, { kind: 'doctor', name: 'Иванов' }],
+      lines: [ROW(7).lines[0], { kind: 'doctor', visit_service_id: 71, visit_id: 7, service_id: 40, name: 'Анализ крови', to_cashier: true, invoice_id: 9 }] }),
+    BILLED(8, 88, { day: '2026-11-18' }),
+  ];
+  const f = fakeLoad(rows);
+  const opened = [];
+  const host = mk('div');
+  await renderRegistrarWaiting(host, {}, { load: f.load, openVisit: async (visitId, onChanged) => { opened.push(visitId); await onChanged(); } });
+  assert.deepEqual(allByAttr(host, 'data-rwait-register').map((b) => b.attrs['data-rwait-register']), ['1', '7']);
+  const visitBtns = allByAttr(host, 'data-rwait-visit');
+  assert.deepEqual(visitBtns.map((b) => b.attrs['data-rwait-visit']), ['6', '8'], '«Открыть визит» не у строк «к кассе»');
+  for (const b of visitBtns) {
+    assert.equal(b.tagName, 'BUTTON');
+    assert.equal(b.attrs.type, 'button');
+    assert.match(textOf(b), /Открыть визит/);
+  }
+  assert.deepEqual(allByAttr(host, 'data-rwait-card').map((b) => b.attrs['data-rwait-card']), [], 'у строки «к кассе» — «Открыть карту» вместо «Открыть визит»');
+  const note = (pid) => walk(byAttr(host, 'data-rwait-row', pid)).find((n) => n.attrs && 'data-rwait-to-cashier' in n.attrs) || null;
+  assert.equal(note(1), null, 'подпись «к кассе» у записи без направления');
+  for (const pid of [6, 7, 8]) assert.match(textOf(note(pid)), /Направил врач — счёт выставлен, к кассе/, pid + ': нет подписи');
+  const chip = walk(byAttr(host, 'data-rwait-row', 6)).find((n) => n.attrs && 'data-rwait-status-chip' in n.attrs);
+  assert.equal(chip.attrs['data-rwait-status-chip'], 'waiting');
+  const before = f.lists().length;
+  byAttr(host, 'data-rwait-visit', 6).click();
+  await tick(30);
+  assert.deepEqual(opened, [66], '«Открыть визит» открыл не визит строки');
+  assert.equal(f.lists().length, before + 1, 'после окна визита список не перечитан');
+});
+
+test('CRM_BOOKINGS_TAB_V1 (направления до оплаты): подпись и «Открыть визит» — на языке экрана (uz / en)', async () => {
+  try {
+    for (const [lang, words] of [
+      ['uz', ['Shifokor yo‘lladi — hisob chiqarildi, kassaga', 'Tashrifni ochish']],
+      ['en', ['Sent by a doctor — invoice issued, to the cashier', 'Open visit']],
+    ]) {
+      setLang(lang);
+      const f = fakeLoad([BILLED(6, 66)]);
+      const host = mk('div');
+      await renderRegistrarWaiting(host, {}, { load: f.load });
+      const txt = textOf(host);
+      for (const w of words) assert.ok(txt.includes(w), lang + ': нет «' + w + '»');
+      assert.equal(/[Ѐ-ӿ]/.test(txt.replace(/Пациент 6|Иванов|Анализ крови|Оператор А/g, '')), false, lang + ': на экране кириллица: ' + txt.match(/[^ ]*[Ѐ-ӿ][^ ]*/g));
+    }
+  } finally { setLang('ru'); }
+});
+
+test('CRM_BOOKINGS_TAB_V1 (направления до оплаты): быстрая регистрация — пациент «только к кассе» не «ждёт» (patientWaitsToday), с записью — ждёт', async () => {
+  try {
+    RPC_REPLY = { today: TODAY, count: 1, rows: [BILLED(6, 66)] };
+    assert.equal(await patientWaitsToday(6), false, 'пациента, которого ждёт только касса, увели в «Оформить по записи»');
+    RPC_REPLY = { today: TODAY, count: 2, rows: [BILLED(6, 66), ROW(6, { lines: [ROW(6).lines[0]] })] };
+    assert.equal(await patientWaitsToday(6), true);
+    RPC_REPLY = { today: TODAY, count: 1, rows: [ROW(6)] };
+    assert.equal(await patientWaitsToday(6), true);
+    RPC_REPLY = { today: TODAY, count: 0, rows: [] };
+    assert.equal(await patientWaitsToday(6), false);
+  } finally { RPC_REPLY = null; }
+});
+
+test('CRM_BOOKINGS_TAB_V1 (направления до оплаты): «Открыть визит» по умолчанию — дверь кассы (cashier-desk.js openVisitWindow) тем же адресом, что у admin.js', async () => {
+  const fs = await import('node:fs');
+  const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8');
+  const stamp = (read('../../admin.js').match(/views\/cashier-desk\.js\?v=([\w-]+)'/) || [])[1];
+  assert.ok(stamp, 'admin.js грузит кассу без штампа — проверка смотрит не туда');
+  const view = read('../views/registrar-waiting.js');
+  const m = view.match(/import\('\.\/cashier-desk\.js(?:\?v=([\w-]+))?'\)/);
+  assert.ok(m, '«Открыть визит» не подгружает кассу в момент действия');
+  assert.equal(m[1], stamp, 'касса подгружается другим адресом — второй экземпляр модуля');
+  assert.match(view, /openVisitWindow\(/, '«Открыть визит» — не дверь кассы');
+  assert.match(read('../views/cashier-desk.js'), /export async function openVisitWindow\(/, 'касса не отдаёт свою дверь «Открыть визит»');
 });

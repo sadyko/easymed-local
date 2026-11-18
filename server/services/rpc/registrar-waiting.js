@@ -25,7 +25,8 @@
 //   в) НАПРАВИЛ ВРАЧ: строка визита сегодня без счёта, на которую направил врач — правило
 //      patient_referral_orders (rpc/referral-orders.js DOCTOR_ORDER_SQL: внутренний источник врача
 //      или строку завёл врач к другому исполнителю). Визит может быть и «Пришёл» (направили с
-//      приёма): пациент уходит из списка, когда строку выставили в счёт; когда регистратор её не
+//      приёма): пациент уходит из списка, когда строку выставили в счёт (CRM_BOOKINGS_TAB_V1 (направления
+//      до оплаты): теперь — когда счёт оплачен или строку отпустили в работу, см. ниже); когда регистратор её не
 //      оформил с причиной (referral_line_skip — номер строки в журнале, решение владельца, ревью M2);
 //      или когда пациента оформили без счёта после того, как строка появилась (отметка
 //      registrar_registered позже строки — регистратор её видел в смете).
@@ -46,7 +47,8 @@
 //         осталось неоформленным (запись, анализ «на дату», направление врача);
 //       'registered' — запись (время записи, связь с CRM или с онлайн-записью партнёра), по которой
 //         выставлен счёт, начата работа, стоит отметка «оформлен» или визит уже «Пришёл» и дальше
-//         (здание приёма — правило ревью M5), и выставленные / оформленные направления врача.
+//         (здание приёма — правило ревью M5), и оформленные направления врача (CRM_BOOKINGS_TAB_V1
+//         (направления до оплаты): со счётом — оплаченные или отпущенные в работу; прошлый день — и выставленные).
 //         Приход «с улицы» (визит стойки без записи) — не запись, его здесь нет;
 //       'cancelled' — отменённая запись (визит «Отменён»), отменённая оператором строка заявки на этот
 //         день, анализ «на дату», отпущенный стойкой с причиной (crm_wish_release — журнал), и
@@ -78,6 +80,29 @@
 // визиту, отменённые строки заявок — по индексу даты, журнал отпущенных — по индексу визита; поиск —
 // только среди пациентов найденных строк (по ключу). Статус «Ждут» этих чтений не делает.
 //
+// CRM_BOOKINGS_TAB_V1 (направления до оплаты, 3.25.0, 2026-11-18) — НАПРАВЛЕННЫЙ ВРАЧОМ ЖДЁТ, ПОКА КАССА
+// НЕ ПРИМЕТ ОПЛАТУ. Кабинет врача выставляет счёт по направлению сразу (REFERRAL_BILL_V1), и по правилу (в)
+// пациент уходил из «Ждут» в «Оформлены», ещё не дойдя до кассы. Решение владельца: строка направления врача
+// (то же правило DOCTOR_ORDER_SQL) в НЕОПЛАЧЕННОМ счёте пациента — «Ждут» с пометкой to_cashier («Направил
+// врач — счёт выставлен, к кассе»; у строки — номер счёта; экран даёт «Открыть визит» вместо «Оформить по
+// записи»). Точное правило — одно с кассой:
+//   • ждёт кассу — строка ещё в смете ('added': RELEASE_SELECT_V1 — в работу её не отпускали), её счёт
+//     пациенту (payer_id IS NULL) и «ещё должны» (domain/money.js OUTSTANDING_STATUSES: 'unpaid', 'partial',
+//     'debt'), счёт своего здания;
+//   • оформлена — счёт 'paid', или строка отпущена в работу (статус дальше 'added': отметка кассира при
+//     части денег или долге, полная оплата, счёт плательщику — его строки уходят в работу сразу, V3120_FIX);
+//   • отменённый счёт ('void', 'refunded') — не «ждёт кассу»: «Отменить счёт» с «Оставить услуги» снимает
+//     со строки счёт, и она снова без счёта — правило (в) как прежде («Оформить по записи»);
+//   • не оформленное с причиной (referral_line_skip) — как прежде уходит; прошлый день — как прежде
+//     («Оформлены»: регистрацию сделал врач, «Не пришли» про оплату не говорит);
+//   • отметка «оформлен» (registrar_registered) строку со счётом не снимает: ждёт касса, а не стойка.
+// Записи (не врач) — прежние правила слово в слово: выставленная запись — «Оформлены», как раньше. Строка
+// ответа получает to_cashier = true, когда ВСЕ её строки — такие направления (регистрировать нечего); у
+// строки с записью рядом пометки нет, но у строк направления — есть (экран подписывает строку). Счётчик
+// вкладки (только CRM) этим не меняется: у таких строк источник — «Направил врач».
+// НАГРУЗКА: те же строки дня тем же запросом (lineRows) — счёт строки читается по первичному ключу
+// (invoice_items → invoices), второго обхода дня нет.
+//
 // Отдельный RPC, а не cashier_unbilled: тот закрыт ролями смены кассы и показывает строки без
 // счёта за 30 дней.
 //
@@ -95,6 +120,7 @@ import { readIdentity } from '../branch-sync/identity.js';
 import { searchArg } from './page-args.js';                   // CRM_BOOKINGS_TAB_V1 — строка поиска: не текст / длиннее 200 — 400
 import { patientMatchSql } from './cashier.js';               // CRM_BOOKINGS_TAB_V1 — поиск пациента правилом кассы
 import { parseWishReleaseNotes } from './registrar-desk.js';  // CRM_BOOKINGS_TAB_V1 — отпущенный стойкой анализ (журнал)
+import { outstandingWhere } from '../domain/money.js';         // CRM_BOOKINGS_TAB_V1 (направления до оплаты) — «ещё должны», как у кассы
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -183,7 +209,13 @@ function parseFilter(a, day0) {
   return { from, to, sources, status, doctorId, q };
 }
 
-/** Строки визитов периода без счёта: записи до прихода и направления врача (а, в). */
+/**
+ * Строки визитов периода без счёта: записи до прихода и направления врача (а, в).
+ * CRM_BOOKINGS_TAB_V1 (направления до оплаты) — и строки направления врача, которые ждут кассу: ещё в смете
+ * ('added'), в неоплаченном счёте пациента своего здания (bill_invoice_id — номер этого счёта; у строки без
+ * счёта — NULL). Счёт строки — по первичному ключу; выставленная строка записи (не врач) отсеивается здесь же:
+ * для записи правило прежнее — выставлена значит оформлена.
+ */
 function lineRows(db, from, to, mine, only, explain = false) {
   const range = localRangeWhere('v.visit_date', from, to);
   return db.prepare(plan(explain) + `
@@ -197,21 +229,26 @@ function lineRows(db, from, to, mine, only, explain = false) {
              strftime('%H:%M', v.visit_date, 'localtime') AS visit_hhmm,
              ${localDate('v.visit_date')} AS visit_day,
              CASE WHEN ${DOCTOR_ORDER_SQL} THEN 1 ELSE 0 END AS doctor_order,
-             ${REFERRER_ID_SQL} AS referrer_id, lrs.name AS source_name
+             ${REFERRER_ID_SQL} AS referrer_id, lrs.name AS source_name,
+             bi.id AS bill_invoice_id, bi.invoice_number AS bill_invoice_number
         FROM visits v INDEXED BY idx_visits_date
        CROSS JOIN visit_services vs ON vs.visit_id = v.id
         LEFT JOIN users cu ON cu.id = vs.created_by
         LEFT JOIN referral_sources lrs ON lrs.id = vs.referred_by_source_id
+        LEFT JOIN invoice_items bii ON bii.id = vs.invoice_item_id
+        LEFT JOIN invoices bi ON bi.id = bii.invoice_id
        WHERE ${range.sql}
          AND COALESCE(v.status, '') NOT IN ('cancelled', 'no_show')
          AND ${BUILDING_SQL}
          AND (v.sync_origin IS NOT NULL OR vs.sync_origin IS NULL)
-         AND vs.status = 'added' AND vs.invoice_item_id IS NULL AND vs.clinic_item_id IS NULL
+         AND vs.status = 'added' AND vs.clinic_item_id IS NULL
+         AND (vs.invoice_item_id IS NULL
+              OR (v.sync_origin IS NULL AND bi.sync_origin IS NULL AND bi.payer_id IS NULL AND ${outstandingWhere('bi.status')}))
          AND (vs.service_id IS NOT NULL OR vs.consultation_type_id IS NOT NULL)
          AND ${NOT_REFUNDED_SQL}
          ${only != null ? 'AND v.patient_id = ?' : ''}
     ) x
-    WHERE x.visit_status IN ('scheduled', 'confirmed') OR x.doctor_order = 1
+    WHERE x.doctor_order = 1 OR (x.bill_invoice_id IS NULL AND x.visit_status IN ('scheduled', 'confirmed'))
     ORDER BY x.visit_date, x.vs_id`).all(...range.params, ...buildingParams(mine), ...(only != null ? [only] : []));
 }
 
@@ -447,6 +484,13 @@ export function registrarWaiting(db, args, user) {
   const doneLines = [];   // CRM_BOOKINGS_TAB_V1 — { line, status, reason }
   for (const l of lines) {
     if (Number(l.doctor_order) === 1) {
+      // CRM_BOOKINGS_TAB_V1 (направления до оплаты) — строка в неоплаченном счёте ждёт КАССУ: отметка «оформлен»
+      // её не снимает. Прошлый день и не оформленное с причиной до счёта — как прежде (выставлена — оформлена).
+      if (l.bill_invoice_id != null) {
+        if (String(l.visit_day) < day0 || skipped.has(Number(l.vs_id))) doneLines.push({ l, status: 'registered' });
+        else keptLines.push(l);
+        continue;
+      }
       if (skipped.has(Number(l.vs_id))) { doneLines.push({ l, status: 'cancelled', reason: skipped.get(Number(l.vs_id)) }); continue; }   // ревью M2 — не оформлено с причиной
       const at = (facts.get(Number(l.visit_id)) || {}).registeredAt;
       if (at && l.line_created_at && String(at) >= String(l.line_created_at)) { doneLines.push({ l, status: 'registered' }); continue; }   // оформлен без счёта после направления
@@ -553,7 +597,7 @@ export function registrarWaiting(db, args, user) {
     let r = rows.get(key);
     if (!r) {
       r = { patient_id: id, patient_name: '', mrn: '', phone: '', day, status,
-        time: null, visit_id: null, visit_status: null, no_service: false, sources: [], doctors: [], services: [], booked_by: [], lines: [], reasons: [] };
+        time: null, visit_id: null, visit_status: null, no_service: false, to_cashier: false, sources: [], doctors: [], services: [], booked_by: [], lines: [], reasons: [] };
       rows.set(key, r);
       doctorIdsOf.set(r, new Set());
     }
@@ -595,10 +639,13 @@ export function registrarWaiting(db, args, user) {
     addUnique(r.booked_by, doctor ? nameOfUser(users.get(Number(l.line_created_by)))
       : (nameOfUser(users.get(Number(l.visit_created_by))) || nameOfUser(users.get(Number(l.line_created_by)))));
     addUnique(r.reasons, reason);
+    // CRM_BOOKINGS_TAB_V1 (направления до оплаты) — направление в неоплаченном счёте, которое ждёт кассу.
+    const toCashier = doctor && status === 'waiting' && l.bill_invoice_id != null;
     r.lines.push({ kind: doctor ? 'doctor' : 'booked', visit_service_id: Number(l.vs_id), visit_id: Number(l.visit_id),
       service_id: l.service_id ?? null, consultation_type_id: l.service_id == null ? (l.consultation_type_id ?? null) : null,
       doctor_id: lineDoctor ?? null, name, doctor_name: doctorName, source, time,
-      referrer_name: referrer, foreign: l.visit_origin != null });
+      referrer_name: referrer, foreign: l.visit_origin != null, to_cashier: toCashier,
+      ...(toCashier ? { invoice_id: Number(l.bill_invoice_id), invoice_number: l.bill_invoice_number || String(l.bill_invoice_id) } : {}) });
   };
 
   const addBare = (b, status) => {
@@ -665,6 +712,8 @@ export function registrarWaiting(db, args, user) {
     const p = patients.get(r.patient_id) || {};
     r.patient_name = p.full_name || ''; r.mrn = p.mrn || ''; r.phone = p.phone || '';
     r.no_service = r.lines.length > 0 && r.lines.every((l) => l.kind === 'booking');
+    // CRM_BOOKINGS_TAB_V1 (направления до оплаты) — регистрировать нечего: все строки ждут кассу.
+    r.to_cashier = r.status === 'waiting' && r.lines.length > 0 && r.lines.every((l) => l.to_cashier === true);
     if (r.visit_status == null && r.visit_id != null) r.visit_status = visitStatus.get(Number(r.visit_id)) ?? null;
   }
   const byName = new Intl.Collator('ru');   // ревью M6 — один сборщик на сортировку, а не localeCompare(…, 'ru') на каждое сравнение
