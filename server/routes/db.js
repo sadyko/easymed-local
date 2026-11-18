@@ -46,6 +46,8 @@ import { onlineRuleProblem } from '../../public/js/shared/service-public.js';   
 import { liveWrapSync } from '../services/live/bus.js';   // LIVE_REFRESH_V1 — «записано» для живых экранов
 import { isCallcenterOnlyUser, callcenterCategoryRefusal, CALLCENTER_DISCOUNT_REFUSAL } from '../services/domain/patient-category-guard.js';   // CALLCENTER_NO_DISCOUNT_V1
 import { recordDocRevision } from '../services/domain/doc-history.js';   // DOC_HISTORY_V1 — версия документа в транзакции записи
+import { DOC_EDIT_REFUSAL } from '../../public/js/shared/doc-history.js';   // DOC_HISTORY_V1 — документ меняет врач строки или администратор
+import { isAdminUser } from '../services/grants.js';   // DOC_HISTORY_V1
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -350,14 +352,36 @@ function takeNotesBase(body) {   // CABINET_FIX_V1_R5
 // сохранёнными notes: { rows, picked } или null (не прочитаны). picked — выбраны
 // отбором правки, а не одним номером. Общая выборка правила «сравнить и
 // заменить» (refuseNotesWrite) и запрета подписи от чужого имени (R3) — ниже.
+// DOC_HISTORY_V1 — и врач строки (doctor_id): кто вправе менять её документ (notesEditRefusal).
 function notesTargetRows(db, meta, body, user, values) {   // CABINET_FIX_V1_R5 · ADMIN_ACT_AS_V1 (вынесено без изменений)
-  const byId = db.prepare('SELECT id, notes FROM visit_services WHERE id = ?');   // CABINET_FIX_V1_R5
+  const byId = db.prepare('SELECT id, notes, doctor_id FROM visit_services WHERE id = ?');   // CABINET_FIX_V1_R5 · DOC_HISTORY_V1 (doctor_id)
   const f = Array.isArray(body.filters) ? body.filters : [];   // CABINET_FIX_V1_R5
   if (meta.op === 'upsert') return { rows: values.id != null ? byId.all(values.id) : [], picked: false };   // CABINET_FIX_V1_R5
   if (f.length === 1 && f[0] && f[0].col === 'id' && f[0].op === 'eq') return { rows: byId.all(f[0].val), picked: false };   // CABINET_FIX_V1_R5
   try {   // CABINET_FIX_V1_R5
-    return { rows: writeTargets(db, meta, body, user, ['id', 'notes']), picked: true };   // CABINET_FIX_V1_R5 · DUP_STOP_V1 (остаток A3) — строки самой правки, без правил чтения
+    return { rows: writeTargets(db, meta, body, user, ['id', 'notes', 'doctor_id']), picked: true };   // CABINET_FIX_V1_R5 · DUP_STOP_V1 (остаток A3) — строки самой правки, без правил чтения · DOC_HISTORY_V1 (doctor_id)
   } catch { return null; }   // CABINET_FIX_V1_R5
+}
+
+// DOC_HISTORY_V1 (решение владельца) — ДОКУМЕНТ ПРИЁМА МЕНЯЕТ ВРАЧ СТРОКИ ИЛИ АДМИНИСТРАТОР.
+// Реестр (schema-registry.js visit_services.update) открывает notes администратору,
+// регистратуре, врачу, лаборатории и медсестре — на ЛЮБОЙ строке; правило «автор или
+// администратор» жило только в браузере. Теперь запись notes через эту дверь — только
+// «своей» строки (doctor_id = я: так её видит кабинет, consultation.js loadServices) или
+// администратором; иначе 403 словами (DOC_EDIT_REFUSAL). Строка без исполнителя — «своя»
+// только администратору (кабинет её врачам не показывает). Заметка медсестры
+// («Выполнено» процедуры) идёт своей дверью — rpc/procedures.js — и этим правилом не
+// задевается. Вход «от имени»: сессия — сотрудника, и правило — его. Строки правки не
+// прочитаны — решает refuseNotesWrite («не прочитаны», 409). null — можно.
+export function notesEditRefusal(db, meta, body, user) {   // DOC_HISTORY_V1 — экспорт для проверки
+  if (!meta || meta.table !== 'visit_services' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;
+  const values = body && body.values && !Array.isArray(body.values) ? body.values : null;
+  if (!values || !Object.prototype.hasOwnProperty.call(values, 'notes')) return null;
+  if (isAdminUser(user)) return null;
+  const got = notesTargetRows(db, meta, body, user, values);
+  if (!got) return null;
+  const me = user && user.id != null ? Number(user.id) : NaN;
+  return got.rows.some((r) => r.doctor_id == null || Number(r.doctor_id) !== me) ? DOC_EDIT_REFUSAL : null;
 }
 
 // DOC_HISTORY_V1 — строки, чей документ меняет эта правка, с их notes ДО неё: после
@@ -792,6 +816,9 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     const orders = visitOrderCheck(db, compiled.meta, req.body, req.user, repeatReason);
     if (orders.unread) return res.status(409).json({ error: { code: 'conflict', message: orders.unread } });   // DUP_STOP_V1 (ревью, остаток 2)
     if (orders.error) return res.status(409).json({ error: errorBody(DUP_CODE, orders.error) });
+    // DOC_HISTORY_V1 — документ приёма меняет врач строки или администратор (notesEditRefusal).
+    const docEditRefusal = notesEditRefusal(db, compiled.meta, req.body, req.user);
+    if (docEditRefusal) return res.status(403).json({ error: { code: 'forbidden', message: docEditRefusal } });
     const notesOut = {};   // CABINET_FIX_V1_R6
     const notesRefusal = refuseNotesWrite(db, compiled.meta, req.body, req.user, notesBase, notesOut);   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6
     if (notesRefusal) return res.status(409).json({ error: { code: 'notes_conflict', reason: notesRefusal.reason, message: notesRefusal.message } });   // CABINET_FIX_V1_R5
