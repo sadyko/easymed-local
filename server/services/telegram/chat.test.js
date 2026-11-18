@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { listChats, chatMessages, markRead, unreadTotal } from './chat.js';
+import { listChats, chatMessages, markRead, unreadTotal, sendChatMessage } from './chat.js';
 import { logMessage, handleUpdate } from './flow.js';
 import { telegramChatsList, telegramChatMessages, telegramChatSend,
          telegramFolderSave, telegramFolderSetChat } from '../rpc/telegram.js';
@@ -253,4 +253,21 @@ test('в несуществующую папку чат не положить', 
   assert.throws(() => telegramFolderSetChat(db, { folder_id: 999, chat_id: '100', member: true }, adminUser),
     /не найдена/);
   db.close();
+});
+
+test('AI_CHAT_V1: ответ ИИ записан by_ai = 1 (kind text), без подписи сотрудника', async () => {
+  const db = openDb(':memory:'); migrate(db);
+  db.prepare(`INSERT INTO telegram_links (chat_id, phone, tg_user_id, tg_name, last_seen_at) VALUES ('100','+998901112233','u','A','2026-11-08T10:00:00Z')`).run();
+  const sent = [];
+  // message_id разный: пара (chat_id, tg_message_id) уникальна, одинаковый id второй записи не дал бы появиться.
+  let mid = 4;
+  const deps = { fetchImpl: async (url, opts) => { sent.push(JSON.parse(opts.body)); return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: ++mid } }) }; } };
+  await sendChatMessage(db, 'x', '100', 'Здравствуйте!', { ai: true }, deps);
+  assert.equal(sent[0].text, 'Здравствуйте!');
+  const m = db.prepare("SELECT kind, sent_by, by_ai FROM telegram_messages WHERE direction = 'out'").get();
+  assert.deepEqual({ ...m }, { kind: 'text', sent_by: null, by_ai: 1 });
+  // Ответ сотрудника — by_ai = 0.
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (5,'op5','x','Оператор','admin')").run();
+  await sendChatMessage(db, 'x', '100', 'Я оператор', { id: 5, full_name: 'Оператор' }, deps);
+  assert.equal(db.prepare("SELECT by_ai FROM telegram_messages WHERE direction = 'out' ORDER BY id DESC LIMIT 1").get().by_ai, 0);
 });

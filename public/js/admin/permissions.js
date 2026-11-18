@@ -997,6 +997,9 @@ const COMMERCE_TOOLS = {
     commerce_links: { legacy: () => { const l = settingsTileLevel('settings.telegram'); return l === 'delete' ? 'edit' : l; } },
     // CLINIC_NEWS_GRANT_V1 — публикация на доске; не настроена — только администратор, как вчера.
     commerce_news:  { legacy: () => (actorIsAdmin() ? 'edit' : 'none') },
+    // AI_CHAT_V1 — переключатель ИИ-помощника; не настроена — только администратор (как commerce_news:
+    // в main администратору уровень даёт legacy, поля `top` ветки ИИ больше нет).
+    commerce_ai:    { legacy: () => (actorIsAdmin() ? 'edit' : 'none') },
 };
 /** Уровень инструмента витрины: 'none' | 'view' | 'edit'. */
 export function commerceToolLevel(key) {
@@ -1058,7 +1061,8 @@ export function isModuleAllowed(navId) {
     // регистратор с одним лишь чатом не должен потерять к нему дорогу из меню.
     if (navId === 'commerce') return isRouteAllowed('commerce-push') || isRouteAllowed('telegram-deeplinks')
         || isRouteAllowed('telegram-chat') || isRouteAllowed('meta-chat')
-        || isRouteAllowed('referrals');   // REFERRALS_TO_COMMERCE_V1 — медпредставитель с одним «Реферированием»
+        || isRouteAllowed('referrals')   // REFERRALS_TO_COMMERCE_V1 — медпредставитель с одним «Реферированием»
+        || isRouteAllowed('commerce-ai');   // AI_CHAT_V1
     // CLINIC_NEWS_V1 — доску («Информационная доска», #clinic-news) сюда НЕ
     // добавлять: она открыта всем сотрудникам, и пункт стал бы виден каждой
     // роли — а с ним и домашним экраном тем, у кого он первый доступный в
@@ -1274,6 +1278,8 @@ export function isRouteAllowed(view) {
     // COMMERCE_BLOCK_V1 — своя строка «Ссылки для рекламы в Telegram»; пока не
     // настроена — окно «Telegram-бот», как было (commerceToolLevel).
     if (view === 'telegram-deeplinks') return commerceToolLevel('commerce_links') !== 'none';
+    // AI_CHAT_V1 — экран ИИ-помощника: строка «ИИ-помощник» (не настроена — только администратор).
+    if (view === 'commerce-ai') return commerceToolLevel('commerce_ai') !== 'none';
     // SMS_INFORM_V1 — логин и пароль Play Mobile — право слать SMS от имени
     // клиники за её деньги: только полный доступ, как у Телефонии. Сервер
     // (rpc/sms.js) отказывает второй раз, независимо от этой строки.

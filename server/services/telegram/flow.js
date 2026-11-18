@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { getDataDir } from '../control/config.js';   // SUPERVISED_INSTALL_V1
 import { clinicNames } from './setup.js';   // CLINIC_PROFILE_V1 — узбекское название клиники в узбекской строке
 import { parseStart, onStart as deeplinkStart, onCallback as deeplinkCallback, takePendingLead, onContactForLead } from './deeplinks.js';   // TG_DEEPLINK_V1 — ссылки для рекламы
+import { aiTakesTelegramText } from '../ai/hooks.js';   // AI_CHAT_V1
 
 // Корень проекта считаем от расположения модуля, а не от process.cwd():
 // сервер могут запустить ярлыком из любой папки, и тогда cwd указывает мимо.
@@ -174,14 +175,14 @@ function rateExceeded(db, chatId) {
 // анализы?»), и до появления раздела «Чат с пациентами» эти сообщения никто в
 // клинике не видел — бот их молча проглатывал.
 export function logMessage(db, chatId, direction, text,
-                           { kind = 'text', sentBy = null, tgMessageId = '', filePath = '' } = {}) {
+                           { kind = 'text', sentBy = null, tgMessageId = '', filePath = '', byAi = false } = {}) {
   if (!text) return;
   try {
     db.prepare(
-      `INSERT INTO telegram_messages (chat_id, direction, text, kind, sent_by, tg_message_id, file_path)
-       VALUES (?,?,?,?,?,?,?)`)
+      `INSERT INTO telegram_messages (chat_id, direction, text, kind, sent_by, tg_message_id, file_path, by_ai)
+       VALUES (?,?,?,?,?,?,?,?)`)
       .run(String(chatId), direction, String(text).slice(0, 4000), kind, sentBy,
-           String(tgMessageId || ''), String(filePath || ''));
+           String(tgMessageId || ''), String(filePath || ''), byAi ? 1 : 0);   // AI_CHAT_V1 — by_ai: ответ ИИ-помощника (kind остаётся 'text': у него CHECK, мигр. 062)
   } catch (e) {
     // Переписка — журнал, а не сама работа: если запись не удалась, бот обязан
     // продолжить отвечать пациенту.
@@ -260,9 +261,23 @@ async function handleMessage(db, token, msg, deps) {
     return reply(db, token, chatId, greeting(db), { reply_markup: menuKeyboard }, deps);
   }
 
+  // AI_CHAT_V1 — ИИ включён: свободный текст отвечает ИИ-помощник (очередь,
+  // ai/worker.js), и «сообщение получено» бот не шлёт — ответ придёт следом.
+  // Только текст: фото или документ без подписи ИИ не прочтёт, их — как раньше
+  // оператору. Выключенный ИИ (по умолчанию) — ни одной строки в очереди.
+  if (text && aiTakesTelegramText(db, { chatId, messageId: msg.message_id, createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') })) return;
+
   // Всё остальное — вопрос живому человеку. Сообщение уже в «Чате с
   // пациентами»; пациенту подтверждаем, что его прочитают, и оставляем
   // кнопки под рукой.
+  return sendGotMessage(db, token, chatId, deps);
+}
+
+// AI_CHAT_V1 — «сообщение принято» обычным ответом бота (kind 'system', не
+// by_ai). Его же шлёт исполнитель ИИ (ai/worker.js), когда задача кончилась без
+// ответа ИИ (ИИ выключили, лимит, сбой, 10 минут без ответа): бот промолчал,
+// потому что ответить взялся ИИ, — без этой фразы пациент слышал бы тишину.
+export function sendGotMessage(db, token, chatId, deps = {}) {
   return reply(db, token, chatId, T.gotMessage, { reply_markup: menuKeyboard }, deps);
 }
 

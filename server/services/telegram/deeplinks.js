@@ -414,7 +414,8 @@ export function takePendingLead(db, chatId) {
 // ---------------------------------------------------------------------------
 // Заявка → карточка CRM
 // ---------------------------------------------------------------------------
-function ensureSource(db) {
+// AI_CHAT_V1 — нужна и заявкам ИИ-помощника из Telegram (ai/lead.js).
+export function ensureSource(db) {
   const cur = db.prepare('SELECT is_active FROM crm_sources WHERE key = ?').get(SOURCE_KEY);
   if (!cur) {
     db.prepare(`INSERT INTO crm_sources (key, label, position, is_active)
@@ -428,7 +429,8 @@ function noteFor(link, lang) {
   return `Заявка из Telegram по ссылке «${link.name}» (${link.key}) · Тип: ${LEAD_KINDS[link.lead_kind] || link.lead_kind} · Язык: ${LANG_LABEL[lang] || lang}`;
 }
 
-function appendToCard(db, id, note) {
+// AI_CHAT_V1 — и это нужно ИИ-заявке: повторное обращение дописывается в карточку и добавляет источник.
+export function appendToCard(db, id, note) {
   const row = db.prepare('SELECT note, sources, source FROM crm_requests WHERE id = ?').get(id);
   if (!row) return;
   let sources = [];

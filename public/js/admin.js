@@ -117,6 +117,7 @@ import { renderTelegramDeeplinks } from './admin/views/telegram-deeplinks.js?v=t
 import { renderSmsSettings }      from './admin/views/sms-settings.js?v=sms1';   // SMS_INFORM_V1 — SMS через Play Mobile
 import { renderCommercePush }     from './admin/views/commerce-push.js?v=push2';   // SMS_PUSH_V1 — Push-уведомление: Telegram и SMS
 import { renderDailyReport }      from './admin/views/daily-report.js';   // DAILY_REPORT_BOT_V1 — отчёт совету директоров в Telegram
+import { renderAiAssistant }      from './admin/views/ai-assistant.js';   // AI_CHAT_V1 — ИИ-помощник: переключатель «ИИ отвечает в чатах»
 import { renderCommerceHub }      from './admin/views/commerce-hub.js?v=tools1';   // COMMERCE_TOOLS_V1 — витрина инструментов
 import { renderClinicNews }       from './admin/views/clinic-news.js';   // CLINIC_NEWS_V1 — «Информационная доска»
 import { renderNewsStrip }        from './admin/clinic-news-strip.js';   // CLINIC_NEWS_STRIP_V1 — полоса новостей стойке и call-центру
@@ -372,6 +373,7 @@ const CRUMBS = {
     commerce:      ['Insights', 'Settings', 'Коммерческие инструменты'],   // COMMERCE_NAV_V1
     'commerce-push': ['Insights', 'Settings', 'Push-уведомления'],   // COMMERCE_TOOLS_V1
     'daily-report': ['Insights', 'Settings', 'Отчёт в Telegram'],   // DAILY_REPORT_BOT_V1
+    'commerce-ai':   ['Insights', 'Settings', 'ИИ-помощник'],   // AI_CHAT_V1
     'clinic-news':   ['Insights', 'Settings', 'Информационная доска'],   // CLINIC_NEWS_V1
     'meta-settings': ['Insights', 'Settings', 'Meta: заявки из рекламы'],   // META_LEADS_V1
     'telegram-deeplinks': ['Insights', 'Settings', 'Ссылки для рекламы в Telegram'],   // TG_DEEPLINK_V1
@@ -844,6 +846,7 @@ const PARENT_OF = {
     // COMMERCE_TOOLS_V1 — каждый инструмент витрины «Коммерческие инструменты»
     'commerce-push': 'commerce',
     'daily-report': 'commerce',   // DAILY_REPORT_BOT_V1
+    'commerce-ai': 'commerce',   // AI_CHAT_V1 — экран ИИ-помощника (views/ai-assistant.js)
     // CHATS_TO_COMMERCE_V1 — чаты стали частью витрины: «Назад» ведёт на неё, она
     // же подсвечена в меню, и «Видимость разделов» прячет их вместе с ней.
     'telegram-chat': 'commerce', 'meta-chat': 'commerce',
@@ -1472,6 +1475,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'clinic-news':   return void await renderClinicNews(viewRoot, ctx);   // CLINIC_NEWS_V1
             case 'commerce-push': return void renderCommercePush(viewRoot);   // SMS_PUSH_V1 — инструмент «Push-уведомления»
             case 'daily-report': return void await renderDailyReport(viewRoot);   // DAILY_REPORT_BOT_V1 — только администратор (permissions.js)
+            case 'commerce-ai': return void await renderAiAssistant(viewRoot);   // AI_CHAT_V1 — инструмент «ИИ-помощник»
             case 'employees':     return void await renderEmployees(viewRoot, ctx);   // EMPLOYEE_EDITOR_V1 — Сотрудники
             case 'documents-settings': return void await renderDocumentsSettings(viewRoot, ctx);   // DOCUMENTS_SETTINGS_V1
             // SETTINGS_SPLIT_V1 — ctx passed on purpose: it still carries

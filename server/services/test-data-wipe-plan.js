@@ -225,6 +225,13 @@ export const TABLE_PLAN = Object.freeze({
   meta_conversations: keep('crm'),         // META_INBOX_V1 — переписка Facebook / Instagram
   meta_messages: keep('crm'),
   meta_comments: keep('crm'),
+  // AI_CHAT_V1 — очередь ИИ-помощника и отметки «Нужен оператор» относятся к
+  // переписке, а переписка остаётся (CRM не трогается). Удалить их значило бы
+  // навредить живым чатам: стёртая задача в очереди — пациент без ответа (бот
+  // Telegram промолчал, потому что ответить взялся ИИ); стёртая отметка — ИИ
+  // снова отвечает в чате, который уже передан людям. Визитов и денег в них нет.
+  ai_chat_jobs: keep('crm'),
+  ai_chat_flags: keep('crm'),
 
   // ── сотрудники, роли, права ────────────────────────────────────────────
   users: keep('staff'),
@@ -300,6 +307,7 @@ export const TABLE_PLAN = Object.freeze({
   api_tokens: keep('settings'),
   meta_settings: keep('settings'),
   telegram_settings: keep('settings'),
+  ai_settings: keep('settings'),           // AI_CHAT_V1 — переключатель ИИ-помощника
   doctor_bot_settings: keep('settings'),
   rep_bot_settings: keep('settings'),      // REP_BOT_V1
   daily_report_settings: keep('settings'), // DAILY_REPORT_BOT_V1 — бот и группа отчёта совету директоров (мигр. 286)

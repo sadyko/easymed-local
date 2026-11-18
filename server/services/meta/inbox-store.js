@@ -125,7 +125,7 @@ export function conversationById(db, id) {
 }
 
 export function conversationMessages(db, id, { limit = 300 } = {}) {
-  const rows = db.prepare(`SELECT id, direction, text, attachments_json, created_at, status, error, sent_by
+  const rows = db.prepare(`SELECT id, direction, text, attachments_json, created_at, status, error, sent_by, by_ai
                              FROM meta_messages WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`).all(Number(id), limit);
   return rows.reverse().map(({ attachments_json, ...m }) => {
     let attachments = [];

@@ -18,6 +18,8 @@ import { controlState } from './state.js';
 // immediately, fixed in one line. The alternative default would silently leave a
 // hole open for as long as nobody looked.
 const READ_ONLY_RPCS = new Set([
+  // AI_CHAT_V1 — состояние ИИ-помощника и чаты «Нужен оператор» — чистое чтение; ai_settings_save остаётся записью.
+  'ai_settings_get', 'ai_flags',
   'dashboard_summary', 'reports_overview', 'run_report', 'owner_report',
   // V3120_FIX — графики сводки и статистика операторов телефонии — чистое
   // чтение: без них клиника с просроченной лицензией видела пустую сводку.
