@@ -4025,7 +4025,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 for (const vid of todayVisits) {
                     if (invoicedVisits.has(vid)) continue;
                     const { error: mErr } = await supabase.rpc('registrar_registered', { visit_id: vid });
-                    if (mErr) toast(trf('Услуги записаны, но отметка «оформлен» не поставлена: {msg} — пациент может остаться в «Ждут регистрации».', { msg: tr(mErr.message || String(mErr)) }), 'fail');
+                    if (mErr) toast(trf('Услуги записаны, но отметка «оформлен» не поставлена: {msg} — пациент может остаться в списке «Записи CRM».', { msg: tr(mErr.message || String(mErr)) }), 'fail');
                 }
             }
             if (attachFail.length) toast(trf('Рекомендация врача не закрыта: {msg}', { msg: attachFail.join('; ') }), 'warn');   // DOCTOR_REFERRAL_DESK_V1

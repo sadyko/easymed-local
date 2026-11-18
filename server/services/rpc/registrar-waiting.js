@@ -438,7 +438,7 @@ export function crmBookingsQueryPlans(db, { visitIds = [1], from = null, to = nu
 
 /** registrar_waiting({ patient_id?, count_only?, day? | from?+to?, sources?, status?, doctor_id?, q? }) → { today, from, to, status, count, rows?, doctors? } */
 export function registrarWaiting(db, args, user) {
-  if (!hasAnyRole(user, WAITING_ROLES)) throw new RpcError('Список «Ждут регистрации» доступен регистратуре и администратору.', 403);
+  if (!hasAnyRole(user, WAITING_ROLES)) throw new RpcError('Список «Записи CRM» доступен регистратуре и администратору.', 403);
   if (patientDataRefusal('visit_services', user, db) || patientDataRefusal('visits', user, db)) {
     throw new RpcError(PATIENT_DATA_DENIED, 403);
   }
