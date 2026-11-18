@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import {
   normalizeName, firstNameOf, phoneKey, idKey, namesMatch,
   duplicateGroups, duplicateIdSet, mrnOrder, mrnSeriesRefusal,
+  // PATIENT_DUP_RULE_V3 — «возможные дубликаты»
+  dobKey, nameParts, fullNameKey, pairKey, possibleDuplicateGroups, duplicateScan, POSSIBLE_REASONS,
+  levenshtein, withinOneEdit, memoNormalizer,
 } from './patient-duplicates.js';
 
 // ---------------------------------------------------------------------------
@@ -250,4 +253,202 @@ test('mrnOrder: the merge dialog picks its default card with it, not with text o
   const body = src.slice(at, src.indexOf('let primaryId', at));
   assert.match(body, /mrnOrder\(a\.mrn, b\.mrn\)/);
   assert.doesNotMatch(body, /localeCompare/);
+});
+
+// ---------------------------------------------------------------------------
+// PATIENT_DUP_RULE_V3 — «Возможные дубликаты — проверьте». Уверенные правила
+// (V2) не меняются; второй список — пары, которые человек должен посмотреть:
+//   • тот же телефон и та же дата рождения, имена разные;
+//   • то же ФИО и та же дата рождения, телефон любой.
+// Пара из уверенной группы вторым списком не повторяется; пустая или мусорная
+// дата/телефон ничего не группируют; пары «Не дубликат» не показываются.
+// ---------------------------------------------------------------------------
+const OWNER_PHONE = '+998 97 765 43 21';
+// Случай владельца (имена, номер и дата изменены): три карты на одном номере — «TEST», «Alimov», «Тест 2»; у двух
+// из них («Sardor Alimov» и «ТЕст 2 Тест 2») одна дата рождения 1991-04-23.
+const OWNER_ROWS = [
+  { id: 101, phone: OWNER_PHONE,     first_name: 'TEST',   last_name: '',       full_name: 'TEST',          date_of_birth: '1990-05-05' },
+  { id: 102, phone: '998977654321',  first_name: 'Alimov',   last_name: 'Sardor',  full_name: 'Sardor Alimov',    date_of_birth: '1991-04-23' },
+  { id: 103, phone: '+998977654321', first_name: 'Тест 2', last_name: 'ТЕст 2', full_name: 'ТЕст 2 Тест 2', date_of_birth: '1991-04-23' },
+];
+
+test('dobKey: дата YYYY-MM-DD (и ДД.ММ.ГГГГ) — ключ; пусто и мусор — нет ключа', () => {
+  assert.equal(dobKey('1991-04-23'), '1991-04-23');
+  assert.equal(dobKey('1991-04-23T00:00:00.000Z'), '1991-04-23', 'время после даты не мешает');
+  assert.equal(dobKey('23.04.1991'), '1991-04-23', 'та же дата, записанная по-русски');
+  for (const junk of ['', null, undefined, '   ', 'abc', '1994-13-01', '2023-02-30', '0000-00-00', '1900-01-01', '1899-12-31', '94-11-15']) {
+    assert.equal(dobKey(junk), '', String(junk));
+  }
+});
+
+test('nameParts / fullNameKey: колонки или «Фамилия Имя Отчество» из full_name; без фамилии или имени ключа нет', () => {
+  assert.deepEqual(nameParts({ last_name: 'Каримов', first_name: 'Азиз', middle_name: 'Рустамович' }),
+    { last: 'каримов', first: 'азиз', middle: 'рустамович' });
+  assert.deepEqual(nameParts({ full_name: 'Каримов Азиз Рустамович' }), { last: 'каримов', first: 'азиз', middle: 'рустамович' });
+  assert.deepEqual(nameParts({ full_name: 'Азиз' }), { last: '', first: 'азиз', middle: '' });
+  assert.equal(fullNameKey({ full_name: 'Фёдоров  Пётр' }), 'федоров петр');
+  assert.equal(fullNameKey({ last_name: 'ФЕДОРОВ', first_name: 'петр' }), 'федоров петр');
+  assert.equal(fullNameKey({ first_name: 'Азиз' }), '', 'одно имя — не ФИО');
+  assert.equal(fullNameKey({ last_name: 'Каримов' }), '', 'одна фамилия — не ФИО');
+  assert.equal(fullNameKey({}), '');
+});
+
+test('pairKey: порядок карт не важен', () => {
+  assert.equal(pairKey(103, 102), pairKey(102, 103));
+  assert.equal(pairKey(9, 10), '9:10', 'id сравниваются числами, а не текстом');
+});
+
+test('случай владельца: уверенных дубликатов нет (правило V2 не тронуто), возможная пара — «Alimov» и «Тест 2» по телефону и дате рождения', () => {
+  assert.deepEqual(duplicateGroups(OWNER_ROWS), [], 'уверенные правила изменились');
+  assert.deepEqual(possibleDuplicateGroups(OWNER_ROWS), [{ ids: [102, 103], reasons: [POSSIBLE_REASONS.PHONE_DOB] }]);
+  assert.equal(POSSIBLE_REASONS.PHONE_DOB, 'phone_dob');
+  assert.equal(POSSIBLE_REASONS.NAME_DOB, 'name_dob');
+});
+
+test('то же ФИО и та же дата рождения при разных телефонах — возможный дубликат (регистр, ё/е, full_name против колонок)', () => {
+  const rows = [
+    { id: 1, phone: '+998 90 111 11 11', full_name: 'Фёдоров Пётр Ильич', date_of_birth: '1980-03-04' },
+    { id: 2, phone: '+998 91 222 22 22', last_name: 'ФЕДОРОВ', first_name: 'петр', middle_name: 'Ильич', date_of_birth: '1980-03-04' },
+    { id: 3, phone: '',                  last_name: 'Федоров', first_name: 'Петр', date_of_birth: '1980-03-04' },
+  ];
+  assert.deepEqual(duplicateGroups(rows), []);
+  assert.deepEqual(possibleDuplicateGroups(rows), [{ ids: [1, 2, 3], reasons: [POSSIBLE_REASONS.NAME_DOB] }],
+    'пустое отчество совместимо с любым');
+});
+
+test('то же ФИО и дата, но РАЗНЫЕ отчества — это разные люди', () => {
+  const rows = [
+    { id: 1, phone: '+998 90 111 11 11', last_name: 'Каримов', first_name: 'Азиз', middle_name: 'Рустамович', date_of_birth: '1980-03-04' },
+    { id: 2, phone: '+998 91 222 22 22', last_name: 'Каримов', first_name: 'Азиз', middle_name: 'Бахтиёрович', date_of_birth: '1980-03-04' },
+  ];
+  assert.deepEqual(possibleDuplicateGroups(rows), []);
+});
+
+test('обе причины сразу — одна группа с двумя причинами', () => {
+  const rows = [
+    { id: 5, phone: PHONE, last_name: 'Каримов', first_name: 'Азиз', date_of_birth: '1980-03-04' },
+    { id: 6, phone: PHONE, last_name: 'Каримова', first_name: 'Дилноза', date_of_birth: '1980-03-04' },
+    { id: 7, phone: '+998 91 222 22 22', last_name: 'Каримова', first_name: 'Дилноза', date_of_birth: '1980-03-04' },
+  ];
+  assert.deepEqual(possibleDuplicateGroups(rows), [{ ids: [5, 6, 7], reasons: [POSSIBLE_REASONS.PHONE_DOB, POSSIBLE_REASONS.NAME_DOB] }]);
+});
+
+test('пара из уверенной группы вторым списком не повторяется', () => {
+  // Один телефон, одно имя, одна дата — это уверенный дубликат, а не «возможный».
+  const sameName = [
+    { id: 1, phone: PHONE, last_name: 'Каримов', first_name: 'Азиз', date_of_birth: '1980-03-04' },
+    { id: 2, phone: PHONE, last_name: 'Каримов', first_name: 'Азиз', date_of_birth: '1980-03-04' },
+  ];
+  assert.equal(duplicateGroups(sameName).length, 1);
+  assert.deepEqual(possibleDuplicateGroups(sameName), []);
+  // Общий ПИНФЛ + то же ФИО и дата — тоже уверенный, «возможным» не повторяется.
+  const byPinfl = [
+    { id: 3, national_id: '12345678901234', phone: '+998 90 111 11 11', full_name: 'Каримов Азиз', date_of_birth: '1980-03-04' },
+    { id: 4, national_id: '12345678901234', phone: '+998 91 222 22 22', full_name: 'Каримов Азиз', date_of_birth: '1980-03-04' },
+  ];
+  assert.deepEqual(possibleDuplicateGroups(byPinfl), []);
+  // Но третья карта, «возможно та же», показывается вместе с уверенной парой.
+  const plusThird = [...sameName, { id: 9, phone: PHONE, last_name: 'Каримов', first_name: 'Aziz', date_of_birth: '1980-03-04' }];
+  assert.deepEqual(possibleDuplicateGroups(plusThird), [{ ids: [1, 2, 9], reasons: [POSSIBLE_REASONS.PHONE_DOB] }]);
+});
+
+test('пустая или мусорная дата рождения ничего не группирует', () => {
+  for (const dob of ['', null, '0000-00-00', '1900-01-01', 'не знаю']) {
+    const rows = [
+      { id: 1, phone: PHONE, last_name: 'Каримов', first_name: 'Азиз', date_of_birth: dob },
+      { id: 2, phone: PHONE, last_name: 'Каримова', first_name: 'Дилноза', date_of_birth: dob },
+      { id: 3, phone: '+998 91 222 22 22', last_name: 'Каримов', first_name: 'Азиз', date_of_birth: dob },
+    ];
+    assert.deepEqual(possibleDuplicateGroups(rows), [], 'дата ' + JSON.stringify(dob));
+  }
+});
+
+test('мусорный или пустой телефон не группирует по правилу «телефон + дата»', () => {
+  for (const phone of ['', null, '0', '123', '000000000', '+998 00 000 00 00', '1111111']) {
+    const rows = [
+      { id: 1, phone, first_name: 'Азиз', date_of_birth: '1980-03-04' },
+      { id: 2, phone, first_name: 'Дилноза', date_of_birth: '1980-03-04' },
+    ];
+    assert.deepEqual(possibleDuplicateGroups(rows), [], 'телефон ' + JSON.stringify(phone));
+  }
+});
+
+test('разная дата рождения — не возможный дубликат (ни по телефону, ни по ФИО)', () => {
+  const rows = [
+    { id: 1, phone: PHONE, last_name: 'Каримов', first_name: 'Азиз', date_of_birth: '1980-03-04' },
+    { id: 2, phone: PHONE, last_name: 'Каримова', first_name: 'Дилноза', date_of_birth: '1980-03-05' },
+    { id: 3, phone: '+998 91 222 22 22', last_name: 'Каримов', first_name: 'Азиз', date_of_birth: '1981-03-04' },
+  ];
+  assert.deepEqual(possibleDuplicateGroups(rows), []);
+});
+
+test('одно имя без фамилии на разных телефонах с одной датой — не ФИО, не группируется', () => {
+  const rows = [
+    { id: 1, phone: '+998 90 111 11 11', first_name: 'Азиз', date_of_birth: '1980-03-04' },
+    { id: 2, phone: '+998 91 222 22 22', first_name: 'Азиз', date_of_birth: '1980-03-04' },
+  ];
+  assert.deepEqual(possibleDuplicateGroups(rows), []);
+});
+
+test('«Не дубликат»: отмеченная пара не показывается, остальные связи группы остаются', () => {
+  assert.deepEqual(possibleDuplicateGroups(OWNER_ROWS, { dismissed: new Set([pairKey(103, 102)]) }), []);
+  // Тройня на одном номере с одной датой: три связи; одна снята — группа держится на двух.
+  const triplets = [
+    { id: 1, phone: PHONE, first_name: 'Азиз', date_of_birth: '2020-01-02' },
+    { id: 2, phone: PHONE, first_name: 'Дилноза', date_of_birth: '2020-01-02' },
+    { id: 3, phone: PHONE, first_name: 'Рустам', date_of_birth: '2020-01-02' },
+  ];
+  assert.deepEqual(possibleDuplicateGroups(triplets, { dismissed: new Set([pairKey(1, 2)]) }).map((g) => g.ids), [[1, 2, 3]]);
+  assert.deepEqual(possibleDuplicateGroups(triplets, { dismissed: new Set([pairKey(1, 2), pairKey(1, 3)]) }).map((g) => g.ids), [[2, 3]]);
+  assert.deepEqual(possibleDuplicateGroups(triplets, { dismissed: new Set([pairKey(1, 2), pairKey(1, 3), pairKey(2, 3)]) }), []);
+  // Отметка «Не дубликат» не трогает уверенные группы.
+  const sure = [
+    { id: 1, phone: PHONE, first_name: 'Азиз', date_of_birth: '2020-01-02' },
+    { id: 2, phone: PHONE, first_name: 'Азиз', date_of_birth: '2020-01-02' },
+  ];
+  assert.equal(duplicateScan(sure, new Set([pairKey(1, 2)])).sure.length, 1);
+});
+
+test('огромная «корзина» одного телефона и одной даты — заглушка, а не человек: не группируется', () => {
+  const rows = Array.from({ length: 30 }, (_, i) => ({ id: i + 1, phone: PHONE, first_name: 'Имя' + i, date_of_birth: '2000-01-01' }));
+  assert.deepEqual(possibleDuplicateGroups(rows), []);
+});
+
+// Скорость скана на 70 000 картах (V3) не должна менять ответ уверенного правила:
+// «одна правка» без таблицы Левенштейна и запомненная нормализация — те же ответы.
+test('withinOneEdit отвечает ровно как levenshtein(x, y) <= 1; memoNormalizer — как normalizeName', () => {
+  const ALPHA = ['а', 'б', 'е', 'ё', 'и', 'a', 'b', 'z', ' '];
+  let seed = 7;
+  const rnd = () => { seed = (seed * 48271) % 2147483647; return seed / 2147483647; };
+  const word = () => Array.from({ length: Math.floor(rnd() * 7) }, () => ALPHA[Math.floor(rnd() * ALPHA.length)]).join('');
+  for (let i = 0; i < 20000; i++) {
+    const x = word();
+    // половина пар — близкие (одна-две правки), иначе совпадений почти не будет
+    let y = x;
+    if (rnd() < 0.5) y = word();
+    else {
+      const p = Math.floor(rnd() * (x.length + 1)), c = ALPHA[Math.floor(rnd() * ALPHA.length)];
+      const op = Math.floor(rnd() * 3);
+      y = op === 0 ? x.slice(0, p) + c + x.slice(p) : op === 1 ? x.slice(0, p) + x.slice(p + 1) : x.slice(0, p) + c + x.slice(p + 1);
+    }
+    assert.equal(withinOneEdit(x, y), levenshtein(x, y) <= 1, JSON.stringify([x, y]));
+  }
+  const norm = memoNormalizer();
+  for (const s of ['  Азиз ', 'АЗИЗ', 'Фёдор', 'Абдулла-Азиз', null, undefined, '', 'Фёдор']) assert.equal(norm(s), normalizeName(s), String(s));
+});
+
+test('duplicateScan: оба списка, новые группы сверху, id в группе по возрастанию; пустой ввод не падает', () => {
+  const rows = [
+    ...OWNER_ROWS,
+    { id: 1, phone: PHONE, first_name: 'Азиз', date_of_birth: '1980-03-04' },
+    { id: 50, phone: '901234567', first_name: 'Азиз', date_of_birth: '1980-03-04' },
+    { id: 7, phone: '+998 97 700 11 22', full_name: 'Эргашев Жахонгир', date_of_birth: '1990-04-01' },
+    { id: 8, phone: '+998 97 700 33 44', full_name: 'Эргашев Жахонгир', date_of_birth: '1990-04-01' },
+  ];
+  const scan = duplicateScan(rows);
+  assert.deepEqual(scan.sure, [[1, 50]]);
+  assert.deepEqual(scan.possible.map((g) => g.ids), [[102, 103], [7, 8]], 'группа с самой новой картой — первой');
+  assert.deepEqual(duplicateScan([]), { sure: [], possible: [] });
+  assert.deepEqual(duplicateScan(null), { sure: [], possible: [] });
+  assert.deepEqual(possibleDuplicateGroups([null, {}, { phone: PHONE, date_of_birth: '1980-03-04' }]), []);
 });

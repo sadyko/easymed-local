@@ -78,6 +78,7 @@ import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
 import { sellCard, refundCardSale, listCardSales } from './card-sales.js';   // CARD_SALE_V1
 import { mergePatientsRpc } from './patient-merge.js';   // PATIENT_MERGE_SERVER_V1
+import { patientDuplicatesScan, patientDupDismiss } from './patient-duplicates.js';   // PATIENT_DUP_RULE_V3
 import { documentsFeed } from './documents.js';   // DOCS_FEED_V1
 import { getClinicBySlug } from './clinic.js';
 import { callcenterReport } from './callcenter.js';
@@ -469,6 +470,10 @@ export const RPC = {
   refund_card_sale:          (db, args, user) => refundCardSale(db, args, user),
   list_card_sales:           (db, args, user) => listCardSales(db, args, user),
   merge_patients:            (db, args, user) => mergePatientsRpc(db, args, user),   // PATIENT_MERGE_SERVER_V1
+  // PATIENT_DUP_RULE_V3 — «Дубликаты» картотеки: оба списка (уверенные и «возможные — проверьте»)
+  // по всей картотеке; «Не дубликат» — отметка пары, право — как у объединения (администратор).
+  patient_duplicates_scan:   (db, args, user) => patientDuplicatesScan(db, args, user),
+  patient_dup_dismiss:       (db, args, user) => patientDupDismiss(db, args, user),
   // QUEUE_BOARD_V1 — читающая сторона тех же номеров: доска «кто у кого
   // стоит» по назначениям за день. Доступ по выданному разделу 'queue'
   // (canViewSection), а не по списку ролей: раздел раздаётся в «Настройки →

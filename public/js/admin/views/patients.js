@@ -5,7 +5,9 @@
 import { h, Icon, Avatar, Tag, StatusTag, PageHead, toast, clear, fmtDate } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { registrarHeader } from './registrar-header.js?v=roleaud1';
-import { loadPatientsPaged, findAllDuplicatePatientIds, mergePatients } from '../data.js';   // DUP_MERGE_V1
+// DUP_MERGE_V1 · PATIENT_DUP_RULE_V3 — оба списка дубликатов считает сервер
+// (loadDuplicateScan); «Не дубликат»; карты групп целиком (loadPatientsByIds).
+import { loadPatientsPaged, mergePatients, loadDuplicateScan, loadPatientsByIds, dismissPossibleDuplicates } from '../data.js';
 import { mrnOrder } from '../patient-duplicates.js';   // MRN_BEYOND_99999_V1 — номер карты целиком, как у триггера (232)
 import { scopedDoctorId, canView, actorIsAdmin, canCreatePatient, canOrderAdmission } from '../permissions.js';   // V3120_FIX — canCreatePatient, canOrderAdmission
 // PATIENT_ROW_V2 — телефон в реестре читается так же, как на карточке CRM.
@@ -40,6 +42,66 @@ import { revealOn, smoothScrollTo } from '../motion.js?v=mo1';
 let duplicateIdSet = new Set();
 // DUP_MERGE_V1 — ids ticked in the Duplicates filter, for merging.
 let selectedDup = new Set();
+
+// PATIENT_DUP_RULE_V3 (решение владельца 2026-11-18) — ВТОРОЙ СПИСОК, «Возможные
+// дубликаты — проверьте»: тот же телефон и та же дата рождения при разных именах,
+// или то же ФИО и та же дата рождения (patient-duplicates.js). Оба списка считает
+// сервер по всей картотеке (patient_duplicates_scan) — прежний скан в браузере
+// смотрел только первые 1000 карт.
+//
+// ЧИП ОДИН: «Дубликаты · N · возможные · M». Второй чип рядом читался бы как
+// второй, отдельный режим, а режим один — список групп, где возможные стоят своим
+// разделом под уверенными; и ряд кнопок шапки и так полон (REG_LIST_HEAD_V3:
+// «все кнопки одной строкой»). N считает уверенные, как прежде; M — карты
+// возможных групп (та же единица, что у N), и без возможных хвоста нет вовсе.
+//
+// РЕЖИМ «Дубликаты» — ГРУППЫ: раздел уверенных, раздел возможных; у группы шапка с
+// причиной и действиями («Объединить» — окно объединения с её картами;
+// «Не дубликат» — только у возможных и только у того, кому сервер разрешил, как
+// объединение), под ней — её карты строками списка. Листается по группам (группа
+// не рвётся между страницами). Поиск, дата рождения, «Фильтр» и сортировка
+// возвращают к обычному списку: внутри групп они разорвали бы группу.
+let possibleIdSet = new Set();   // карты возможных групп
+let dupGroups = [];              // [{ kind: 'sure'|'possible', ids, reasons }] — порядок показа
+let dupCanDismiss = false;       // сервер: этот сотрудник может нажать «Не дубликат»
+let dupScanLoaded = false;
+let dupPages = [];               // группы по страницам: [[group…]…]
+
+function applyDuplicateScan(scan) {
+    const s = scan || {};
+    const sure = Array.isArray(s.sure) ? s.sure : [];
+    const possible = Array.isArray(s.possible) ? s.possible : [];
+    duplicateIdSet = new Set(sure.flat());
+    possibleIdSet = new Set(possible.flatMap((g) => g.ids));
+    dupGroups = [
+        ...sure.map((ids) => ({ kind: 'sure', ids, reasons: [] })),
+        ...possible.map((g) => ({ kind: 'possible', ids: g.ids, reasons: g.reasons || [] })),
+    ];
+    dupCanDismiss = !!s.canDismiss;
+    dupScanLoaded = true;
+}
+async function rescanDuplicates() {
+    applyDuplicateScan(await loadDuplicateScan());
+    paintDuplicateCount();
+}
+// Группы по страницам: до PAGE_SIZE карт на страницу, группа целиком.
+function packDupPages(groups) {
+    const pages = [];
+    let cur = [], n = 0;
+    for (const g of groups) {
+        if (cur.length && n + g.ids.length > PAGE_SIZE) { pages.push(cur); cur = []; n = 0; }
+        cur.push(g); n += g.ids.length;
+    }
+    if (cur.length) pages.push(cur);
+    return pages;
+}
+// Поиск, дата, «Фильтр», сортировка — к обычному списку (см. шапку V3).
+function leaveDupMode() {
+    if (state.filter !== 'duplicates') return;
+    state.filter = 'all';
+    selectedDup.clear();
+    paintDupChip();
+}
 
 const PAGE_SIZE = 30;
 
@@ -160,11 +222,13 @@ export async function renderPatients(container, { onNavigate, embedded = false }
     // Async: scan the whole register for shared phone / PINFL so the
     // Duplicates card can show its count + filter the list. Doesn't block
     // the initial paint — the count placeholder reads "—" until this lands.
-    findAllDuplicatePatientIds().then(set => {
-        duplicateIdSet = set;
+    // PATIENT_DUP_RULE_V3 — скан делает сервер, оба списка сразу.
+    dupScanLoaded = false;
+    loadDuplicateScan().then(scan => {
+        applyDuplicateScan(scan);
         paintDuplicateCount();
         // If the user has clicked through to the Duplicates filter before
-        // the scan returned, repaint with the freshly-computed id set.
+        // the scan returned, repaint with the freshly-computed groups.
         if (state.filter === 'duplicates') fetchAndPaint();
     });
 }
@@ -251,6 +315,7 @@ function mount() {
     refs.dobInp.addEventListener('change', () => {
         state.dob = refs.dobInp.value;
         state.page = 1;
+        leaveDupMode();   // PATIENT_DUP_RULE_V3
         fetchAndPaint();
     });
     let searchTimer = null;
@@ -259,6 +324,7 @@ function mount() {
         searchTimer = setTimeout(() => {
             state.search = refs.searchInp.value;
             state.page = 1;
+            leaveDupMode();   // PATIENT_DUP_RULE_V3 — поиск идёт по всей картотеке, а не внутри групп
             fetchAndPaint();
         }, 250);
     });
@@ -295,8 +361,7 @@ function mount() {
         class: 'icon-btn btn-sm',
         style: { width: '28px', height: '28px' },
         onclick: () => {
-            const maxPage = Math.max(1, Math.ceil(state.total / PAGE_SIZE));
-            if (state.page < maxPage) { state.page++; goPage(); }
+            if (state.page < maxPage()) { state.page++; goPage(); }   // PATIENT_DUP_RULE_V3 — в «Дубликатах» страницы групп
         },
     }, Icon('ChevronRight', { size: 14 }));
 
@@ -309,7 +374,7 @@ function mount() {
     // карт «Последний визит» — около 0,17 с против 0,006 с у «Сначала новые».
     const sortSegmented = h('select', {
         class: 'reg-sort-sel', 'data-sort-select': '', 'aria-label': 'Сортировка',
-        onchange: (e) => { state.sort = e.target.value; state.page = 1; fetchAndPaint(); },
+        onchange: (e) => { state.sort = e.target.value; state.page = 1; leaveDupMode(); fetchAndPaint(); },
     }, ...SORT_OPTIONS.map(([key, label]) => h('option', { value: key }, label)));
     sortSegmented.value = state.sort;
     refs.sortSelect = sortSegmented;
@@ -317,10 +382,14 @@ function mount() {
     // REGISTRATURA_CLEANUP_V1 — table-header actions: duplicates chip + calculator + create.
     const dupCountSpan = h('span', { class: 'num', style: { fontWeight: '700' } }, '—');
     refs.dupChipCount = dupCountSpan;
-    const dupChip = h('button', { type: 'button', class: 'btn btn-outline btn-sm',
-        title: 'Возможные дубликаты — одно имя на одном телефоне или общий ПИНФЛ. Родственники на общем номере дубликатами не считаются',
+    // PATIENT_DUP_RULE_V3 — «· возможные · M» тем же чипом (почему не второй — шапка V3).
+    refs.dupPossibleCount = h('span', { class: 'num', style: { fontWeight: '700' } }, '0');
+    refs.dupPossibleWrap = h('span', { class: 'dup-chip-possible', style: { display: 'none', color: 'var(--ink-500)' } },
+        ' · ', tr('возможные'), ' · ', refs.dupPossibleCount);
+    const dupChip = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-act': 'dup-chip',
+        title: tr('Дубликаты — тот же ПИНФЛ или то же имя на том же телефоне. Возможные — тот же телефон или то же ФИО при той же дате рождения: проверьте и объедините карты или отметьте «Не дубликат». Родственники на общем номере дубликатами не считаются'),
         onclick: () => { state.filter = state.filter === 'duplicates' ? 'all' : 'duplicates'; state.page = 1; if (state.filter !== 'duplicates') selectedDup.clear(); paintDupChip(); fetchAndPaint(); } },
-        Icon('Warning', { size: 13 }), ' Дубликаты · ', dupCountSpan);
+        Icon('Warning', { size: 13 }), ' Дубликаты · ', dupCountSpan, refs.dupPossibleWrap);
     refs.dupChip = dupChip;
     const calcBtn = h('button', { class: 'btn btn-amber btn-sm', title: 'Калькулятор услуг — расчёт без выбора пациента',
         onclick: () => openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', titleIcon: 'Coins', onPick: () => {}, onCreatePatient: () => openCreatePatient() }) },
@@ -528,11 +597,13 @@ function buildFilterPanel() {
         const f = fromInp.value || '', t = toInp.value || '';
         if (f && t && f > t) { toast('Начало периода позже его конца.', 'fail'); return; }
         state.lastFrom = f; state.lastTo = t; state.page = 1;
+        leaveDupMode();   // PATIENT_DUP_RULE_V3
         paintFilterChrome(); fetchAndPaint();
     };
     const reset = () => {
         fromInp.value = ''; toInp.value = '';
         state.lastFrom = ''; state.lastTo = ''; state.page = 1;
+        leaveDupMode();   // PATIENT_DUP_RULE_V3
         paintFilterChrome(); fetchAndPaint();
     };
     return h('div', { class: 'pt-filter-panel', style: { ...panelStyle } },
@@ -575,7 +646,7 @@ function repaintHead() {
 
 function filterCard(key, m) {
     // Count value (only rendered for the Duplicates card right now). Updated
-    // by paintDuplicateCount() once findAllDuplicatePatientIds() resolves.
+    // by paintDuplicateCount() once loadDuplicateScan() resolves (PATIENT_DUP_RULE_V3).
     const countEl = h('span', {
         class: 'num',
         style: {
@@ -609,6 +680,9 @@ function filterCard(key, m) {
 
 function paintDuplicateCount() {
     if (refs.dupChipCount) refs.dupChipCount.textContent = String(duplicateIdSet.size);
+    // PATIENT_DUP_RULE_V3 — карты возможных групп; при нуле хвоста нет.
+    if (refs.dupPossibleCount) refs.dupPossibleCount.textContent = String(possibleIdSet.size);
+    if (refs.dupPossibleWrap) refs.dupPossibleWrap.style.display = possibleIdSet.size ? '' : 'none';
 }
 function paintDupChip() {
     const b = refs.dupChip; if (!b) return;
@@ -737,12 +811,12 @@ function debtOf(p) {
 // чатам — регистратор по умолчанию не видел её вовсе. patient_bot_status
 // отвечает за id ЭТОЙ страницы всем, кто видит список, и номеров не отдаёт.
 // Бот у клиники не подключён — колонка пустая: звать в несуществующий бот нельзя.
-const botCells = new Map();   // String(patient id) → <td> последней колонки
+const botCells = new Map();   // String(patient id) → [<td> последней колонки] (PATIENT_DUP_RULE_V3: карта бывает в двух группах)
 let botStatusToken = 0;
 
 function botCell(p) {
     const td = h('td', { class: 'pt-bot-cell', onclick: (e) => e.stopPropagation() });
-    if (p && p.id != null) botCells.set(String(p.id), td);
+    if (p && p.id != null) { const k = String(p.id); if (!botCells.has(k)) botCells.set(k, []); botCells.get(k).push(td); }
     return td;
 }
 
@@ -760,8 +834,7 @@ async function loadBotStatus(rows) {
     if (token !== botStatusToken || !st) return;
     const linked = new Set((st.linked || []).map(String));
     for (const p of rows) {
-        const td = botCells.get(String(p.id));
-        if (td) fillBotCell(td, p, linked.has(String(p.id)), !!st.bot);
+        for (const td of botCells.get(String(p.id)) || []) fillBotCell(td, p, linked.has(String(p.id)), !!st.bot);
     }
 }
 
@@ -832,6 +905,27 @@ async function fetchAndPaint() {
     const token = ++lastFetchToken;
     setLoadingRow();
 
+    // PATIENT_DUP_RULE_V3 — «Дубликаты» — список ГРУПП (шапка V3): страница —
+    // группы целиком, их карты одной выборкой по id, без поиска и сортировки.
+    if (state.filter === 'duplicates') {
+        // Скан ещё в пути — групп нет (а не прежние, от прошлого входа в раздел): «Загрузка…».
+        dupPages = packDupPages(dupScanLoaded ? dupGroups : []);
+        if (state.page > dupPages.length) state.page = Math.max(1, dupPages.length);
+        const ids = (dupPages[state.page - 1] || []).flatMap((g) => g.ids);
+        const [res] = await Promise.all([loadPatientsByIds(ids), ensureLookups()]);
+        if (res.error && token === lastFetchToken) toast(trf('Список не загрузился: {msg}', { msg: res.error }), 'fail');
+        if (token !== lastFetchToken) return;
+        await resolveRegistrars(res.rows);
+        if (token !== lastFetchToken) return;
+        await resolveDebts(res.rows);
+        if (token !== lastFetchToken) return;
+        state.total = dupGroups.length;
+        refs.lastRows = res.rows;
+        paintRows(res.rows);
+        paintPager();
+        return;
+    }
+
     // Duplicates card is a virtual filter — pass the precomputed id set in,
     // and let the shared loader handle the rest.
     const opts = {
@@ -845,10 +939,6 @@ async function fetchAndPaint() {
         lastFrom: state.lastFrom,   // PATIENT_LIST_LAST_VISIT_V1
         lastTo:   state.lastTo,
     };
-    if (state.filter === 'duplicates') {
-        opts.filter = 'all';
-        opts.idsIn = [...duplicateIdSet];
-    }
     const [result] = await Promise.all([loadPatientsPaged(opts), ensureLookups()]);   // PATIENT_LIST_COLUMNS_V1 — названия ссылок к первой отрисовке
     if (result.error && token === lastFetchToken) toast(trf('Список не загрузился: {msg}', { msg: result.error }), 'fail');
 
@@ -877,20 +967,35 @@ function setLoadingRow() {
     refs.tbody.appendChild(h('tr', null,
         // PATIENT_ROW_V2 — 10 колонок (REG_LIST_AGE_COL_V1 + PATIENT_BOT_INVITE_V1): число обязано
         // совпадать с шапкой, иначе строка загрузки не растянется на таблицу.
-        h('td', { colspan: String(10 + extraCols.size), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка…'),
+        h('td', { colspan: String(colCount()), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка…'),
     ));
     refs.emptyEl.style.display = 'none';
 }
+// Колонок в строке: десять постоянных + выбранные («Колонки»).
+function colCount() { return 10 + extraCols.size; }
 
 function paintRows(rows) {
     clear(refs.tbody);
     botCells.clear();   // PATIENT_BOT_INVITE_V1
+    // PATIENT_DUP_RULE_V3 — в «Дубликатах» строки идут группами; пусто — своими словами,
+    // а не «Пациент не найден. Создать нового?».
+    const dup = state.filter === 'duplicates';
     if (rows.length === 0) {
+        if (dup) {
+            refs.emptyEl.style.display = 'none';
+            refs.tbody.appendChild(h('tr', null, h('td', { colspan: String(colCount()),
+                style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } },
+                dupScanLoaded ? tr('Дубликатов не найдено.') : 'Загрузка…')));
+            syncHeadCb();
+            paintMergeBar();
+            return;
+        }
         refs.emptyEl.style.display = '';
         return;
     }
     refs.emptyEl.style.display = 'none';
-    for (const p of rows) refs.tbody.appendChild(patientRow(p));
+    if (dup) paintDupGroups(rows);
+    else for (const p of rows) refs.tbody.appendChild(patientRow(p));
     // MOTION_REVEAL_ONCE_V1 — появление ОДИН РАЗ на монтирование, а не на
     // каждую перерисовку. paintRows() зовётся на КАЖДУЮ букву в поиске (тот же
     // ввод с задержкой 250 мс строкой выше), на смену страницы, фильтра и
@@ -911,10 +1016,82 @@ function paintRows(rows) {
     loadBotStatus(rows);   // PATIENT_BOT_INVITE_V1 — дозаполняет последнюю колонку
 }
 
+// PATIENT_DUP_RULE_V3 — ГРУППЫ в режиме «Дубликаты»: раздел уверенных, раздел
+// возможных; у группы шапка (причина, число карт, «Объединить», «Не дубликат»), под
+// ней её карты обычными строками списка (флажок объединения, переход в карту).
+const DUP_REASON_LABELS = {
+    phone_dob: 'тот же телефон и дата рождения',
+    name_dob: 'то же ФИО и дата рождения',
+};
+function paintDupGroups(rows) {
+    const byId = new Map(rows.map((p) => [String(p.id), p]));
+    let lastKind = null;
+    for (const g of (dupPages[state.page - 1] || [])) {
+        if (g.kind !== lastKind) { refs.tbody.appendChild(dupSectionRow(g.kind)); lastKind = g.kind; }
+        const members = g.ids.map((id) => byId.get(String(id))).filter(Boolean);
+        refs.tbody.appendChild(dupGroupHead(g, members));
+        for (const p of members) refs.tbody.appendChild(patientRow(p));
+    }
+}
+function dupSectionRow(kind) {
+    const sure = kind === 'sure';
+    const n = dupGroups.filter((g) => g.kind === kind).length;
+    return h('tr', { class: 'dup-sec-row', 'data-dup-kind': kind },
+        h('td', { colspan: String(colCount()), style: { padding: '12px 20px 6px', background: 'var(--ink-50)', borderBottom: '1px solid var(--ink-100)' } },
+            h('span', { class: 'cell-strong', style: { fontSize: '13.5px' } },
+                sure ? tr('Дубликаты') : tr('Возможные дубликаты — проверьте')),
+            h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '12.5px' } },
+                sure ? tr('тот же ПИНФЛ или то же имя на том же телефоне') : tr('тот же телефон или то же ФИО при той же дате рождения')),
+            h('span', { class: 'muted num', style: { marginLeft: '10px', fontSize: '12.5px' } }, trf('групп: {n}', { n }))));
+}
+function dupGroupHead(g, members) {
+    const possible = g.kind === 'possible';
+    const reasons = possible ? (g.reasons || []).map((r) => DUP_REASON_LABELS[r]).filter(Boolean) : [];
+    // Объединяет только администратор — как полоса объединения (M4); «Не дубликат» —
+    // кому разрешил сервер (то же право).
+    const mayMerge = actorIsAdmin() && members.length >= 2;
+    const mayDismiss = possible && dupCanDismiss;
+    let dismissBtn = null;
+    if (mayDismiss) {
+        dismissBtn = h('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'data-act': 'dup-dismiss',
+            title: tr('Это разные люди: группа больше не будет показываться в возможных дубликатах. Карты пациентов не меняются.'),
+            onclick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); dismissDupGroup(g, dismissBtn); } },
+            Icon('X', { size: 13 }), ' ', tr('Не дубликат'));
+    }
+    return h('tr', { class: 'dup-group-head', 'data-dup-kind': g.kind },
+        h('td', { colspan: String(colCount()), style: { padding: '8px 20px', borderTop: '1px solid var(--ink-100)' } },
+            h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
+                ...reasons.map((r) => h('span', { class: 'tag tag-info', style: { fontSize: '12.5px' } }, tr(r))),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, trf('карт: {n}', { n: g.ids.length })),
+                h('span', { class: 'grow' }),
+                mayMerge ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-act': 'dup-merge',
+                    title: tr('Объединить карты этой группы'),
+                    onclick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); openMergeModal(members); } },
+                    Icon('Check', { size: 13 }), ' ', tr('Объединить')) : null,
+                dismissBtn)));
+}
+// «Не дубликат»: подтверждение → пары группы на сервер → пересчёт → перерисовка.
+async function dismissDupGroup(g, btn) {
+    if (!window.confirm(tr('Отметить эти карты как разных людей? Группа больше не будет показываться в возможных дубликатах. Карты пациентов не изменятся.'))) return;
+    if (btn) btn.disabled = true;
+    try {
+        await dismissPossibleDuplicates(g.ids, g.reasons);
+        toast(tr('Отмечено: это разные люди.'), 'ok');
+        for (const id of g.ids) selectedDup.delete(id);
+        await rescanDuplicates();
+        await fetchAndPaint();
+    } catch (e) {
+        const msg = e && e.code === 'forbidden' ? tr('Отмечать «Не дубликат» может только администратор.') : ((e && e.message) || e);
+        toast(trf('Не удалось отметить: {msg}', { msg }), 'fail');
+        if (btn) btn.disabled = false;
+    }
+}
+
 // DUP_MERGE_V1 — reflect selection count in the bar; toggle the whole strip.
 function paintMergeBar() {
     // keep only ids still present as duplicates
-    for (const id of [...selectedDup]) if (!duplicateIdSet.has(id)) selectedDup.delete(id);
+    // PATIENT_DUP_RULE_V3 — уверенные или возможные: объединять можно и тех, и других.
+    for (const id of [...selectedDup]) if (!duplicateIdSet.has(id) && !possibleIdSet.has(id)) selectedDup.delete(id);
     if (refs.mergeCount) refs.mergeCount.textContent = String(selectedDup.size);
     // Четвёртая проверка, M4 — объединяет карты только администратор (сервер
     // merge_patients откажет остальным): кнопки у других ролей нет.
@@ -932,8 +1109,9 @@ function syncHeadCb() {
 }
 
 // DUP_MERGE_V1 — merge dialog: pick which record to KEEP, merge the rest into it.
-function openMergeModal() {
-    const chosen = (refs.lastRows || []).filter(p => selectedDup.has(p.id));
+// PATIENT_DUP_RULE_V3 — list: карты группы («Объединить» в шапке группы); без него — отмеченные флажками.
+function openMergeModal(list = null) {
+    const chosen = Array.isArray(list) ? list : (refs.lastRows || []).filter(p => selectedDup.has(p.id));
     if (chosen.length < 2) { toast('Выберите минимум два дубликата.', 'fail'); return; }
     // Default primary = most visits, tiebreak the lowest (oldest) MRN.
     // MRN_BEYOND_99999_V1 — «oldest» by year + WHOLE number (mrnOrder), not by
@@ -980,8 +1158,7 @@ function openMergeModal() {
             selectedDup.clear();
             close();
             // rescan duplicates, then repaint
-            duplicateIdSet = await findAllDuplicatePatientIds();
-            paintDuplicateCount();
+            await rescanDuplicates();   // PATIENT_DUP_RULE_V3 — оба списка, сервером
             await fetchAndPaint();
         } catch (e) {
             // M4 — отказ по роли словами экрана; остальные отказы сервер пишет по-русски.
@@ -1009,7 +1186,19 @@ function openMergeModal() {
     document.body.appendChild(overlay);
 }
 
+// PATIENT_DUP_RULE_V3 — в «Дубликатах» страницы — группы (packDupPages), а не по 30 строк.
+function maxPage() {
+    return state.filter === 'duplicates' ? Math.max(1, dupPages.length) : Math.max(1, Math.ceil(state.total / PAGE_SIZE));
+}
+
 function paintPager() {
+    if (state.filter === 'duplicates') {
+        refs.pagerLabel.textContent = trf('Страница {page} из {pages} · групп: {n}', { page: state.page, pages: maxPage(), n: dupGroups.length });
+        refs.totalEl.textContent = String(new Set(dupGroups.flatMap((g) => g.ids)).size);
+        setDisabled(refs.prevBtn, state.page <= 1);
+        setDisabled(refs.nextBtn, state.page >= maxPage());
+        return;
+    }
     const totalPages = Math.max(1, Math.ceil(state.total / PAGE_SIZE));
     // V3120_FIX — было «Page 1 of … · … patients» по-английски посреди русского экрана.
     refs.pagerLabel.textContent = trf('Страница {page} из {pages} · пациентов: {n}', { page: state.page, pages: totalPages, n: state.total });
@@ -1102,6 +1291,11 @@ function patientRow(p) {
                         // TELEGRAM — значок у имени (PATIENT_ROW_V2) переехал в
                         // последнюю колонку строки: PATIENT_BOT_INVITE_V1.
                         duplicateIdSet.has(p.id) ? h('span', { class: 'tag tag-warn', style: { fontSize: '12.5px' }, title: 'Возможный дубликат — то же имя на том же телефоне (или общий ПИНФЛ). Откройте карточку для объединения.' }, 'Дубликат') : null,
+                        // PATIENT_DUP_RULE_V3 — карта из «Возможных дубликатов» (и не уверенный дубликат).
+                        !duplicateIdSet.has(p.id) && possibleIdSet.has(p.id)
+                            ? h('span', { class: 'tag tag-info pt-dup-possible', style: { fontSize: '12.5px' },
+                                title: tr('Возможный дубликат — тот же телефон или то же ФИО при той же дате рождения. Проверьте в «Дубликатах».') }, tr('Возможный дубликат'))
+                            : null,
                         // DEBT_FLOW_V1 — долг у имени, с суммой: у стойки это
                         // видят ДО того, как человек дойдёт до кассы.
                         debtOf(p) > 0

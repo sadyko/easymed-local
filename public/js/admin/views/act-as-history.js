@@ -59,6 +59,9 @@ const RPC_LABELS = {
     patient_card_doc_add: 'Документ в карте пациента',
     patient_card_doc_void: 'Отзыв документа пациента',
     merge_patients: 'Объединение пациентов',
+    // PATIENT_DUP_RULE_V3 — «Дубликаты» списка пациентов: скан спрашивается при каждом входе в список.
+    patient_duplicates_scan: 'Дубликаты пациентов',
+    patient_dup_dismiss: 'Отметка «Не дубликат»',
     procedure_assign: 'Процедура взята',
     procedure_complete: 'Процедура выполнена',
     save_lab_results: 'Результаты анализов',

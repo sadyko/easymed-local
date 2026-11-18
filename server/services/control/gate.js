@@ -88,6 +88,7 @@ const READ_ONLY_RPCS = new Set([
   // список без «визитов» и «баланса» выглядел бы сломанным, а не запертым.
   'patient_base_aggregates',
   'patient_list_page',   // PATIENT_LIST_LAST_VISIT_V1 — картотека по последнему визиту; чтение
+  'patient_duplicates_scan',   // PATIENT_DUP_RULE_V3 — «Дубликаты» картотеки (оба списка); чтение. «Не дубликат» (patient_dup_dismiss) — запись
   'telegram_settings_get', 'telegram_links_list', 'telegram_deliveries_list',
   'telegram_stats', 'telegram_broadcast_status', 'telegram_broadcast_history',
   'telegram_chats_list', 'telegram_chat_messages', 'telegram_chat_unread',

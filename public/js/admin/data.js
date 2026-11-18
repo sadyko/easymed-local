@@ -11,7 +11,10 @@ import { branchScope, branchSelectionNarrows } from './branch-filter.js?v=bf4'; 
 import { getSelectedBranchIds, soleBranchId } from './branch-context.js?v=bc3';   // soleBranchId: SOLE_BRANCH_V1
 // PATIENT_DUP_RULE_V2 — one definition of "same person", shared by the register
 // scan and the registration-time guard. See the header of that file for the rule.
-import { duplicateIdSet, namesMatch, levenshtein as rawLevenshtein } from './patient-duplicates.js';
+// PATIENT_DUP_RULE_V3 — тот же модуль решает, что такое «возможный дубликат» и при
+// сохранении карты (dobKey/fullNameKey/nameParts/possiblePhoneKey), и в списке
+// (его считает сервер, rpc/patient-duplicates.js, тем же модулем).
+import { namesMatch, levenshtein as rawLevenshtein, dobKey, fullNameKey, nameParts, possiblePhoneKey } from './patient-duplicates.js';
 
 // ---------------------------------------------------------------------------
 // DEMO DATA — used as fallback when Supabase is empty or unreachable.
@@ -688,9 +691,17 @@ async function findDuplicateCandidates(insert) {
     // It only means "same person" when the FIRST NAME matches too, otherwise the
     // registrar was blocked with a duplicate warning on every family member.
     // The surname is not consulted — a family shares that as well.
+    // PATIENT_DUP_RULE_V3 — «возможный дубликат» при сохранении — то же правило,
+    // что у второго списка «Дубликатов»: тот же телефон и та же дата рождения при
+    // другом имени (случай владельца, имена изменены — «Sardor Alimov» и «ТЕст 2 Тест 2»), и то же
+    // ФИО с той же датой (ниже, после поиска по похожему имени). Мусорные дата
+    // и телефон не считаются — dobKey/possiblePhoneKey из patient-duplicates.js.
+    const dobK = dobKey(dob);
     if (phone) {
+        const phoneDob = !!(dobK && possiblePhoneKey(phone));
         for (const r of await safeQuery(base().eq('phone', phone).limit(10))) {
             if (namesMatch(fn, r.first_name)) add(r, 'same phone + name', 60);
+            else if (phoneDob && dobKey(r.date_of_birth) === dobK) add(r, 'same phone + DOB', 45);
         }
     }
     // A PINFL identifies one human, so it stands alone.
@@ -724,28 +735,82 @@ async function findDuplicateCandidates(insert) {
         }
     }
 
+    // PATIENT_DUP_RULE_V3 — то же ФИО и та же дата рождения, телефон любой. Пул
+    // по двум буквам фамилии выше ограничен 60 строками и на большой картотеке
+    // нужную карту может не захватить; здесь — прямо по дате рождения (у одной
+    // даты в картотеке единицы карт). Отчество, записанное у обеих, должно
+    // совпасть. Если поиск по имени уже нашёл ту же карту с той же датой, вторая
+    // метка не добавляется — она сказала бы то же самое.
+    const nameK = fullNameKey(insert);
+    if (nameK && dobK) {
+        const mid = nameParts(insert).middle;
+        for (const r of await safeQuery(base().eq('date_of_birth', dobK).limit(50))) {
+            if (fullNameKey(r) !== nameK) continue;
+            const m2 = nameParts(r).middle;
+            if (mid && m2 && mid !== m2) continue;
+            const seen = cand.get(r.id);
+            if (seen && seen._reasons.includes('name matches') && seen._reasons.includes('DOB matches')) continue;
+            add(r, 'same name + DOB', 55);
+        }
+    }
+
     return [...cand.values()].sort((a, b) => b._score - a._score).slice(0, 8);
 }
 
-// Patients-list "Duplicates" chip. Scans the register and returns every id that
-// is in a group of 2+ under the PATIENT_DUP_RULE_V2 rule: same PINFL, or same
-// phone AND same first name. A shared family phone alone is NOT a duplicate —
-// that is the normal case, not an error. Cheap enough for clinics with
-// thousands of patients: one query plus an in-memory grouping. Returns Set<id>.
-export async function findAllDuplicatePatientIds() {
+// Patients-list «Дубликаты». PATIENT_DUP_RULE_V3 — считает СЕРВЕР
+// (patient_duplicates_scan, rpc/patient-duplicates.js) по ВСЕЙ картотеке.
+// Прежде здесь была выборка /api/db с .limit(1000) и группировка в браузере:
+// на картотеке в 70 000 карт смотрелась первая тысяча, и дубль, заведённый
+// позже, не находился никогда.
+//   sure     — [[id…]…] уверенные группы (тот же ПИНФЛ; тот же телефон и имя);
+//   possible — [{ ids, reasons }…] «Возможные дубликаты — проверьте»;
+//   canDismiss — может ли этот сотрудник нажать «Не дубликат» (как объединять).
+// Сбой — пустые списки: чип покажет ноль, список пациентов работает дальше.
+export async function loadDuplicateScan() {
+    const empty = { sure: [], possible: [], canDismiss: false, failed: true };
     try {
-        // CLOUD_LEFTOVER_COLUMNS_V1 — отбор по company_id убран по той же причине,
-        // что и в поиске дублей выше: колонки нет в реестре, запрос отвергался
-        // целиком, и чип «Дубли» всегда показывал ноль.
-        const _q = supabase.from('patients')
-            .select('id, phone, national_id, first_name, full_name').limit(1000);
-        const { data, error } = await _q;
-        if (error) { console.warn('[findAllDuplicatePatientIds]', error.message); return new Set(); }
-        return duplicateIdSet(data || []);
+        const { data, error } = await supabase.rpc('patient_duplicates_scan', {});
+        if (error) { console.warn('[loadDuplicateScan]', error.message); return empty; }
+        const d = data || {};
+        const asId = (v) => (typeof v === 'number' ? v : Number(v));
+        const sure = (Array.isArray(d.sure) ? d.sure : []).filter(Array.isArray).map((g) => g.map(asId));
+        const possible = (Array.isArray(d.possible) ? d.possible : [])
+            .filter((g) => g && Array.isArray(g.ids))
+            .map((g) => ({ ids: g.ids.map(asId), reasons: Array.isArray(g.reasons) ? g.reasons : [] }));
+        return { sure, possible, canDismiss: !!d.can_dismiss, failed: !data };
     } catch (e) {
-        console.warn('[findAllDuplicatePatientIds] threw:', e.message);
-        return new Set();
+        console.warn('[loadDuplicateScan] threw:', e.message);
+        return empty;
     }
+}
+
+// PATIENT_DUP_RULE_V3 — «Не дубликат»: эти карты — разные люди. Сервер запоминает
+// каждую пару группы (кто и когда, patient_dup_dismissals); карты не меняются.
+// Право — как у объединения карт; отказ сервера пробрасывается вызывающему.
+export async function dismissPossibleDuplicates(ids, reasons = []) {
+    const { data, error } = await supabase.rpc('patient_dup_dismiss', {
+        ids: (ids || []).map(Number), reasons: (reasons || []).filter(Boolean),
+    });
+    if (error) throw error;
+    return data || { dismissed: 0, pairs: 0 };
+}
+
+// PATIENT_DUP_RULE_V3 — карты группы дубликатов целиком, в порядке ids. Без
+// отбора по зданиям: группа считается по всей картотеке, и половина группы на
+// экране читалась бы как «дубликат с одной картой». Те же поля строки, что у
+// страницы списка (shapePatient + числа визитов и баланса).
+export async function loadPatientsByIds(ids) {
+    const want = [...new Set((ids || []).filter((id) => id != null))];
+    if (!want.length) return { rows: [] };
+    const { data, error } = await supabase.from('patients').select('*').in('id', want).limit(want.length);
+    if (error) {
+        console.warn('[loadPatientsByIds]', error.message);
+        return { rows: [], error: error.message || String(error) };
+    }
+    const byId = new Map((data || []).map((r) => [String(r.id), r]));
+    const rows = want.map((id) => byId.get(String(id))).filter(Boolean).map(shapePatient);
+    await attachBaseAggregates(rows);
+    return { rows };
 }
 
 // Find duplicate candidates for an EXISTING patient (used by the patient

@@ -760,7 +760,9 @@ test('поиск по списку не проигрывает появлени�
     ') — это мигание на самом «печатаемом» экране продукта');
 
   // И смена фильтра — тоже не повод проигрывать появление снова.
-  const dupChip = walk(box).find((n) => n.tagName === 'BUTTON' && String(n.attrs.title || '').startsWith('Возможные дубликаты'));
+  // PATIENT_DUP_RULE_V3 — «Возможные» теперь отдельный, второй список, и подсказка
+  // чипа начинается с «Дубликаты — …»; чип ищется по своей метке data-act.
+  const dupChip = walk(box).find((n) => n.tagName === 'BUTTON' && n.attrs['data-act'] === 'dup-chip');
   assert.ok(dupChip, 'в шапке списка нет фильтра дубликатов');
   dupChip.click();
   await tick(80);

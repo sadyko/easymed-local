@@ -190,6 +190,9 @@ export const TABLE_PLAN = Object.freeze({
   patient_relationships: keep('patients'),
   patient_conditions: keep('patients'),
   patient_merges: keep('patients'),
+  // PATIENT_DUP_RULE_V3 (мигр. 290) — отметки «Не дубликат» описывают пары КАРТ, а карты остаются:
+  // удалить разбор значило бы снова показать регистратору пары, которые он уже проверил.
+  patient_dup_dismissals: keep('patients'),
 
   // ── CRM, звонки, Telegram, Meta ────────────────────────────────────────
   crm_requests: keep('crm'),

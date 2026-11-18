@@ -87,6 +87,9 @@ export const MERGE_TABLES = Object.freeze([
   { table: 'patient_deposits', cols: ['patient_id'], how: 'money' },
   { table: 'patient_guardians', cols: ['patient_id', 'guardian_patient_id'], how: 'guardians' },
   { table: 'patient_relationships', cols: ['patient_id_a', 'patient_id_b'], how: 'relationships' },
+  // PATIENT_DUP_RULE_V3 (мигр. 290) — отметки «Не дубликат»: «A — не дубль» остаётся правдой и для
+  // карты, в которую дубль влился. Пара «оставленная — дубль» снимается (их объединили), повтор — тоже.
+  { table: 'patient_dup_dismissals', cols: ['patient_id_a', 'patient_id_b'], how: 'dismissals' },
 ]);
 
 // Родство хранится одной строкой на пару, «младший» id — в a (как у экрана,
@@ -129,6 +132,21 @@ export function mergeRows(db, keep, drop) {
         if (x === y) continue;   // связь с самим собой
         if (String(x) > String(y)) { [x, y] = [y, x]; rt = REL_INVERSE[rt] || rt; }
         n += ins.run(x, y, rt).changes;
+      }
+      moved[t.table] = n;
+    } else if (t.how === 'dismissals') {
+      // PATIENT_DUP_RULE_V3 — пара хранится младшим id в a (CHECK мигр. 290): переписываем с
+      // перестановкой; пара с самой собой не пишется, уже отмеченная — пропускается (OR IGNORE).
+      const rows = db.prepare('SELECT * FROM patient_dup_dismissals WHERE patient_id_a = ? OR patient_id_b = ?').all(drop, drop);
+      db.prepare('DELETE FROM patient_dup_dismissals WHERE patient_id_a = ? OR patient_id_b = ?').run(drop, drop);
+      const ins = db.prepare(`INSERT OR IGNORE INTO patient_dup_dismissals
+        (patient_id_a, patient_id_b, reasons, dismissed_by, dismissed_by_name, created_at) VALUES (?, ?, ?, ?, ?, ?)`);
+      let n = 0;
+      for (const r of rows) {
+        const x = r.patient_id_a === drop ? keep : r.patient_id_a;
+        const y = r.patient_id_b === drop ? keep : r.patient_id_b;
+        if (x === y) continue;
+        n += ins.run(Math.min(x, y), Math.max(x, y), r.reasons, r.dismissed_by, r.dismissed_by_name, r.created_at).changes;
       }
       moved[t.table] = n;
     }

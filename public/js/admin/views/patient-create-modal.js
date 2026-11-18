@@ -1304,6 +1304,26 @@ export async function runPatientSearch(term, resultsEl, onPick) {
     return rows;
 }
 
+// PATIENT_DUP_RULE_V3 — причины совпадения (data.js findDuplicateCandidates отдаёт
+// их кодами по-английски) словами экрана. Две новые — «тот же телефон и дата
+// рождения» и «то же ФИО и дата рождения» — те же, что у второго списка
+// «Дубликатов» в картотеке; прежние кнопки показывали код как есть.
+const DUP_REASON_WORDS = {
+    'same phone + name': 'тот же телефон и имя',
+    'same PINFL': 'тот же ПИНФЛ',
+    'same phone + DOB': 'тот же телефон и дата рождения',
+    'same name + DOB': 'то же ФИО и дата рождения',
+    'name matches': 'имя совпадает',
+    'DOB matches': 'дата рождения совпадает',
+    'DOB ≈ matches': 'дата рождения почти совпадает',
+};
+export function dupReasonLabel(reason) {
+    const r = String(reason == null ? '' : reason);
+    if (DUP_REASON_WORDS[r]) return tr(DUP_REASON_WORDS[r]);
+    const m = /^name ~ (\d+) char diff$/.exec(r);
+    return m ? trf('отличий в имени: {n}', { n: m[1] }) : r;
+}
+
 // ---------------------------------------------------------------------------
 // Диалог дубликата — открывает существующую карту или создаёт принудительно.
 // Экспортируется: тот же диалог показывает встроенная форма в мастере услуг.
@@ -1373,7 +1393,7 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
                     borderRadius: '999px', background: 'var(--primary-50)',
                     color: 'var(--primary-700)', textTransform: 'uppercase', letterSpacing: '0.04em',
                 },
-            }, r));
+            }, dupReasonLabel(r)));   // PATIENT_DUP_RULE_V3
             const row = h('button', {
                 type: 'button', class: 'dup-row',
                 style: {
