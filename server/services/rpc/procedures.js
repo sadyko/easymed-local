@@ -43,6 +43,7 @@ import { hasColumn } from '../domain/buildings.js';
 // CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
 import { crmServiceEvidence } from '../crm/visit-status.js';
 import { mergeNurseNote, nurseNoteOf } from '../domain/cabinet-notes.js';   // CABINET_FIX_V1_R5 (B) — заметка медсестры не стирает документ кабинета
+import { recordDocRevision } from '../domain/doc-history.js';   // DOC_HISTORY_V1 — версия «Отметка медсестры»
 import { refuseSignWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3)
 import { refundedOpenLineIds } from '../domain/pay-releases.js';   // REFUND_ANY_V1 (ревью B4, п. 9b)
 import { lineHasWork } from '../domain/line-work.js';   // REFUND_ANY_V1 (ревью B4, п. 9b)
@@ -410,14 +411,20 @@ export function procedureComplete(db, args, user) {
     // CABINET_FIX_V1_R5 (ревью 5, B) — заметка медсестры не стирает записи кабинета
     // врача: у строки с его JSON она ложится туда же под своим ключом (nurseNote),
     // у прочих — текстом, как прежде (mergeNurseNote).
-    const stored = db.prepare('SELECT notes FROM visit_services WHERE id = ?').get(id);
-    db.prepare(`UPDATE visit_services
-                   SET status = 'completed',
-                       notes = ?,
-                       verified_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
-                       verified_by = ?,
-                       doctor_id = COALESCE(doctor_id, ?)
-                 WHERE id = ?`).run(mergeNurseNote(stored ? stored.notes : null, notes), me, me, id);   // CABINET_FIX_V1_R5 (B)
+    // DOC_HISTORY_V1 — заметка, легшая в документ кабинета, — версия «Отметка медсестры»
+    // (services/domain/doc-history.js), в одной транзакции с самой отметкой.
+    db.transaction(() => {
+      const stored = db.prepare('SELECT notes FROM visit_services WHERE id = ?').get(id);
+      const merged = mergeNurseNote(stored ? stored.notes : null, notes);
+      db.prepare(`UPDATE visit_services
+                     SET status = 'completed',
+                         notes = ?,
+                         verified_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+                         verified_by = ?,
+                         doctor_id = COALESCE(doctor_id, ?)
+                   WHERE id = ?`).run(merged, me, me, id);   // CABINET_FIX_V1_R5 (B)
+      recordDocRevision(db, { visitServiceId: id, prevRaw: stored ? stored.notes : null, nextRaw: merged, user, via: 'nurse' });   // DOC_HISTORY_V1
+    })();
   } else {
     db.prepare(`UPDATE admission_services
                    SET performed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),

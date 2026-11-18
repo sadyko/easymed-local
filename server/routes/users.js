@@ -1125,6 +1125,8 @@ const STAFF_HISTORY_REFS = [
   { table: 'admission_prescriptions', columns: ['prescribed_by'],             label: 'назначения' },
   { table: 'med_administrations',     columns: ['administered_by'],           label: 'введения препаратов' },
   { table: 'visit_documents',         columns: ['created_by'],                label: 'документы визитов' },
+  // DOC_HISTORY_V1 (мигр. 289) — кто менял документы приёма (и администратор «от имени»): история постоянна.
+  { table: 'visit_document_revisions', columns: ['user_id', 'acting_admin_id'], label: 'история изменений документов' },
   { table: 'patient_vitals',          columns: ['recorded_by'],               label: 'показатели пациентов' },
   { table: 'patient_deposits',        columns: ['created_by', 'received_by'], label: 'депозиты пациентов' },
   { table: 'stock_movements',         columns: ['created_by'],                label: 'движения склада' },

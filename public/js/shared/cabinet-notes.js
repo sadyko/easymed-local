@@ -68,7 +68,8 @@ export function signedVersionsDropped(storedRaw, nextRaw) {
 }
 
 // ADMIN_ACT_AS_V1 (R3) — запись по содержанию, без зависимости от порядка ключей.
-function stableJson(v) {
+// DOC_HISTORY_V1 — экспорт: отпечаток содержания документа (shared/doc-history.js).
+export function stableJson(v) {
     if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']';
     if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
     return JSON.stringify(v === undefined ? null : v);

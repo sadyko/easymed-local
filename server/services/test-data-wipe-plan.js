@@ -67,6 +67,11 @@ export const TABLE_PLAN = Object.freeze({
   // ── документы визитов (файлы — test-data-wipe.js removeVisitDocFiles) ─
   visit_documents: del('documents'),
   telegram_deliveries: del('documents'),
+  // DOC_HISTORY_V1 (мигр. 289) — история изменений документов приёма: учебные документы
+  // (visit_services.notes) уходят вместе с визитами — и их история с ними, как копии
+  // подписанных документов (visit_documents). Запрет на удаление версий снимается
+  // только на время этой транзакции (GUARD_TRIGGERS ниже) и возвращается тем же текстом.
+  visit_document_revisions: del('documents'),
 
   // ── стационар ──────────────────────────────────────────────────────────
   admissions: del('inpatient'),
@@ -350,7 +355,7 @@ export const WIPE_ORDER = Object.freeze([
   'treatment_administrations', 'treatment_orders', 'med_administrations',
   'admission_diets', 'admission_meals', 'admission_prescriptions', 'admission_reviews',
   'admission_title_sheets', 'admission_transfers', 'admission_vitals', 'admission_services',
-  'lab_results', 'lab_device_messages', 'telegram_deliveries', 'visit_documents',
+  'lab_results', 'lab_device_messages', 'telegram_deliveries', 'visit_documents', 'visit_document_revisions',   // DOC_HISTORY_V1
   'service_queue_tickets', 'recommended_services', 'patient_vitals', 'custdev_cards',
   'doctor_bot_notifications', 'crm_booking_links', 'crm_booking_undo', 'crm_card_visit_views',
   'api_outbox', 'slot_holds', 'api_requests',
@@ -367,6 +372,8 @@ export const WIPE_ORDER = Object.freeze([
 // возвращает и триггер.
 export const GUARD_TRIGGERS = Object.freeze({
   patient_deposits: Object.freeze(['patient_deposits_no_delete']),
+  // DOC_HISTORY_V1 (мигр. 289) — «История изменений документа не удаляется.»
+  visit_document_revisions: Object.freeze(['visit_document_revisions_no_delete']),
 });
 
 // ВСЕ триггеры, которые срабатывают от самого удаления (событие DELETE на
@@ -384,8 +391,11 @@ export const GUARD_TRIGGERS = Object.freeze({
 //   patient_deposits_no_delete (мигр. 160) — запрет, GUARD_TRIGGERS выше;
 //   visit_services_lab_gone (мигр. 281, ревью S3 L-4) — пишет след удалённой
 //     строки в lab_line_gone; её удаление идёт ПОСЛЕ visit_services (WIPE_ORDER)
-//     и уносит и эти следы.
+//     и уносит и эти следы;
+//   visit_document_revisions_no_delete (мигр. 289, DOC_HISTORY_V1) — запрет,
+//     GUARD_TRIGGERS выше.
 export const DELETE_TRIGGERS = Object.freeze({
+  visit_document_revisions: Object.freeze(['visit_document_revisions_no_delete']),
   visits: Object.freeze(['visits_journal_del']),
   visit_services: Object.freeze(['visit_services_journal_del', 'visit_services_lab_gone']),
   lab_results: Object.freeze(['lab_results_journal_del']),

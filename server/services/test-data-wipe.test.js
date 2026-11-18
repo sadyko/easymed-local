@@ -72,6 +72,8 @@ function seeded() {
   ins(db, "INSERT INTO doctor_bot_notifications (visit_id, referral_source_id, chat_id) VALUES (?, ?, '555')", p.visit, p.source);
   ins(db, "INSERT INTO visit_documents (patient_id, visit_id, visit_service_id, title, file_path) VALUES (?, ?, ?, 'Заключение', ?)",
     p.patient, p.visit, p.vs, `patients/${p.patient}/docs/1-a-scan.pdf`);
+  // DOC_HISTORY_V1 (мигр. 289) — версия учебного документа приёма уходит вместе с ним.
+  ins(db, "INSERT INTO visit_document_revisions (visit_service_id, rev_no, kind, via, doc_type, snapshot, content_hash, user_id) VALUES (?, 1, 'draft', 'cabinet', 'conclusion', '{}', 'h1.1', 5)", p.vs);
   // Поправка 6: скан в карте пациента без визита — тоже учебный документ.
   ins(db, "INSERT INTO visit_documents (patient_id, title, file_path) VALUES (?, 'Скан направления', ?)",
     p.patient, `patients/${p.patient}/docs/2-b-scan.pdf`);
@@ -187,6 +189,10 @@ test('каждая удаляемая таблица наполнена до у�
   assert.equal(r.deleted.visits, 1);
   assert.equal(r.deleted.invoices, 4, 'счёт визита, квитанция депозита, продажа карты, счёт выписки');
   assert.equal(r.deleted.visit_documents, 2, 'документ визита и скан в карте без визита (поправка 6)');
+  // DOC_HISTORY_V1 — история учебного документа удалена, запрет на удаление версий вернулся.
+  assert.equal(r.deleted.visit_document_revisions, 1, 'версия учебного документа приёма');
+  ins(db, "INSERT INTO visit_document_revisions (visit_service_id, rev_no, kind, via, doc_type, snapshot, content_hash) VALUES (1, 1, 'draft', 'cabinet', 'conclusion', '{}', 'h1.1')");
+  assert.throws(() => db.prepare('DELETE FROM visit_document_revisions').run(), /не удаляется/, 'запрет на удаление версий не вернулся');
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [], 'ни одной висячей ссылки');
   db.close();
 });

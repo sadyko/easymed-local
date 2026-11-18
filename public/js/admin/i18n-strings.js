@@ -3,6 +3,9 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // DOC_HISTORY_V1 — версии документа приёма неизменяемы: отказ триггеров миграции 289
+  "История изменений документа не меняется.": {"en":"The document’s change history cannot be modified.","ru":"История изменений документа не меняется.","uz":"Hujjat o‘zgarishlari tarixini o‘zgartirib bo‘lmaydi."},   // DOC_HISTORY_V1
+  "История изменений документа не удаляется.": {"en":"The document’s change history cannot be deleted.","ru":"История изменений документа не удаляется.","uz":"Hujjat o‘zgarishlari tarixini o‘chirib bo‘lmaydi."},   // DOC_HISTORY_V1
   // RELEASE_SELECT_V1 — частичная оплата и долг отпускают в работу только отмеченные услуги (release-select.js, cashier-desk.js, visit-modal.js, rpc/billing.js)
   "Что можно оказать сейчас": {"en":"What can be provided now","ru":"Что можно оказать сейчас","uz":"Hozir nima ko‘rsatish mumkin"},   // RELEASE_SELECT_V1
   "Отметьте услуги, которые пациент получит сейчас. Неотмеченные ждут оплаты: в лабораторию и к врачу они не попадут.": {"en":"Tick the services the patient gets now. Unticked ones wait for payment: they will not reach the laboratory or the doctor.","ru":"Отметьте услуги, которые пациент получит сейчас. Неотмеченные ждут оплаты: в лабораторию и к врачу они не попадут.","uz":"Bemor hozir oladigan xizmatlarni belgilang. Belgilanmaganlari to‘lovni kutadi: ular laboratoriya va shifokorga bormaydi."},   // RELEASE_SELECT_V1

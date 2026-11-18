@@ -45,6 +45,7 @@ import { packageProblem, isPackageRow, packageIds, packageItems } from '../../pu
 import { onlineRuleProblem } from '../../public/js/shared/service-public.js';   // SERVICES_PACKAGES_V1 — показ услуги: RU + UZ
 import { liveWrapSync } from '../services/live/bus.js';   // LIVE_REFRESH_V1 — «записано» для живых экранов
 import { isCallcenterOnlyUser, callcenterCategoryRefusal, CALLCENTER_DISCOUNT_REFUSAL } from '../services/domain/patient-category-guard.js';   // CALLCENTER_NO_DISCOUNT_V1
+import { recordDocRevision } from '../services/domain/doc-history.js';   // DOC_HISTORY_V1 — версия документа в транзакции записи
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -357,6 +358,16 @@ function notesTargetRows(db, meta, body, user, values) {   // CABINET_FIX_V1_R5 
   try {   // CABINET_FIX_V1_R5
     return { rows: writeTargets(db, meta, body, user, ['id', 'notes']), picked: true };   // CABINET_FIX_V1_R5 · DUP_STOP_V1 (остаток A3) — строки самой правки, без правил чтения
   } catch { return null; }   // CABINET_FIX_V1_R5
+}
+
+// DOC_HISTORY_V1 — строки, чей документ меняет эта правка, с их notes ДО неё: после
+// записи (в той же транзакции) по каждой пишется версия (services/domain/doc-history.js).
+function docRevisionTargets(db, meta, body, user) {
+  if (!meta || meta.table !== 'visit_services' || meta.op !== 'update') return [];
+  const values = body && body.values && !Array.isArray(body.values) ? body.values : null;
+  if (!values || !Object.prototype.hasOwnProperty.call(values, 'notes')) return [];
+  const got = notesTargetRows(db, meta, body, user, values);
+  return got ? got.rows : [];
 }
 export function refuseNotesWrite(db, meta, body, user, base, out = null) {   // CABINET_FIX_V1_R5 — экспорт для проверки · CABINET_FIX_V1_R6
   if (!meta || meta.table !== 'visit_services' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;   // CABINET_FIX_V1_R5
@@ -892,7 +903,19 @@ export function dbRoutes(db, { storageDir = null } = {}) {
         // crmEvidenceTargets), а заявки считаем ПОСЛЕ: хук молчит при любой
         // ошибке, но и запускать его по строкам, которые не записались, незачем.
         const evidence = crmEvidenceTargets(db, meta, req.body, req.user);
-        const updInfo = db.prepare(sql).run(...params);
+        // DOC_HISTORY_V1 — правка документа приёма и его версия — одна транзакция: версия
+        // пишется по тому, что легло у строки (перечитано после UPDATE), не записалась —
+        // откатывается и сама правка. Тот же текст ещё раз — версии нет.
+        const docTargets = docRevisionTargets(db, meta, req.body, req.user);
+        const updInfo = docTargets.length ? db.transaction(() => {
+          const info = db.prepare(sql).run(...params);
+          const after = db.prepare('SELECT notes FROM visit_services WHERE id = ?');
+          for (const t of docTargets) {
+            const now = after.get(t.id);
+            if (now) recordDocRevision(db, { visitServiceId: t.id, prevRaw: t.notes, nextRaw: now.notes, user: req.user, via: 'cabinet' });
+          }
+          return info;
+        })() : db.prepare(sql).run(...params);
         // CABINET_FIX_V1_R1 — таблица, где 0 задетых строк значит «ограничение не
         // пропустило» (шаблоны: правит автор или администратор), отвечает отказом.
         if (updInfo.changes === 0 && zeroRowRefusal(meta.table)) return res.status(403).json({ error: { code: 'forbidden', message: zeroRowRefusal(meta.table) } });

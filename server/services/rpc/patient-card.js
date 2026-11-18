@@ -48,6 +48,7 @@ import { actingActorName } from '../../../public/js/shared/act-as.js';   // REFE
 import { localMonth } from '../domain/day.js';   // PAY_MONTH_LOCAL_V1 — закрытый месяц — местный, как у выплаты
 import { refuseSignWhileActing, refuseDoctorDocWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3; ревью — документ врача в карте)
 import { labDocIssued } from '../../../public/js/shared/lab-doc-batches.js';   // LAB_DOC_NOT_READY_V1 — «документ анализа выдан?»
+import { ensureDocRevisionCurrent } from '../domain/doc-history.js';   // DOC_HISTORY_V1 — история документа догоняется подписью
 
 const SECTION = 'patients';
 
@@ -927,6 +928,9 @@ export function visitDocumentArchive(db, args, user) {
     for (const r of replaceable) voidOne.run(me, r.id);
     const info = db.prepare(`INSERT INTO visit_documents (visit_service_id, visit_id, patient_id, doc_type, title, body, created_by)
       VALUES (?,?,?,?,?,?,?)`).run(vsId, line.visit_id, line.patient_id, docType, title, JSON.stringify(body), me);
+    // DOC_HISTORY_V1 — подпись записала документ строки через /api/db (там и его версия);
+    // если документ изменился мимо журнала, история догоняется здесь, той же транзакцией.
+    ensureDocRevisionCurrent(db, vsId, user);
     return { id: Number(info.lastInsertRowid) };
   });
   return run();
