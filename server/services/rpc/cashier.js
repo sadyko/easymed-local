@@ -19,7 +19,7 @@ import { assertOwnBuilding, PERFORMED_LINE_STATUSES, lineHasWork } from './billi
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
 import { lineUnitPrice, consultationFor, doctorPriceLookup, legacyPackageOnlyOff, packageLineDiscount, doctorPriceFor } from '../domain/pricing.js';   // doctorPriceFor: VISIT_TIER_SHOWN_CASHIER_V1
 import { tierUnitPrice } from '../domain/visit-tier.js';   // VISIT_TIER_SHOWN_CASHIER_V1 — цена яруса строки
-import { quoteServicePrices } from './service-price-quote.js';   // VISIT_TIER_SHOWN_CASHIER_V1 — дни от прошлого визита, как у мастера   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
+import { quoteServicePrices, billingTiers } from './service-price-quote.js';   // VISIT_TIER_ATTENDED_V1 — billingTiers: ярус невыставленной строки, как его решит счёт; VISIT_TIER_SHOWN_CASHIER_V1 — дни от прошлого визита, как у мастера   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
 import { searchArg, pageInt } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере; REFUND_ANY_V1 — pageInt: страницы поиска счёта
 import { moneyDocRefusal } from '../domain/wallet.js';   // REFUND_ANY_V1 (ревью M-1) — «это документ денег» тем же правилом, что оплата и возврат
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
@@ -1166,6 +1166,22 @@ export function cashierUnbilled(db, args, user) {
     return consults.get(key);
   };
 
+  // VISIT_TIER_ATTENDED_V1 — ярус строки — тот, что решит счёт (billingTiers, по
+  // визиту): записанный мог устареть (прошлую запись отменили, «Не пришёл»), и
+  // сумма «Ждут счёта» — по правилу цены счёта.
+  const tierOf = new Map();
+  {
+    const perVisit = new Map();
+    for (const l of lines) {
+      if (l.service_id == null) continue;
+      if (!perVisit.has(l.visit_id)) perVisit.set(l.visit_id, []);
+      perVisit.get(l.visit_id).push(l);
+    }
+    for (const [visitId, ls] of perVisit) {
+      for (const [id, tier] of billingTiers(db, { id: visitId, patient_id: ls[0].patient_id, visit_date: ls[0].visit_date }, ls)) tierOf.set(id, tier);
+    }
+  }
+
   // Строки идут от самой свежей: первая строка визита задаёт его место в
   // списке и «добавил» (автор самой свежей строки).
   const byVisit = new Map();
@@ -1175,7 +1191,8 @@ export function cashierUnbilled(db, args, user) {
     else if (l.clinic_item_id != null) { prod = once(products, l.clinic_item_id, getProduct); name = prod && prod.name; }
     else if (l.consultation_type_id != null) { const c = consult(l.consultation_type_id, l.doctor_id); name = c && c.name; }
     const qty = Number(l.quantity);
-    const unit = Number(lineUnitPrice(db, l, { service: svc, product: prod, ownPrice, consult })) || 0;   // REFBILL_REVIEW_V1
+    const priceRow = tierOf.has(l.id) ? { ...l, price_tier: tierOf.get(l.id) } : l;   // VISIT_TIER_ATTENDED_V1
+    const unit = Number(lineUnitPrice(db, priceRow, { service: svc, product: prod, ownPrice, consult })) || 0;   // REFBILL_REVIEW_V1
     // SERVICES_PACKAGES_V1 — строка из пакета — по цене в пакете, записанной при
     // записи: она окончательная (решение владельца 1), её и выставит счёт.
     // Ревью C1 — строка до мигр. 244, чья цена несёт скидку группы пациента
@@ -1234,7 +1251,9 @@ export function cashierUnbilled(db, args, user) {
 // нет: её цену задаёт пакет, ярус её не меняет (pricing.js lineUnitPrice).
 //   tier        — слово яруса, записанное в строке (по нему считает счёт);
 //   price       — цена единицы, которую показывает экран: у выставленной строки —
-//                 цена позиции счёта, у невыставленной — цена строки визита;
+//                 цена позиции счёта, у невыставленной — цена строки визита
+//                 (VISIT_TIER_ATTENDED_V1: если счёт решит ярус иначе, чем
+//                 записано, — ярус и цена, которые выставит счёт);
 //   quantity    — количество (зачёркнутая сумма — цена первого визита × количество);
 //   first_price — цена ПЕРВОГО визита: своя цена врача строки, иначе каталог (то же
 //                 правило lineUnitPrice с ярусом 'primary'). НЕ ДОГАДКА: только если
@@ -1273,6 +1292,19 @@ export function cashierLineTiers(db, args, user) {
         LEFT JOIN invoice_items ii ON ii.id = vs.invoice_item_id
        WHERE vs.visit_id = ? AND COALESCE(vs.status, '') <> 'cancelled'
        ORDER BY vs.id`).all(a.visit_id);
+    // VISIT_TIER_ATTENDED_V1 — у НЕвыставленной строки ярус и цена — те, что даст
+    // счёт (billingTiers — расчёт кассы в миг счёта): записанный ярус мог
+    // устареть, и чип «Второй визит» у строки, которую счёт выставит первичной,
+    // обещал бы пациенту не ту цену.
+    const v = db.prepare('SELECT id, patient_id, visit_date FROM visits WHERE id = ?').get(a.visit_id);
+    const decided = billingTiers(db, v, rows.filter((r) => r.ii_id == null));
+    const stamped = (t) => (t === 'secondary' || t === 'repeat' ? t : 'primary');
+    rows = rows.map((r) => {
+      if (r.ii_id != null || !decided.has(r.id) || decided.get(r.id) === stamped(r.price_tier)) return r;
+      const svc = db.prepare('SELECT * FROM services WHERE id = ?').get(r.service_id) || null;
+      const next = { ...r, price_tier: decided.get(r.id) };
+      return { ...next, unit_price: round2(Number(lineUnitPrice(db, next, { service: svc })) || 0) };
+    });
   }
   const tiered = rows.filter((r) => r.service_id != null
     && (r.price_tier === 'secondary' || r.price_tier === 'repeat')

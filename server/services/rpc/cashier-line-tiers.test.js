@@ -19,6 +19,7 @@ import { RPC } from './index.js';
 import { createInvoiceForVisit } from './billing.js';
 import { cashierLineTiers } from './cashier.js';
 import { isReadOnlyRpc } from '../control/gate.js';
+import { markBilled } from '../../test-helpers/billed-line.js';   // VISIT_TIER_ATTENDED_V1 — прошлый приём выставлен
 
 const registrar = { id: 7, role: 'registrar', full_name: 'Регистратура' };
 const cashier = { id: 9, role: 'cashier', full_name: 'Кассир' };
@@ -57,10 +58,11 @@ function line(db, vid, { service_id, doctor_id, tier = null, status = 'added', u
   return Number(db.prepare(`INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by, price_tier)
                             VALUES (?, ?, ?, ?, ?, ?, ?, 7, ?)`).run(vid, service_id, doctor_id, qty, unit_price, unit_price * qty, status, tier).lastInsertRowid);
 }
-// Прошлый приём этой услуги: первичный, выполнен, `offset` дней назад.
+// Прошлый приём этой услуги: первичный, выполнен и выставлен (VISIT_TIER_ATTENDED_V1),
+// `offset` дней назад.
 function history(db, pid, serviceId, offset) {
   const v = visit(db, pid, offset);
-  line(db, v, { service_id: serviceId, doctor_id: PLAIN, tier: 'primary', status: 'completed' });
+  markBilled(db, line(db, v, { service_id: serviceId, doctor_id: PLAIN, tier: 'primary', status: 'completed' }));
   return v;
 }
 const itemOf = (db, vsId) => db.prepare('SELECT invoice_item_id FROM visit_services WHERE id = ?').get(vsId).invoice_item_id;
@@ -135,8 +137,8 @@ test('цену первого визита сервер НЕ называет, �
   // (в) повторный визит бесплатно у врача со своей ценой: 0 не зависит от своей цены — проверить её нечем.
   {
     const { db: db3, CONS: C3, pid: p3 } = seed();
-    const h1 = visit(db3, p3, -4); line(db3, h1, { service_id: C3, doctor_id: PLAIN, tier: 'primary', status: 'completed' });
-    const h2 = visit(db3, p3, -2); line(db3, h2, { service_id: C3, doctor_id: PLAIN, tier: 'secondary', status: 'completed' });
+    const h1 = visit(db3, p3, -4); markBilled(db3, line(db3, h1, { service_id: C3, doctor_id: PLAIN, tier: 'primary', status: 'completed' }));
+    const h2 = visit(db3, p3, -2); markBilled(db3, line(db3, h2, { service_id: C3, doctor_id: PLAIN, tier: 'secondary', status: 'completed' }));
     const v = visit(db3, p3, 0);
     const vs = line(db3, v, { service_id: C3, doctor_id: OWN, tier: 'repeat' });
     const inv = createInvoiceForVisit(db3, { visit_id: v, visit_service_ids: [vs] }, registrar).invoice;
@@ -150,8 +152,8 @@ test('цену первого визита сервер НЕ называет, �
 
 test('повторный бесплатно по каталогу: цена 0, цена первого визита 200 000', () => {
   const { db, CONS, pid } = seed();
-  const h1 = visit(db, pid, -4); line(db, h1, { service_id: CONS, doctor_id: PLAIN, tier: 'primary', status: 'completed' });
-  const h2 = visit(db, pid, -2); line(db, h2, { service_id: CONS, doctor_id: PLAIN, tier: 'secondary', status: 'completed' });
+  const h1 = visit(db, pid, -4); markBilled(db, line(db, h1, { service_id: CONS, doctor_id: PLAIN, tier: 'primary', status: 'completed' }));
+  const h2 = visit(db, pid, -2); markBilled(db, line(db, h2, { service_id: CONS, doctor_id: PLAIN, tier: 'secondary', status: 'completed' }));
   const v = visit(db, pid, 0);
   const vs = line(db, v, { service_id: CONS, doctor_id: PLAIN, tier: 'repeat', unit_price: 0 });
   const [l] = cashierLineTiers(db, { visit_id: v }, cashier).lines;

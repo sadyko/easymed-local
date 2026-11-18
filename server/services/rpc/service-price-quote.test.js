@@ -8,6 +8,7 @@ import { servicePriceQuote } from './service-price-quote.js';
 import { serviceSave } from './service-save.js';
 import { createInvoiceForVisit } from './billing.js';
 import { getRpc } from './index.js';
+import { markBilled } from '../../test-helpers/billed-line.js';   // VISIT_TIER_ATTENDED_V1 — прошлый приём выставлен
 
 const admin = { id: 1, role: 'admin' };
 const registrar = { id: 2, role: 'registrar' };
@@ -22,13 +23,16 @@ function fresh() {
   return db;
 }
 // A visit N local days before today, with one line of `serviceId` at `tier`.
-function pastVisit(db, { patientId = 1, daysAgo, serviceId, tier = null, status = 'arrived', lineStatus = 'added' }) {
+// VISIT_TIER_ATTENDED_V1 — the line is billed (billed: false — it is not): only an
+// attended, billed visit is a previous visit.
+function pastVisit(db, { patientId = 1, daysAgo, serviceId, tier = null, status = 'arrived', lineStatus = 'added', billed = true }) {
   const day = db.prepare("SELECT datetime('now', 'localtime', ?) || 'Z' AS d").get(`-${daysAgo} days`).d;
   // stored as UTC: convert the local wall time back
   const utc = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?, 'utc') AS u").get(day.replace('Z', '')).u;
   const vid = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, ?, ?)").run(patientId, utc, status).lastInsertRowid;
-  db.prepare("INSERT INTO visit_services (visit_id, service_id, unit_price, total, status, price_tier) VALUES (?, ?, 0, 0, ?, ?)")
-    .run(vid, serviceId, lineStatus, tier);
+  const vs = db.prepare("INSERT INTO visit_services (visit_id, service_id, unit_price, total, status, price_tier) VALUES (?, ?, 0, 0, ?, ?)")
+    .run(vid, serviceId, lineStatus, tier).lastInsertRowid;
+  if (billed) markBilled(db, Number(vs));
   return vid;
 }
 const tiered = (db, over = {}) => serviceSave(db, {
@@ -96,15 +100,25 @@ test('quote: a service without tiers answers primary with no lookup; unknown ids
   assert.equal(typeof getRpc('service_price_quote'), 'function');
 });
 
-test('the cashier honours the recorded tier: a secondary line is invoiced at 60 000, not the catalog 200 000', () => {
+// VISIT_TIER_ATTENDED_V1 (3.25.0) — прежде здесь стояло «касса берёт записанный ярус»:
+// строка «второй» шла в счёт по 60 000, строка без яруса — по 200 000. Правило владельца:
+// касса решает ярус невыставленной строки заново, тем же расчётом, что смета, и пишет
+// его в строку. Обе строки одного визита — один ответ (сам визит исключён).
+test('the cashier re-decides the tier at billing: with an attended, billed visit 3 days ago both lines are second visits; without it — first visits', () => {
   const db = fresh();
   const id = tiered(db);
-  const vid = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (1, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'arrived')").run().lastInsertRowid;
-  const vs1 = db.prepare("INSERT INTO visit_services (visit_id, service_id, unit_price, total, status, price_tier) VALUES (?, ?, 60000, 60000, 'added', 'secondary')").run(vid, id).lastInsertRowid;
-  const vs2 = db.prepare("INSERT INTO visit_services (visit_id, service_id, unit_price, total, status, price_tier) VALUES (?, ?, 200000, 200000, 'added', NULL)").run(vid, id).lastInsertRowid;
-  const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1, vs2] }, admin);
-  assert.deepEqual(inv.items.map((i) => i.unit_price), [60000, 200000]);
-  assert.equal(inv.invoice.subtotal, 260000);
+  const bill = () => {
+    const vid = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (1, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'arrived')").run().lastInsertRowid;
+    const vs1 = db.prepare("INSERT INTO visit_services (visit_id, service_id, unit_price, total, status, price_tier) VALUES (?, ?, 60000, 60000, 'added', 'secondary')").run(vid, id).lastInsertRowid;
+    const vs2 = db.prepare("INSERT INTO visit_services (visit_id, service_id, unit_price, total, status, price_tier) VALUES (?, ?, 200000, 200000, 'added', NULL)").run(vid, id).lastInsertRowid;
+    const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1, vs2] }, admin);
+    const tiers = db.prepare('SELECT price_tier FROM visit_services WHERE id IN (?, ?) ORDER BY id').all(vs1, vs2).map((r) => r.price_tier);
+    db.prepare("UPDATE visits SET status = 'cancelled' WHERE id = ?").run(vid);   // следующий круг — без этого визита
+    return { prices: inv.items.map((i) => i.unit_price), subtotal: inv.invoice.subtotal, tiers };
+  };
+  assert.deepEqual(bill(), { prices: [200000, 200000], subtotal: 400000, tiers: ['primary', 'primary'] }, 'прошлого визита нет — записанный «второй» не в счёт');
+  pastVisit(db, { daysAgo: 3, serviceId: id, tier: 'primary' });
+  assert.deepEqual(bill(), { prices: [60000, 60000], subtotal: 120000, tiers: ['secondary', 'secondary'] }, 'прошлый визит был и выставлен');
 });
 
 test('quote for a PLANNED date: booked for tomorrow after a visit today → second visit; same day → first (unless «со дня» is 0)', () => {
@@ -294,11 +308,12 @@ test('service_save: сохранённое \'\' в цене повторного
 const OWNER = { price: 80000, price_secondary: 20000, secondary_days_from: 3, secondary_days_to: 5, price_repeat: 10000, repeat_days_from: 6, repeat_days_to: 10 };
 const ownerSvc = (db, over = {}) => tiered(db, { ...OWNER, ...over });
 const localDayPlus = (db, n) => db.prepare("SELECT date('now', 'localtime', ?) d").get(`${n >= 0 ? '+' : ''}${n} days`).d;
-/** Визит пациента 1 в местный день today+n (10:00), строка услуги со статусом и ярусом. */
-function visitOn(db, { n, serviceId, status = 'scheduled', lineStatus = 'added', tier = 'primary' }) {
+/** Визит пациента 1 в местный день today+n (10:00), строка услуги со статусом и ярусом; billed — строка выставлена (VISIT_TIER_ATTENDED_V1). */
+function visitOn(db, { n, serviceId, status = 'scheduled', lineStatus = 'added', tier = 'primary', billed = false }) {
   const utc = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', date('now','localtime', ?) || ' 10:00:00', 'utc') u").get(`${n >= 0 ? '+' : ''}${n} days`).u;
   const vid = db.prepare('INSERT INTO visits (patient_id, visit_date, status) VALUES (1, ?, ?)').run(utc, status).lastInsertRowid;
   const vs = db.prepare('INSERT INTO visit_services (visit_id, service_id, unit_price, total, status, price_tier) VALUES (?, ?, 80000, 80000, ?, ?)').run(vid, serviceId, lineStatus, tier).lastInsertRowid;
+  if (billed) markBilled(db, Number(vs));
   return { vid: Number(vid), vs: Number(vs) };
 }
 
@@ -308,7 +323,9 @@ test('поток G: та же запись — строка этой же усл
   const { vid } = visitOn(db, { n: 1, serviceId: id, lineStatus: 'completed' });
   const day = localDayPlus(db, 1);
   const noVisit = servicePriceQuote(db, { patient_id: 1, service_ids: [id], date: day }, registrar).quotes[id];
-  assert.deepEqual([noVisit.tier, noVisit.price, noVisit.reason, noVisit.days_since], ['primary', 80000, 'too_soon', 0]);
+  // VISIT_TIER_ATTENDED_V1 — завтрашняя строка (визита ещё не было, счёта нет) прошлым
+  // визитом не считается вовсе: «first», а не «too_soon» с 0 дней.
+  assert.deepEqual([noVisit.tier, noVisit.price, noVisit.reason, noVisit.days_since], ['primary', 80000, 'first', null]);
   const withVisit = servicePriceQuote(db, { patient_id: 1, service_ids: [id], date: day, visit_id: vid }, registrar).quotes[id];
   assert.deepEqual([withVisit.tier, withVisit.price, withVisit.reason], ['primary', 80000, 'first']);
   db.close();
@@ -317,35 +334,40 @@ test('поток G: та же запись — строка этой же усл
 test('поток G: настоящий второй визит — прошлый 4 дня назад (окно 3–5): 20 000; 6 дней — окно прошло, первичный 80 000 (повторный — только после второго)', () => {
   const db = fresh();
   const id = ownerSvc(db);
-  visitOn(db, { n: -4, serviceId: id, status: 'arrived', lineStatus: 'completed' });
+  visitOn(db, { n: -4, serviceId: id, status: 'arrived', lineStatus: 'completed', billed: true });
   let q = servicePriceQuote(db, { patient_id: 1, service_ids: [id] }, registrar).quotes[id];
   assert.deepEqual([q.tier, q.price, q.days_since], ['secondary', 20000, 4]);
   q = servicePriceQuote(db, { patient_id: 1, service_ids: [id], date: localDayPlus(db, 2) }, registrar).quotes[id];
   assert.deepEqual([q.tier, q.price, q.reason, q.days_since], ['primary', 80000, 'window_passed', 6],
     '«повторный 6–10 дн.» считается от ВТОРОГО визита, а не от первого');
   // Второй визит был (2 дня назад, ярус «второй») — через 6 дней после него повторный 10 000.
-  visitOn(db, { n: -2, serviceId: id, status: 'arrived', lineStatus: 'completed', tier: 'secondary' });
+  visitOn(db, { n: -2, serviceId: id, status: 'arrived', lineStatus: 'completed', tier: 'secondary', billed: true });
   q = servicePriceQuote(db, { patient_id: 1, service_ids: [id], date: localDayPlus(db, 4) }, registrar).quotes[id];
   assert.deepEqual([q.tier, q.price, q.days_since], ['repeat', 10000, 6]);
   db.close();
 });
 
-test('поток G (граница): ЗАПИСАННАЯ, ещё не оказанная строка раньше дня нового визита считается прошлым визитом; «Не пришёл» — перестаёт, но уже записанный ярус касса не пересчитывает', () => {
+// VISIT_TIER_ATTENDED_V1 (3.25.0) — здесь было закреплено прежнее правило («решение — за
+// владельцем»): записанная, ещё не оказанная строка считалась прошлым визитом, а касса
+// выставляла записанный ярус и после «Не пришёл» — 20 000 за фактически первый визит.
+// Владелец решил: прошлый визит — только тот, на который пациент пришёл и который выставлен.
+test('поток G (граница): ЗАПИСАННАЯ, ещё не оказанная строка — не прошлый визит; строка с прежним ярусом «второй» после «Не пришёл» выставляется по 80 000', () => {
   const db = fresh();
   const id = ownerSvc(db);
   // Запись на послезавтра (не пришёл ещё никто), и регистратор записывает ту же услугу на +5.
   const first = visitOn(db, { n: 2, serviceId: id });
   const later = localDayPlus(db, 5);
   let q = servicePriceQuote(db, { patient_id: 1, service_ids: [id], date: later }, registrar).quotes[id];
-  assert.deepEqual([q.tier, q.price, q.days_since], ['secondary', 20000, 3], 'записанная строка — «прошлый визит»');
-  // Вторая запись легла с ярусом «второй».
+  assert.deepEqual([q.tier, q.price, q.reason], ['primary', 80000, 'first'], 'записанная строка — не «прошлый визит»');
+  // Вторая запись — с ярусом «второй», как её записывали до 3.25.0.
   const second = visitOn(db, { n: 5, serviceId: id, tier: 'secondary' });
   // Пациент на первую запись не пришёл.
   db.prepare("UPDATE visits SET status = 'no_show' WHERE id = ?").run(first.vid);
   q = servicePriceQuote(db, { patient_id: 1, service_ids: [id], date: later, visit_id: second.vid }, registrar).quotes[id];
   assert.deepEqual([q.tier, q.price, q.reason], ['primary', 80000, 'first'], 'после «Не пришёл» прошлого визита нет');
-  // …но касса выставляет счёт по ярусу, записанному в строке: 20 000 за фактически первый визит.
+  // Касса решает ярус заново: 80 000, и в строке — «первичный».
   const inv = createInvoiceForVisit(db, { visit_id: second.vid, visit_service_ids: [second.vs] }, admin);
-  assert.equal(inv.items[0].unit_price, 20000);
+  assert.equal(inv.items[0].unit_price, 80000);
+  assert.equal(db.prepare('SELECT price_tier FROM visit_services WHERE id = ?').get(second.vs).price_tier, 'primary');
   db.close();
 });

@@ -100,6 +100,8 @@ const { compile } = await import('../../../../server/db/query-compiler.js');
 const { readableColumns, jsonColumns } = await import('../../../../server/db/schema-registry.js');
 const { getRpc } = await import('../../../../server/services/rpc/index.js');
 const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');
+// VISIT_TIER_ATTENDED_V1 — прошлый приём считается, только если он выставлен: стенд кладёт и счёт.
+const { markBilled } = await import('../../../../server/test-helpers/billed-line.js');
 
 const ymd = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 const dayAt = (off, hh = 0, mm = 0) => { const d = new Date(); d.setHours(hh, mm, 0, 0); d.setDate(d.getDate() + off); return d; };
@@ -178,11 +180,12 @@ function seed() {
     if (DB) DB.close();
     DB = db;
 }
-/** Прошлый визит пациента по УЗИ: `daysAgo` местных дней назад, строка выполнена, ярус первичный. */
+/** Прошлый визит пациента по УЗИ: `daysAgo` местных дней назад, строка выполнена и выставлена (VISIT_TIER_ATTENDED_V1), ярус первичный. */
 function pastUzi(daysAgo, tier = 'primary') {
     const at = dayAt(-daysAgo, 10, 0);
     const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, created_by) VALUES (3, ?, 5, 'arrived', 1)").run(at.toISOString()).lastInsertRowid);
-    DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, 22, 5, 1, 80000, 80000, 'completed', ?, 1)").run(vid, tier);
+    const vs = Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, 22, 5, 1, 80000, 80000, 'completed', ?, 1)").run(vid, tier).lastInsertRowid);
+    markBilled(DB, vs);
     return vid;
 }
 
@@ -226,7 +229,8 @@ async function openCalcWithUzi({ tomorrow = false } = {}) {
     await settle(200);   // ответ котировки
 }
 const savedLine = () => DB.prepare("SELECT vs.price_tier, vs.unit_price, v.visit_date FROM visit_services vs JOIN visits v ON v.id = vs.visit_id WHERE vs.service_id = 22 AND vs.status = 'added'").get();
-const invoicedUzi = () => DB.prepare('SELECT unit_price FROM invoice_items WHERE service_id = 22').get();
+// VISIT_TIER_ATTENDED_V1 — у прошлого УЗИ теперь свой счёт (стенд): позиция — та, что у строки ЭТОЙ записи.
+const invoicedUzi = () => DB.prepare("SELECT ii.unit_price FROM invoice_items ii JOIN visit_services vs ON vs.invoice_item_id = ii.id WHERE vs.service_id = 22 AND vs.status = 'added'").get();
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Сегодня — как было: настоящий второй визит, чип и цена второго визита, строка и счёт

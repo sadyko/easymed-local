@@ -38,6 +38,7 @@ import { priceFor } from '../crm/booking-mirror.js';
 import { doctorPriceFor, doctorPriceLookup, lineUnitPrice } from '../domain/pricing.js';
 import { tierUnitPrice } from '../domain/visit-tier.js';
 import { serviceLinePrice, ownPriceValue, ownPriceFromRates } from '../../../public/js/shared/own-price-rule.js';
+import { markBilled } from '../../test-helpers/billed-line.js';   // VISIT_TIER_ATTENDED_V1 — прошлый приём выставлен
 
 const admin = { id: 1, role: 'admin', full_name: 'Админ' };
 const registrar = { id: 7, role: 'registrar', full_name: 'Регистратура' };
@@ -90,10 +91,11 @@ function line(db, vid, { service_id, doctor_id, tier = null, status = 'added', b
                             VALUES (?, ?, ?, 1, 0, 0, ?, ?, ?)`).run(vid, service_id, doctor_id, status, by, tier).lastInsertRowid);
 }
 const patient = (db) => Number(db.prepare("INSERT INTO patients (full_name) VALUES ('Пациент Второй')").run().lastInsertRowid);
-// Прошлый приём этой услуги у пациента: первичный (или указанный ярус), выполнен.
+// Прошлый приём этой услуги у пациента: первичный (или указанный ярус), выполнен
+// и выставлен (VISIT_TIER_ATTENDED_V1 — без счёта он не прошлый визит).
 function history(db, pid, serviceId, offset, tier = 'primary') {
   const v = visit(db, pid, offset);
-  line(db, v, { service_id: serviceId, doctor_id: PLAIN, tier, status: 'completed' });
+  markBilled(db, line(db, v, { service_id: serviceId, doctor_id: PLAIN, tier, status: 'completed' }));
   return v;
 }
 const quote = (db, pid, serviceId, offset, doctorId) => RPC.service_price_quote(db, {

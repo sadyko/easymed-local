@@ -17,6 +17,7 @@ import { doctorPaySummary } from './reports.js';
 import { cashierUnbilled } from './cashier.js';
 import { today } from '../domain/day.js';
 import { insertVisitLine } from '../../test-helpers/package-line.js';
+import { markBilled } from '../../test-helpers/billed-line.js';   // VISIT_TIER_ATTENDED_V1 — прошлый приём выставлен
 import { buildBatch } from '../branch-sync/journal.js';
 import { packageCalc, packageTerms, packageItems } from '../../../public/js/shared/package-price.js';
 
@@ -128,6 +129,11 @@ test('«Повторный визит» и своя цена врача: стр�
   c.db.prepare('UPDATE services SET price_secondary = 120000, secondary_days_from = 0, secondary_days_to = 30 WHERE id = 7').run();
   c.db.prepare('UPDATE users SET service_rates = ? WHERE id = 1').run(JSON.stringify(Object.keys(PRICE).map((id) => (
     Number(id) === 1 ? { service_id: 1, pct: 30, price: 60000 } : { service_id: Number(id), pct: 30 }))));
+  // VISIT_TIER_ATTENDED_V1 — второй визит — после приёма, на который пациент пришёл и
+  // который выставлен: УЗИ позавчера (без врача — в долю врача не идёт).
+  const pv = Number(c.db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (1, ?, 'arrived')")
+    .run(c.db.prepare("SELECT date(?, '-2 days') AS d").get(c.day).d + 'T09:00:00Z').lastInsertRowid);
+  markBilled(c.db, Number(c.db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, price_tier) VALUES (?, 7, 1, 180000, 180000, 'completed', 'primary')").run(pv).lastInsertRowid));
   const ids = PKG_IDS.map((sid) => c.line(sid, c.pkg));
   const plain = c.line(7);
   c.db.prepare(`UPDATE visit_services SET price_tier = 'secondary' WHERE visit_id = ?`).run(c.visitId);

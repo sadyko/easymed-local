@@ -28,7 +28,7 @@ import { ratedChoice, invoiceRateSource, rateInvoiceItems, invoiceFloorBase, des
 import { requireServicesEdit, requireServicesDelete } from './patient-card.js';   // CASHIER_HEAD_V1 (ревью I2) — вкладка «Услуги» у регистратуры/администратора
 import { surgeryWithoutBedRefusal } from '../domain/surgery-bed.js';   // CASHIER_HEAD_V1 (ревью I4)
 // BILLING_AUDIT_FIX_V1 (B3) — тариф заменённой услуги спрашивается заново.
-import { servicePriceQuote, quoteServicePrices } from './service-price-quote.js';
+import { servicePriceQuote, quoteServicePrices, billingTiers } from './service-price-quote.js';   // VISIT_TIER_ATTENDED_V1 — billingTiers: ярус строки решается заново при счёте
 // HOLDINGS_FIRST_V1 — «вернуть КАЖДУЮ часть туда, откуда она пришла» живёт в
 // одном месте на весь сервер (rpc/inventory.js): подотчёт сотрудника, кабинет,
 // отдел, склад. Кольцо импортов здесь такое же, как у billing ↔ cashier строкой
@@ -527,7 +527,21 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
     // PACKAGES_V1 — местный день визита: по нему проверяется срок пакета.
     const visitDay = db.prepare(`SELECT ${localDate('?')} AS d`).get(visit.visit_date).d;
     const packages = new Map();
-    const priced = rows.map((row) => {
+    // VISIT_TIER_ATTENDED_V1 (3.25.0, правило владельца) — ЯРУС СТРОКИ («второй»
+    // / «повторный» визит) РЕШАЕТСЯ ЗАНОВО В МИГ СЧЁТА, тем же расчётом, что
+    // смета (service-price-quote.js billingTiers: прошлый визит — только тот, на
+    // который пациент пришёл и который выставлен). Записанный при записи ярус
+    // мог устареть — прошлую запись отменили, отметили «Не пришёл», перенесли,
+    // вернули за неё деньги — или его прислал экран. Решённый ярус ложится в
+    // строку вместе с ценой (syncVisitService ниже): строка говорит, почему
+    // стоит столько. Сюда доходят только невыставленные строки (отказ «уже в
+    // счёте» выше) — выставленные не меняются никогда. Доля врача за
+    // выполненную, ещё не выставленную строку (reports.js, PAY_BASIS_PERFORMED_V1)
+    // считается по ЗАПИСАННОМУ ярусу: у строки с устаревшим ярусом она
+    // сдвигается в миг счёта на цену, которую счёт выставил.
+    const tiers = billingTiers(db, visit, rows);
+    const priced = rows.map((stored) => {
+      const row = tiers.has(stored.id) ? { ...stored, price_tier: tiers.get(stored.id) } : stored;
       let svcName = null;
       let svc = null, prod = null;
       if (row.service_id != null) {
@@ -755,7 +769,8 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const linkVisitService = db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?');
-    const syncVisitService = db.prepare('UPDATE visit_services SET unit_price = ?, total = ? WHERE id = ?');
+    // VISIT_TIER_ATTENDED_V1 — и ярус, решённый при счёте (у строки без ярусов — прежний).
+    const syncVisitService = db.prepare('UPDATE visit_services SET unit_price = ?, total = ?, price_tier = ? WHERE id = ?');
 
     for (const { row, unit, qty, line, svcName, ownDiscount, rate, rateShare } of priced) {
       const description = svcName || '';
@@ -764,7 +779,7 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
       linkVisitService.run(itemInfo.lastInsertRowid, row.id);
       clearRefundRelease(db, 'out', [row.id]);   // FINAL_MONEY_FIX_V1 (M1) — отметка была про прежний счёт
       // Keep the visit line consistent with what was actually billed.
-      syncVisitService.run(unit, line, row.id);
+      syncVisitService.run(unit, line, row.price_tier ?? null, row.id);
     }
 
     // FREE_SERVICE_V1 — счёт на ноль (бесплатная услуга или скидка 100%) выше
@@ -914,14 +929,14 @@ function appendToVisitInvoice(db, target, { visitId, priced, subtotal, restSubto
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const linkVisitService = db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?');
-  const syncVisitService = db.prepare('UPDATE visit_services SET unit_price = ?, total = ? WHERE id = ?');
+  const syncVisitService = db.prepare('UPDATE visit_services SET unit_price = ?, total = ?, price_tier = ? WHERE id = ?');   // VISIT_TIER_ATTENDED_V1 — ярус, решённый при счёте
   const itemIds = [];
   for (const { row, unit, qty, line, svcName, ownDiscount, rate, rateShare } of priced) {
     const itemInfo = insertItem.run(target.id, row.service_id, svcName || '', qty, unit, line, ownDiscount, rate ?? null, rate != null ? rateShare : null);   // DISCOUNT_RATES_V1
     itemIds.push(Number(itemInfo.lastInsertRowid));
     linkVisitService.run(itemInfo.lastInsertRowid, row.id);
     clearRefundRelease(db, 'out', [row.id]);   // FINAL_MONEY_FIX_V1 (M1) — как при новом счёте
-    syncVisitService.run(unit, line, row.id);
+    syncVisitService.run(unit, line, row.price_tier ?? null, row.id);
   }
   const sum = round2(db.prepare('SELECT COALESCE(SUM(total), 0) s FROM invoice_items WHERE invoice_id = ?').get(target.id).s);
   const off = Math.min(round2((Number(target.discount_amount) || 0) + discount), sum);

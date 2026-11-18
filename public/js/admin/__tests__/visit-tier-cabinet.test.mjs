@@ -43,6 +43,8 @@ const { compile } = await import('../../../../server/db/query-compiler.js');
 const { readableColumns } = await import('../../../../server/db/schema-registry.js');
 const { getRpc } = await import('../../../../server/services/rpc/index.js');
 const { createInvoiceForVisit } = await import('../../../../server/services/rpc/billing.js');
+// VISIT_TIER_ATTENDED_V1 — прошлый приём считается, только если он выставлен: стенд кладёт и счёт.
+const { markBilled } = await import('../../../../server/test-helpers/billed-line.js');
 
 const DOCTOR = { id: 5, role: 'doctor', extra_roles: [] };
 const ADMIN = { id: 1, role: 'admin', extra_roles: [] };
@@ -111,7 +113,7 @@ function seed({ prevDaysAgo, visitDaysAgo }) {
     db.prepare(`INSERT INTO services (id, name, price, type, active, requires_doctor, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to)
                 VALUES (22,'УЗИ брюшной полости',80000,'imaging',1,1,20000,3,5,10000,6,10)`).run();
     const v0 = Number(db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (3, 5, ?, 'arrived', 1)").run(dayAt(-prevDaysAgo).toISOString()).lastInsertRowid);
-    db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, unit_price, total, status, price_tier, created_by) VALUES (?, 22, 5, 80000, 80000, 'completed', 'primary', 5)").run(v0);
+    markBilled(db, Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, unit_price, total, status, price_tier, created_by) VALUES (?, 22, 5, 80000, 80000, 'completed', 'primary', 5)").run(v0).lastInsertRowid));
     const at = dayAt(-visitDaysAgo);
     const v1 = Number(db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (3, 5, ?, 'arrived', 1)").run(at.toISOString()).lastInsertRowid);
     // Строка приёма врача (консультация), на которой открыт кабинет.

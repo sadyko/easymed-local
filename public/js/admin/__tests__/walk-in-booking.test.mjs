@@ -35,6 +35,8 @@ const { migrate } = await import('../../../../server/db/migrate.js');
 const { compile } = await import('../../../../server/db/query-compiler.js');
 const { readableColumns } = await import('../../../../server/db/schema-registry.js');
 const { getRpc } = await import('../../../../server/services/rpc/index.js');
+// VISIT_TIER_ATTENDED_V1 — прошлый приём считается, только если он выставлен: стенд кладёт и счёт.
+const { markBilled } = await import('../../../../server/test-helpers/billed-line.js');
 
 const USER = { id: 1, role: 'registrar', extra_roles: [] };
 let DB = null;
@@ -202,7 +204,7 @@ test('ПОВТОРНЫЙ ВИЗИТ: цена по тарифу второго �
   // считает окно второго визита (secondary_days_from = 0).
   const yesterday = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   DB.prepare("INSERT INTO visits (id, patient_id, visit_date, visit_type, status) VALUES (90, ?, ?, 'outpatient', 'arrived')").run(PATIENT, yesterday);
-  DB.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (90, ?, 1, 200000, 200000, 'completed')").run(TIERED);
+  markBilled(DB, Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (90, ?, 1, 200000, 200000, 'completed')").run(TIERED).lastInsertRowid));
 
   const out = await registerWalkIn({ patientId: PATIENT, lines: [{ service: svc(TIERED), doctorId: null }] });
 

@@ -74,6 +74,8 @@ const { readableColumns } = await import('../../../../server/db/schema-registry.
 const { getRpc } = await import('../../../../server/services/rpc/index.js');
 const { insertVisitLine } = await import('../../../../server/test-helpers/package-line.js');   // SERVICES_PACKAGES_V1 — строка, как её заводит дверь /api/db
 const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');   // SERVICES_PACKAGES_V1
+// VISIT_TIER_ATTENDED_V1 — прошлый приём считается, только если он выставлен: стенд кладёт и счёт.
+const { markBilled } = await import('../../../../server/test-helpers/billed-line.js');
 
 let USER = { id: 1, role: 'registrar', extra_roles: [] };
 let DB = null;
@@ -802,7 +804,7 @@ function repeatPatient() {
     .run(JSON.stringify([{ service_id: 21, pct: 30 }]));
   const past = new Date(Date.now() - 3 * 86400000).toISOString();
   const pv = DB.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (3, ?, 'arrived')").run(past).lastInsertRowid;
-  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier) VALUES (?, 21, 8, 1, 200000, 200000, 'completed', 'primary')").run(pv);
+  markBilled(DB, Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier) VALUES (?, 21, 8, 1, 200000, 200000, 'completed', 'primary')").run(pv).lastInsertRowid));
   DB.prepare('UPDATE visit_services SET package_id = NULL, package_full = NULL, package_price = NULL WHERE id = 102').run();   // SERVICES_PACKAGES_V1
 }
 const OWN_DOC = { id: 7, service_rates: [{ service_id: 21, price: 300000, pct: 30 }] };
@@ -878,7 +880,7 @@ test('OWN_PRICE_TIER_RATIO_V1: кабинет врача «Добавить» �
       DB.prepare("INSERT INTO services (id, name, price, price_secondary, secondary_days_from, secondary_days_to, price_repeat, requires_doctor) VALUES (23, 'МРТ повторно', 200000, 60000, 1, 10, 0, 1)").run();
       DB.prepare('UPDATE users SET service_rates = ? WHERE id = 8').run(JSON.stringify([{ service_id: 23, pct: 30 }]));
       const pv = DB.prepare("SELECT visit_id FROM visit_services WHERE service_id = 21 AND status = 'completed'").get().visit_id;
-      DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier) VALUES (?, 23, 8, 1, 200000, 200000, 'completed', 'primary')").run(pv);
+      markBilled(DB, Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier) VALUES (?, 23, 8, 1, 200000, 200000, 'completed', 'primary')").run(pv).lastInsertRowid));
     }
     const ctx = { visitId: 40, visitServiceId: 102, patient: { id: 3, __service: { doctorId } }, container: null };
     await WS.addOwnService(ctx, { id: sid, name: 'МРТ', price: 200000, requires_doctor: 1 }, null);

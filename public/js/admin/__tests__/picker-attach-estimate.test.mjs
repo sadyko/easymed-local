@@ -87,6 +87,8 @@ const { readableColumns, jsonColumns } = await import('../../../../server/db/sch
 const { getRpc } = await import('../../../../server/services/rpc/index.js');
 const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');
 const { packageStampRefusal } = await import('../../../../server/services/rpc/billing.js');
+// VISIT_TIER_ATTENDED_V1 — прошлый приём считается, только если он выставлен: стенд кладёт и счёт.
+const { markBilled } = await import('../../../../server/test-helpers/billed-line.js');
 
 const USER = { id: 1, role: 'registrar', extra_roles: [] };
 const ADMIN = { id: 1, role: 'admin', extra_roles: [] };
@@ -176,7 +178,7 @@ function seed({ visitOffset = 0, visitDoctor = null, ownPrice = null, ownLabPric
     if (repeat) {
         if (uziTier) db.prepare('UPDATE services SET price_secondary = 20000, secondary_days_from = 0, secondary_days_to = 30 WHERE id = 22').run();
         const pv = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (3, ?, 'arrived')").run(dayAt(-3).toISOString()).lastInsertRowid;
-        db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, price_tier) VALUES (?, 22, 1, 50000, 50000, 'completed', 'primary')").run(pv);
+        markBilled(db, Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, price_tier) VALUES (?, 22, 1, 50000, 50000, 'completed', 'primary')").run(pv).lastInsertRowid));
     }
     if (DB) DB.close();
     DB = db;

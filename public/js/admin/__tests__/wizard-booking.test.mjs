@@ -115,6 +115,8 @@ const { getRpc } = await import('../../../../server/services/rpc/index.js');
 const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');   // SERVICES_PACKAGES_V1
 const { readableColumns } = await import('../../../../server/db/schema-registry.js');
 const { calendarSlots, calendarWindows } = await import('../../../../server/services/rpc/calendar.js');
+// VISIT_TIER_ATTENDED_V1 — прошлый приём считается, только если он выставлен: стенд кладёт и счёт.
+const { markBilled } = await import('../../../../server/test-helpers/billed-line.js');
 
 const USER = { id: 1, role: 'registrar', extra_roles: [] };
 let DB = null;
@@ -1038,9 +1040,9 @@ test('REFBILL_REVIEW_V1: у врача тариф строки — свежий 
     // или в ближайшие дни), для сервера второй.
     const past = DB.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', date('now','localtime','-3 days') || ' 10:00:00', 'utc') t").get().t;
     const pv = DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (3, 7, ?, 'arrived', 1)").run(past).lastInsertRowid;
-    DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, 21, 7, 1, 100000, 100000, 'completed', 1)").run(pv);
+    markBilled(DB, Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, 21, 7, 1, 100000, 100000, 'completed', 1)").run(pv).lastInsertRowid));
     await pressUntilCreate();
-    const inv = DB.prepare('SELECT * FROM invoices').all();
+    const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id <> ?').all(pv);   // VISIT_TIER_ATTENDED_V1 — счёт прошлого приёма (стенд) не в счёт
     assert.equal(inv.length, 1, 'врачу отказано в счёте: ' + JSON.stringify(TOASTS));
     assert.equal(inv[0].total_amount, 60000, 'счёт — по тарифу «второй визит», как считает сервер');
     const line = DB.prepare('SELECT price_tier FROM visit_services WHERE visit_id <> ? AND service_id = 21').get(pv);
@@ -1073,7 +1075,8 @@ function repeatHistory(db, rates) {
   db.prepare('UPDATE users SET service_rates = ? WHERE id = 7').run(JSON.stringify(rates));
   const past = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', date('now','localtime','-3 days') || ' 10:00:00', 'utc') t").get().t;
   const pv = db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (3, 7, ?, 'arrived', 1)").run(past).lastInsertRowid;
-  db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by, price_tier) VALUES (?, 21, 7, 1, 200000, 200000, 'completed', 1, 'primary')").run(pv);
+  // VISIT_TIER_ATTENDED_V1 — прошлый приём выставлен (иначе он не прошлый визит).
+  markBilled(db, Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by, price_tier) VALUES (?, 21, 7, 1, 200000, 200000, 'completed', 1, 'primary')").run(pv).lastInsertRowid));
   return pv;
 }
 // OWN_PRICE_TIER_RATIO_V1 — чип яруса строки сметы и цена первого визита в его подсказке.
@@ -1123,7 +1126,7 @@ test('OWN_PRICE_TIER_RATIO_V1: мастер — второй визит у вр�
   assert.ok(sent, 'мастер не записал строку: ' + JSON.stringify(TOASTS));
   assert.equal(sent.price_tier, 'secondary', 'ярус второго визита не записан');
   assert.equal(sent.unit_price, 90000, 'смета мастера: не 30 % своей цены');
-  const inv = DB.prepare('SELECT total_amount FROM invoices').all();
+  const inv = DB.prepare('SELECT total_amount FROM invoices WHERE visit_id <> ?').all(pv);   // VISIT_TIER_ATTENDED_V1 — без счёта прошлого приёма (стенд)
   assert.equal(inv.length, 1, 'счёт не выставлен: ' + JSON.stringify(TOASTS));
   assert.equal(inv[0].total_amount, sent.unit_price, 'смета ≠ счёт');
   const line = DB.prepare('SELECT price_tier FROM visit_services WHERE visit_id <> ? AND service_id = 21').get(pv);
@@ -1144,7 +1147,7 @@ test('OWN_PRICE_TIER_RATIO_V1: мастер — второй визит у вр�
   const sent = rows.find((r) => Number(r.service_id) === 21);
   assert.ok(sent, 'мастер не записал строку: ' + JSON.stringify(TOASTS));
   assert.deepEqual([sent.unit_price, sent.price_tier], [60000, 'secondary']);
-  assert.equal(DB.prepare('SELECT total_amount FROM invoices').get().total_amount, 60000);
+  assert.equal(DB.prepare('SELECT total_amount FROM invoices WHERE visit_id <> ?').get(pv).total_amount, 60000);   // VISIT_TIER_ATTENDED_V1 — без счёта прошлого приёма (стенд)
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

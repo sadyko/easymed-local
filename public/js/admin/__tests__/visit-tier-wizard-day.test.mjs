@@ -84,6 +84,8 @@ const { getRpc } = await import('../../../../server/services/rpc/index.js');
 const { stampWriteBody } = await import('../../../../server/services/domain/package-lines.js');
 const { readableColumns } = await import('../../../../server/db/schema-registry.js');
 const { reshape } = await import('../../../../server/routes/db.js');   // ревью-2 — связи (patient_categories) вложенными, как настоящий маршрут
+// VISIT_TIER_ATTENDED_V1 — прошлый приём считается, только если он выставлен: стенд кладёт и счёт.
+const { markBilled } = await import('../../../../server/test-helpers/billed-line.js');
 
 let USER = { id: 1, role: 'registrar', extra_roles: [] };   // INVOICE_APPEND_V1 (ревью M1) — тест баланса идёт администратором
 let DB = null;
@@ -172,11 +174,12 @@ function seed({ todayOff = false } = {}) {
   forgetSlots();
   return db;
 }
-/** Прошлый визит пациента: строка услуги `sid` выполнена `daysAgo` дней назад, ярус первичный. */
+/** Прошлый визит пациента: строка услуги `sid` выполнена и выставлена (VISIT_TIER_ATTENDED_V1) `daysAgo` дней назад, ярус первичный. */
 function pastLine(sid, daysAgo) {
   const d = dayOffset(-daysAgo); d.setHours(10, 0, 0, 0);
   const vid = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, doctor_id, status, created_by) VALUES (3, ?, 7, 'arrived', 1)").run(d.toISOString()).lastInsertRowid);
-  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, ?, 7, 1, 80000, 80000, 'completed', 'primary', 1)").run(vid, sid);
+  const vs = Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, ?, 7, 1, 80000, 80000, 'completed', 'primary', 1)").run(vid, sid).lastInsertRowid);
+  markBilled(DB, vs);
   return vid;
 }
 
@@ -224,7 +227,8 @@ test('настоящий второй визит: прошлый ЭЭГ 4 дня
   const line = newLine(25);
   assert.ok(line, 'строка не записана: ' + JSON.stringify(TOASTS));
   assert.deepEqual([line.price_tier, line.unit_price], ['secondary', 20000]);
-  const inv = DB.prepare('SELECT ii.unit_price FROM invoice_items ii WHERE ii.service_id = 25').get();
+  // VISIT_TIER_ATTENDED_V1 — у прошлого ЭЭГ свой счёт (стенд): позиция — та, что у строки этой записи.
+  const inv = DB.prepare("SELECT ii.unit_price FROM invoice_items ii JOIN visit_services vs ON vs.invoice_item_id = ii.id WHERE vs.service_id = 25 AND vs.status = 'added'").get();
   assert.ok(inv, 'счёт не выставлен: ' + JSON.stringify(TOASTS));
   assert.equal(inv.unit_price, 20000, 'счёт — не цена строки');
 });
@@ -253,7 +257,9 @@ test('та же запись (снимок 68): пациент записан з
   assert.equal(q[q.length - 1].date, isoOf(dayOffset(1)), 'котировка не на день записи');
   assert.equal(tierChip(), undefined, 'строка в той же записи названа «вторым визитом»');
   const quoted = getRpc('service_price_quote')(DB, { patient_id: 3, service_ids: [24], date: isoOf(dayOffset(1)) }, USER).quotes[24];
-  assert.deepEqual([quoted.tier, quoted.price, quoted.reason, quoted.days_since], ['primary', 80000, 'too_soon', 0]);
+  // VISIT_TIER_ATTENDED_V1 — записанная на завтра строка (не выставлена, визита ещё не было)
+  // прошлым визитом не считается вовсе: первичный «first», а не «too_soon» с 0 дней.
+  assert.deepEqual([quoted.tier, quoted.price, quoted.reason, quoted.days_since], ['primary', 80000, 'first', null]);
 });
 
 test('строка на завтра («Ближайшее»): прошлый приём 2 дня назад — к завтрашнему дню 3 дня: «Второй визит» 20 000, котировка на день строки; строка «второй»', { skip: TZ_SPLIT }, async () => {

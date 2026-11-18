@@ -187,6 +187,10 @@ test('без счёта — своя цена врача, как её поста
 test('без счёта — цена повторного визита (ступень цены на строке), как её поставит счёт', () => {
   const c = clinic();
   c.db.prepare('UPDATE services SET price_secondary = 60000, secondary_days_from = 1, secondary_days_to = 6 WHERE id = 1').run();
+  // VISIT_TIER_ATTENDED_V1 — ярус «второй» настоящий: пациент был на приёме 5 дней назад,
+  // и приём выставлен (у другого врача — в долю «Доктора Д.» не идёт). Без такого
+  // визита счёт решил бы ярус заново (первичный).
+  c.line({ doctor: 2, invoice: 'paid', visitStatus: 'arrived', at: '2026-09-05T09:00:00Z' });
   const id = c.line({ tier: 'secondary' });
   const { before, after } = feeBeforeAndAfterInvoice(c, id);
   assert.equal(before.lines[0].amount, 60000);

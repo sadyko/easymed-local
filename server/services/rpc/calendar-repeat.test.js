@@ -27,6 +27,7 @@ import { migrate } from '../../db/migrate.js';
 import { calendarBook } from './calendar.js';
 import { ensureVisit } from './visits.js';
 import { dayVisitMovableFor } from '../crm/booking-mirror.js';
+import { markBilled } from '../../test-helpers/billed-line.js';   // VISIT_TIER_ATTENDED_V1 — прошлый приём выставлен
 
 const REG = { id: 1, role: 'registrar', extra_roles: [] };
 const DOC = { id: 10, role: 'doctor', is_doctor: true, extra_roles: [] };
@@ -238,9 +239,16 @@ test('REPEAT_VISIT_V1: цена строки — по дню ВИЗИТА: че�
   try {
     const first = await calendarBook(db, repeatArgs({ visit_kind: 'first', start: at(0, 10), line: { service_id: 31 } }), REG);
     assert.deepEqual([first.line.price_tier, first.line.unit_price], ['primary', 100000]);
-    // Сегодня первого приёма ещё нет (он в будущем понедельнике) — котировка
-    // «на сегодня» дала бы первичную цену. День визита — через 10 дней после.
-    const rep = await calendarBook(db, repeatArgs({ start: at(10, 10), line: { service_id: 31 } }), DOC);
+    // VISIT_TIER_ATTENDED_V1 — первый приём ещё впереди (будущий понедельник): прошлым
+    // визитом он не считается, и повторная запись через 10 дней после него — первичная.
+    const early = await calendarBook(db, repeatArgs({ start: at(10, 10), line: { service_id: 31 } }), DOC);
+    assert.deepEqual([early.line.price_tier, early.line.unit_price], ['primary', 100000], 'будущая запись посчитана прошлым визитом');
+    // Пациент был на осмотре позавчера, и приём выставлен. Сегодня до окна (5–30 дней)
+    // далеко — котировка «на сегодня» дала бы первичную цену; день визита — в окне.
+    const past = new Date(); past.setDate(past.getDate() - 2); past.setHours(10, 0, 0, 0);
+    const pv = Number(db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (77, 10, ?, 'arrived')").run(past.toISOString()).lastInsertRowid);
+    markBilled(db, Number(db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier) VALUES (?, 31, 10, 1, 100000, 100000, 'completed', 'primary')").run(pv).lastInsertRowid));
+    const rep = await calendarBook(db, repeatArgs({ start: at(12, 10), line: { service_id: 31 } }), DOC);
     assert.deepEqual([rep.line.price_tier, rep.line.unit_price], ['secondary', 60000], 'цена посчитана не по дню визита');
   } finally { db.close(); }
 });

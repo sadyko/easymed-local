@@ -28,6 +28,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { createInvoiceForVisit } from './billing.js';
 import { RPC } from './index.js';
+import { markBilled } from '../../test-helpers/billed-line.js';   // VISIT_TIER_ATTENDED_V1 — прошлый приём выставлен
 
 const DOC = 20;
 const DOC_B = 21;
@@ -117,7 +118,7 @@ test('C1: «повторный визит» первичному пациент�
 test('C1: пациент был 3 дня назад — «второй визит» по расчёту сервера выставляется (60 000); иной тариф — отказ', () => {
   const { db, CARD, pid } = seed();
   const before = visit(db, pid, { offset: -3, status: 'arrived', by: 7 });
-  line(db, before, { service_id: CARD, by: 7, status: 'completed' });
+  markBilled(db, line(db, before, { service_id: CARD, by: 7, status: 'completed' }));   // VISIT_TIER_ATTENDED_V1 — приём выставлен
   // Все строки — в визите СЕГОДНЯ: сам визит расчёт не считает (quoteTier),
   // прошлый — 3 дня назад, окно второго визита 1–6 дней.
   const vid = visit(db, pid);
@@ -218,9 +219,13 @@ test('врач с денежной ролью, касса и регистрат�
     const l = line(db, vid, { service_id: CARD, by: 7, tier: 'secondary' });
     // INVOICE_APPEND_V1 — со второго вызова строки дописываются в тот же
     // неоплаченный счёт визита: сверяется позиция ЭТОЙ строки.
+    // VISIT_TIER_ATTENDED_V1 — отказа «тариф не совпадает» у денежных ролей нет,
+    // но и чужой тариф строки счёт не берёт: прошлого визита у пациента нет —
+    // ярус решён заново (первичный), 200 000, и записан в строку.
     const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [l] }, who);
-    assert.equal(out.items[0].total, 60000, who.full_name);
+    assert.equal(out.items[0].total, 200000, who.full_name);
+    assert.equal(db.prepare('SELECT price_tier FROM visit_services WHERE id = ?').get(l).price_tier, 'primary', who.full_name);
   }
   assert.equal(db.prepare('SELECT COUNT(*) n FROM invoices WHERE visit_id = ?').get(vid).n, 1, 'один счёт на визит');
-  assert.equal(db.prepare('SELECT total_amount FROM invoices WHERE visit_id = ?').get(vid).total_amount, 240000);
+  assert.equal(db.prepare('SELECT total_amount FROM invoices WHERE visit_id = ?').get(vid).total_amount, 800000);
 });

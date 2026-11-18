@@ -23,6 +23,7 @@ import { createApp } from '../../app.js';
 import { licensedDataDir } from '../control/licensed-fixture.js';
 import { listen } from '../../../control-plane/server/test-helpers/listen.js';
 import { insertVisitLine } from '../../test-helpers/package-line.js';   // SERVICES_PACKAGES_V1 — строка, как её заводит дверь /api/db
+import { markBilled } from '../../test-helpers/billed-line.js';   // VISIT_TIER_ATTENDED_V1 — прошлый приём выставлен
 
 const admin = { id: 1, role: 'admin', full_name: 'Админ' };
 const registrar = { id: 7, role: 'registrar', full_name: 'Регистратор' };
@@ -270,10 +271,10 @@ test('добавить услугу, которой нужен врач, без 
   setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
   const NEED = svc(db, 'Операция', 500000, { requires_doctor: 1 });
   refused(() => call('cashier_line_add', db, { invoice_id: invoiceId, service_id: NEED }, cashier), /врач/, 400);
-  // Повторный визит: прошлый приём у этого пациента неделю назад.
+  // Повторный визит: прошлый приём у этого пациента неделю назад (выставлен — VISIT_TIER_ATTENDED_V1).
   const REP = svc(db, 'Осмотр', 100000, { price_repeat: 40000, repeat_days_from: 1, repeat_days_to: 30 });
   const old = Number(db.prepare("INSERT INTO visits (patient_id, visit_date) VALUES (?, '2026-09-03T05:00:00Z')").run(pid).lastInsertRowid);
-  line(db, old, REP, null, { status: 'completed' });
+  markBilled(db, line(db, old, REP, null, { status: 'completed' }));
   const r = call('cashier_line_add', db, { visit_id: vid, service_id: REP }, cashier);
   assert.equal(r.line.price_tier, 'repeat');
   assert.equal(r.line.unit_price, 40000);

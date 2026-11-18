@@ -10,6 +10,7 @@ import {
 } from './billing.js';
 import { voidInvoice, cashierInvoices } from './cashier.js';
 import { walletBalance } from '../domain/wallet.js';
+import { markBilled } from '../../test-helpers/billed-line.js';   // VISIT_TIER_ATTENDED_V1 — прошлый приём выставлен
 
 const registrar = { id: 7, role: 'registrar' };
 const cashier = { id: 9, role: 'cashier', full_name: 'Кассир' };
@@ -90,9 +91,9 @@ test('B3: тариф строки спрашивается заново — «в
   assert.equal(res.line.price_tier, 'primary', 'кардиолога пациент ещё не посещал');
   assert.equal(res.invoice.total_amount, 180000);
 
-  // А если кардиолог был 3 дня назад — тариф второго визита.
+  // А если кардиолог был 3 дня назад (и приём выставлен — VISIT_TIER_ATTENDED_V1) — тариф второго визита.
   const past = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, '2026-09-24T05:00:00Z', 'arrived')").run(pid).lastInsertRowid;
-  addLine(db, past, { service_id: fresh, unit_price: 180000, total: 180000, status: 'completed' });
+  markBilled(db, Number(addLine(db, past, { service_id: fresh, unit_price: 180000, total: 180000, status: 'completed' })));
   const back = changeUnpaidService(db, { visit_service_id: vs, new_service_id: old }, registrar);
   assert.equal(back.line.price_tier, 'primary');
   const again = changeUnpaidService(db, { visit_service_id: vs, new_service_id: fresh }, registrar);
