@@ -19,7 +19,7 @@ import { assertOwnBuilding, PERFORMED_LINE_STATUSES, lineHasWork } from './billi
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
 import { lineUnitPrice, consultationFor, doctorPriceLookup, legacyPackageOnlyOff, packageLineDiscount, doctorPriceFor } from '../domain/pricing.js';   // doctorPriceFor: VISIT_TIER_SHOWN_CASHIER_V1
 import { tierUnitPrice } from '../domain/visit-tier.js';   // VISIT_TIER_SHOWN_CASHIER_V1 — цена яруса строки
-import { quoteServicePrices, billingTiers } from './service-price-quote.js';   // VISIT_TIER_ATTENDED_V1 — billingTiers: ярус невыставленной строки, как его решит счёт; VISIT_TIER_SHOWN_CASHIER_V1 — дни от прошлого визита, как у мастера   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
+import { quoteServicePrices, billingTiers, billingTiersMany } from './service-price-quote.js';   // VISIT_TIER_ATTENDED_V1 — billingTiers: ярус невыставленной строки, как его решит счёт; VISIT_TIER_SHOWN_CASHIER_V1 — дни от прошлого визита, как у мастера   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта; SERVICES_PACKAGES_V1 (ревью C1) — legacyPackageOnlyOff
 import { searchArg, pageInt } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере; REFUND_ANY_V1 — pageInt: страницы поиска счёта
 import { moneyDocRefusal } from '../domain/wallet.js';   // REFUND_ANY_V1 (ревью M-1) — «это документ денег» тем же правилом, что оплата и возврат
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
@@ -1169,17 +1169,19 @@ export function cashierUnbilled(db, args, user) {
   // VISIT_TIER_ATTENDED_V1 — ярус строки — тот, что решит счёт (billingTiers, по
   // визиту): записанный мог устареть (прошлую запись отменили, «Не пришёл»), и
   // сумма «Ждут счёта» — по правилу цены счёта.
-  const tierOf = new Map();
+  // VISIT_TIER_ATTENDED_V1 (доводка) — все визиты списка одним проходом
+  // (billingTiersMany: запросы готовятся один раз): по визиту на вызов
+  // billingTiers «Ждут счёта» на 9 000 визитов готовил 36 000 запросов
+  // (cashier-unbilled.perf.test.js).
+  let tierOf;
   {
     const perVisit = new Map();
     for (const l of lines) {
       if (l.service_id == null) continue;
-      if (!perVisit.has(l.visit_id)) perVisit.set(l.visit_id, []);
-      perVisit.get(l.visit_id).push(l);
+      if (!perVisit.has(l.visit_id)) perVisit.set(l.visit_id, { visit: { id: l.visit_id, patient_id: l.patient_id, day: l.visit_day }, rows: [] });
+      perVisit.get(l.visit_id).rows.push(l);
     }
-    for (const [visitId, ls] of perVisit) {
-      for (const [id, tier] of billingTiers(db, { id: visitId, patient_id: ls[0].patient_id, visit_date: ls[0].visit_date }, ls)) tierOf.set(id, tier);
-    }
+    tierOf = billingTiersMany(db, perVisit.values());
   }
 
   // Строки идут от самой свежей: первая строка визита задаёт его место в
@@ -1265,6 +1267,11 @@ export function cashierUnbilled(db, args, user) {
 //   days_since  — дней от прошлого визита по этой услуге: та же котировка, что у
 //                 мастера (quoteServicePrices, день ЭТОГО визита, сам визит исключён),
 //                 и только если она называет тот же ярус; иначе null.
+// VISIT_TIER_ATTENDED_V1 (доводка) — по visit_id ещё и unbilled: КАЖДАЯ
+// невыставленная строка визита (не только ярусная) — { visit_service_id, tier,
+// price, quantity, total }: цена единицы и сумма строки, которые поставит счёт
+// (ярус — решённый счётом, null — ярусов у строки нет). Окна «Выставить счёт»
+// показывают её вместо записанной цены строки.
 // Только чтение (READ_ONLY_RPCS). Роли — те же, что у котировки service_price_quote:
 // цены и ярусы они видят и так.
 const LINE_TIER_ROLES = ['admin', 'registrar', 'doctor', 'nurse', 'cashier', 'callcenter'];
@@ -1273,6 +1280,7 @@ export function cashierLineTiers(db, args, user) {
   if (!hasAnyRole(user, LINE_TIER_ROLES)) throw new RpcError('Нет доступа к ценам услуг.', 403);
   const a = args || {};
   let rows;
+  let unbilled = null;   // VISIT_TIER_ATTENDED_V1 (доводка) — только по визиту
   if (a.invoice_id !== undefined && a.invoice_id !== null) {
     if (!isPositiveInt(a.invoice_id)) throw new RpcError('Счёт указан неверно.', 400);
     if (!db.prepare('SELECT 1 FROM invoices WHERE id = ?').get(a.invoice_id)) throw new RpcError('Счёт не найден.', 400);
@@ -1297,19 +1305,42 @@ export function cashierLineTiers(db, args, user) {
     // устареть, и чип «Второй визит» у строки, которую счёт выставит первичной,
     // обещал бы пациенту не ту цену.
     const v = db.prepare('SELECT id, patient_id, visit_date FROM visits WHERE id = ?').get(a.visit_id);
-    const decided = billingTiers(db, v, rows.filter((r) => r.ii_id == null));
+    const open = rows.filter((r) => r.ii_id == null);
+    const decided = billingTiers(db, v, open);
+    const getSvc = db.prepare('SELECT * FROM services WHERE id = ?');
     const stamped = (t) => (t === 'secondary' || t === 'repeat' ? t : 'primary');
+    // VISIT_TIER_ATTENDED_V1 (доводка) — ЦЕНА СЧЁТА КАЖДОЙ НЕВЫСТАВЛЕННОЙ СТРОКИ
+    // (unbilled). Окна «Выставить счёт» (касса из «Ждут счёта», «Счёт и оплата»,
+    // вкладка «Services» окна визита) показывали записанную цену строки, а счёт
+    // берёт ярус и цену заново — сумма в окне расходилась со счётом. Здесь — ровно
+    // то, что поставит create_invoice_for_visit (billing.js issueVisitInvoice):
+    // lineUnitPrice строки с ярусом billingTiers, сумма строки — цена × количество
+    // до скидок счёта; ярус — решённый счётом (null — у строки ярусов нет: товар,
+    // консультация, пакет, услуга без цен визитов). Браузер ярус не считает.
+    const getProd = db.prepare('SELECT sale_price FROM products WHERE id = ?');
+    unbilled = open.map((r) => {
+      const next = decided.has(r.id) ? { ...r, price_tier: decided.get(r.id) } : r;
+      const svc = r.service_id != null ? getSvc.get(r.service_id) || null : null;
+      const prod = r.service_id == null && r.clinic_item_id != null ? getProd.get(r.clinic_item_id) || null : null;
+      const unit = Number(lineUnitPrice(db, next, { service: svc, product: prod })) || 0;
+      const qty = Number(r.quantity);
+      return {
+        visit_service_id: r.id, tier: decided.has(r.id) ? decided.get(r.id) : null,
+        price: round2(unit), quantity: Number.isFinite(qty) ? qty : 0, total: Number.isFinite(qty) ? round2(unit * qty) : 0,
+      };
+    });
     rows = rows.map((r) => {
       if (r.ii_id != null || !decided.has(r.id) || decided.get(r.id) === stamped(r.price_tier)) return r;
-      const svc = db.prepare('SELECT * FROM services WHERE id = ?').get(r.service_id) || null;
+      const svc = getSvc.get(r.service_id) || null;
       const next = { ...r, price_tier: decided.get(r.id) };
       return { ...next, unit_price: round2(Number(lineUnitPrice(db, next, { service: svc })) || 0) };
     });
   }
+  const withUnbilled = (out) => (unbilled ? { ...out, unbilled } : out);
   const tiered = rows.filter((r) => r.service_id != null
     && (r.price_tier === 'secondary' || r.price_tier === 'repeat')
     && !(r.package_price != null && r.package_full != null));
-  if (!tiered.length) return { lines: [] };
+  if (!tiered.length) return withUnbilled({ lines: [] });
 
   const getService = db.prepare(`
     SELECT price, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to,
@@ -1363,5 +1394,5 @@ export function cashierLineTiers(db, args, user) {
       days_since: q && q.tier === r.price_tier && q.days_since != null ? Number(q.days_since) : null,
     });
   }
-  return { lines };
+  return withUnbilled({ lines });
 }

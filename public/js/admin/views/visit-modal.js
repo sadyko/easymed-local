@@ -34,6 +34,7 @@ import { lineIdentity, linePerformer, isConsultPick } from './visit-line-row.js'
 import { loadVisitOrders, blockedPickIds, precheckOrders, withRepeatReason } from './dup-order-check.js';   // DUP_STOP_V1 (ревью M3) — повтор услуги в визите — правило сервера
 import { doctorPoolFor, performerRequired, performerCandidates, soleCandidate, ROUTE_SELECT } from './doctor-pool.js?v=dp1';   // LAB_NO_DOCTOR_V1 — performerRequired вместо needsPerformer   // DIAG_ROUTE_V1 (D3) — исполнитель рекомендации — по услуге, не рекомендовавший
 import { REFUNDED_LINE_MARK } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (ревью B5) — «Услуга возвращена» в журнале счёта
+import { loadLineTiers } from './tier-chip.js';   // VISIT_TIER_ATTENDED_V1 (доводка) — цена счёта невыставленной строки
 
 // BILLING_AUDIT_FIX_V1 (A1) — 'YYYY-MM-DD' местного дня для visit_date.
 // Полное мгновение (с временем) переводится в день клиники браузера; голая
@@ -2021,6 +2022,16 @@ async function loadServices(state) {
         __created_by_name: formatRegistrar(r.creator?.full_name),
     }));
     await loadRefundedFlags(state);   // FINAL_MONEY_FIX_V1 (I1)
+    // VISIT_TIER_ATTENDED_V1 (доводка) — у невыставленной строки сумма «Amount» и
+    // итог отмеченного — по цене, которую поставит счёт (ярус касса решает заново
+    // в миг счёта; cashier_line_tiers unbilled). Сбой — записанная цена, как прежде.
+    if (state.services.some(r => !r.invoice_item_id)) {
+        const bills = (await loadLineTiers({ visit_id: state.visit.id })).billByLine;
+        for (const r of state.services) {
+            const b = !r.invoice_item_id ? bills.get(Number(r.id)) : null;
+            if (b) r.price = Number(b.price);
+        }
+    }
     // LIVE_AUDIT_FIX_V1 — строки, выставленные КОНТРАГЕНТУ (invoices.payer_id),
     // помечаются «Покрывается плательщиком»: это их счёт, а не счёт пациента.
     const itemIds = state.services.map(r => r.invoice_item_id).filter(Boolean);

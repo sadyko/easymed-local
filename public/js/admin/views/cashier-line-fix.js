@@ -1076,8 +1076,11 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
         if (!seeded) { for (const l of lines) if (preselectRefunded || !refunded.has(Number(l.id))) chosen.add(Number(l.id)); seeded = true; }   // REFERRAL_BILL_V1 — preselectRefunded
         for (const id of [...chosen]) if (!lines.some((l) => Number(l.id) === id)) chosen.delete(id);
         // VISIT_TIER_SHOWN_CASHIER_V1 — «Второй визит» / «Повторный визит» у строк визита без счёта.
-        const tierByLine = lines.some((l) => l && l.service_id != null)
-            ? (await loadLineTiers({ visit_id: row.visit_id })).byLine : new Map();
+        // VISIT_TIER_ATTENDED_V1 (доводка) — и сумма строки — та, что поставит счёт
+        // (billByLine: ярус и цену касса решает заново в миг счёта), а не записанная.
+        const tiers = lines.length ? await loadLineTiers({ visit_id: row.visit_id }) : null;
+        const tierByLine = tiers ? tiers.byLine : new Map();
+        const billByLine = tiers ? tiers.billByLine : new Map();
         clear(table);
         if (!lines.length) {
             table.appendChild(h('div', { class: 'empty' }, 'Невыставленных строк не осталось — выставлять нечего.'));
@@ -1115,7 +1118,7 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
                 h('div', { class: 'cell-strong' }, name, tags.length ? h('span', { class: 'muted', style: { fontWeight: 500 } }, ' · ' + tags.join(', ')) : null),
                 h('div', { class: 'muted', 'data-line-where': '', style: { fontSize: '12.5px' } }, lineWhere(l, doc))),   // CASHIER_LINE_EDIT_V1
             ...tierChipNodes(tierByLine.get(id), fmtSum),   // VISIT_TIER_SHOWN_CASHIER_V1
-            h('div', { class: 'num', style: { whiteSpace: 'nowrap', fontWeight: 600 } }, fmtSum((Number(l.unit_price) || 0) * (Number(l.quantity) || 1)), ' ', tr('сум')),
+            h('div', { class: 'num', style: { whiteSpace: 'nowrap', fontWeight: 600 } }, fmtSum(billByLine.has(id) ? Number(billByLine.get(id).total) || 0 : (Number(l.unit_price) || 0) * (Number(l.quantity) || 1)), ' ', tr('сум')),   // VISIT_TIER_ATTENDED_V1 (доводка) — сумма счёта
             actions));
         }
         billBtn.disabled = !chosen.size;

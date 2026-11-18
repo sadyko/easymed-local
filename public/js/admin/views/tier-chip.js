@@ -46,11 +46,17 @@ export function tierChipNodes(t, fmtMoney, { struck = true } = {}) {
 
 /**
  * Ярусы строк счёта ({ invoice_id }) или визита ({ visit_id }) с сервера.
- * → { byItem: Map(invoice_item_id → строка), byLine: Map(visit_service_id → строка) }.
- * Сбой или старый сервер — пустые карты: строки показываются без чипа, как прежде.
+ * → { byItem: Map(invoice_item_id → строка), byLine: Map(visit_service_id → строка),
+ *     billByLine: Map(visit_service_id → { tier, price, quantity, total }) }.
+ * billByLine (VISIT_TIER_ATTENDED_V1 (доводка), только по visit_id) — цена, которую
+ * поставит счёт каждой НЕвыставленной строке визита: касса решает ярус заново в
+ * миг счёта, и записанная цена строки может быть не той. Окна «Выставить счёт»
+ * показывают её; ярус браузер не считает.
+ * Сбой или старый сервер — пустые карты: строки показываются без чипа и по
+ * записанной цене, как прежде.
  */
 export async function loadLineTiers(args) {
-    const out = { byItem: new Map(), byLine: new Map() };
+    const out = { byItem: new Map(), byLine: new Map(), billByLine: new Map() };
     try {
         const { data, error } = await supabase.rpc('cashier_line_tiers', args);
         if (error) return out;
@@ -58,6 +64,9 @@ export async function loadLineTiers(args) {
             if (!l) continue;
             if (l.invoice_item_id != null) out.byItem.set(Number(l.invoice_item_id), l);
             if (l.visit_service_id != null) out.byLine.set(Number(l.visit_service_id), l);
+        }
+        for (const b of (data && Array.isArray(data.unbilled) ? data.unbilled : [])) {
+            if (b && b.visit_service_id != null && Number.isFinite(Number(b.price))) out.billByLine.set(Number(b.visit_service_id), b);
         }
     } catch (_) { /* без чипа */ }
     return out;

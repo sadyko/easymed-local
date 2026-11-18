@@ -98,6 +98,8 @@ import { canSeeReportKey, requireReportKind } from '../report-access.js';
 // врачу с той цены и той скидки категории, которые поставит счёт: правило
 // цены и правило скидки — у кассы, здесь только их вызов.
 import { lineUnitPrice, packageLineDiscount } from '../domain/pricing.js';   // SERVICES_PACKAGES_V1 — скидка пакета — записанная на строке
+// VISIT_TIER_ATTENDED_V1 (доводка) — ярус строки без счёта — тот, что решит счёт (billingTiersMany ниже).
+import { billingTiersMany } from './service-price-quote.js';
 import { hasRates, lineDiscountPct } from '../../../public/js/admin/discount-rates.js';   // DISCOUNT_RATES_V1 — ставки группы на строку без счёта
 import { makeLineService } from '../domain/discount-rates.js';   // DISCOUNT_RATES_V1
 // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям» группирует тем же правилом,
@@ -1874,6 +1876,33 @@ function payLineMoney(r, pricer) {
 // V3120_FINAL (C1) — доля денег строки после скидки после продажи (1 — её нет).
 const postSaleKeepOf = (r) => (r && r.post_sale_keep != null ? Number(r.post_sale_keep) : 1);
 
+// VISIT_TIER_ATTENDED_V1 (доводка, 3.25.0) — ЯРУС ВЫПОЛНЕННОЙ, ЕЩЁ НЕ ВЫСТАВЛЕННОЙ
+// СТРОКИ — ТОТ, ЧТО РЕШИТ СЧЁТ. Касса решает ярус («второй» / «повторный» визит)
+// заново в миг счёта (billing.js issueVisitInvoice → billingTiers: прошлый визит —
+// только тот, на который пациент пришёл и который выставлен), а доля врача до
+// счёта бралась по ЗАПИСАННОМУ ярусу: записанный «второй визит» без выставленного
+// прошлого визита платил врачу с 60 000, а счёт выставлял 100 000 — и доля
+// прыгала в миг счёта. Теперь цена строки без счёта (payLineMoney → pricer.unit →
+// lineUnitPrice) берёт ярус того же решения: одно правило, без копии. Решение —
+// по визиту, всех визитов выборки одним проходом (billingTiersMany: запросы
+// готовятся один раз, не запрос на строку). Строка со счётом — по позиции счёта,
+// как прежде; стационар ярусов не знает. → Map(строка выборки → ярус).
+function unbilledPayTiers(db, raw) {
+  const byVisit = new Map();
+  const rowOf = new Map();
+  for (const r of raw) {
+    if (r.kind !== 'out' || r.invoice_item_id != null || r.service_id == null || r.visit_id == null) continue;
+    let g = byVisit.get(r.visit_id);
+    if (!g) byVisit.set(r.visit_id, g = { visit: { id: r.visit_id, patient_id: r.patient_id, day: r.date }, rows: [] });
+    g.rows.push({ id: r.line_id, service_id: r.service_id, package_price: r.package_price, package_full: r.package_full });
+    rowOf.set(r.line_id, r);
+  }
+  const out = new Map();
+  if (!byVisit.size) return out;
+  for (const [lineId, tier] of billingTiersMany(db, byVisit.values())) out.set(rowOf.get(lineId), tier);
+  return out;
+}
+
 const EMPTY_FILTER = { clause: '', params: [] };
 /**
  * Строки выплаты за период [from, to] (местные дни).
@@ -1906,7 +1935,9 @@ function livePayLines(db, { from, to, doctorId = null, kinds = ['out', 'in'], ar
     ...(foreign && doctorId == null && kinds.includes('out') ? foreignPayRows(db, q) : []),
   ];
   const pricer = makePayPricer(db);
-  return raw.map((r) => {
+  const billTier = unbilledPayTiers(db, raw);
+  return raw.map((stored) => {
+    const r = billTier.has(stored) ? { ...stored, price_tier: billTier.get(stored) } : stored;
     const m = payLineMoney(r, pricer);
     return {
       ...r,

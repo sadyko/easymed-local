@@ -28,6 +28,7 @@ import { isOwnBuilding, originTag } from '../record-origin.js';
 // OWN_SHELF_ONLY_V1 — «Выдать» у врача и медсестры: только товары своих полок.
 import { loadShelves, shelfItems, fmtShelfQty, warehouseStock, isOwnShelfShort, showOwnShelfRefusal } from './own-shelf.js';
 import { releaseSelect, releaseChoiceNeeded } from '../release-select.js';   // RELEASE_SELECT_V1 (ревью) — часть денег по правилу кассы
+import { loadLineTiers } from './tier-chip.js';   // VISIT_TIER_ATTENDED_V1 (доводка) — цена счёта невыставленной строки
 
 // RELEASE_SELECT_V1 (ревью) — ключ повтора оплаты (как у кассы, cashier-desk.js
 // idemKeeper): повтор после обрыва связи приходит с тем же ключом, и сервер
@@ -158,7 +159,7 @@ export function openVisitBillModal(visit, onChanged) {
     const linesTbody = h('tbody');
     const linesEmptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'Услуг в этом визите пока нет.');
 
-    function lineRow(r) {
+    function lineRow(r, bill) {
         const svc = r.services;
         const prod = r.products;
         const isDispensed = r.clinic_item_id != null;
@@ -166,7 +167,10 @@ export function openVisitBillModal(visit, onChanged) {
         const billed = r.invoice_item_id != null;
         // LIVE_AUDIT_FIX_V1 (B8) — цена строки, а не каталога: у строки своя
         // (цена врача, второй/повторный визит), и счёт выставляется по ней.
-        const price = r.unit_price != null ? r.unit_price : (svc ? svc.price : 0);
+        // VISIT_TIER_ATTENDED_V1 (доводка) — у НЕвыставленной строки — цена, которую
+        // поставит счёт (`bill` — ответ сервера, cashier_line_tiers unbilled): ярус
+        // касса решает заново в миг счёта, и записанная цена может быть не той.
+        const price = !billed && bill ? Number(bill.price) : (r.unit_price != null ? r.unit_price : (svc ? svc.price : 0));
         const canRemove = hasActorRole(isDispensed ? BILL_VOID_ROLES : BILL_REMOVE_ROLES);
         return h('tr', null,
             h('td', null, itemName || '—',
@@ -202,12 +206,15 @@ export function openVisitBillModal(visit, onChanged) {
             // REFBILL_REVIEW_V1 (проверка ревью) — отменённая строка в счёт не
             // идёт: сервер её отклоняет, и одна такая строка роняла весь счёт.
             unInvoicedIds = rows.filter(r => r.invoice_item_id == null && r.status !== 'cancelled' && !refunded.has(Number(r.id))).map(r => r.id);
+            // VISIT_TIER_ATTENDED_V1 (доводка) — цены счёта невыставленных строк (сбой — записанные).
+            const bills = rows.some(r => r.invoice_item_id == null)
+                ? (await loadLineTiers({ visit_id: visit.id })).billByLine : new Map();
             clear(linesTbody);
             if (rows.length === 0) {
                 linesEmptyEl.style.display = '';
             } else {
                 linesEmptyEl.style.display = 'none';
-                for (const r of rows) linesTbody.appendChild(lineRow(r));
+                for (const r of rows) linesTbody.appendChild(lineRow(r, bills.get(Number(r.id))));
             }
         } catch (e) {
             clear(linesTbody);

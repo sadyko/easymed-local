@@ -365,9 +365,15 @@ test('доля врача за второй визит — от 90 000: выст
   assert.equal(doctorPaySummary(db, range, admin).outpatient.fee, 9000, '10 % от 90 000');
 
   // Выполнено, счёта ещё нет: доля считается от той цены, что выставит касса.
-  const v2 = visit(db, pid, 0);
-  line(db, v2, { service_id: CONS, doctor_id: OWN, tier: 'secondary', status: 'completed' });
+  // VISIT_TIER_ATTENDED_V1 (доводка) — второй визит настоящий: вчера, через 2 дня после
+  // выставленного первичного (прежде строка стояла сегодня, после уже выставленного
+  // сегодня второго визита — счёт решил бы её первичной, 300 000, и доля прыгала бы
+  // с 18 000 на 39 000 в миг счёта; теперь доля до счёта — по решению счёта).
+  const v2 = visit(db, pid, -1);
+  const l2 = line(db, v2, { service_id: CONS, doctor_id: OWN, tier: 'secondary', status: 'completed' });
   assert.equal(doctorPaySummary(db, range, admin).outpatient.fee, 18000);
+  createInvoiceForVisit(db, { visit_id: v2, visit_service_ids: [l2] }, registrar);
+  assert.equal(doctorPaySummary(db, range, admin).outpatient.fee, 18000, 'счёт долю не сдвинул');
 });
 
 // ─── «Ждут счёта» кассы ──────────────────────────────────────────────────────

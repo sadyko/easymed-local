@@ -537,8 +537,8 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false, append = true }
     // стоит столько. Сюда доходят только невыставленные строки (отказ «уже в
     // счёте» выше) — выставленные не меняются никогда. Доля врача за
     // выполненную, ещё не выставленную строку (reports.js, PAY_BASIS_PERFORMED_V1)
-    // считается по ЗАПИСАННОМУ ярусу: у строки с устаревшим ярусом она
-    // сдвигается в миг счёта на цену, которую счёт выставил.
+    // берёт ярус того же решения (VISIT_TIER_ATTENDED_V1 (доводка):
+    // unbilledPayTiers → billingTiersMany), поэтому счёт её не сдвигает.
     const tiers = billingTiers(db, visit, rows);
     const priced = rows.map((stored) => {
       const row = tiers.has(stored.id) ? { ...stored, price_tier: tiers.get(stored.id) } : stored;

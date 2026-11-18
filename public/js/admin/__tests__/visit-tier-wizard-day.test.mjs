@@ -279,4 +279,44 @@ test('строка на завтра («Ближайшее»): прошлый п
   assert.deepEqual([line.price_tier, line.unit_price], ['secondary', 20000]);
 });
 
+// VISIT_TIER_ATTENDED_V1 (доводка, решение 3) — СМЕТА НА НЕСКОЛЬКО ДНЕЙ = СЧЁТ.
+// Будущий день услуги, по которой пациент сегодня пришёл и выставлен, — второй визит
+// (сегодняшний визит — прошлый: пришёл и выставлен, будущий день после него): и смета на
+// тот день, и счёт, выставленный сегодня заранее, — 20 000. Одной смете услуга не может
+// стоять в двух днях (второй раз её смета не берёт), поэтому сегодняшняя строка той же
+// услуги, выставленная ЭТИМ же нажатием раньше будущей, в смете не встречается.
+test('решение 3: сегодня приём был и выставлен — запись той же услуги на завтра: смета «Второй визит» 20 000 и счёт 20 000', { skip: TZ_SPLIT }, async () => {
+  seed({ todayOff: true });
+  DB.prepare('UPDATE services SET secondary_days_from = 1 WHERE id = 24').run();   // второй визит — со следующего дня
+  // Сегодняшний приём: пациент пришёл, работа сделана, счёт выставлен. Визит — без врача 7,
+  // чтобы мастер не взял его записью на сегодня («в запись · 10:00»): строка пойдёт на завтра.
+  const d = dayOffset(0); d.setHours(10, 0, 0, 0);
+  const tv = Number(DB.prepare("INSERT INTO visits (patient_id, visit_date, status, created_by) VALUES (3, ?, 'arrived', 1)").run(d.toISOString()).lastInsertRowid);
+  markBilled(DB, Number(DB.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, price_tier, created_by) VALUES (?, 24, 1, 80000, 80000, 'completed', 'primary', 1)").run(tv).lastInsertRowid));
+  await openWizard([24]);
+  const nearest = byAttr(overlay(), 'data-pick-nearest', 24);
+  assert.ok(nearest, 'нет «Ближайшее»: ' + textOf(overlay()).replace(/\s+/g, ' ').slice(0, 600) + ' | ' + JSON.stringify(TOASTS));
+  nearest.click();
+  await flush(20); await wait(150); await flush(20);
+  const chip = tierChip();
+  assert.ok(chip && textOf(chip).trim() === 'Второй визит', 'нет «Второй визит» на завтра: ' + textOf(overlay()).slice(0, 300));
+  assert.ok(textOf(overlay()).includes('20 000'), 'в смете нет 20 000');
+  await pressUntilCreate();
+  const line = newLine(24);
+  assert.ok(line, 'строка не записана: ' + JSON.stringify(TOASTS));
+  assert.deepEqual([line.price_tier, line.unit_price], ['secondary', 20000]);
+  const inv = DB.prepare("SELECT ii.unit_price FROM invoice_items ii JOIN visit_services vs ON vs.invoice_item_id = ii.id WHERE vs.service_id = 24 AND vs.status = 'added'").get();
+  assert.ok(inv, 'счёт не выставлен: ' + JSON.stringify(TOASTS));
+  assert.equal(inv.unit_price, 20000, 'счёт = смета');
+});
+
+test('решение 3: одна услуга в смете — один раз; второй раз её смета не берёт (две строки одной услуги в разных днях не бывает)', { skip: TZ_SPLIT }, async () => {
+  seed();
+  await openWizard([25, 25]);
+  assert.ok(TOASTS.some((t) => /уже в смете/.test(t)), 'второй раз услуга легла в смету: ' + JSON.stringify(TOASTS));
+  await pressUntilCreate();
+  const n = DB.prepare("SELECT COUNT(*) n FROM visit_services WHERE service_id = 25 AND status = 'added'").get().n;
+  assert.equal(n, 1, 'одна строка услуги на смету');
+});
+
 test.after(() => { if (DB) DB.close(); DB = null; });

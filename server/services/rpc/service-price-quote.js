@@ -120,11 +120,19 @@ export function quoteServicePrices(db, args) {
  * `visitId` — визит, чьи строки не считаются прошлыми (null — визита ещё нет).
  * @returns {Map<number, {svc: object, q: object}>}
  */
-function tierDecisions(db, { patientId, serviceIds, visitId = null, date = null }) {
-  const vid = visitId == null ? null : Number(visitId);
+function tierDecisions(db, args) {
+  return tierDecider(db)(args);
+}
+
+// VISIT_TIER_ATTENDED_V1 (доводка) — то же решение для МНОГИХ визитов подряд:
+// запросы готовятся один раз, строка услуги читается один раз на услугу, день
+// клиники — один на всю выборку. Им считают доля врача в отчётах (reports.js,
+// тысячи строк за период) и «Ждут счёта»; одиночный вызов — tierDecisions выше.
+function tierDecider(db) {
   const clinicToday = today(db);
-  const lineDay = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? String(date) : clinicToday;
   const getService = db.prepare('SELECT id, price, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?');
+  const services = new Map();
+  const serviceOf = (id) => { if (!services.has(id)) services.set(id, getService.get(id) || null); return services.get(id); };
   // The most recent earlier line of this service for this patient. Lines
   // cancelled at the desk and visits that never happened do not count: a
   // patient who booked and did not come has not had a first visit.
@@ -154,18 +162,22 @@ function tierDecisions(db, { patientId, serviceIds, visitId = null, date = null 
      ORDER BY v.visit_date DESC, vs.id DESC
      LIMIT 1`);
 
-  const out = new Map();
-  for (const id of serviceIds) {
-    const svc = getService.get(id);
-    if (!svc) continue;
-    if (!hasTiers(svc)) {
-      out.set(id, { svc, q: { tier: 'primary', price: Number(svc.price) || 0, base_price: Number(svc.price) || 0, days_since: null, reason: 'no_tiers', prev_day: null } });
-      continue;
+  return function decide({ patientId, serviceIds, visitId = null, date = null }) {
+    const vid = visitId == null ? null : Number(visitId);
+    const lineDay = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? String(date) : clinicToday;
+    const out = new Map();
+    for (const id of serviceIds) {
+      const svc = serviceOf(id);
+      if (!svc) continue;
+      if (!hasTiers(svc)) {
+        out.set(id, { svc, q: { tier: 'primary', price: Number(svc.price) || 0, base_price: Number(svc.price) || 0, days_since: null, reason: 'no_tiers', prev_day: null } });
+        continue;
+      }
+      const prev = prevStmt.get(patientId, id, vid, vid, lineDay, clinicToday) || null;
+      out.set(id, { svc, q: { ...tierFor(svc, prev, lineDay), prev_day: prev ? prev.day : null } });
     }
-    const prev = prevStmt.get(patientId, id, vid, vid, lineDay, clinicToday) || null;
-    out.set(id, { svc, q: { ...tierFor(svc, prev, lineDay), prev_day: prev ? prev.day : null } });
-  }
-  return out;
+    return out;
+  };
 }
 
 /**
@@ -182,19 +194,41 @@ function tierDecisions(db, { patientId, serviceIds, visitId = null, date = null 
  * @returns {Map<number, 'primary'|'secondary'|'repeat'>} id строки → ярус
  */
 export function billingTiers(db, visit, rows) {
+  return billingTiersMany(db, [{ visit, rows }]);
+}
+
+/**
+ * VISIT_TIER_ATTENDED_V1 (доводка) — billingTiers для МНОГИХ визитов одним
+ * проходом (запросы готовятся один раз, tierDecider): доля врача за выполненные,
+ * ещё не выставленные строки периода (reports.js) и «Ждут счёта» (cashier.js).
+ * Решение — ровно то же, что у счёта каждого визита.
+ * `groups` — [{ visit: { id, patient_id, visit_date } | { id, patient_id, day: 'YYYY-MM-DD' }, rows }];
+ * `day` — уже местный день визита (тогда visit_date не нужен).
+ * @returns {Map<number, 'primary'|'secondary'|'repeat'>} id строки → ярус
+ */
+export function billingTiersMany(db, groups) {
   const out = new Map();
-  const patientId = Number(visit && visit.patient_id);
-  if (!Number.isInteger(patientId) || patientId <= 0) return out;
-  const lines = (rows || []).filter((r) => r && r.service_id != null && !(r.package_price != null && r.package_full != null));
-  if (!lines.length) return out;
-  const day = db.prepare(`SELECT ${localDate('?')} AS d`).get(visit.visit_date).d;
-  const decided = tierDecisions(db, {
-    patientId, serviceIds: [...new Set(lines.map((r) => Number(r.service_id)))], visitId: visit.id, date: day,
-  });
-  for (const r of lines) {
-    const d = decided.get(Number(r.service_id));
-    if (!d || d.q.reason === 'no_tiers') continue;
-    out.set(r.id, d.q.tier === 'secondary' || d.q.tier === 'repeat' ? d.q.tier : 'primary');
+  let decide = null;
+  let dayStmt = null;
+  for (const { visit, rows } of groups || []) {
+    const patientId = Number(visit && visit.patient_id);
+    if (!Number.isInteger(patientId) || patientId <= 0) continue;
+    const lines = (rows || []).filter((r) => r && r.service_id != null && !(r.package_price != null && r.package_full != null));
+    if (!lines.length) continue;
+    let day = /^\d{4}-\d{2}-\d{2}$/.test(String(visit.day || '')) ? String(visit.day) : null;
+    if (!day) {
+      if (!dayStmt) dayStmt = db.prepare(`SELECT ${localDate('?')} AS d`);
+      day = dayStmt.get(visit.visit_date).d;
+    }
+    if (!decide) decide = tierDecider(db);
+    const decided = decide({
+      patientId, serviceIds: [...new Set(lines.map((r) => Number(r.service_id)))], visitId: visit.id, date: day,
+    });
+    for (const r of lines) {
+      const d = decided.get(Number(r.service_id));
+      if (!d || d.q.reason === 'no_tiers') continue;
+      out.set(r.id, d.q.tier === 'secondary' || d.q.tier === 'repeat' ? d.q.tier : 'primary');
+    }
   }
   return out;
 }
