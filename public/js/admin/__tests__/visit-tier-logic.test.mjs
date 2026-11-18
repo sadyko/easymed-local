@@ -82,7 +82,8 @@ test('the editor sends the four tier fields; the wizard, attach path and doctor 
     // patient card, the new-patient window and the CRM) is the main path.
     const vw = read('views/visit-wizard.js');
     assert.match(vw, /rpc\('service_price_quote'/, 'мастер записи спрашивает цену у сервера');
-    assert.match(vw, /price_tier:\s*lineTier\(c\)/, 'строка визита из мастера несёт ступень');
+    // WAIT_REG_V1 (ревью H2) — у строки вида приёма consultation_type_id, у остальных ступень присваиванием: row.price_tier = lineTier(c).
+    assert.match(vw, /price_tier\s*[:=]\s*lineTier\(c\)/, 'строка визита из мастера несёт ступень');
     assert.match(vw, /if \(day\) args\.date = day;/, 'котировка спрашивается на ДЕНЬ записи, а не на сегодня');
     // OWN_PRICE_TIER_RATIO_V1 (владелец, 30.09; заменяет 3.14.0) — своя цена
     // врача получает ту же скидку ступени, что каталог; правило одно с кассой
