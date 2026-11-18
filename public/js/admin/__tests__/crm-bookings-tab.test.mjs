@@ -287,3 +287,25 @@ test('CRM_BOOKINGS_TAB_V1: loadRegistrarWaiting шлёт фильтры серв
     ['registrar_waiting', { patient_id: 5 }],
   ]);
 });
+
+// CRM_BOOKINGS_TAB_V1 (вид, снимок владельца 18.11) — поле даты надевает календарь программы
+// (ui-datefield.js): родное поле получает класс uidate-native и прячется. Перерисовка фильтров
+// переписывала className целиком, класс пропадал, и родное «дд.мм.гггг» вылезало вторым полем
+// под «Выберите дату». Отметка «выбрана дата» ставится классом, не затирая чужие классы.
+test('CRM_BOOKINGS_TAB_V1 (вид): перерисовка фильтров не снимает чужие классы с поля даты', async () => {
+  const f = fakeLoad([]);
+  const host = mk('div');
+  await renderRegistrarWaiting(host, {}, { load: f.load });
+  const date = byAttr(host, 'data-rwait-date');
+  date.classList.add('uidate-native');   // так делает enhanceDateField
+  const has = (c) => String(date.className).split(/\s+/).includes(c);
+  date.value = '2026-11-20';
+  date.dispatchEvent({ type: 'change', target: date, currentTarget: date });
+  await tick();
+  assert.equal(has('uidate-native'), true, 'после выбора даты родное поле остаётся спрятанным');
+  assert.equal(has('on'), true, 'выбранная дата отмечена');
+  await (async () => { byAttr(host, 'data-rwait-day', 'today').click(); await tick(); })();
+  assert.equal(has('uidate-native'), true, 'после «Сегодня» — тоже');
+  assert.equal(has('on'), false);
+  assert.ok(date.attrs.placeholder, 'у поля даты есть подпись (её показывает календарь программы)');
+});

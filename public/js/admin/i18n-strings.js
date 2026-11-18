@@ -1559,6 +1559,7 @@ export const STRINGS = {
   "Не выбрано": {"en":"Not selected","ru":"Не выбрано","uz":"Tanlanmagan"},
   "Список пуст": {"en":"The list is empty","ru":"Список пуст","uz":"Ro'yxat bo'sh"},
   "Выберите дату": {"en":"Choose a date","ru":"Выберите дату","uz":"Sanani tanlang"},
+  "Другая дата": {"en":"Other date","ru":"Другая дата","uz":"Boshqa sana"},
   // DIAG_CONCLUSION_V1 — «Диагностика» в истории пациента
   "По этому исследованию ещё нет ни заключения, ни измерений.": {"en":"This study has neither a conclusion nor measurements yet.","ru":"По этому исследованию ещё нет ни заключения, ни измерений.","uz":"Bu tekshiruv bo'yicha hali na xulosa, na o'lchovlar bor."},
   // DOCTOR_PAY_I18N_V1 (2026-09-05) — вкладка «Зарплата» в кабинете врача

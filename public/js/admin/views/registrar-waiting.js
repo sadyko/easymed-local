@@ -242,6 +242,8 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
             h('span', { class: 'rwait-f-l', 'aria-hidden': 'true' }, label), h('div', { class: 'segmented' }, ...btns));
     };
     const dateInp = h('input', { type: 'date', class: 'rwait-date', 'data-rwait-date': '', 'aria-label': 'Дата',
+        // CRM_BOOKINGS_TAB_V1 (вид) — подпись пустого поля: её показывает календарь программы (ui-datefield.js).
+        placeholder: tr('Другая дата'),
         onchange: () => { if (dateInp.value) pickDate(dateInp.value); } });
     const doctorSel = h('select', { class: 'rwait-doctor', 'data-rwait-doctor': '', 'aria-label': 'Врач',
         onchange: () => setFilter({ doctorId: String(doctorSel.value || '') }) });
@@ -294,7 +296,12 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
             }
         }
         dateInp.value = f.day === 'date' ? f.date : '';
-        dateInp.className = 'rwait-date' + (f.day === 'date' ? ' on' : '');
+        // CRM_BOOKINGS_TAB_V1 (вид) — отметка классом, не className целиком: календарь программы
+        // (ui-datefield.js) повесил на родное поле uidate-native, и затирать его значит вытащить
+        // спрятанное «дд.мм.гггг» вторым полем. Видимое поле — обёртка .uidate, отметка и на ней.
+        dateInp.classList.toggle('on', f.day === 'date');
+        const dateWrap = typeof dateInp.closest === 'function' ? dateInp.closest('.uidate') : null;
+        if (dateWrap) dateWrap.classList.toggle('on', f.day === 'date');
         // Список врачей — с сервера; выбранный остаётся и тогда, когда сервер его больше не прислал.
         const docs = [...state.doctors];
         if (f.doctorId && !docs.some((d) => String(d.id) === String(f.doctorId))) docs.push({ id: Number(f.doctorId), name: '#' + f.doctorId });
