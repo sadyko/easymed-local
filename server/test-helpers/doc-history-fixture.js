@@ -7,8 +7,24 @@ import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';
-import { listen } from '../../control-plane/server/test-helpers/listen.js';
 import { notesBaseOf, NOTES_BASE_KEY } from '../services/domain/cabinet-notes.js';
+
+// Свой listen, без импорта из control-plane: сторож сборки (scripts/build-bundle.test.js)
+// не пускает из server/ импортов за пределы поставки. Как в crm-unify-app.js: порт,
+// который fetch() отвергает («bad port»), закрывается, и берётся следующий.
+const isBadPortError = (e) => /bad port/i.test(String((e && e.cause && e.cause.message) || (e && e.message) || ''));
+async function listen(app, attempts = 6) {
+  for (let i = 0; ; i++) {
+    const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+    try {
+      await fetch(`http://127.0.0.1:${server.address().port}/api/health`);
+      return server;
+    } catch (e) {
+      if (!isBadPortError(e) || i >= attempts) return server;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+}
 
 export const BOSS = 1, DOC = 3, DOC2 = 4, HDOC = 5, NURSE = 6, REG = 7, LAB = 8;
 export const DOCN = (current, history = [], extra = {}) => JSON.stringify({ __service_workspace_v1: 1, current, history, ...extra });

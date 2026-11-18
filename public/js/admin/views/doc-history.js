@@ -66,7 +66,7 @@ export function revisionChanges(rev, snap = null) {
 
 function kindTag(kind) {
     const [bg, fg] = KIND_TONE[kind] || KIND_TONE.draft;
-    return h('span', { 'data-dh-kind': kind, style: { display: 'inline-block', padding: '1px 8px', borderRadius: '999px', background: bg, color: fg, fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' } },
+    return h('span', { 'data-dh-kind': kind, style: { display: 'inline-block', padding: '1px 8px', borderRadius: '999px', background: bg, color: fg, fontSize: '12.5px', fontWeight: 600, whiteSpace: 'nowrap' } },
         DOC_REVISION_KIND_LABELS[kind] || kind);
 }
 
@@ -254,7 +254,7 @@ export function openDocHistoryModal({ visitServiceId, title = '' } = {}) {
                 box,
                 h('div', { style: { minWidth: 0 } },
                     h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
-                        h('b', { style: { fontSize: '13px' } }, trf('Версия {n}', { n: rev.rev_no })), kindTag(rev.kind)),
+                        h('b', { style: { fontSize: '13.5px' } }, trf('Версия {n}', { n: rev.rev_no })), kindTag(rev.kind)),
                     h('div', { class: 'muted num', style: { fontSize: '12.5px', marginTop: '2px' } }, txt(fmtDateTime(rev.created_at))),
                     h('div', { style: { fontSize: '12.5px', marginTop: '2px' } }, txt(revisionWho(rev))),
                     h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, txt(revisionChanges(rev))))));

@@ -9826,7 +9826,7 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
 .rwait-frow { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 18px; }
 .rwait-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .rwait-f-day { flex-direction: row; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
-.rwait-f-l { font-size: 12px; font-weight: 600; color: var(--ink-500); }
+.rwait-f-l { font-size: 12.5px; font-weight: 600; color: var(--ink-500); }
 .rwait-f .segmented { flex-wrap: wrap; }
 .rwait-f .segmented button:focus-visible, .rwait-filters select:focus-visible, .rwait-filters input:focus-visible {
     outline: 2px solid var(--primary-500, #14b8a6); outline-offset: 1px;
@@ -9835,7 +9835,7 @@ body.cph-open .app .main > #topbar.appbar { padding-right: 388px; transition: pa
    рисовать его здесь вторым полем нельзя. Стиль — только если календарь не надет. */
 .rwait-date:not(.uidate-native), .rwait-doctor, .rwait-q {
     height: 36px; box-sizing: border-box; padding: 0 10px; border: 1px solid var(--ink-200, #d9e1e4); border-radius: 8px;
-    background: var(--white, #fff); color: var(--ink-900); font-size: 13px;
+    background: var(--white, #fff); color: var(--ink-900); font-size: 13.5px;
 }
 .rwait-f-day .uidate { min-width: 168px; }
 .rwait-f-day .uidate.on .uidate-field, .rwait-date.on:not(.uidate-native) { border-color: var(--primary-500, #14b8a6); box-shadow: 0 0 0 1px var(--primary-500, #14b8a6) inset; }

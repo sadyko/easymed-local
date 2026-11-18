@@ -224,8 +224,8 @@ test('S2: табличным путём не удаляют строку в сч
     assert.equal(t.db.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(v).n, 2);
     // Вид приёма у выставленной строки не меняют.
     assert.equal((await upd(t, 'reg', billed, { consultation_type_id: null })).status, 409);
-    // Заметка у выставленной — как прежде.
-    assert.equal((await upd(t, 'lab', billed, { notes: 'x' })).status, 200);
+    // Заметка у выставленной — как прежде (документ строки без врача меняет администратор: DOC_HISTORY_V1).
+    assert.equal((await upd(t, 'boss', billed, { notes: 'x' })).status, 200);
     // Невыставленную услугу снять можно, как прежде.
     const open = line(t, v, { svc: 30, price: 100000 });
     assert.equal((await del('reg', open)).status, 200);
