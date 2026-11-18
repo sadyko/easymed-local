@@ -146,6 +146,7 @@ import {
 } from './patient-card.js';   // PATIENT_TAB_ACCESS_V1
 import { visitDocumentArchive } from './patient-card.js';   // V3120_FIX (F2) — подпись протокола отзывает прежний, а не стирает
 import { patientDocSources } from './patient-doc-sources.js';   // PASTE_SOURCES_V1 — «Вставить результаты» кабинета: все документы пациента
+import { documentHistoryList, documentHistoryGet } from './doc-history.js';   // DOC_HISTORY_V1 — «История изменений» документа приёма (только чтение)
 import { rxMyDrugs } from './rx.js';   // RX_TEMPLATES_V1 — «свои» препараты врача для подсказок рецепта
 
 export const RPC = {
@@ -165,6 +166,10 @@ export const RPC = {
   patient_card_set_line_referrer: (db, args, user) => patientCardSetLineReferrer(db, args, user),   // SVC_REFERRER_COLUMN_V1 — «Направил» строки услуги в карте
   visit_document_archive:   (db, args, user) => visitDocumentArchive(db, args, user),   // V3120_FIX (F2)
   patient_doc_sources:      (db, args, user) => patientDocSources(db, args, user),   // PASTE_SOURCES_V1 — «Вставить результаты»: документы пациента по вкладкам
+  // DOC_HISTORY_V1 — версии документа приёма: список и одна версия со снимком. Пишет их только
+  // сервер (domain/doc-history.js); правящих RPC нет — версии не меняются и не удаляются.
+  document_history_list:    (db, args, user) => documentHistoryList(db, args, user),
+  document_history_get:     (db, args, user) => documentHistoryGet(db, args, user),
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
   callcenter_report:        (db, args, user) => callcenterReport(db, args, user),
   crm_operator_kpi:         (db, args, user) => operatorKpi(db, args, user),   // OPERATOR_KPI_V1
