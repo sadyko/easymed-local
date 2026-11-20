@@ -225,6 +225,7 @@ export const TABLE_PLAN = Object.freeze({
   rep_bot_links: keep('crm'),              // REP_BOT_V1 — подключённые медпредставители
   rep_bot_drafts: keep('crm'),             // REP_BOT_V1 — недописанная анкета врача
   rep_bot_additions: keep('crm'),          // REP_BOT_V1 — кто завёл врача через бота
+  rep_bot_claims: keep('crm'),             // REP_BOT_CLAIMS_V1 — заявки на закрепление существующего врача
   patient_bot_invites: keep('crm'),        // PATIENT_BOT_INVITE_V1 — «Ссылка на бот» из списка пациентов
   lead_bot_invites: keep('crm'),           // PATIENT_BOT_INVITE_V1 — то же из карточки заявки
   sms_messages: keep('crm'),               // SMS_INFORM_V1 — журнал SMS
