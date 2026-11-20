@@ -122,9 +122,16 @@ export const T = {
     '',
     `№ ${esc(code)} shifokor (${esc(name)}) boshqa vakilga o‘tkazildi.`,
   ].join('\n'),
+  // Заявка закрыта, потому что администратор подтвердил чужую заявку на того же врача.
+  claimTaken: (name, code) => [
+    `Врач № ${esc(code)} (${esc(name)}) закреплён за другим представителем.`,
+    '',
+    `№ ${esc(code)} shifokor (${esc(name)}) boshqa vakilga biriktirildi.`,
+  ].join('\n'),
   askSpecialty: 'Специальность врача — напишите часть названия (например: «тера» или «кард»), бот предложит варианты из списка клиники.\nShifokor mutaxassisligi — nomining bir qismini yozing (masalan: «tera» yoki «kard»), bot klinika ro‘yxatidan variantlarni taklif qiladi.',
   pickSpecialty: 'Выберите специальность кнопкой. Нет нужной — напишите название иначе.\nMutaxassislikni tugma orqali tanlang. Kerakligi yo‘q bo‘lsa — nomini boshqacha yozing.',
   pickSpecialtyMore: (n) => `Найдено ${n} — показаны первые ${SPECIALTY_BUTTONS}. Выберите кнопкой или напишите точнее.\n${n} ta topildi — birinchi ${SPECIALTY_BUTTONS} tasi ko‘rsatildi. Tugma orqali tanlang yoki aniqroq yozing.`,
+  specialtyShort: 'Напишите хотя бы 2 буквы названия специальности.\nMutaxassislik nomidan kamida 2 ta harf yozing.',
   noSpecialty: 'В списке клиники такой специальности не нашлось. Напишите иначе — например, «хирург», «невро», «педиатр».\nKlinika ro‘yxatida bunday mutaxassislik topilmadi. Boshqacha yozing — masalan, «jarroh», «nevro», «pediatr».',
   askWorkplace: 'Место работы — поликлиника, больница.\nIsh joyi — poliklinika, kasalxona.',
   askDistrict: 'Район.\nTuman.',
@@ -427,6 +434,9 @@ async function handleDraftAnswer(db, token, msg, link, rep, cur, deps) {
   }
   if (step === 'specialty') {
     // Текст — это поиск; сохраняется только выбор кнопкой (handleCallback, 'sp:').
+    // Одна буква — не «не нашлось», а «напишите больше»: иначе представитель
+    // решит, что такой специальности в клинике нет.
+    if (normSp(text).length < 2) return sendMessage(token, chatId, T.specialtyShort, { reply_markup: cancelKeyboard }, deps);
     const found = specialtyMatches(text);
     if (!found.length) return sendMessage(token, chatId, T.noSpecialty, { reply_markup: cancelKeyboard }, deps);
     const head = found.length > SPECIALTY_BUTTONS ? T.pickSpecialtyMore(found.length) : T.pickSpecialty;
@@ -616,12 +626,27 @@ async function handleCallback(db, token, cq, deps) {
     await ackQuietly(token, cq.id, '', deps);
     return sendMessage(token, chatId, T.locked, { reply_markup: menuKeyboard }, deps);
   }
-  const res = saveDraftedSource(db, { chatId, link, rep, draft: cur.draft });
+  // Нажатие гасится ДО записи: упади saveDraftedSource (ошибка базы) —
+  // у представителя не должно остаться вечное «часики» на кнопке.
   await ackQuietly(token, cq.id, '', deps);
+  const res = saveDraftedSource(db, { chatId, link, rep, draft: cur.draft });
   if (res.stale) return sendMessage(token, chatId, T.stale, { reply_markup: menuKeyboard }, deps);
   // Номер успел занять другой врач, пока шла анкета, — то же правило, что на шаге «Телефон».
   if (res.duplicate) return answerDuplicate(db, token, { chatId, link, rep, draft: cur.draft, source: res.duplicate }, deps);
   return sendMessage(token, chatId, T.saved(res.source.name, res.source.code || ''), { reply_markup: menuKeyboard }, deps);
+}
+
+/**
+ * Повторить вопрос, на котором стоит анкета. Нужен для старой кнопки под
+ * давним сообщением: молчание в ответ на нажатие выглядит как «бот сломался»,
+ * а повтор вопроса показывает, чего бот ждёт сейчас.
+ */
+function repeatQuestion(db, token, chatId, cur, deps) {
+  if (cur.step === 'confirm') return sendMessage(token, chatId, summary(cur.draft), { reply_markup: confirmMarkup }, deps);
+  if (cur.step === 'name') return sendMessage(token, chatId, T.askName, { reply_markup: cancelKeyboard }, deps);
+  const idx = stepIndex(cur.step);
+  if (idx < 0) return null;
+  return sendMessage(token, chatId, STEPS[idx][1], { reply_markup: STEPS[idx][2] }, deps);
 }
 
 /** REP_BOT_CLAIMS_V1 — кнопки специальности ('sp:<i>') и типа оплаты ('pay:<тип>'). */
@@ -632,7 +657,7 @@ async function handleStepButton(db, token, cq, chatId, link, data, deps) {
   const sp = SP_RE.exec(data);
   if (sp) {
     const i = Number(sp[1]);
-    if (cur.step !== 'specialty' || !Number.isInteger(i) || i < 0 || i >= SPECIALTY_ROWS.length) return null;
+    if (cur.step !== 'specialty' || !Number.isInteger(i) || i < 0 || i >= SPECIALTY_ROWS.length) return repeatQuestion(db, token, chatId, cur, deps);
     // Хранится русское название — как у выпадающего списка «Настроек».
     const draft = { ...cur.draft, specialty: SPECIALTY_ROWS[i].ru };
     return askNext(db, token, chatId, link.id, draft, nextIndex(stepIndex('specialty'), draft), deps);
@@ -640,7 +665,7 @@ async function handleStepButton(db, token, cq, chatId, link, data, deps) {
   const pay = PAY_RE.exec(data);
   if (pay) {
     const v = pay[1];
-    if (cur.step !== 'payment' || !PAYMENT_TYPES.some(([x]) => x === v)) return null;
+    if (cur.step !== 'payment' || !PAYMENT_TYPES.some(([x]) => x === v)) return repeatQuestion(db, token, chatId, cur, deps);
     const draft = { ...cur.draft, payment_type: v };
     if (v !== 'card') delete draft.card_number;
     return askNext(db, token, chatId, link.id, draft, nextIndex(stepIndex('payment'), draft), deps);

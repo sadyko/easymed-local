@@ -124,7 +124,11 @@ export async function renderReferralsRepBot(host) {
         const claims = state.claims || [];
         if (!claims.length) return null;
         const columns = [
-            { label: 'Врач', value: (c) => nameCell(c.source_name, subline(['№ ' + (c.source_code || ''), c.source_phone])) },
+            // Выключенный врач — с пометкой: администратор решает, нужен ли он вообще
+            // (подтверждение врача не включает — данные карточки заявка не меняет).
+            { label: 'Врач', value: (c) => h('div', null,
+                nameCell(c.source_name, subline(['№ ' + (c.source_code || ''), c.source_phone])),
+                c.source_active === 0 ? h('span', { 'data-repbot-claim-off': c.id }, Tag(tr('отключён'), {})) : null) },
             { label: 'Заявитель', value: (c) => nameCell(c.requester_name || '—',
                 c.entered_name ? trf('В анкете: {name}', { name: c.entered_name }) : '') },
             { label: 'Сейчас закреплён', value: (c) => (c.current_rep_name ? c.current_rep_name : h('span', { class: 'muted' }, tr('не закреплён'))) },

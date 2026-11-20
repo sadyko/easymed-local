@@ -64,9 +64,9 @@ let decideError = null;
 function seed() {
   claims = [
     { id: 5, created_at: '2026-11-19T08:00:00Z', entered_name: 'Каримов Азиз Б.', source_id: 40, source_code: '0040', source_name: 'Каримов Азиз',
-      source_phone: '+998901234567', requester_id: 3, requester_name: 'Юсупов Акмал', current_rep_id: 4, current_rep_name: 'Прежний Представитель' },
+      source_phone: '+998901234567', source_active: 1, requester_id: 3, requester_name: 'Юсупов Акмал', current_rep_id: 4, current_rep_name: 'Прежний Представитель' },
     { id: 6, created_at: '2026-11-20T08:00:00Z', entered_name: '', source_id: 41, source_code: '0041', source_name: 'Нарзиев Бобур',
-      source_phone: '+998907777777', requester_id: 3, requester_name: 'Юсупов Акмал', current_rep_id: null, current_rep_name: null },
+      source_phone: '+998907777777', source_active: 0, requester_id: 3, requester_name: 'Юсупов Акмал', current_rep_id: null, current_rep_name: null },
   ];
 }
 globalThis.fetch = async (url, opts) => {
@@ -111,6 +111,9 @@ test('открытые заявки — карточкой: врач (№, ФИ�
     assert.ok(t.includes(s), 'нет: ' + s);
   }
   assert.ok(byAttr(card, 'data-repbot-claim-approve', 5)[0] && byAttr(card, 'data-repbot-claim-reject', 5)[0]);
+  assert.equal(byAttr(card, 'data-repbot-claim-off', 5).length, 0, 'включённый — без пометки');
+  const off = byAttr(card, 'data-repbot-claim-off', 6)[0];
+  assert.ok(off && textOf(off).includes('отключён'), 'выключенный врач — с пометкой «отключён»');
 });
 
 test('нет открытых заявок — карточки нет', async () => {

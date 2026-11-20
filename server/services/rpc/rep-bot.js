@@ -185,6 +185,7 @@ export function repBotClaimsList(db, _args, user) {
   return db.prepare(`
     SELECT c.id, c.created_at, c.entered_name,
            rs.id AS source_id, rs.code AS source_code, rs.name AS source_name, rs.phone AS source_phone,
+           rs.active AS source_active,
            c.user_id AS requester_id, ru.full_name AS requester_name,
            rs.representative_id AS current_rep_id, cu.full_name AS current_rep_name
       FROM rep_bot_claims c
@@ -221,8 +222,14 @@ async function defaultSend(db, chatId, text) {
  * «Медпредставитель»; закрепление — той же серверной функцией, что вкладка
  * «Представители» (referralsAssignRepresentative), не копией её SQL. Проверка
  * не прошла — заявка 'void' (сохраняется) и понятный отказ администратору.
- * Сообщения в бот — после транзакции и best-effort: сбой Telegram решение не
- * отменяет.
+ * Подтверждение закрывает ('void') и ДРУГИЕ открытые заявки на того же врача —
+ * иначе второе «Подтвердить» молча перенесло бы врача ещё раз; их заявители
+ * получают «закреплён за другим представителем».
+ *
+ * Сообщения в бот — после транзакции, best-effort и НЕ ожидаются: Telegram
+ * может отвечать секундами, а администратор ждёт перерисовки списка. Отправки
+ * уходят отдельным Promise.allSettled; тестам его отдаёт deps.onNotified —
+ * ответ RPC от этого не меняется.
  */
 export async function repBotClaimDecide(db, args, user, deps = {}) {
   requireAdmin(user);
@@ -251,24 +258,43 @@ export async function repBotClaimDecide(db, args, user, deps = {}) {
     const prev = src.representative_id;
     referralsAssignRepresentative(db, { source_id: src.id, user_id: c.user_id }, user);
     close('approved', prev);
-    return { claim: c, src, status: 'approved', prev };
+    const others = db.prepare("SELECT id, user_id FROM rep_bot_claims WHERE referral_source_id = ? AND status = 'pending' AND id <> ?")
+      .all(src.id, id);
+    db.prepare(`UPDATE rep_bot_claims SET status = 'void', decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+                 WHERE referral_source_id = ? AND status = 'pending' AND id <> ?`).run(uid, src.id, id);
+    return { claim: c, src, status: 'approved', prev, taken: others.map((o) => o.user_id) };
   })();
 
   if (out.status === 'void') throw new RpcError(out.message, 409);
 
-  const send = deps.send || defaultSend;
-  const notify = async (userId, text) => {
-    const chat = repChat(db, userId);
-    if (!chat) return;
-    try { await send(db, chat, text); }
-    catch (e) { console.warn('[rep-bot] claim notice not sent:', (e && e.message) || e); }
-  };
   const { claim, src } = out;
+  const notices = [];   // [сотрудник, текст]; чаты — сейчас, пока связки те же
   if (out.status === 'approved') {
-    await notify(claim.user_id, BOT_TEXT.claimApproved(src.name, src.code || ''));
-    if (out.prev != null && out.prev !== claim.user_id) await notify(out.prev, BOT_TEXT.claimMoved(src.name, src.code || ''));
-    return { id, status: 'approved', source_id: src.id, representative_id: claim.user_id, prev_representative_id: out.prev };
+    notices.push([claim.user_id, BOT_TEXT.claimApproved(src.name, src.code || '')]);
+    if (out.prev != null && out.prev !== claim.user_id) notices.push([out.prev, BOT_TEXT.claimMoved(src.name, src.code || '')]);
+    for (const u of out.taken) if (u != null && u !== claim.user_id) notices.push([u, BOT_TEXT.claimTaken(src.name, src.code || '')]);
+  } else if (src) {
+    notices.push([claim.user_id, BOT_TEXT.claimRejected(src.name, src.code || '')]);
   }
-  if (src) await notify(claim.user_id, BOT_TEXT.claimRejected(src.name, src.code || ''));
-  return { id, status: 'rejected' };
+  sendNotices(db, notices, deps);
+  return out.status === 'approved'
+    ? { id, status: 'approved', source_id: src.id, representative_id: claim.user_id, prev_representative_id: out.prev }
+    : { id, status: 'rejected' };
+}
+
+/** Отправить сообщения о решении, не задерживая ответ RPC. Каждая отправка ловит свою ошибку. */
+function sendNotices(db, notices, deps) {
+  const send = deps.send || defaultSend;
+  const jobs = [];
+  for (const [userId, text] of notices) {
+    let chat = null;
+    try { chat = repChat(db, userId); } catch { chat = null; }
+    if (!chat) continue;
+    jobs.push((async () => {
+      try { await send(db, chat, text); }
+      catch (e) { console.warn('[rep-bot] claim notice not sent:', (e && e.message) || e); }
+    })());
+  }
+  const all = Promise.allSettled(jobs);
+  if (typeof deps.onNotified === 'function') deps.onNotified(all);
 }

@@ -122,6 +122,10 @@ test('анкета: все шаги обязательны; специально
   assert.ok(!JSON.stringify(sent).includes(T.skipBtn), 'кнопки «Пропустить» больше нет ни на одном шаге');
   assert.equal(draftRow(db).step, 'specialty');
 
+  // Одна буква — «напишите хотя бы 2 буквы», не «не нашлось».
+  await handleUpdate(db, 'tok', text('т'), deps);
+  assert.equal(lastText(sent), T.specialtyShort);
+  assert.match(T.specialtyShort, /хотя бы 2 буквы/);
   // Поиск: ничего — просьба написать иначе; «тера» — кнопки (до 8), шаг не сдвинулся.
   await handleUpdate(db, 'tok', text('абракадабра'), deps);
   assert.equal(lastText(sent), T.noSpecialty);
@@ -194,22 +198,28 @@ test('оплата наличными — номер карты не спраш�
   assert.deepEqual({ ...src }, { payment_type: 'cash', card_number: null, specialty: 'Терапевт' });
 });
 
-test('кнопки анкеты снаружи: sp вне списка, sp/pay не на своём шаге, неизвестный pay — анкета не меняется', async () => {
+test('кнопки анкеты снаружи: sp вне списка, sp/pay не на своём шаге, неизвестный pay — анкета не меняется, вопрос повторяется', async () => {
   const { db, sent, deps } = await connected();
   await fillDraft(db, deps, ['Кнопочный Врач', '+998 90 765 43 21']);
   const before = draftRow(db);
-  const n = sent.filter((s) => s.method === 'sendMessage').length;
-  for (const d of ['sp:' + SPECIALTY_ROWS.length, 'sp:99999', 'sp:-1', 'pay:cash', 'pay:bitcoin', 'sp:abc']) {
+  const msgs = () => sent.filter((s) => s.method === 'sendMessage');
+  for (const d of ['sp:' + SPECIALTY_ROWS.length, 'sp:9999', 'pay:cash', 'pay:bitcoin']) {
+    const n = msgs().length;
     await handleUpdate(db, 'tok', press(d), deps);
+    assert.equal(msgs().length, n + 1, d + ' — ответ есть');
+    assert.equal(lastText(sent), T.askSpecialty, d + ' — повтор текущего вопроса, не молчание');
   }
+  const n = msgs().length;
+  for (const d of ['sp:-1', 'sp:abc', 'sp:99999']) await handleUpdate(db, 'tok', press(d), deps);   // не наш формат — гасится молча
+  assert.equal(msgs().length, n);
   assert.deepEqual(draftRow(db), before);
-  assert.equal(sent.filter((s) => s.method === 'sendMessage').length, n, 'ничего не отвечено');
   assert.ok(sent.filter((s) => s.method === 'answerCallbackQuery').length >= 6, 'каждое нажатие погашено');
 
   await handleUpdate(db, 'tok', press('sp:' + SP('Хирург')), deps);
   await handleUpdate(db, 'tok', press('sp:' + SP('Терапевт')), deps);   // старая кнопка — шаг уже другой
   assert.equal(JSON.parse(draftRow(db).draft).specialty, 'Хирург');
   assert.equal(draftRow(db).step, 'workplace');
+  assert.equal(lastText(sent), T.askWorkplace, 'старая кнопка — повтор вопроса «Место работы»');
 });
 
 test('анкета прежней версии бота: шага больше нет — в меню; сводка без обязательных полей — не сохраняется', async () => {
@@ -326,4 +336,15 @@ test('сообщения из группы бот игнорирует', async (
   const before = sent.length;
   await handleUpdate(db, 'tok', { message: { chat: { id: -5, type: 'group' }, from: { id: CHAT }, text: T.addBtn } }, deps);
   assert.equal(sent.length, before);
+});
+
+test('«Сохранить»: нажатие гасится до записи — ошибка базы не оставляет «часики» на кнопке', async () => {
+  const { db, sent, deps } = await connected();
+  await fillDraft(db, deps, fullCash('Сбойный Врач'));
+  db.exec('DROP TABLE rep_bot_additions');   // запись врача упадёт
+  const before = sent.length;
+  await assert.rejects(() => handleUpdate(db, 'tok', press('save'), deps));
+  const after = sent.slice(before);
+  assert.equal(after[0] && after[0].method, 'answerCallbackQuery', 'нажатие погашено до попытки записи');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM referral_sources WHERE name = 'Сбойный Врач'").get().n, 0, 'транзакция откатилась');
 });
