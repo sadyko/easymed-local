@@ -3,12 +3,12 @@
 // список врачей, заведённых через бота. Всё — только администратору клиники:
 // токен открывает переписку, а подтверждение даёт чату право заводить врачей.
 import { isAdminUser } from '../grants.js';
-import { getMe, TelegramError } from '../telegram/api.js';
+import { getMe, sendMessage, TelegramError } from '../telegram/api.js';
 import { publicSettings, saveSettings, clearToken, getDecryptedToken, recordCheck, SettingsError,
          clashMessage } from '../rep-bot/settings.js';
-import { wakeRepBot } from '../rep-bot/index.js';
-import { repOfLink } from '../rep-bot/flow.js';
-import { representativeCodes } from './referrals.js';
+import { wakeRepBot, botConfig } from '../rep-bot/index.js';
+import { repOfLink, T as BOT_TEXT } from '../rep-bot/flow.js';
+import { representativeCodes, referralsAssignRepresentative } from './referrals.js';
 
 export class RpcError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -166,4 +166,109 @@ export function repBotLinkRevoke(db, args, user) {
                          WHERE id = ? AND revoked_at IS NULL`).run(uidOf(user), id);
   db.prepare('DELETE FROM rep_bot_drafts WHERE link_id = ?').run(id);
   return { id, revoked: r.changes > 0 };
+}
+
+// ---------------------------------------------------------------------------
+// REP_BOT_CLAIMS_V1 (2026-11-20) — заявки на закрепление существующего врача.
+//
+// Владелец: «if there is doctor with the same number it should go to
+// approvement before adding to medical representative». Бот заводит заявку,
+// когда номер из анкеты уже есть у внешнего врача (rep-bot/flow.js fileClaim);
+// здесь администратор её видит и решает. Подтверждение ПЕРЕНОСИТ врача к
+// заявителю, даже если он был закреплён за другим представителем — тот
+// получает сообщение в боте. Карточку врача заявка не меняет.
+// ---------------------------------------------------------------------------
+
+/** Открытые заявки: врач, заявитель, кто закреплён сейчас (или null), когда. */
+export function repBotClaimsList(db, _args, user) {
+  requireAdmin(user);
+  return db.prepare(`
+    SELECT c.id, c.created_at, c.entered_name,
+           rs.id AS source_id, rs.code AS source_code, rs.name AS source_name, rs.phone AS source_phone,
+           c.user_id AS requester_id, ru.full_name AS requester_name,
+           rs.representative_id AS current_rep_id, cu.full_name AS current_rep_name
+      FROM rep_bot_claims c
+      JOIN referral_sources rs ON rs.id = c.referral_source_id
+      LEFT JOIN users ru ON ru.id = c.user_id
+      LEFT JOIN users cu ON cu.id = rs.representative_id
+     WHERE c.status = 'pending'
+     ORDER BY c.created_at, c.id`).all();
+}
+
+const CLAIM_DONE = 'Эта заявка уже рассмотрена.';
+const CLAIM_VOID_SOURCE = 'Врач из заявки больше не внешний врач-источник — заявка закрыта без закрепления.';
+const CLAIM_VOID_REP = 'Заявитель больше не действующий медпредставитель (отключён или снята роль) — заявка закрыта без закрепления.';
+
+/** Чат подтверждённой живой связки сотрудника с ботом, или null. */
+function repChat(db, userId) {
+  if (userId == null) return null;
+  const r = db.prepare(`SELECT chat_id FROM rep_bot_links
+                         WHERE user_id = ? AND revoked_at IS NULL AND status = 'confirmed'
+                         ORDER BY id DESC LIMIT 1`).get(userId);
+  return r ? r.chat_id : null;
+}
+
+/** Отправка сообщением бота представителей; null — бот выключен или без токена. */
+async function defaultSend(db, chatId, text) {
+  const cfg = botConfig(db);
+  if (!cfg) return null;
+  return sendMessage(cfg.token, chatId, text);
+}
+
+/**
+ * «Подтвердить» / «Отклонить». Подтверждение в ОДНОЙ транзакции: заявка всё ещё
+ * открыта; врач существует и внешний; заявитель — действующий сотрудник с ролью
+ * «Медпредставитель»; закрепление — той же серверной функцией, что вкладка
+ * «Представители» (referralsAssignRepresentative), не копией её SQL. Проверка
+ * не прошла — заявка 'void' (сохраняется) и понятный отказ администратору.
+ * Сообщения в бот — после транзакции и best-effort: сбой Telegram решение не
+ * отменяет.
+ */
+export async function repBotClaimDecide(db, args, user, deps = {}) {
+  requireAdmin(user);
+  const id = Number(args && args.id);
+  if (!Number.isInteger(id) || id <= 0) throw new RpcError('Заявка не выбрана.', 400);
+  const decision = args && args.decision;
+  if (decision !== 'approve' && decision !== 'reject') throw new RpcError('Решение по заявке — «Подтвердить» или «Отклонить».', 400);
+  const uid = uidOf(user);
+  const close = (status, prev = null) => db.prepare(`UPDATE rep_bot_claims SET status = ?, prev_representative_id = ?,
+      decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ? AND status = 'pending'`).run(status, prev, uid, id);
+
+  const out = db.transaction(() => {
+    const c = db.prepare('SELECT * FROM rep_bot_claims WHERE id = ?').get(id);
+    if (!c || c.status !== 'pending') throw new RpcError(CLAIM_DONE, 409);
+    const src = db.prepare('SELECT id, code, name, doctor_id, representative_id FROM referral_sources WHERE id = ?').get(c.referral_source_id);
+    if (decision === 'reject') {
+      close('rejected');
+      return { claim: c, src, status: 'rejected' };
+    }
+    if (!src || src.doctor_id != null) { close('void'); return { status: 'void', message: CLAIM_VOID_SOURCE }; }
+    const codes = representativeCodes(db);
+    const rep = c.user_id == null ? null
+      : db.prepare(`SELECT id FROM users WHERE id = ? AND is_active = 1 AND custom_role_code IN (${codes.map(() => '?').join(',')})`)
+        .get(c.user_id, ...codes);
+    if (!rep) { close('void'); return { status: 'void', message: CLAIM_VOID_REP }; }
+    const prev = src.representative_id;
+    referralsAssignRepresentative(db, { source_id: src.id, user_id: c.user_id }, user);
+    close('approved', prev);
+    return { claim: c, src, status: 'approved', prev };
+  })();
+
+  if (out.status === 'void') throw new RpcError(out.message, 409);
+
+  const send = deps.send || defaultSend;
+  const notify = async (userId, text) => {
+    const chat = repChat(db, userId);
+    if (!chat) return;
+    try { await send(db, chat, text); }
+    catch (e) { console.warn('[rep-bot] claim notice not sent:', (e && e.message) || e); }
+  };
+  const { claim, src } = out;
+  if (out.status === 'approved') {
+    await notify(claim.user_id, BOT_TEXT.claimApproved(src.name, src.code || ''));
+    if (out.prev != null && out.prev !== claim.user_id) await notify(out.prev, BOT_TEXT.claimMoved(src.name, src.code || ''));
+    return { id, status: 'approved', source_id: src.id, representative_id: claim.user_id, prev_representative_id: out.prev };
+  }
+  if (src) await notify(claim.user_id, BOT_TEXT.claimRejected(src.name, src.code || ''));
+  return { id, status: 'rejected' };
 }

@@ -31,7 +31,9 @@
 // памяти: перезапуск сервера посреди анкеты её не теряет. Врач с тем же
 // номером уже есть — второго не заводим: два врача с одним номером не смогут
 // подключиться к боту врачей (там такой номер — «ничей»), а в ведомости
-// появится двойник.
+// появится двойник. REP_BOT_CLAIMS_V1 — вместо отказа заводится заявка на
+// закрепление существующего врача (rep_bot_claims, мигр. 293); решает её
+// администратор на вкладке «Бот представителей» (rpc/rep-bot.js).
 //
 // ЛИЦЕНЗИЯ. Просроченная клиника читает, но не пишет (gate.js); бот — тоже
 // запись, поэтому перед сохранением спрашивается то же состояние лицензии.
@@ -91,10 +93,34 @@ export const T = {
   badName: 'Нужны хотя бы фамилия и имя — два слова, до 120 символов.\nKamida familiya va ism kerak — ikki so‘z.',
   askPhone: 'Телефон врача, например +998 90 123 45 67. По этому номеру врач потом подключится к боту для врачей.\nShifokor telefoni, masalan +998 90 123 45 67.',
   badPhone: 'Это не похоже на узбекский номер. Введите номер целиком, например +998 90 123 45 67.\nRaqamni to‘liq kiriting, masalan +998 90 123 45 67.',
-  duplicate: (name, code) => [
-    `Врач с этим номером уже есть в клинике: ${esc(name)}${code ? ' (№ ' + esc(code) + ')' : ''}. Второго не заводим. Если его нужно закрепить за вами — попросите администратора.`,
+  // REP_BOT_CLAIMS_V1 — совпадение номера: вместо «попросите администратора»
+  // (о просьбе администратор не узнавал) — заявка, которую он видит на вкладке.
+  claimSent: (name, code) => [
+    `Врач с этим номером уже есть в клинике: ${esc(name)}${code ? ', № ' + esc(code) : ''}. Заявка на закрепление отправлена администратору.`,
     '',
-    `Bu raqamli shifokor klinikada allaqachon bor: ${esc(name)}. Ikkinchisini qo‘shmaymiz.`,
+    `Bu raqamli shifokor klinikada allaqachon bor: ${esc(name)}${code ? ', № ' + esc(code) : ''}. Biriktirish so‘rovi administratorga yuborildi.`,
+  ].join('\n'),
+  alreadyYours: (name, code) => [
+    `Врач с этим номером уже есть в клинике: ${esc(name)}${code ? ', № ' + esc(code) : ''}. Он уже закреплён за вами.`,
+    '',
+    `Bu raqamli shifokor klinikada allaqachon bor: ${esc(name)}${code ? ', № ' + esc(code) : ''}. U allaqachon sizga biriktirilgan.`,
+  ].join('\n'),
+  claimLocked: 'Клиника сейчас не принимает изменения (лицензия). Заявка на закрепление не отправлена — попробуйте позже.\nKlinika hozir o‘zgarishlarni qabul qilmayapti. So‘rov yuborilmadi — keyinroq urinib ko‘ring.',
+  // Сообщения о решении администратора (rpc/rep-bot.js repBotClaimDecide).
+  claimApproved: (name, code) => [
+    `Врач № ${esc(code)} (${esc(name)}) закреплён за вами.`,
+    '',
+    `№ ${esc(code)} shifokor (${esc(name)}) sizga biriktirildi.`,
+  ].join('\n'),
+  claimRejected: (name, code) => [
+    `Заявка на врача № ${esc(code)} (${esc(name)}) отклонена.`,
+    '',
+    `№ ${esc(code)} shifokor (${esc(name)}) bo‘yicha so‘rov rad etildi.`,
+  ].join('\n'),
+  claimMoved: (name, code) => [
+    `Врач № ${esc(code)} (${esc(name)}) передан другому представителю.`,
+    '',
+    `№ ${esc(code)} shifokor (${esc(name)}) boshqa vakilga o‘tkazildi.`,
   ].join('\n'),
   askSpecialty: 'Специальность врача — напишите часть названия (например: «тера» или «кард»), бот предложит варианты из списка клиники.\nShifokor mutaxassisligi — nomining bir qismini yozing (masalan: «tera» yoki «kard»), bot klinika ro‘yxatidan variantlarni taklif qiladi.',
   pickSpecialty: 'Выберите специальность кнопкой. Нет нужной — напишите название иначе.\nMutaxassislikni tugma orqali tanlang. Kerakligi yo‘q bo‘lsa — nomini boshqacha yozing.',
@@ -240,9 +266,42 @@ export function splitFio(text) {
 export function findSourceWithPhone(db, rawPhone) {
   const key = phoneKey(rawPhone);
   if (!key) return null;
-  const rows = db.prepare(`SELECT id, name, code, phone FROM referral_sources
+  const rows = db.prepare(`SELECT id, name, code, phone, representative_id FROM referral_sources
                             WHERE doctor_id IS NULL AND COALESCE(phone, '') <> ''`).all();
   return rows.find((r) => phoneKey(r.phone) === key) || null;
+}
+
+/**
+ * REP_BOT_CLAIMS_V1 — заявка на закрепление существующего врача. Врач уже за
+ * этим представителем — заявки нет ({ mine: true }). Иначе — открытая заявка
+ * пары врач+представитель: прежняя, если есть (повтор анкеты не плодит вторую;
+ * частичный уникальный индекс мигр. 293 — страховка), или новая.
+ * entered_name — ФИО из анкеты, только для сведения администратору.
+ */
+export function fileClaim(db, { chatId, link, rep, draft, source }) {
+  if (source.representative_id === rep.id) return { mine: true };
+  return db.transaction(() => {
+    const open = () => db.prepare("SELECT * FROM rep_bot_claims WHERE referral_source_id = ? AND user_id = ? AND status = 'pending'")
+      .get(source.id, rep.id);
+    const had = open();
+    if (had) return { claim: had, reused: true };
+    db.prepare('INSERT INTO rep_bot_claims (referral_source_id, user_id, link_id, chat_id, entered_name) VALUES (?,?,?,?,?)')
+      .run(source.id, rep.id, link.id, String(chatId), String((draft && draft.name) || '').slice(0, NAME_MAX));
+    return { claim: open(), reused: false };
+  })();
+}
+
+/** Ответ на совпадение номера — на шаге «Телефон» и при «Сохранить». Анкета закрывается в любом случае. */
+async function answerDuplicate(db, token, { chatId, link, rep, draft, source }, deps) {
+  dropDraft(db, chatId);
+  if (source.representative_id === rep.id) {
+    return sendMessage(token, chatId, T.alreadyYours(source.name, source.code), { reply_markup: menuKeyboard }, deps);
+  }
+  // Заявка — тоже запись: просроченная клиника её не принимает, как и врача.
+  const isLocked = deps.isLocked || defaultIsLocked;
+  if (isLocked(db)) return sendMessage(token, chatId, T.claimLocked, { reply_markup: menuKeyboard }, deps);
+  fileClaim(db, { chatId, link, rep, draft, source });
+  return sendMessage(token, chatId, T.claimSent(source.name, source.code), { reply_markup: menuKeyboard }, deps);
 }
 
 // REP_BOT_CLAIMS_V1 — поиск специальности. Представитель пишет часть названия
@@ -329,7 +388,7 @@ async function askNext(db, token, chatId, linkId, draft, fromIndex, deps) {
   return sendMessage(token, chatId, summary(draft), { reply_markup: confirmMarkup }, deps);
 }
 
-async function handleDraftAnswer(db, token, msg, link, cur, deps) {
+async function handleDraftAnswer(db, token, msg, link, rep, cur, deps) {
   const chatId = msg.chat.id;
   const raw = typeof msg.text === 'string' ? msg.text : null;
   const step = cur.step;
@@ -363,10 +422,7 @@ async function handleDraftAnswer(db, token, msg, link, cur, deps) {
   if (step === 'phone') {
     if (!isWholeUzPhone(digitsOf(text))) return sendMessage(token, chatId, T.badPhone, { reply_markup: cancelKeyboard }, deps);
     const dup = findSourceWithPhone(db, text);
-    if (dup) {
-      dropDraft(db, chatId);
-      return sendMessage(token, chatId, T.duplicate(dup.name, dup.code), { reply_markup: menuKeyboard }, deps);
-    }
+    if (dup) return answerDuplicate(db, token, { chatId, link, rep, draft, source: dup }, deps);
     return askNext(db, token, chatId, link.id, { ...draft, phone: uzE164(text) }, nextIndex(idx, draft), deps);
   }
   if (step === 'specialty') {
@@ -476,7 +532,7 @@ async function handleMessage(db, token, msg, deps) {
   }
 
   const cur = readDraft(db, chatId);
-  if (cur && cur.link_id === link.id) return handleDraftAnswer(db, token, msg, link, cur, deps);
+  if (cur && cur.link_id === link.id) return handleDraftAnswer(db, token, msg, link, rep, cur, deps);
   if (cur) dropDraft(db, chatId);   // анкета прежней связки этого чата
   return sendMessage(token, chatId, T.menu, { reply_markup: menuKeyboard }, deps);
 }
@@ -563,10 +619,8 @@ async function handleCallback(db, token, cq, deps) {
   const res = saveDraftedSource(db, { chatId, link, rep, draft: cur.draft });
   await ackQuietly(token, cq.id, '', deps);
   if (res.stale) return sendMessage(token, chatId, T.stale, { reply_markup: menuKeyboard }, deps);
-  if (res.duplicate) {
-    dropDraft(db, chatId);
-    return sendMessage(token, chatId, T.duplicate(res.duplicate.name, res.duplicate.code), { reply_markup: menuKeyboard }, deps);
-  }
+  // Номер успел занять другой врач, пока шла анкета, — то же правило, что на шаге «Телефон».
+  if (res.duplicate) return answerDuplicate(db, token, { chatId, link, rep, draft: cur.draft, source: res.duplicate }, deps);
   return sendMessage(token, chatId, T.saved(res.source.name, res.source.code || ''), { reply_markup: menuKeyboard }, deps);
 }
 

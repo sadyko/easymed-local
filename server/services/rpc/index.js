@@ -29,7 +29,7 @@ import { doctorBotSettingsGet, doctorBotSettingsSave, doctorBotTokenClear, docto
 import { dailyReportSettingsGet, dailyReportSettingsSave, dailyReportTokenClear, dailyReportFindChats, dailyReportPreview,
          dailyReportSendNow } from './daily-report.js';   // DAILY_REPORT_BOT_V1 — отчёт совету директоров в Telegram
 import { repBotSettingsGet, repBotSettingsSave, repBotTokenClear, repBotTestConnection, repBotStats, repBotLinksList, repBotAdditionsList,
-         repBotLinkConfirm, repBotLinkReject, repBotLinkRevoke } from './rep-bot.js';   // REP_BOT_V1 — бот для медпредставителей
+         repBotLinkConfirm, repBotLinkReject, repBotLinkRevoke, repBotClaimsList, repBotClaimDecide } from './rep-bot.js';   // REP_BOT_V1 — бот для медпредставителей
 import { clinicNewsList, clinicNewsSave, clinicNewsArchive } from './clinic-news.js';   // CLINIC_NEWS_V1 — «Информационная доска»
 import { patientBotStatus, patientBotInvite, phoneBotStatus, phoneBotInvite } from './patient-bot.js';   // PATIENT_BOT_INVITE_V1 — бот пациента в списке пациентов
 import { navVisibilityGet, navVisibilitySave } from './nav-visibility.js';   // NAV_VISIBILITY_V1 — видимость разделов меню для всей клиники
@@ -351,6 +351,10 @@ export const RPC = {
   rep_bot_link_confirm:             (db, args, user) => repBotLinkConfirm(db, args, user),
   rep_bot_link_reject:              (db, args, user) => repBotLinkReject(db, args, user),
   rep_bot_link_revoke:              (db, args, user) => repBotLinkRevoke(db, args, user),
+  // REP_BOT_CLAIMS_V1 — заявки бота на закрепление существующего врача: список — чтение (READ_ONLY_RPCS),
+  // решение — запись (просроченная клиника не решает; ворота — control/gate.js).
+  rep_bot_claims_list:              (db, args, user) => repBotClaimsList(db, args, user),
+  rep_bot_claim_decide:             (db, args, user) => repBotClaimDecide(db, args, user),
   // NAV_VISIBILITY_V1 — какие разделы меню есть в клинике: читают все, меняет администратор.
   nav_visibility_get:               (db, args, user) => navVisibilityGet(db, args, user),
   nav_visibility_save:              (db, args, user) => navVisibilitySave(db, args, user),

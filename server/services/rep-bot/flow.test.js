@@ -228,13 +228,63 @@ test('анкета прежней версии бота: шага больше �
   assert.equal(draftRow(db), undefined);
 });
 
-test('врач с тем же номером уже есть — анкета прерывается, двойника нет', async () => {
-  const { db, sent, deps } = await connected();
-  db.prepare("INSERT INTO referral_sources (name, phone, active) VALUES ('Старый Врач', '998 90 123-45-67', 0)").run();
+// REP_BOT_CLAIMS_V1 — совпадение номера: заявка на закрепление вместо отказа.
+const claims = (db) => db.prepare('SELECT * FROM rep_bot_claims ORDER BY id').all();
+
+test('врач с тем же номером уже есть — двойника нет, заводится одна заявка; повтор находит ту же', async () => {
+  const { db, rep, sent, deps } = await connected();
+  const other = Number(db.prepare("INSERT INTO users (username, password_hash, role, full_name, custom_role_code) VALUES ('rep2','x','callcenter','Другой Представитель','medrep')").run().lastInsertRowid);
+  const srcId = Number(db.prepare("INSERT INTO referral_sources (name, phone, active, representative_id) VALUES ('Старый Врач', '998 90 123-45-67', 0, ?)").run(other).lastInsertRowid);
+  const code = db.prepare('SELECT code FROM referral_sources WHERE id = ?').get(srcId).code;
+  const link = activeLink(db, CHAT);
+
   await fillDraft(db, deps, ['Новый Врач', '+998901234567']);
-  assert.match(lastText(sent), /Старый Врач/);
+  assert.equal(lastText(sent), T.claimSent('Старый Врач', code));
+  assert.match(lastText(sent), /Заявка на закрепление отправлена администратору/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM rep_bot_drafts').get().n, 0, 'анкета закрыта');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM referral_sources WHERE name = 'Новый Врач'").get().n, 0, 'второй карточки нет');
+  let c = claims(db);
+  assert.equal(c.length, 1);
+  assert.deepEqual({ s: c[0].referral_source_id, u: c[0].user_id, l: c[0].link_id, ch: c[0].chat_id, n: c[0].entered_name, st: c[0].status },
+    { s: srcId, u: rep, l: link.id, ch: String(CHAT), n: 'Новый Врач', st: 'pending' });
+  assert.equal(db.prepare('SELECT representative_id FROM referral_sources WHERE id = ?').get(srcId).representative_id, other, 'до решения врач не переходит');
+
+  await fillDraft(db, deps, ['Новый Врач', '90 123 45 67']);
+  assert.equal(lastText(sent), T.claimSent('Старый Врач', code));
+  assert.equal(claims(db).length, 1, 'повтор — та же заявка');
+});
+
+test('врач с этим номером уже за этим представителем — «уже закреплён за вами», заявки нет', async () => {
+  const { db, rep, sent, deps } = await connected();
+  db.prepare("INSERT INTO referral_sources (name, phone, representative_id) VALUES ('Свой Врач', '+998901234567', ?)").run(rep);
+  await fillDraft(db, deps, ['Свой Врач', '+998901234567']);
+  assert.match(lastText(sent), /уже закреплён за вами/);
+  assert.equal(claims(db).length, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM rep_bot_drafts').get().n, 0);
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM referral_sources WHERE name = 'Новый Врач'").get().n, 0);
+});
+
+test('номер заняли, пока шла анкета, — при «Сохранить» тоже заявка, а не двойник', async () => {
+  const { db, sent, deps } = await connected();
+  await fillDraft(db, deps, fullCash('Медленный Врач'));
+  db.prepare("INSERT INTO referral_sources (name, phone) VALUES ('Быстрый Врач', '+998907654321')").run();
+  await handleUpdate(db, 'tok', press('save'), deps);
+  assert.match(lastText(sent), /Быстрый Врач.*Заявка на закрепление отправлена/s);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM referral_sources WHERE name = 'Медленный Врач'").get().n, 0);
+  assert.equal(claims(db).length, 1);
+  assert.equal(claims(db)[0].entered_name, 'Медленный Врач');
+});
+
+test('заблокированная лицензия: заявка не заводится', async () => {
+  const { db, sent, deps } = await connected();
+  db.prepare("INSERT INTO referral_sources (name, phone) VALUES ('Чужой Врач', '+998901234567')").run();
+  await fillDraft(db, deps, ['Новый Врач', '+998901234567']);
+  assert.equal(claims(db).length, 1, 'с действующей лицензией — заводится');
+  db.prepare('DELETE FROM rep_bot_claims').run();
+  await handleUpdate(db, 'tok', text(T.addBtn), deps);
+  await handleUpdate(db, 'tok', text('Новый Врач'), deps);
+  await handleUpdate(db, 'tok', text('+998901234567'), { ...deps, isLocked: () => true });
+  assert.equal(lastText(sent), T.claimLocked);
+  assert.equal(claims(db).length, 0);
 });
 
 test('«Отмена» и заблокированная лицензия: врач не заводится', async () => {
