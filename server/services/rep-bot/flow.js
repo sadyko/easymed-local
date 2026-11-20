@@ -18,8 +18,16 @@
 // роль, сменился номер — связка отзывается здесь же, даже если триггер
 // мигр. 260 по какой-то причине не сработал.
 //
-// АНКЕТА. ФИО → телефон → специальность → место работы → район → «Сохранить».
-// Всё, кроме ФИО, можно пропустить. Анкета хранится в rep_bot_drafts, не в
+// АНКЕТА. ФИО → телефон → специальность → место работы → район → тип оплаты
+// (→ номер карты) → «Сохранить». REP_BOT_CLAIMS_V1 (2026-11-20) — владелец:
+// «here we need all data in terms of where doctor work, speciality and others».
+// Раньше всё, кроме ФИО, можно было пропустить, и из бота приходили врачи без
+// телефона, места работы и способа выплаты — их потом дописывали руками в
+// «Настройках». Теперь обязательно всё; кнопки «Пропустить» нет, «Отмена» есть
+// всегда. Специальность — только из списка клиники (specialty-list.js, тот же,
+// что выпадающий список карточки источника): «терапевт», «Терапевт» и
+// «терапевт-участковый» в ведомости по специальностям стали бы тремя
+// строками. Анкета хранится в rep_bot_drafts, не в
 // памяти: перезапуск сервера посреди анкеты её не теряет. Врач с тем же
 // номером уже есть — второго не заводим: два врача с одним номером не смогут
 // подключиться к боту врачей (там такой номер — «ничей»), а в ведомости
@@ -32,10 +40,12 @@ import { phoneKey, digitsOf, isWholeUzPhone, uzE164 } from '../../../public/js/a
 import { representativeCodes } from '../rpc/referrals.js';
 import { controlState } from '../control/state.js';
 import { getDataDir } from '../control/config.js';
+import { SPECIALTY_ROWS } from '../../../public/js/shared/specialty-list.js';
 
 const NAME_MAX = 120;
 const FIELD_MAX = 120;
 const MY_DOCTORS_SHOWN = 30;
+const SPECIALTY_BUTTONS = 8;   // REP_BOT_CLAIMS_V1 — больше кнопок под сообщением телефон не уместит
 
 export const T = {
   shareBtn: 'Отправить номер · Raqamni yuborish',
@@ -79,16 +89,24 @@ export const T = {
   menu: 'Выберите действие кнопкой ниже.\nQuyidagi tugma orqali amalni tanlang.',
   askName: 'ФИО врача — фамилия, имя и отчество через пробел (например: Каримов Азиз Бахтиёрович).\nShifokorning F.I.Sh. — familiya, ism va otasining ismi.',
   badName: 'Нужны хотя бы фамилия и имя — два слова, до 120 символов.\nKamida familiya va ism kerak — ikki so‘z.',
-  askPhone: 'Телефон врача, например +998 90 123 45 67. По этому номеру врач потом подключится к боту для врачей. Нет номера — «Пропустить».\nShifokor telefoni. Raqam bo‘lmasa — «O‘tkazib yuborish».',
-  badPhone: 'Это не похоже на узбекский номер. Введите номер целиком, например +998 90 123 45 67, или нажмите «Пропустить».\nRaqamni to‘liq kiriting yoki «O‘tkazib yuborish».',
+  askPhone: 'Телефон врача, например +998 90 123 45 67. По этому номеру врач потом подключится к боту для врачей.\nShifokor telefoni, masalan +998 90 123 45 67.',
+  badPhone: 'Это не похоже на узбекский номер. Введите номер целиком, например +998 90 123 45 67.\nRaqamni to‘liq kiriting, masalan +998 90 123 45 67.',
   duplicate: (name, code) => [
     `Врач с этим номером уже есть в клинике: ${esc(name)}${code ? ' (№ ' + esc(code) + ')' : ''}. Второго не заводим. Если его нужно закрепить за вами — попросите администратора.`,
     '',
     `Bu raqamli shifokor klinikada allaqachon bor: ${esc(name)}. Ikkinchisini qo‘shmaymiz.`,
   ].join('\n'),
-  askSpecialty: 'Специальность врача (например: терапевт). Или «Пропустить».\nShifokor mutaxassisligi. Yoki «O‘tkazib yuborish».',
-  askWorkplace: 'Место работы — поликлиника, больница. Или «Пропустить».\nIsh joyi. Yoki «O‘tkazib yuborish».',
-  askDistrict: 'Район. Или «Пропустить».\nTuman. Yoki «O‘tkazib yuborish».',
+  askSpecialty: 'Специальность врача — напишите часть названия (например: «тера» или «кард»), бот предложит варианты из списка клиники.\nShifokor mutaxassisligi — nomining bir qismini yozing (masalan: «tera» yoki «kard»), bot klinika ro‘yxatidan variantlarni taklif qiladi.',
+  pickSpecialty: 'Выберите специальность кнопкой. Нет нужной — напишите название иначе.\nMutaxassislikni tugma orqali tanlang. Kerakligi yo‘q bo‘lsa — nomini boshqacha yozing.',
+  pickSpecialtyMore: (n) => `Найдено ${n} — показаны первые ${SPECIALTY_BUTTONS}. Выберите кнопкой или напишите точнее.\n${n} ta topildi — birinchi ${SPECIALTY_BUTTONS} tasi ko‘rsatildi. Tugma orqali tanlang yoki aniqroq yozing.`,
+  noSpecialty: 'В списке клиники такой специальности не нашлось. Напишите иначе — например, «хирург», «невро», «педиатр».\nKlinika ro‘yxatida bunday mutaxassislik topilmadi. Boshqacha yozing — masalan, «jarroh», «nevro», «pediatr».',
+  askWorkplace: 'Место работы — поликлиника, больница.\nIsh joyi — poliklinika, kasalxona.',
+  askDistrict: 'Район.\nTuman.',
+  askPayment: 'Как выплачивать вознаграждение? Выберите кнопкой.\nMukofot qanday to‘lanadi? Tugma orqali tanlang.',
+  askCard: 'Номер карты врача — 16 цифр (можно с пробелами).\nShifokor karta raqami — 16 ta raqam (bo‘sh joy bilan mumkin).',
+  badCard: 'Номер карты — ровно 16 цифр, например 8600 1234 5678 9012.\nKarta raqami — aniq 16 ta raqam.',
+  required: 'Этот вопрос обязательный — пропустить нельзя. Чтобы не добавлять врача — «Отмена».\nBu savol majburiy — o‘tkazib bo‘lmaydi. Qo‘shmaslik uchun — «Bekor qilish».',
+  stale: 'Анкета устарела (бот обновился) — начните заново: «Добавить врача».\nAnketa eskirdi — qaytadan boshlang: «Shifokor qo‘shish».',
   needText: 'Ответьте текстом или кнопкой ниже.\nMatn yoki quyidagi tugma bilan javob bering.',
   tooLong: 'Слишком длинно — до 120 символов.\nJuda uzun — 120 belgigacha.',
   cancelled: 'Добавление отменено.\nQo‘shish bekor qilindi.',
@@ -111,16 +129,37 @@ const contactKeyboard = {
 };
 const removeKeyboard = { remove_keyboard: true };
 const menuKeyboard = { keyboard: [[{ text: T.addBtn }], [{ text: T.myBtn }]], resize_keyboard: true };
-const stepKeyboard = { keyboard: [[{ text: T.skipBtn }], [{ text: T.cancelBtn }]], resize_keyboard: true };
-const nameKeyboard = { keyboard: [[{ text: T.cancelBtn }]], resize_keyboard: true };
+// REP_BOT_CLAIMS_V1 — у каждого вопроса анкеты одна кнопка: «Отмена». T.skipBtn
+// остался в T только затем, чтобы нажатие на кнопку старой клавиатуры (она
+// висит у представителя до следующего ответа бота) узналось и получило
+// «пропустить нельзя», а не записалось местом работы «Пропустить».
+const cancelKeyboard = { keyboard: [[{ text: T.cancelBtn }]], resize_keyboard: true };
 
-// Порядок вопросов анкеты после ФИО: шаг → [поле, вопрос].
-const OPTIONAL_STEPS = [
-  ['phone', T.askPhone],
-  ['specialty', T.askSpecialty],
-  ['workplace', T.askWorkplace],
-  ['district', T.askDistrict],
+// REP_BOT_CLAIMS_V1 — тип оплаты: те же значения и подписи, что у выпадающего
+// списка «Тип оплаты» карточки источника в «Настройках» (settings-hub.js).
+export const PAYMENT_TYPES = [
+  ['cash', 'Наличные', 'Naqd pul'],
+  ['card', 'На карту', 'Kartaga'],
+  ['transfer', 'Перечислением', 'O‘tkazma orqali'],
 ];
+const paymentMarkup = { inline_keyboard: PAYMENT_TYPES.map(([v, ru, uz]) => [{ text: `${ru} · ${uz}`, callback_data: 'pay:' + v }]) };
+
+// Порядок вопросов анкеты после ФИО: шаг → [поле, вопрос, разметка].
+// 'card' спрашивается только при оплате «На карту» (nextIndex ниже).
+const STEPS = [
+  ['phone', T.askPhone, cancelKeyboard],
+  ['specialty', T.askSpecialty, cancelKeyboard],
+  ['workplace', T.askWorkplace, cancelKeyboard],
+  ['district', T.askDistrict, cancelKeyboard],
+  ['payment', T.askPayment, paymentMarkup],
+  ['card', T.askCard, cancelKeyboard],
+];
+const stepIndex = (step) => STEPS.findIndex(([s]) => s === step);
+function nextIndex(idx, draft) {
+  let i = idx + 1;
+  if (i < STEPS.length && STEPS[i][0] === 'card' && draft.payment_type !== 'card') i += 1;
+  return i;
+}
 
 // ---------------------------------------------------------------------------
 // Кто это
@@ -206,9 +245,58 @@ export function findSourceWithPhone(db, rawPhone) {
   return rows.find((r) => phoneKey(r.phone) === key) || null;
 }
 
+// REP_BOT_CLAIMS_V1 — поиск специальности. Представитель пишет часть названия
+// на любом из трёх языков; сравнение без регистра, «ё» = «е», все виды
+// узбекского апострофа (‘ ’ ʻ ʼ `) — один. Сначала — названия, которые
+// начинаются с написанного («тера» → «Терапевт» раньше «Физиотерапевт»).
+const normSp = (s) => String(s == null ? '' : s).toLowerCase().replace(/ё/g, 'е').replace(/[‘’ʻʼ`']/g, "'").replace(/\s+/g, ' ').trim();
+const SPECIALTY_INDEX = SPECIALTY_ROWS.map((r, i) => ({ i, labels: [r.ru, r.uz, r.en].map(normSp) }));
+
+/** Индексы SPECIALTY_ROWS, подходящие под написанное; [] — меньше двух букв или ничего. */
+export function specialtyMatches(query) {
+  const q = normSp(query);
+  if (q.length < 2) return [];
+  const starts = [];
+  const inside = [];
+  for (const row of SPECIALTY_INDEX) {
+    if (row.labels.some((l) => l.startsWith(q))) starts.push(row.i);
+    else if (row.labels.some((l) => l.includes(q))) inside.push(row.i);
+  }
+  return [...starts, ...inside];
+}
+
+/** Номер карты: цифры без пробелов и дефисов, ровно 16; иначе null. */
+export function cardDigits(text) {
+  const s = String(text == null ? '' : text).trim();
+  if (!/^[\d\s-]+$/.test(s)) return null;
+  const d = s.replace(/\D/g, '');
+  return d.length === 16 ? d : null;
+}
+const cardShown = (d) => String(d || '').replace(/(\d{4})(?=\d)/g, '$1 ');
+const paymentLabel = (v) => {
+  const p = PAYMENT_TYPES.find(([x]) => x === v);
+  return p ? `${p[1]} · ${p[2]}` : '';
+};
+
+/**
+ * Анкета заполнена целиком. Анкета, начатая до REP_BOT_CLAIMS_V1, могла дойти
+ * до сводки с пропущенным телефоном и без типа оплаты — её шаг «confirm» есть
+ * и сейчас, поэтому «шаг устарел» её не ловит; ловит эта проверка перед
+ * сохранением.
+ */
+export function draftComplete(d) {
+  if (!d || !d.name || !d.first_name) return false;
+  if (!d.phone || !isWholeUzPhone(digitsOf(d.phone))) return false;
+  if (!SPECIALTY_ROWS.some((r) => r.ru === d.specialty)) return false;
+  if (!d.workplace || !d.district) return false;
+  if (!PAYMENT_TYPES.some(([v]) => v === d.payment_type)) return false;
+  if (d.payment_type === 'card' && !cardDigits(d.card_number)) return false;
+  return true;
+}
+
 export function summary(d) {
   const line = (label, v) => `${label}: ${v ? esc(v) : '—'}`;
-  return [
+  const out = [
     '<b>Проверьте данные врача · Ma’lumotlarni tekshiring</b>',
     '',
     line('ФИО', d.name),
@@ -216,15 +304,24 @@ export function summary(d) {
     line('Специальность', d.specialty),
     line('Место работы', d.workplace),
     line('Район', d.district),
-  ].join('\n');
+    line('Тип оплаты', paymentLabel(d.payment_type)),
+  ];
+  // Номер карты — целиком, группами по 4: сводка для того и показывается,
+  // чтобы представитель увидел опечатку до «Сохранить».
+  if (d.payment_type === 'card') out.push(line('Номер карты', cardShown(d.card_number)));
+  return out.join('\n');
 }
 const confirmMarkup = { inline_keyboard: [[{ text: T.saveBtn, callback_data: 'save' }, { text: T.cancelBtn, callback_data: 'cancel' }]] };
 
+function specialtyMarkup(indexes) {
+  return { inline_keyboard: indexes.slice(0, SPECIALTY_BUTTONS).map((i) => [{ text: SPECIALTY_ROWS[i].ru, callback_data: 'sp:' + i }]) };
+}
+
 async function askNext(db, token, chatId, linkId, draft, fromIndex, deps) {
-  if (fromIndex < OPTIONAL_STEPS.length) {
-    const [step, question] = OPTIONAL_STEPS[fromIndex];
+  if (fromIndex < STEPS.length) {
+    const [step, question, markup] = STEPS[fromIndex];
     writeDraft(db, chatId, linkId, step, draft);
-    return sendMessage(token, chatId, question, { reply_markup: stepKeyboard }, deps);
+    return sendMessage(token, chatId, question, { reply_markup: markup }, deps);
   }
   writeDraft(db, chatId, linkId, 'confirm', draft);
   // Клавиатура шагов уходит, решение — кнопками под сводкой.
@@ -241,33 +338,54 @@ async function handleDraftAnswer(db, token, msg, link, cur, deps) {
   if (step === 'confirm') {
     return sendMessage(token, chatId, summary(draft), { reply_markup: confirmMarkup }, deps);
   }
-  if (raw === null) {
-    return sendMessage(token, chatId, T.needText, { reply_markup: step === 'name' ? nameKeyboard : stepKeyboard }, deps);
+  const idx = stepIndex(step);
+  if (step !== 'name' && idx < 0) {
+    // Шаг, которого в анкете больше нет (анкета начата прежней версией бота).
+    dropDraft(db, chatId);
+    return sendMessage(token, chatId, T.menu, { reply_markup: menuKeyboard }, deps);
   }
+  const markup = step === 'name' ? cancelKeyboard : STEPS[idx][2];
+  if (raw === null) return sendMessage(token, chatId, T.needText, { reply_markup: markup }, deps);
   const text = cleanText(raw);
   const skip = text === T.skipBtn || text.toLowerCase() === '/skip';
 
   if (step === 'name') {
     const fio = text.length <= NAME_MAX && !skip ? splitFio(text) : null;
-    if (!fio) return sendMessage(token, chatId, T.badName, { reply_markup: nameKeyboard }, deps);
+    if (!fio) return sendMessage(token, chatId, T.badName, { reply_markup: cancelKeyboard }, deps);
     return askNext(db, token, chatId, link.id, { ...draft, ...fio }, 0, deps);
   }
 
-  const idx = OPTIONAL_STEPS.findIndex(([s]) => s === step);
-  if (idx < 0) { dropDraft(db, chatId); return sendMessage(token, chatId, T.menu, { reply_markup: menuKeyboard }, deps); }
-  if (skip) return askNext(db, token, chatId, link.id, { ...draft, [step]: '' }, idx + 1, deps);
-  if (text.length > FIELD_MAX) return sendMessage(token, chatId, T.tooLong, { reply_markup: stepKeyboard }, deps);
+  // REP_BOT_CLAIMS_V1 — всё обязательно: «Пропустить» (кнопка старой клавиатуры
+  // или /skip) — не ответ, а повтор вопроса.
+  if (skip) return sendMessage(token, chatId, T.required + '\n\n' + STEPS[idx][1], { reply_markup: markup }, deps);
+  if (text.length > FIELD_MAX) return sendMessage(token, chatId, T.tooLong, { reply_markup: markup }, deps);
 
   if (step === 'phone') {
-    if (!isWholeUzPhone(digitsOf(text))) return sendMessage(token, chatId, T.badPhone, { reply_markup: stepKeyboard }, deps);
+    if (!isWholeUzPhone(digitsOf(text))) return sendMessage(token, chatId, T.badPhone, { reply_markup: cancelKeyboard }, deps);
     const dup = findSourceWithPhone(db, text);
     if (dup) {
       dropDraft(db, chatId);
       return sendMessage(token, chatId, T.duplicate(dup.name, dup.code), { reply_markup: menuKeyboard }, deps);
     }
-    return askNext(db, token, chatId, link.id, { ...draft, phone: uzE164(text) }, idx + 1, deps);
+    return askNext(db, token, chatId, link.id, { ...draft, phone: uzE164(text) }, nextIndex(idx, draft), deps);
   }
-  return askNext(db, token, chatId, link.id, { ...draft, [step]: text }, idx + 1, deps);
+  if (step === 'specialty') {
+    // Текст — это поиск; сохраняется только выбор кнопкой (handleCallback, 'sp:').
+    const found = specialtyMatches(text);
+    if (!found.length) return sendMessage(token, chatId, T.noSpecialty, { reply_markup: cancelKeyboard }, deps);
+    const head = found.length > SPECIALTY_BUTTONS ? T.pickSpecialtyMore(found.length) : T.pickSpecialty;
+    return sendMessage(token, chatId, head, { reply_markup: specialtyMarkup(found) }, deps);
+  }
+  if (step === 'payment') {
+    // Тип оплаты — только кнопкой: текст «карта» / «karta» гадать не будем.
+    return sendMessage(token, chatId, T.askPayment, { reply_markup: paymentMarkup }, deps);
+  }
+  if (step === 'card') {
+    const digits = cardDigits(text);
+    if (!digits) return sendMessage(token, chatId, T.badCard, { reply_markup: cancelKeyboard }, deps);
+    return askNext(db, token, chatId, link.id, { ...draft, card_number: digits }, nextIndex(idx, draft), deps);
+  }
+  return askNext(db, token, chatId, link.id, { ...draft, [step]: text }, nextIndex(idx, draft), deps);
 }
 
 /**
@@ -278,15 +396,19 @@ async function handleDraftAnswer(db, token, msg, link, cur, deps) {
  */
 export function saveDraftedSource(db, { chatId, link, rep, draft }) {
   return db.transaction(() => {
+    if (!draftComplete(draft)) { dropDraft(db, chatId); return { stale: true }; }
     if (draft.phone) {
       const dup = findSourceWithPhone(db, draft.phone);
       if (dup) return { duplicate: dup };
     }
+    // REP_BOT_CLAIMS_V1 — тип оплаты и номер карты пишутся вместе с остальным;
+    // номер карты — только при «На карту» (как beforeSave формы «Настроек»).
     const r = db.prepare(`INSERT INTO referral_sources
-        (name, last_name, first_name, middle_name, phone, specialty, workplace, district, representative_id, active)
-        VALUES (?,?,?,?,?,?,?,?,?, 1)`).run(
+        (name, last_name, first_name, middle_name, phone, specialty, workplace, district, payment_type, card_number, representative_id, active)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?, 1)`).run(
       draft.name, draft.last_name || null, draft.first_name || null, draft.middle_name || null,
-      draft.phone || null, draft.specialty || null, draft.workplace || null, draft.district || null, rep.id);
+      draft.phone || null, draft.specialty || null, draft.workplace || null, draft.district || null,
+      draft.payment_type, draft.payment_type === 'card' ? draft.card_number : null, rep.id);
     const id = Number(r.lastInsertRowid);
     db.prepare('INSERT INTO rep_bot_additions (referral_source_id, user_id, link_id, chat_id) VALUES (?,?,?,?)')
       .run(id, rep.id, link.id, String(chatId));
@@ -343,7 +465,7 @@ async function handleMessage(db, token, msg, deps) {
   }
   if (text === T.addBtn || cmd === '/add') {
     writeDraft(db, chatId, link.id, 'name', {});
-    return sendMessage(token, chatId, T.askName, { reply_markup: nameKeyboard }, deps);
+    return sendMessage(token, chatId, T.askName, { reply_markup: cancelKeyboard }, deps);
   }
   if (text === T.myBtn || cmd === '/my') {
     return sendMessage(token, chatId, myDoctorsText(db, rep.id), { reply_markup: menuKeyboard }, deps);
@@ -401,10 +523,19 @@ async function handleContact(db, token, msg, deps) {
 // Кнопки под сводкой. callback_data — только 'save' / 'cancel': анкета берётся
 // по chat_id этого же чата, а не по номеру из кнопки (callback_data приходит
 // снаружи). Повторное нажатие «Сохранить» анкеты уже не находит.
+//
+// REP_BOT_CLAIMS_V1 — ещё две кнопки анкеты: 'sp:<i>' (специальность — индекс в
+// SPECIALTY_ROWS, не текст: callback_data приходит снаружи, а текст кнопки
+// Telegram в ответе и не присылает) и 'pay:<тип>'. Обе принимаются, только
+// если анкета этого чата стоит на своём шаге; старая кнопка под давним
+// сообщением тихо гасится.
+const SP_RE = /^sp:(\d{1,4})$/;
+const PAY_RE = /^pay:([a-z]+)$/;
 async function handleCallback(db, token, cq, deps) {
   const data = String(cq.data || '');
   const chatId = cq.message && cq.message.chat && cq.message.chat.id;
-  if (!chatId || (data !== 'save' && data !== 'cancel')) return ackQuietly(token, cq.id, '', deps);
+  const known = data === 'save' || data === 'cancel' || SP_RE.test(data) || PAY_RE.test(data);
+  if (!chatId || !known) return ackQuietly(token, cq.id, '', deps);
 
   const link = activeLink(db, chatId);
   const rep = link ? repOfLink(db, link) : null;
@@ -412,6 +543,7 @@ async function handleCallback(db, token, cq, deps) {
     await ackQuietly(token, cq.id, '', deps);
     return sendMessage(token, chatId, link && rep ? T.pending(rep.full_name) : T.revoked, { reply_markup: link && rep ? removeKeyboard : contactKeyboard }, deps);
   }
+  if (data !== 'save' && data !== 'cancel') return handleStepButton(db, token, cq, chatId, link, data, deps);
   const cur = readDraft(db, chatId);
   if (!cur || cur.step !== 'confirm' || cur.link_id !== link.id) {
     await ackQuietly(token, cq.id, '', deps);
@@ -430,9 +562,34 @@ async function handleCallback(db, token, cq, deps) {
   }
   const res = saveDraftedSource(db, { chatId, link, rep, draft: cur.draft });
   await ackQuietly(token, cq.id, '', deps);
+  if (res.stale) return sendMessage(token, chatId, T.stale, { reply_markup: menuKeyboard }, deps);
   if (res.duplicate) {
     dropDraft(db, chatId);
     return sendMessage(token, chatId, T.duplicate(res.duplicate.name, res.duplicate.code), { reply_markup: menuKeyboard }, deps);
   }
   return sendMessage(token, chatId, T.saved(res.source.name, res.source.code || ''), { reply_markup: menuKeyboard }, deps);
+}
+
+/** REP_BOT_CLAIMS_V1 — кнопки специальности ('sp:<i>') и типа оплаты ('pay:<тип>'). */
+async function handleStepButton(db, token, cq, chatId, link, data, deps) {
+  await ackQuietly(token, cq.id, '', deps);
+  const cur = readDraft(db, chatId);
+  if (!cur || cur.link_id !== link.id) return null;
+  const sp = SP_RE.exec(data);
+  if (sp) {
+    const i = Number(sp[1]);
+    if (cur.step !== 'specialty' || !Number.isInteger(i) || i < 0 || i >= SPECIALTY_ROWS.length) return null;
+    // Хранится русское название — как у выпадающего списка «Настроек».
+    const draft = { ...cur.draft, specialty: SPECIALTY_ROWS[i].ru };
+    return askNext(db, token, chatId, link.id, draft, nextIndex(stepIndex('specialty'), draft), deps);
+  }
+  const pay = PAY_RE.exec(data);
+  if (pay) {
+    const v = pay[1];
+    if (cur.step !== 'payment' || !PAYMENT_TYPES.some(([x]) => x === v)) return null;
+    const draft = { ...cur.draft, payment_type: v };
+    if (v !== 'card') delete draft.card_number;
+    return askNext(db, token, chatId, link.id, draft, nextIndex(stepIndex('payment'), draft), deps);
+  }
+  return null;
 }

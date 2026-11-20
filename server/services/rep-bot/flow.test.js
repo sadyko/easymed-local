@@ -3,7 +3,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { handleUpdate, activeLink, findRepsByPhone, splitFio, T } from './flow.js';
+import { handleUpdate, activeLink, findRepsByPhone, splitFio, specialtyMatches, cardDigits, T } from './flow.js';
+import { SPECIALTY_ROWS } from '../../../public/js/shared/specialty-list.js';
+
+const SP = (ru) => SPECIALTY_ROWS.findIndex((r) => r.ru === ru);
 
 function fresh() {
   const db = openDb(':memory:');
@@ -40,10 +43,15 @@ async function connected() {
   env.db.prepare("UPDATE rep_bot_links SET status = 'confirmed'").run();
   return { ...env, ...api };
 }
+// Ответ анкеты — текст или нажатие инлайн-кнопки ({ press: 'sp:99' }).
 async function fillDraft(db, deps, answers) {
   await handleUpdate(db, 'tok', text(T.addBtn), deps);
-  for (const a of answers) await handleUpdate(db, 'tok', text(a), deps);
+  for (const a of answers) await handleUpdate(db, 'tok', typeof a === 'string' ? text(a) : press(a.press), deps);
 }
+// REP_BOT_CLAIMS_V1 — полная анкета до сводки, оплата наличными.
+const fullCash = (name, phone = '+998 90 765 43 21') =>
+  [name, phone, 'тера', { press: 'sp:' + SP('Терапевт') }, 'Поликлиника № 5', 'Чиланзар', { press: 'pay:cash' }];
+const draftRow = (db) => db.prepare('SELECT step, draft FROM rep_bot_drafts').get();
 
 test('findRepsByPhone: только действующие сотрудники с ролью представителя, ключ — 9 цифр', () => {
   const { db, rep } = fresh();
@@ -88,12 +96,64 @@ test('номер, указанный у двух представителей, �
   assert.equal(activeLink(db, CHAT), null);
 });
 
-test('анкета: ФИО → телефон → пропуски → «Сохранить» заводит врача за представителем с номером справочника', async () => {
+test('specialtyMatches: без регистра, на трёх языках, сначала начинающиеся с написанного; меньше двух букв — ничего', () => {
+  const tera = specialtyMatches('ТЕРА');
+  assert.equal(tera[0], SP('Терапевт'), 'начинается с «тера» — первым');
+  assert.ok(tera.includes(SP('Физиотерапевт')), 'внутри слова — тоже');
+  assert.ok(specialtyMatches('jarroh').includes(SP('Хирург')), 'по-узбекски');
+  assert.ok(specialtyMatches('cardiolog').includes(SP('Кардиолог')), 'по-английски');
+  assert.deepEqual(specialtyMatches('т'), []);
+  assert.deepEqual(specialtyMatches('абракадабра'), []);
+});
+
+test('cardDigits: ровно 16 цифр, пробелы и дефисы допустимы, буквы — нет', () => {
+  assert.equal(cardDigits('8600 1234-5678 9012'), '8600123456789012');
+  assert.equal(cardDigits('8600 1234 5678 901'), null);
+  assert.equal(cardDigits('8600 1234 5678 90123'), null);
+  assert.equal(cardDigits('8600 12x4 5678 9012'), null);
+});
+
+test('анкета: все шаги обязательны; специальность — поиском и кнопкой; «На карту» — номер карты; «Сохранить» пишет все поля', async () => {
   const { db, rep, sent, deps } = await connected();
-  await fillDraft(db, deps, ['Каримов', 'Каримов Азиз Бахтиёрович', '12345', '90 123 45 67', 'Терапевт', T.skipBtn, 'Чиланзар']);
+  await fillDraft(db, deps, ['Каримов', 'Каримов Азиз Бахтиёрович', T.skipBtn, '12345', '90 123 45 67']);
   assert.ok(sent.some((s) => s.params.text === T.badName), 'одно слово — не ФИО');
+  assert.ok(sent.some((s) => s.params.text.startsWith(T.required)), '«Пропустить» телефона — повтор вопроса');
   assert.ok(sent.some((s) => s.params.text === T.badPhone), 'короткий номер — не номер');
-  assert.match(lastText(sent), /Каримов Азиз Бахтиёрович/);
+  assert.ok(!JSON.stringify(sent).includes(T.skipBtn), 'кнопки «Пропустить» больше нет ни на одном шаге');
+  assert.equal(draftRow(db).step, 'specialty');
+
+  // Поиск: ничего — просьба написать иначе; «тера» — кнопки (до 8), шаг не сдвинулся.
+  await handleUpdate(db, 'tok', text('абракадабра'), deps);
+  assert.equal(lastText(sent), T.noSpecialty);
+  await handleUpdate(db, 'tok', text('тера'), deps);
+  const kb = sent.at(-1).params.reply_markup.inline_keyboard;
+  assert.equal(kb.length, 8, 'не больше восьми кнопок');
+  assert.equal(kb[0][0].text, 'Терапевт');
+  assert.equal(kb[0][0].callback_data, 'sp:' + SP('Терапевт'));
+  assert.equal(lastText(sent), T.pickSpecialtyMore(specialtyMatches('тера').length));
+  assert.equal(draftRow(db).step, 'specialty', 'текст специальности не сохраняется — только кнопка');
+  await handleUpdate(db, 'tok', press('sp:' + SP('Терапевт')), deps);
+  assert.equal(lastText(sent), T.askWorkplace);
+
+  await handleUpdate(db, 'tok', text('/skip'), deps);
+  assert.ok(lastText(sent).startsWith(T.required), '/skip — не место работы');
+  assert.equal(JSON.parse(draftRow(db).draft).workplace, undefined);
+  await handleUpdate(db, 'tok', text('Поликлиника № 5'), deps);
+  await handleUpdate(db, 'tok', text('Чиланзар'), deps);
+  assert.equal(lastText(sent), T.askPayment);
+  assert.deepEqual(sent.at(-1).params.reply_markup.inline_keyboard.map((r) => r[0].callback_data), ['pay:cash', 'pay:card', 'pay:transfer']);
+  await handleUpdate(db, 'tok', text('карта'), deps);
+  assert.equal(lastText(sent), T.askPayment, 'тип оплаты — только кнопкой');
+  await handleUpdate(db, 'tok', press('pay:card'), deps);
+  assert.equal(lastText(sent), T.askCard);
+  await handleUpdate(db, 'tok', text('8600 1234'), deps);
+  assert.equal(lastText(sent), T.badCard);
+  await handleUpdate(db, 'tok', text('8600 1234 5678 9012'), deps);
+
+  const sum = lastText(sent);
+  for (const s of ['Каримов Азиз Бахтиёрович', '+998901234567', 'Терапевт', 'Поликлиника № 5', 'Чиланзар', 'На карту', '8600 1234 5678 9012']) {
+    assert.ok(sum.includes(s), 'в сводке нет: ' + s);
+  }
   assert.deepEqual(sent.at(-1).params.reply_markup.inline_keyboard[0].map((b) => b.callback_data), ['save', 'cancel']);
 
   await handleUpdate(db, 'tok', press('save'), deps);
@@ -104,8 +164,10 @@ test('анкета: ФИО → телефон → пропуски → «Сох�
   assert.equal(src.middle_name, 'Бахтиёрович');
   assert.equal(src.phone, '+998901234567');
   assert.equal(src.specialty, 'Терапевт');
-  assert.equal(src.workplace, null);
+  assert.equal(src.workplace, 'Поликлиника № 5');
   assert.equal(src.district, 'Чиланзар');
+  assert.equal(src.payment_type, 'card');
+  assert.equal(src.card_number, '8600123456789012');
   assert.equal(src.representative_id, rep);
   assert.equal(src.active, 1);
   assert.match(src.code, /^\d{4,}$/, 'номер выдал триггер справочника');
@@ -119,6 +181,51 @@ test('анкета: ФИО → телефон → пропуски → «Сох�
 
   await handleUpdate(db, 'tok', text(T.myBtn), deps);
   assert.match(lastText(sent), /Каримов Азиз Бахтиёрович/);
+});
+
+test('оплата наличными — номер карты не спрашивается и не пишется', async () => {
+  const { db, sent, deps } = await connected();
+  await fillDraft(db, deps, fullCash('Наличный Врач'));
+  assert.equal(draftRow(db).step, 'confirm');
+  assert.ok(!sent.some((s) => s.params.text === T.askCard));
+  assert.ok(lastText(sent).includes('Наличные') && !lastText(sent).includes('Номер карты'));
+  await handleUpdate(db, 'tok', press('save'), deps);
+  const src = db.prepare("SELECT payment_type, card_number, specialty FROM referral_sources WHERE name = 'Наличный Врач'").get();
+  assert.deepEqual({ ...src }, { payment_type: 'cash', card_number: null, specialty: 'Терапевт' });
+});
+
+test('кнопки анкеты снаружи: sp вне списка, sp/pay не на своём шаге, неизвестный pay — анкета не меняется', async () => {
+  const { db, sent, deps } = await connected();
+  await fillDraft(db, deps, ['Кнопочный Врач', '+998 90 765 43 21']);
+  const before = draftRow(db);
+  const n = sent.filter((s) => s.method === 'sendMessage').length;
+  for (const d of ['sp:' + SPECIALTY_ROWS.length, 'sp:99999', 'sp:-1', 'pay:cash', 'pay:bitcoin', 'sp:abc']) {
+    await handleUpdate(db, 'tok', press(d), deps);
+  }
+  assert.deepEqual(draftRow(db), before);
+  assert.equal(sent.filter((s) => s.method === 'sendMessage').length, n, 'ничего не отвечено');
+  assert.ok(sent.filter((s) => s.method === 'answerCallbackQuery').length >= 6, 'каждое нажатие погашено');
+
+  await handleUpdate(db, 'tok', press('sp:' + SP('Хирург')), deps);
+  await handleUpdate(db, 'tok', press('sp:' + SP('Терапевт')), deps);   // старая кнопка — шаг уже другой
+  assert.equal(JSON.parse(draftRow(db).draft).specialty, 'Хирург');
+  assert.equal(draftRow(db).step, 'workplace');
+});
+
+test('анкета прежней версии бота: шага больше нет — в меню; сводка без обязательных полей — не сохраняется', async () => {
+  const { db, link, sent, deps } = await (async () => { const c = await connected(); return { ...c, link: activeLink(c.db, CHAT) }; })();
+  db.prepare("INSERT INTO rep_bot_drafts (chat_id, link_id, step, draft) VALUES (?, ?, 'category', '{}')").run(String(CHAT), link.id);
+  await handleUpdate(db, 'tok', text('что-то'), deps);
+  assert.equal(lastText(sent), T.menu);
+  assert.equal(draftRow(db), undefined);
+
+  // Дошла до сводки, когда всё, кроме ФИО, можно было пропустить.
+  const old = { name: 'Старая Анкета', last_name: 'Старая', first_name: 'Анкета', phone: '', specialty: 'терапевт', workplace: '', district: '' };
+  db.prepare("INSERT INTO rep_bot_drafts (chat_id, link_id, step, draft) VALUES (?, ?, 'confirm', ?)").run(String(CHAT), link.id, JSON.stringify(old));
+  await handleUpdate(db, 'tok', press('save'), deps);
+  assert.equal(lastText(sent), T.stale);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM referral_sources WHERE name = 'Старая Анкета'").get().n, 0);
+  assert.equal(draftRow(db), undefined);
 });
 
 test('врач с тем же номером уже есть — анкета прерывается, двойника нет', async () => {
@@ -136,7 +243,7 @@ test('«Отмена» и заблокированная лицензия: вр�
   assert.equal(lastText(sent), T.cancelled);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM rep_bot_drafts').get().n, 0);
 
-  await fillDraft(db, deps, ['Запертый Врач', T.skipBtn, T.skipBtn, T.skipBtn, T.skipBtn]);
+  await fillDraft(db, deps, fullCash('Запертый Врач'));
   await handleUpdate(db, 'tok', press('save'), { ...deps, isLocked: () => true });
   assert.equal(lastText(sent), T.locked);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM referral_sources WHERE name = 'Запертый Врач'").get().n, 0);
@@ -144,7 +251,7 @@ test('«Отмена» и заблокированная лицензия: вр�
 
 test('сотрудника уволили или сменили номер — связка отозвана (триггер), бот больше не даёт заводить врачей', async () => {
   const { db, rep, sent, deps } = await connected();
-  await fillDraft(db, deps, ['Почти Врач', T.skipBtn, T.skipBtn, T.skipBtn, T.skipBtn]);
+  await fillDraft(db, deps, fullCash('Почти Врач'));
   db.prepare("UPDATE users SET phone = '+998 90 310 65 70' WHERE id = ?").run(rep);
   assert.ok(activeLink(db, CHAT), 'та же запись номера по цифрам — связка жива');
   db.prepare('UPDATE users SET is_active = 0 WHERE id = ?').run(rep);
