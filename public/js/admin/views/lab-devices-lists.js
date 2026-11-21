@@ -300,6 +300,9 @@ export function serviceSummary(c, { proxy = false } = {}) {   // LIS_PROXY_V1 �
  */
 export function modelNote(p) {
     if (!p) return null;
+    // LIS_ASTM_FOUR_V1 — ASTM-прибор (XN-350, CA-660, cobas c 311 / e 411): Easy-Med
+    // читает его только из рук переадресателя (провод forwarder), напрямую — нет.
+    if (p.wire === 'forwarder') return 'ASTM: только через переадресатор лаборатории — сверьте первую пробу';
     if (p.wireSource === 'driver') return 'формат — по программам других LIS: сверьте первую пробу';
     if (p.wireSource === 'siblings' || p.channelsSource === 'siblings') return 'по документам соседних моделей: сверьте первую пробу';
     if (p.channelsSource === 'device') return 'формат документирован; показатели — из проб прибора';

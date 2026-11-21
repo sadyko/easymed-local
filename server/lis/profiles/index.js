@@ -22,8 +22,13 @@ import bc3000plus from './mindray-bc-3000-plus.js'; // только RS-232 — �
 import bs200 from './mindray-bs-200.js';            // LIS_REAL_ANALYZERS_V1_PROFILES — биохимия, по одному тесту в сообщении
 import a1000 from './autobio-autolumo-a1000.js';    // LIS_REAL_ANALYZERS_V1_PROFILES — ИХЛА, HL7 по сети (COM — через переадресатор)
 import bc780 from './mindray-bc-780.js';            // LIS_REAL_ANALYZERS_V1_PROFILES — гематология, по документам соседних моделей
+// LIS_ASTM_FOUR_V1 — ASTM-приборы: приходят только через переадресатор (MSH-4 LabPC)
+import xn350 from './sysmex-xn-350.js';             // гематология
+import ca660 from './sysmex-ca-660.js';             // коагулометр, только RS-232
+import c311 from './roche-cobas-c311.js';           // биохимия, только RS-232
+import e411 from './roche-cobas-e411.js';           // ИХЛА, только RS-232
 
-const ALL = Object.freeze([bc20, bc5300, bs240, cl900i, bc2800, bc3000plus, bs200, a1000, bc780]);
+const ALL = Object.freeze([bc20, bc5300, bs240, cl900i, bc2800, bc3000plus, bs200, a1000, bc780, xn350, ca660, c311, e411]);
 const BY_KEY = new Map(ALL.map((p) => [p.key, p]));
 
 export function listProfiles() { return ALL; }

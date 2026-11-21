@@ -206,6 +206,13 @@ test('подпись модели — по тому, откуда известе
   assert.equal(modelNote({ channelsSource: 'device', wireSource: 'driver' }), 'формат — по программам других LIS: сверьте первую пробу');
   // BC-780: по документам соседних моделей.
   assert.equal(modelNote({ channelsSource: 'siblings', wireSource: 'siblings' }), 'по документам соседних моделей: сверьте первую пробу');
+  // LIS_ASTM_FOUR_V1 — XN-350, CA-660, cobas c 311 / e 411 говорят ASTM: напрямую в
+  // Easy-Med их не подключить, только через переадресатор лаборатории (провод forwarder).
+  const ASTM = 'ASTM: только через переадресатор лаборатории — сверьте первую пробу';
+  for (const p of [{ wire: 'forwarder', channelsSource: 'conventional', wireSource: 'documented' },
+    { wire: 'forwarder', channelsSource: 'conventional', wireSource: 'driver' },
+    { wire: 'forwarder', channelsSource: 'device', wireSource: 'documented' }]) assert.equal(modelNote(p), ASTM, JSON.stringify(p));
+  assert.equal(modelNote({ wire: 'autobio-hl7', channelsSource: 'device', wireSource: 'driver' }), 'формат — по программам других LIS: сверьте первую пробу', 'A1000 — как было');
 });
 
 test('колонка «Подключение»: кто кому звонит', () => {
