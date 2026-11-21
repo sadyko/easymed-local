@@ -1801,11 +1801,30 @@ function markRevisitBooked(ctx, when) {
 
 // PAPER_ACTIONS_NOTE_V1 — mirror a scheduled revisit / inpatient request into the document's
 // РЕКОМЕНДАЦИИ section (turned on first), so it prints on the conclusion.
-function noteInRecommendations(ctx, html) {
+//
+// DIAG_NO_HIDDEN_NOTE_V1 (3.25.1) — В ДОКУМЕНТЕ «ДИАГНОСТИКА» СТРОКА НЕ ПИШЕТСЯ.
+// Бланк диагностики показывает только «Описание» и «Заключение» (HIDDEN_IN_DIAG):
+// строка в «Рекомендациях» там не видна, и «Завершить приём» отказывал — «В документе
+// есть текст, которого нет в бланке «Диагностика»: Рекомендации». Врач УЗИ нажимал
+// «Направить на услуги» / «Повторный визит» / «Заявка на госпитализацию» у одного
+// пациента — и только этот документ нельзя было подписать. Решение владельца
+// (2026-11-20, вариант A): у диагностики строку в документ не писать; само действие
+// (запись, счёт, заявка) сохранено своим путём, врач видит то же сообщение.
+// Тип берётся у СВОЕЙ строки: ответ приходит после ожидания, и открытой может быть
+// уже другая. Возвращает false, если строка не писалась (диагностика, сбой). Экспорт — для проверки.
+function lineDocType(ctx) {
+    if (!ctx || wsState.ctx === ctx) return wsState.docType;
+    if (ctx.__wsState && ctx.__wsState.docType) return ctx.__wsState.docType;
+    const sel = ctx.container && ctx.container.querySelector('[data-doctype]');
+    return sel && sel.value ? sel.value : wsState.docType;
+}
+export function noteInRecommendations(ctx, html) {
+    if (lineDocType(ctx) === 'diag') return false;
     try {
         wsAddSection(ctx, 'recommendations');   // ensure the section is visible + printed
         a4InsertHtml(ctx, html, 'recommendations_text', null);
-    } catch (e) { console.warn('[doc note]', e); }
+        return true;
+    } catch (e) { console.warn('[doc note]', e); return false; }
 }
 
 // PASTE_SOURCES_V1 — история пациента для «Вставить результаты» — views/paste-sources.js и
