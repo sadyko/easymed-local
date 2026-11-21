@@ -1,4 +1,4 @@
-// LAB_STATUS_TICKS_V1 (2026-11-21) — ВКЛАДКИ ЛАБОРАТОРИИ = СТАТУСЫ, СТАТУС — ГАЛОЧКОЙ.
+// LAB_STATUS_TICKS_V1 (2026-11-21) — ВКЛАДКИ ЛАБОРАТОРИИ = СТАТУСЫ, СТАТУС — ОДНОЙ КНОПКОЙ.
 //
 // Владелец, 2026-11-21 (снимки «РЕЗУЛЬТАТЫ НЕ ВНЕСЕНЫ · 0 / 3 готово · 3 к забору» и
 // «Открытые · 39 · Забор · 21 · В работе · 6 · Результаты · 12 · Все · 324»):
@@ -6,11 +6,15 @@
 //    of the analysis. probe is taken, in progress etc. and also the statuses tabs are not
 //    transcribing the actual statuses, there is no separate ready section».
 // Решения владельца (вопросы 2026-11-21):
-//   1. статус меняется ГАЛОЧКАМИ и кнопками: отметил анализы → «Проба взята» / «В работу»
-//      (и «Вернуть в забор» — на ошибку);
-//   2. вкладка на КАЖДЫЙ статус: Открытые · Забор · Проба взята · В работе · Внесены ·
+//   1. вкладка на КАЖДЫЙ статус: Открытые · Забор · Проба взята · В работе · Внесены ·
 //      Готово · Все («Готово» — проверено и выдано, раньше было только во «Все»);
-//   3. число на вкладке — ПАЦИЕНТЫ (карточки списка), а не анализы.
+//   2. число на вкладке — ПАЦИЕНТЫ (карточки списка), а не анализы;
+//   3. статус — КНОПКАМИ. Сначала владелец выбрал галочки и панель «Отмечено N: …»,
+//      посмотрел на :8000 и сказал «its bit hard for user … add buttons?» — второе
+//      решение: у пациента одна кнопка следующего шага для всех его анализов
+//      («Проба взята · 3», без раскрытия строки), у каждого анализа — своя кнопка
+//      следующего шага и стрелка «Вернуть на шаг назад»; панели галочек нет, галочки —
+//      только у анализов с результатом (для «Подтвердить» и «Бланк»), как прежде.
 // Слово статуса одно на вкладке, на карточке пациента и на строке анализа.
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -133,20 +137,22 @@ async function mount(rows, results = []) {
   await tick();
   return root;
 }
-const chips = (root) => byClass(root, 'lab-tabs').length ? buttons(byClass(root, 'lab-tabs')[0]) : buttons(root);
+// Вкладки — только в ряду фильтров очереди (.segmented): «Проба взята · 3» есть и у пациента.
+const filterRow = (root) => walk(root).find((n) => hasClass(n, 'segmented') && !hasClass(n, 'seg-lg'));
 function tabChip(root, label) {
-  const c = buttons(root).find((b) => clean(b) === label || clean(b).startsWith(label + ' · '));
-  assert.ok(c, 'нет вкладки «' + label + '»: ' + buttons(root).map(clean).join(' | '));
+  const row = filterRow(root);
+  assert.ok(row, 'ряд вкладок очереди пропал');
+  const c = buttons(row).find((b) => clean(b) === label || clean(b).startsWith(label + ' · '));
+  assert.ok(c, 'нет вкладки «' + label + '»: ' + buttons(row).map(clean).join(' | '));
   return c;
 }
 async function openTab(root, label) { tabChip(root, label).click(); await tick(); }
 const ticks = (root) => walk(root).filter((n) => n.tagName === 'INPUT' && n.getAttribute('data-pick'));
-function tickRow(root, id) {
-  const box = ticks(root).find((b) => b.getAttribute('data-pick') === String(id));
-  assert.ok(box, 'у анализа ' + id + ' нет галочки');
-  box.checked = true;
-  box.dispatchEvent({ type: 'change', target: box });
-}
+const cardBtns = (root) => buttons(byClass(byClass(root, 'lq-card')[0], 'lq-do')[0] || mk('div'));
+const itemOf = (root, status) => byClass(root, 'lq-item').find((n) => n.getAttribute('data-status') === status);
+const rowBtns = (item) => buttons(byClass(item, 'lq-item-do')[0] || mk('div'));
+const UNDO = 'Вернуть на шаг назад';
+const isUndo = (b) => b.getAttribute('title') === UNDO;
 
 // ═══ 1. ПРАВИЛА — чистые функции (lab-grouping.js) ════════════════════════════
 
@@ -234,48 +240,84 @@ test('карточка и строка говорят словом вкладк�
   assert.ok(textOf(byClass(byClass(mixed, 'lq-card')[0], 'lq-state-card')[0]).includes('Проба взята'));
 });
 
-test('у КАЖДОГО анализа есть галочка; старых кнопок строки «Забор пробы» и «В работу» нет', async () => {
-  const root = await mount([vs(1, 'queued'), vs(2, 'collected'), vs(3, 'in_progress')]);
-  assert.strictEqual(ticks(root).length, 3, 'галочки не у всех анализов');
-  const rowBtns = byClass(root, 'lq-item-do').flatMap((d) => buttons(d)).map(clean);
-  assert.ok(!rowBtns.includes('Забор пробы') && !rowBtns.includes('В работу'), 'на строке остались прежние кнопки: ' + rowBtns.join(' | '));
-  assert.strictEqual(byClass(root, 'lq-tickbar').length, 0, 'панель действий видна, хотя ничего не отмечено');
-});
-
-test('отметил два анализа к забору → «Проба взята» пишет ОДНОЙ записью оба, со временем', async () => {
+test('кнопка пациента: «Проба взята · 3» — главная и первая; одно нажатие — все три одной записью', async () => {
   const root = await mount([vs(1, 'queued'), vs(2, 'queued'), vs(3, 'queued')]);
-  tickRow(root, 1); tickRow(root, 2);
-  await tick();
-  const bar = byClass(root, 'lq-tickbar')[0];
-  assert.ok(bar, 'после отметки нет панели действий');
-  assert.ok(textOf(bar).includes('Отмечено 2'), 'панель не говорит, сколько отмечено: ' + textOf(bar));
-  const names = buttons(bar).map(clean);
-  assert.ok(names.includes('Проба взята') && names.includes('В работу'), 'нет кнопок статуса: ' + names.join(' | '));
-  assert.ok(!names.includes('Вернуть в забор'), '«Вернуть в забор» для анализов, которые и так в заборе');
-  buttons(bar).find((b) => clean(b) === 'Проба взята').click();
+  const first = cardBtns(root)[0];
+  assert.strictEqual(clean(first), 'Проба взята · 3', 'первой у пациента стоит «' + clean(first) + '»');
+  assert.ok(hasClass(first, 'btn-primary'), '«Проба взята · 3» — не главная кнопка');
+  assert.strictEqual(byClass(byClass(root, 'lq-card')[0], 'btn-primary').length, 1, 'главных кнопок у пациента больше одной');
+  first.click();
   await tick(60);
-  assert.strictEqual(UPDATES.length, 1, 'два анализа — не одна запись: ' + UPDATES.length);
+  assert.strictEqual(UPDATES.length, 1, 'три анализа — не одна запись: ' + UPDATES.length);
   const f = UPDATES[0].filters.find((x) => x.col === 'id');
-  assert.deepStrictEqual({ op: f.op, ids: f.val.map(Number).sort() }, { op: 'in', ids: [1, 2] });
+  assert.deepStrictEqual({ op: f.op, ids: f.val.map(Number).sort() }, { op: 'in', ids: [1, 2, 3] });
   assert.strictEqual(UPDATES[0].values.status, 'collected');
   assert.ok(UPDATES[0].values.sample_collected_at, 'время взятия не записано');
-  assert.strictEqual(VISIT_SERVICES.find((r) => r.id === 3).status, 'queued', 'неотмеченный анализ сдвинулся');
-  assert.strictEqual(byClass(root, 'lq-tickbar').length, 0, 'отметки не сняты после записи');
+  const next = cardBtns(root).map(clean);
+  assert.ok(next.includes('В работу · 3'), 'после забора у пациента нет «В работу · 3»: ' + next.join(' | '));
+  assert.ok(!next.some((t) => t.startsWith('Проба взята')), '«Проба взята» осталась, хотя забирать нечего');
 });
 
-test('«Вернуть в забор» — на ошибку: доступна для взятых и в работе, снимает время', async () => {
-  const root = await mount([vs(1, 'collected'), vs(2, 'in_progress')]);
-  tickRow(root, 1); tickRow(root, 2);
-  await tick();
-  const bar = byClass(root, 'lq-tickbar')[0];
-  buttons(bar).find((b) => clean(b) === 'Вернуть в забор').click();
+test('кнопка пациента двигает только ждущие забора — не взятые, не с результатом', async () => {
+  const root = await mount([vs(1, 'queued'), vs(2, 'resulted'), vs(3, 'collected')], [res(1, 2)]);
+  const take = cardBtns(root).find((b) => clean(b).startsWith('Проба взята'));
+  assert.strictEqual(clean(take), 'Проба взята · 1');
+  assert.ok(!cardBtns(root).some((b) => clean(b).startsWith('В работу')), 'пока есть что забирать, у пациента одна кнопка шага');
+  take.click();
+  await tick(60);
+  assert.deepStrictEqual(UPDATES[0].filters.find((x) => x.col === 'id').val.map(Number), [1]);
+  assert.strictEqual(clean(cardBtns(root).find((b) => clean(b).startsWith('В работу'))), 'В работу · 2');
+});
+
+test('у каждого анализа — кнопка следующего шага и стрелка назад; у внесённого — нет', async () => {
+  const root = await mount([vs(1, 'queued'), vs(2, 'collected'), vs(3, 'in_progress'), vs(4, 'resulted')], [res(1, 4)]);
+  const want = {
+    queued: { step: 'Проба взята', undo: false },
+    collected: { step: 'В работу', undo: true },
+    in_progress: { step: 'Результаты…', undo: true },
+    resulted: { step: 'Проверить и выдать', undo: false },
+  };
+  for (const [status, w] of Object.entries(want)) {
+    const item = itemOf(root, status);
+    assert.ok(item, status + ': строки нет');
+    const btns = rowBtns(item);
+    assert.ok(btns.some((b) => clean(b) === w.step), status + ': нет «' + w.step + '»: ' + btns.map(clean).join(' | '));
+    assert.strictEqual(btns.some(isUndo), w.undo, status + ': стрелка назад ' + (w.undo ? 'пропала' : 'лишняя'));
+    for (const b of btns) assert.ok(!hasClass(b, 'btn-primary'), status + ': на строке анализа залитая кнопка');
+  }
+});
+
+test('кнопка анализа меняет только его', async () => {
+  const root = await mount([vs(1, 'queued'), vs(2, 'queued')]);
+  const item = byClass(root, 'lq-item').find((n) => n.getAttribute('data-vs') === '2');
+  assert.ok(item, 'строки «Анализ 2» нет');
+  rowBtns(item).find((b) => clean(b) === 'Проба взята').click();
   await tick(60);
   assert.strictEqual(UPDATES.length, 1);
+  assert.deepStrictEqual(UPDATES[0].filters.find((x) => x.col === 'id').val.map(Number), [2]);
+  assert.strictEqual(UPDATES[0].values.status, 'collected');
+  assert.strictEqual(VISIT_SERVICES.find((r) => r.id === 1).status, 'queued', 'сдвинулся соседний анализ');
+});
+
+test('стрелка назад: из «Проба взята» — в забор без времени; из «В работе» — в «Проба взята», время то же', async () => {
+  const root = await mount([vs(1, 'collected'), vs(2, 'in_progress')]);
+  rowBtns(itemOf(root, 'collected')).find(isUndo).click();
+  await tick(60);
   assert.deepStrictEqual(UPDATES[0].values, { status: 'queued', sample_collected_at: null });
+  UPDATES = [];
+  rowBtns(itemOf(root, 'in_progress')).find(isUndo).click();
+  await tick(60);
+  assert.deepStrictEqual(UPDATES[0].values, { status: 'collected' }, 'шаг назад из «В работе» сбросил время взятия');
+});
+
+test('панели галочек нет; галочка — только у анализа с результатом (для «Подтвердить» и «Бланк»)', async () => {
+  const root = await mount([vs(1, 'queued'), vs(2, 'resulted')], [res(1, 2)]);
+  assert.deepStrictEqual(ticks(root).map((b) => b.getAttribute('data-pick')), ['2']);
+  assert.strictEqual(byClass(root, 'lq-tickbar').length, 0);
 });
 
 test('новые слова есть в словаре на трёх языках', () => {
-  for (const s of ['Внесены', 'Вернуть в забор', 'Снять отметки', 'Отмечено {n}:', '{done} / {total} внесено',
+  for (const s of ['Внесены', '{done} / {total} внесено', 'Вернуть на шаг назад',
     'Проба взята: {n}', 'В работе: {n}', 'Возвращено в забор: {n}']) {
     const e = STRINGS[s];
     assert.ok(e && e.uz && e.en, '«' + s + '» нет в словаре');

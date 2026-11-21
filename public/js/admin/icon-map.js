@@ -37,6 +37,7 @@ export const ICON_MAP = Object.freeze({
     ChevronRight: 'Arrow/Chevron_Right',
     Refresh:      'Arrow/Arrows_Reload_01',
     Repeat:       'Arrow/Arrow_Reload_02',
+    Undo:         'Arrow/Arrow_Undo_Up_Left',   // LAB_STATUS_TICKS_V1 — «Вернуть на шаг назад» у анализа
 
     // --- время ---
     Calendar:     'Calendar/Calendar',

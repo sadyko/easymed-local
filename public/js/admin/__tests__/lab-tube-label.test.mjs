@@ -293,9 +293,9 @@ test('«Печать этикетки» строки — её номер, мес
   assert.deepStrictEqual(labelsOf(printed[0]), [{ code: '00000028', date: '02.11.2026, 19:06', tests: 'Анализ крови' }]);
 });
 
-// LAB_STATUS_TICKS_V1 — окна «Забор пробы» больше нет: галочка → «Проба взята», и у
+// LAB_STATUS_TICKS_V1 — окна «Забор пробы» больше нет: «Проба взята» на строке — сразу, и у
 // взятой строки появляется её «Печать этикетки» — тот же номер строки и местное время взятия.
-test('галочка → «Проба взята» → «Печать этикетки» строки: её номер, название, время — местное, числом', async () => {
+test('«Проба взята» на строке → «Печать этикетки» строки: её номер, название, время — местное, числом', async () => {
   const saved = globalThis.fetch;
   globalThis.fetch = async (url, opts) => {
     const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -312,16 +312,14 @@ test('галочка → «Проба взята» → «Печать этике
     const root = mk('div');
     await renderLaboratory(root, { tabId: 't-1' });
     await tick();
-    const box = walk(root).find((n) => n.tagName === 'INPUT' && n.getAttribute('data-pick') === '31');
-    assert.ok(box, 'у строки крови № 31 нет галочки');
-    box.checked = true;
-    box.dispatchEvent({ type: 'change', target: box });
-    await tick();
-    const take = buttons(byClass(root, 'lq-tickbar')[0] || mk('div')).find((b) => clean(b) === 'Проба взята');
-    assert.ok(take, 'после отметки нет «Проба взята»');
+    const row31 = () => byClass(root, 'lq-item').find((n) => n.getAttribute('data-vs') === '31');
+    assert.strictEqual(row31() && row31().getAttribute('data-status'), 'queued');
+    const take = buttons(row31()).find((b) => clean(b) === 'Проба взята');
+    assert.ok(take, 'у ждущей строки крови № 31 нет «Проба взята»');
     take.click();
     await tick(80);
-    const item = byClass(root, 'lq-item').find((n) => walk(n).some((x) => x.tagName === 'INPUT' && x.getAttribute('data-pick') === '31'));
+    const item = row31();
+    assert.strictEqual(item && item.getAttribute('data-status'), 'collected', '№ 31 не перешла в «Проба взята»');
     const pr = item && buttons(item).find((b) => b.getAttribute('title') === 'Печать этикетки');
     assert.ok(pr, 'у взятой строки № 31 нет «Печать этикетки»');
     pr.click();

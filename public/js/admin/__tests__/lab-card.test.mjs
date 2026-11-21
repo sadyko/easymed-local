@@ -344,7 +344,8 @@ for (const [name, expected] of Object.entries(PRIMARY_PER_STATE)) {
 }
 
 test('главная кнопка каждого состояния — та, что и есть следующий шаг, и стоит первой', async () => {
-  const want = { fresh: 'Внести результаты', partial: 'Внести результаты', entered: 'Подтвердить', released: 'Бланк' };
+  // LAB_STATUS_TICKS_V1 — пока есть что забирать, следующий шаг — забор («Проба взята · N»).
+  const want = { fresh: 'Проба взята · 1', partial: 'Внести результаты', entered: 'Подтвердить', released: 'Бланк' };
   for (const [name, label] of Object.entries(want)) {
     const c = await STATE_FIXTURES[name]();
     const row = byClass(c, 'lq-do')[0];
@@ -535,7 +536,7 @@ const clean = (b) => textOf(b).replace(/<[^>]*>/g, '').trim();
 
 test('все действия карточки на месте в каждом состоянии — изменился только их вес', async () => {
   const want = {
-    fresh: ['Внести результаты', 'Штрих-код'],   // RELEASE_SELECT_V1 — «unpaid» в очередь не попадает
+    fresh: ['Проба взята · 1', 'Внести результаты', 'Штрих-код'],   // RELEASE_SELECT_V1 — «unpaid» в очередь не попадает · LAB_STATUS_TICKS_V1 — забор всех ждущих
     partial: ['Внести результаты', 'Подтвердить', 'Бланк', 'Штрих-код'],
     entered: ['Подтвердить', 'Внести результаты', 'Бланк', 'Штрих-код'],
     // LAB_TUBE_LABEL_V1 — у выданного визита открытых пробирок нет: этикеток не
@@ -556,11 +557,11 @@ test('все действия карточки на месте в каждом �
 });
 
 test('все действия строки анализа на месте — по одному на каждый статус', async () => {
-  // LAB_STATUS_TICKS_V1 — «Забор пробы» и «В работу» ушли со строки в панель отмеченных
-  // (галочка строки → «Проба взята» / «В работу»; lab-status-ticks.test.mjs).
+  // LAB_STATUS_TICKS_V1 — «Забор пробы» (окно) стал «Проба взята» одним нажатием;
+  // у взятого и в работе — ещё «Вернуть на шаг назад» (lab-status-ticks.test.mjs).
   const want = {
-    queued:      [],
-    collected:   [],
+    queued:      ['Проба взята'],
+    collected:   ['В работу'],
     in_progress: ['Результаты…'],
     resulted:    ['Проверить и выдать'],
     completed:   ['Отчёт'],
@@ -574,10 +575,9 @@ test('все действия строки анализа на месте — п
     for (const label of labels) {
       assert.ok(btns.some((b) => clean(b) === label), status + ': кнопка «' + label + '» пропала со строки');
     }
-    assert.ok(!btns.some((b) => clean(b) === 'Забор пробы' || clean(b) === 'В работу'),
-      status + ': на строке снова кнопка статуса — статус меняют галочкой');
-    assert.ok(walk(c).some((n) => n.tagName === 'INPUT' && n.getAttribute('data-pick') === '805'),
-      status + ': у анализа нет галочки');
+    assert.ok(!btns.some((b) => clean(b) === 'Забор пробы'), status + ': вернулось окно «Забор пробы»');
+    assert.strictEqual(btns.some((b) => b.getAttribute('title') === 'Вернуть на шаг назад'), status === 'collected' || status === 'in_progress',
+      status + ': «Вернуть на шаг назад» не там, где можно шагнуть назад');
     for (const b of btns) assert.ok((b._l.click || []).length === 1, status + ': кнопка ни к чему не подключена');
     // Перепечать этикетки живёт на строке с момента, когда проба существует.
     const label = btns.find((b) => b.getAttribute('title') === 'Печать этикетки');
@@ -595,7 +595,7 @@ test('главная кнопка действительно делает то, 
   // «Внести результаты» открывает общий бланк ввода (модальное окно в body).
   const fresh = await STATE_FIXTURES.fresh();
   fakeBody.children.length = 0;
-  buttons(byClass(fresh, 'lq-do')[0])[0].click();
+  buttons(byClass(fresh, 'lq-do')[0]).find((b) => clean(b) === 'Внести результаты').click();   // LAB_STATUS_TICKS_V1 — первой стоит «Проба взята · 1»
   await tick(60);
   assert.ok(byClass(fakeBody, 'lw-patient').length === 1,
     '«Внести результаты» не открыла бланк ввода — действие отвалилось от кнопки');
@@ -632,7 +632,6 @@ const extTags = (root) => walk(root).filter((n) => n.attrs && n.attrs['data-exte
 const actionsOf = (c) => ({
   card: buttons(byClass(c, 'lq-do')[0] || mk('div')).map((b) => clean(b) + '|' + (b.getAttribute('title') || '')).sort(),
   row: buttons(byClass(c, 'lq-item-do')[0] || mk('div')).map((b) => clean(b) + '|' + (b.getAttribute('title') || '')).sort(),
-  tick: walk(c).filter((n) => n.tagName === 'INPUT' && n.getAttribute('data-pick')).length,   // LAB_STATUS_TICKS_V1 — статус меняют галочкой
 });
 
 test('EXTERNAL_LAB_V1: строка очереди подписана «Внешняя лаборатория», без отметки — нет', async () => {
@@ -650,7 +649,7 @@ test('EXTERNAL_LAB_V1: отметка не меняет поведения оч�
     const filter = status === 'completed' ? 'Все' : null;
     const off = actionsOf(await card([extVs(805, status, 0)], results, { filter }));
     const on = actionsOf(await card([extVs(805, status, 1)], results, { filter }));
-    if (status !== 'added') assert.ok(off.row.length > 0 || off.tick > 0, status + ': стенд не нашёл действий строки — сравнение было бы пустым');
+    if (status !== 'added') assert.ok(off.row.length > 0, status + ': стенд не нашёл действий строки — сравнение было бы пустым');
     assert.deepStrictEqual(on, off, status + ': у внешнего анализа другой набор действий');
   }
 });
@@ -668,7 +667,7 @@ test('EXTERNAL_LAB_V1: подпись видна в бланке ввода ре
   // Лист пациента — «Внести результаты» на карточке.
   const w = await card([extVs(805, 'queued', 1), extVs(806, 'collected', 0)]);
   fakeBody.children.length = 0;
-  buttons(byClass(w, 'lq-do')[0])[0].click();
+  buttons(byClass(w, 'lq-do')[0]).find((b) => clean(b) === 'Внести результаты').click();   // LAB_STATUS_TICKS_V1 — первой стоит «Проба взята · 1»
   await tick(60);
   assert.ok(byClass(fakeBody, 'lw-patient').length === 1, 'лист пациента не открылся');
   const titles = byClass(fakeBody, 'lw-sec-title');

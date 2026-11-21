@@ -56,7 +56,7 @@ import { mountLabDevices, stopLabDevicesLive } from './lab-devices.js?v=lisfield
 // browser holding the older cached copy would fail the named import and blank the view.
 import { pluralRu, groupLabRows, selectOptionsFor,
          labCardState, labPrimaryAction,
-         LAB_TABS, LAB_STATUS_WORD, LAB_MOVES, labTabCounts, labMovePlan, labGroupKey } from './lab-grouping.js?v=labticks1';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 / LAB_CARD_V3 — pure helpers, unit-tested separately · LAB_STATUS_TICKS_V1 — вкладки, слова статусов, кнопки отметок (новые имена — новый ?v=)
+         LAB_TABS, LAB_STATUS_WORD, LAB_MOVES, LAB_STEP_BACK, labTabCounts, labMovePlan, labGroupKey } from './lab-grouping.js?v=labticks2';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 / LAB_CARD_V3 — pure helpers, unit-tested separately · LAB_STATUS_TICKS_V1 — вкладки, слова статусов, кнопки шага (новые имена — новый ?v=)
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
 // LAB_ONE_CLINIC_V1 — «лаборатория обслуживает всю клинику / только своё здание».
 import { scopeQuery, normalizeLabScope, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT } from './lab-scope.js';
@@ -1156,7 +1156,7 @@ function refundedTag(r) {
 function lqItem(r, patient) {
     const svc = r.services || {};
     const results = state.resultsByVs[r.id] || [];
-    return h('div', { class: 'lq-item', 'data-status': r.status || '' },
+    return h('div', { class: 'lq-item', 'data-status': r.status || '', 'data-vs': String(r.id) },   // LAB_STATUS_TICKS_V1 — data-vs: строка по номеру (проверки)
         pickBox(r, results),   // LAB_DOC_SPLIT_V1 — отметить анализ
         tubePill(svc.tube_color),
         h('div', { class: 'lq-item-main' },
@@ -1189,7 +1189,12 @@ function labGroupCard(g, byVisit = new Map()) {
     const pct = total ? Math.round(done / total * 100) : 0;
     const allDone = total > 0 && done === total;
     const cardState = labCardState(rows, hasRes);
-    const primary = labPrimaryAction(cardState, { anyToVerify });
+    // LAB_STATUS_TICKS_V1 (решение владельца 2026-11-21) — шаг для всех анализов пациента
+    // одной кнопкой, без раскрытия строки: «Проба взята · N» (ждущие забора), когда их
+    // нет — «В работу · N» (взятые). Анализ с результатом кнопка не двигает.
+    const toTake = rows.filter(r => r.status === 'queued' && !hasRes(r));
+    const toStart = rows.filter(r => r.status === 'collected' && !hasRes(r));
+    const primary = labPrimaryAction(cardState, { anyToVerify, toTake: toTake.length });
     const stage = total ? Math.min(...rows.map(r => (STAGE_OF[r.status] != null ? STAGE_OF[r.status] : 0))) : 0;
     const info = state.patientMap[g.visitId] || {};
     const patient = info.patient || {};
@@ -1204,11 +1209,16 @@ function labGroupCard(g, byVisit = new Map()) {
     // ОДНА главная кнопка на карточку. Красится primary-ом ровно та, чей ключ
     // вернула labPrimaryAction; второй такой взяться неоткуда, потому что
     // ключ у главного действия ровно один (и это проверяет тест).
-    const act = (key, label, icon, title, onclick) => h('button', {
+    // count — число анализов шага отдельным узлом: слово переводится целиком, « · N» — после.
+    const act = (key, label, icon, title, onclick, count) => h('button', {
         class: 'btn btn-sm ' + (primary === key ? 'btn-primary' : 'btn-outline'),
         type: 'button', title, onclick,
-    }, Icon(icon, { size: 13 }), ' ' + label);
+    }, Icon(icon, { size: 13 }), ' ' + label, count != null ? ' · ' + count : null);
     const defs = [
+        toTake.length ? ['take', 'Проба взята', 'Droplet', 'Проба взята у всех анализов пациента, которые ждут забора',
+            (e) => moveRows(e && e.currentTarget, toTake, 'collected'), toTake.length]
+            : toStart.length ? ['start', 'В работу', 'Activity', 'Все взятые пробы пациента — в работу',
+                (e) => moveRows(e && e.currentTarget, toStart, 'in_progress'), toStart.length] : null,
         anyActive && canWriteLabResults() ? ['worksheet', 'Внести результаты', 'Flask',
             'Внести результаты всех анализов одним документом', () => openPatientWorksheet(g, patient, tubes, days)] : null,   // tubes: ревью U11, M2 — те же номера, что на карточке; days: LAB_ONE_BARCODE_V1
         anyToVerify && canWriteLabResults() ? ['verify', 'Подтвердить', 'Check',
@@ -1224,7 +1234,7 @@ function labGroupCard(g, byVisit = new Map()) {
     // Главная — первой слева: порядок ряда и есть подсказка «начни отсюда».
     // ADMIN_ACT_AS_V1 (R3) — «Подтвердить» (проверить и выдать всё) от чужого имени неактивна.
     const actions = defs.filter(d => d[0] === primary).concat(defs.filter(d => d[0] !== primary))
-        .map(d => (d[0] === 'verify' ? lockSignButton(act(d[0], d[1], d[2], d[3], d[4])) : act(d[0], d[1], d[2], d[3], d[4])));
+        .map(d => (d[0] === 'verify' ? lockSignButton(act(d[0], d[1], d[2], d[3], d[4])) : act(d[0], d[1], d[2], d[3], d[4], d[5])));
 
     // LAB_QUEUE_ROWS_V1 (2026-09-15) — owner: «make list like this, and show
     // as accordion the list of the services when pressed. small lists». One
@@ -1303,7 +1313,6 @@ function labGroupCard(g, byVisit = new Map()) {
         h('div', { class: 'lq-list' },
             manyLabels(days, tubes) ? h('div', { class: 'lq-tubes' }, ...labelChips(days, tubes, g.accession)) : null,   // LAB_ONE_BARCODE_V1 — по номеру на день
             pickAllRow(rows),   // LAB_DOC_SPLIT_V1 — отметить все анализы карточки
-            tickBar(rows),   // LAB_STATUS_TICKS_V1 — статус отмеченных одной кнопкой
             ...rows.map(r => lqItem(r, patient))),
     );
 }
@@ -1313,10 +1322,6 @@ function labGroupCard(g, byVisit = new Map()) {
 // только отмеченные (группа — «Отметить все» карточки). Подтверждённые вместе —
 // один документ в «Документах» (shared/lab-doc-batches.js); не отмечено ничего —
 // карточка работает, как прежде, со всеми анализами.
-// LAB_STATUS_TICKS_V1 (2026-11-21) — галочка теперь у КАЖДОГО анализа: ею же
-// отмечают, у каких анализов сменить статус (панель под отметками, tickBar).
-// «Подтвердить» и «Бланк» берут из отмеченных только анализы с результатом
-// (pickable); таких среди отмеченных нет — работают со всеми, как прежде.
 function pickable(r) {
     return (state.resultsByVs[r.id] || []).length > 0 && (r.status === 'resulted' || r.status === 'completed');
 }
@@ -1325,8 +1330,9 @@ function pickedOf(rows) {
     return mine.length ? mine : rows;
 }
 function pickBox(r) {
+    if (!pickable(r)) return h('span', { class: 'lq-pick lq-pick-none' });
     const box = h('input', { type: 'checkbox', class: 'lq-pick', 'data-pick': String(r.id),
-        title: tr('Отметить анализ: сменить статус, подтвердить или напечатать только отмеченные'), 'aria-label': tr('Отметить анализ') });
+        title: tr('Отметить анализ: подтвердить или напечатать только отмеченные'), 'aria-label': tr('Отметить анализ') });
     box.checked = state.picked.has(Number(r.id));
     if (box.checked) box.setAttribute('checked', '');
     box.addEventListener('change', () => {
@@ -1336,42 +1342,32 @@ function pickBox(r) {
     return box;
 }
 function pickAllRow(rows) {
-    if (rows.length < 2) return null;
-    const n = rows.filter((r) => state.picked.has(Number(r.id))).length;
+    const can = rows.filter(pickable);
+    if (can.length < 2) return null;
+    const n = can.filter((r) => state.picked.has(Number(r.id))).length;
     const box = h('input', { type: 'checkbox', class: 'lq-pick-all', 'aria-label': tr('Отметить все анализы') });
-    box.checked = n === rows.length;
+    box.checked = n === can.length;
     if (box.checked) box.setAttribute('checked', '');
     box.addEventListener('change', () => {
-        for (const r of rows) { if (box.checked) state.picked.add(Number(r.id)); else state.picked.delete(Number(r.id)); }
+        for (const r of can) { if (box.checked) state.picked.add(Number(r.id)); else state.picked.delete(Number(r.id)); }
         paintRows();
     });
     return h('label', { class: 'lq-pick-row', style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', padding: '4px 0' } },
-        box, h('span', null, tr('Отметить все анализы')));
+        box, h('span', null, tr('Отметить все анализы')),
+        n ? h('span', { class: 'muted' }, trf('Отмечено {n}: «Подтвердить» и «Бланк» — только для них', { n })) : null);
 }
 
-// LAB_STATUS_TICKS_V1 — ПАНЕЛЬ ОТМЕЧЕННЫХ: «Отмечено N: [Проба взята] [В работу]
-// [Вернуть в забор] · Снять отметки». Кнопка видна, только если ей есть кого
-// двигать (labMovePlan); анализ с результатом кнопки не двигают. Одна кнопка —
-// одна запись на все отмеченные анализы (пачка — .in('id', …)).
-function tickBar(rows) {
-    const mine = rows.filter((r) => state.picked.has(Number(r.id)));
-    if (!mine.length) return null;
-    const hasRes = (r) => (state.resultsByVs[r.id] || []).length > 0;
-    const moves = LAB_MOVES.filter((m) => labMovePlan(mine, m.to, hasRes, nowIso()).length);
-    const btn = (m) => h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-move': m.to,
-        title: tr(m.label), onclick: (e) => moveTicked(e && e.currentTarget, mine, m) }, tr(m.label));
-    return h('div', { class: 'lq-tickbar', style: { display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', fontSize: '12.5px', padding: '6px 0' } },
-        h('span', { class: 'lq-tickbar-n' }, trf('Отмечено {n}:', { n: mine.length })),
-        ...moves.map(btn),
-        mine.some(pickable)
-            ? h('span', { class: 'muted' }, tr('«Подтвердить» и «Бланк» — только для отмеченных с результатом')) : null,
-        h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: tr('Снять отметки'),
-            onclick: () => { for (const r of mine) state.picked.delete(Number(r.id)); paintRows(); } }, tr('Снять отметки')));
-}
-async function moveTicked(btnEl, rows, move) {
+// LAB_STATUS_TICKS_V1 (2026-11-21) — ШАГ СТАТУСА КНОПКОЙ: у пациента («Проба взята · N»,
+// «В работу · N») и у анализа («Проба взята», «В работу», «Вернуть на шаг назад»).
+// Что писать — labMovePlan (lab-grouping.js): анализ с результатом не двигается,
+// время взятия ставится при заборе и снимается при возврате в забор. Одна кнопка —
+// одна запись на все её анализы (.in('id', …)).
+async function moveRows(btnEl, rows, to) {
+    const move = LAB_MOVES.find((m) => m.to === to);
+    if (!move) return;
     if (btnEl) btnEl.disabled = true;
     const hasRes = (r) => (state.resultsByVs[r.id] || []).length > 0;
-    const plan = labMovePlan(rows, move.to, hasRes, nowIso());
+    const plan = labMovePlan(rows, to, hasRes, nowIso());
     let n = 0;
     for (const p of plan) {
         const { error } = await supabase.from('visit_services').update(p.values).in('id', p.ids);
@@ -1383,8 +1379,7 @@ async function moveTicked(btnEl, rows, move) {
         }
         n += p.ids.length;
     }
-    for (const r of rows) state.picked.delete(Number(r.id));
-    toast(trf(move.done, { n }), 'ok');
+    if (n) toast(trf(move.done, { n }), 'ok');
     await fetchAndPaint();
 }
 
@@ -1407,10 +1402,17 @@ function actionButtons(r, patient, results) {
         class: 'btn btn-outline btn-sm', type: 'button', onclick,
     }, Icon(icon, { size: 13 }), ' ' + label);
 
-    // LAB_STATUS_TICKS_V1 — «Забор пробы» (окно → «Проба взята») и «В работу» на строке
-    // заменены галочкой и панелью отмеченных (tickBar): та же запись, сразу для
-    // нескольких анализов. Этикетки — «Штрих-код» карточки и значок на строке.
-    if (r.status === 'in_progress') {
+    // LAB_STATUS_TICKS_V1 — шаг одним нажатием (moveRows): «Проба взята» сразу, без окна
+    // «Забор пробы» (этикетки — «Штрих-код» карточки и значок строки после забора);
+    // у взятого и в работе — «Вернуть на шаг назад» на ошибку. С результатом — не двигается.
+    const hasRes = (results || []).length > 0;
+    const back = !hasRes && LAB_STEP_BACK[r.status]
+        ? iconBtn('Undo', tr('Вернуть на шаг назад'), (e) => moveRows(e && e.currentTarget, [r], LAB_STEP_BACK[r.status])) : null;
+    if (r.status === 'queued' && !hasRes) {
+        btns.push(step('Проба взята', 'Droplet', (e) => moveRows(e && e.currentTarget, [r], 'collected')));
+    } else if (r.status === 'collected' && !hasRes) {
+        btns.push(step('В работу', 'Activity', (e) => moveRows(e && e.currentTarget, [r], 'in_progress')));
+    } else if (r.status === 'in_progress') {
         if (canWriteLabResults()) btns.push(step('Результаты…', 'Edit', () => openResultsModal(r, patient)));   // LIVE_AUDIT_FIX_V1
     } else if (r.status === 'resulted') {
         if (canWriteLabResults()) {   // LIVE_AUDIT_FIX_V1
@@ -1424,6 +1426,7 @@ function actionButtons(r, patient, results) {
     if (r.status !== 'added' && r.status !== 'queued') {
         btns.push(iconBtn('Scan', 'Печать этикетки', () => printLabel(r, patient)));
     }
+    if (back) btns.push(back);   // LAB_STATUS_TICKS_V1 — последней: ошибка — не главное
     return btns;
 }
 
