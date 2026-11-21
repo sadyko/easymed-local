@@ -16,6 +16,13 @@ export function pluralRu(n, one, few, many) {
     return many;
 }
 
+// Ключ карточки строки: визит, а заказ без визита — сам по себе. Один ключ на
+// группировку и на счётчики вкладок (LAB_STATUS_TICKS_V1): число на вкладке —
+// ровно столько карточек, сколько под ней в списке.
+export function labGroupKey(r) {
+    return r && r.visit_id != null ? r.visit_id : ('_solo_' + (r && r.id));
+}
+
 // Group visit_services rows into one card per patient-visit.
 //
 //   rows       — visit_services rows (each has .id, .visit_id, .services{}).
@@ -40,7 +47,7 @@ export function groupLabRows(rows, patientMap, accessionOf) {
     const groups = [];
     const byKey = new Map();
     for (const r of (rows || [])) {
-        const key = r.visit_id != null ? r.visit_id : ('_solo_' + r.id);
+        const key = labGroupKey(r);
         let g = byKey.get(key);
         if (!g) {
             const info = pm[r.visit_id] || {};
@@ -163,6 +170,89 @@ export function labPrimaryAction(cardState, opts) {
         case 'released':  return 'report';
         default:          return null;
     }
+}
+
+// -----------------------------------------------------------------------------
+// LAB_STATUS_TICKS_V1 (2026-11-21) — ВКЛАДКИ = СТАТУСЫ, СТАТУС — ГАЛОЧКОЙ.
+//
+// Владелец: «the statuses tabs are not transcribing the actual statuses, there is
+// no separate ready section» и «make tick or just click so it changes the status».
+// Было: вкладки «Забор · В работе · Результаты» считали АНАЛИЗЫ, а список
+// показывает ПАЦИЕНТОВ; «В работе» сливала «Проба взята» и «В работе»; выданное
+// жило только во «Все»; карточка к забору говорила «Результаты не внесены ·
+// 0 / 3 готово». Статус менялся только кнопкой на каждом анализе в отдельности
+// («Забор пробы» → окно → «Проба взята», потом «В работу»).
+// Решения владельца (2026-11-21): вкладка на каждый статус и «Готово»; число —
+// пациенты; статус — галочками и кнопками под карточкой.
+// -----------------------------------------------------------------------------
+
+/** Одно слово статуса — на вкладке, на карточке пациента и на строке анализа. */
+export const LAB_STATUS_WORD = Object.freeze({
+    queued: 'Забор',
+    collected: 'Проба взята',
+    in_progress: 'В работе',
+    resulted: 'Внесены',
+    completed: 'Готово',
+});
+
+/** Вкладки листа в порядке работы. «Открытые» — всё, что ещё не выдано. */
+export const LAB_TABS = Object.freeze([
+    { key: 'open',     label: 'Открытые',               match: (s) => s !== 'completed' && s !== 'added' },
+    { key: 'collect',  label: LAB_STATUS_WORD.queued,      match: (s) => s === 'queued' },
+    { key: 'taken',    label: LAB_STATUS_WORD.collected,   match: (s) => s === 'collected' },
+    { key: 'work',     label: LAB_STATUS_WORD.in_progress, match: (s) => s === 'in_progress' },
+    { key: 'resulted', label: LAB_STATUS_WORD.resulted,    match: (s) => s === 'resulted' },
+    { key: 'done',     label: LAB_STATUS_WORD.completed,   match: (s) => s === 'completed' },
+    { key: 'all',      label: 'Все',                    match: () => true },
+]);
+
+/**
+ * Число на каждой вкладке — ПАЦИЕНТЫ: сколько карточек будет под вкладкой
+ * (карточка — визит, labGroupKey). Пациент с анализами в разных статусах стоит
+ * в каждой из этих вкладок — так же, как его карточка.
+ */
+export function labTabCounts(rows, tabs = LAB_TABS) {
+    const out = {};
+    for (const t of tabs) {
+        const keys = new Set();
+        for (const r of (rows || [])) if (t.match(r.status)) keys.add(labGroupKey(r));
+        out[t.key] = keys.size;
+    }
+    return out;
+}
+
+/**
+ * Кнопки панели отмеченных анализов: куда и откуда. Анализ с внесённым
+ * результатом кнопками не двигается — его статус ведут ввод результатов
+ * («Внесены») и проверка («Готово»).
+ */
+export const LAB_MOVES = Object.freeze([
+    { to: 'collected',   label: 'Проба взята',     from: ['queued', 'in_progress'], done: 'Проба взята: {n}' },
+    { to: 'in_progress', label: 'В работу',        from: ['queued', 'collected'],   done: 'В работе: {n}' },
+    { to: 'queued',      label: 'Вернуть в забор', from: ['collected', 'in_progress'], done: 'Возвращено в забор: {n}' },
+]);
+
+/**
+ * Что записать, чтобы перевести отмеченные строки `rows` в статус `to`.
+ * Возвращает пачки { ids, values } — каждая пишется ОДНОЙ записью:
+ *   • в «Проба взята» и «В работу» строка без времени взятия получает `now`
+ *     (пробу взяли — время её взятия известно), со временем — оставляет своё;
+ *   • «Вернуть в забор» время взятия снимает.
+ * Строки не из `from`, уже в `to` и с результатом — не трогаются. Пусто — [].
+ */
+export function labMovePlan(rows, to, hasResults, now) {
+    const move = LAB_MOVES.find((m) => m.to === to);
+    if (!move) return [];
+    const has = typeof hasResults === 'function' ? hasResults : () => false;
+    const can = (rows || []).filter((r) => move.from.includes(r.status) && !has(r));
+    if (!can.length) return [];
+    if (to === 'queued') return [{ ids: can.map((r) => r.id), values: { status: 'queued', sample_collected_at: null } }];
+    const stamp = can.filter((r) => !r.sample_collected_at).map((r) => r.id);
+    const keep = can.filter((r) => r.sample_collected_at).map((r) => r.id);
+    const out = [];
+    if (stamp.length) out.push({ ids: stamp, values: { status: to, sample_collected_at: now } });
+    if (keep.length) out.push({ ids: keep, values: { status: to } });
+    return out;
 }
 
 // -----------------------------------------------------------------------------

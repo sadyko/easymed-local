@@ -5,8 +5,10 @@
 // lab-only values 'collected' and 'resulted' are new to the local vocabulary):
 //
 //   added        «Ожидает оплату»   (invoice raised, cashier not paid yet)
-//   queued       «Забор пробы»      → stamps sample_collected_at, prints label
+//   queued       «Проба взята»      → stamps sample_collected_at
 //   collected    «В работу»         → status = in_progress
+//   (LAB_STATUS_TICKS_V1: both — and «Вернуть в забор» — from the tick bar under
+//   the patient, for every ticked analysis at once; labels — «Штрих-код»)
 //   in_progress  «Результаты…»      → panel-driven entry modal → resulted
 //   resulted     «Проверить и выдать» → verified_by/at on results + row,
 //                                       status = completed, branded report
@@ -53,7 +55,8 @@ import { mountLabDevices, stopLabDevicesLive } from './lab-devices.js?v=lisfield
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
 import { pluralRu, groupLabRows, selectOptionsFor,
-         labCardState, labPrimaryAction } from './lab-grouping.js?v=labcard3';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 / LAB_CARD_V3 — pure helpers, unit-tested separately
+         labCardState, labPrimaryAction,
+         LAB_TABS, LAB_STATUS_WORD, LAB_MOVES, labTabCounts, labMovePlan, labGroupKey } from './lab-grouping.js?v=labticks1';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 / LAB_CARD_V3 — pure helpers, unit-tested separately · LAB_STATUS_TICKS_V1 — вкладки, слова статусов, кнопки отметок (новые имена — новый ?v=)
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
 // LAB_ONE_CLINIC_V1 — «лаборатория обслуживает всю клинику / только своё здание».
 import { scopeQuery, normalizeLabScope, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT } from './lab-scope.js';
@@ -97,13 +100,16 @@ const accession = (vs) => labAccession(vs.id);
 const LAB_DONE_WINDOW = 2000;
 const nowIso = () => new Date().toISOString().slice(0, 19) + 'Z';
 
+// LAB_STATUS_TICKS_V1 — слово статуса строки — то же, что у её вкладки (LAB_STATUS_WORD):
+// «Оплачен · к забору», «Результаты внесены» и «Выдан» на строке не совпадали со
+// вкладками «Забор», «Результаты» и «Все».
 const ST = {
-    added:       { label: 'Ожидает оплату',     kind: '' },
-    queued:      { label: 'Оплачен · к забору', kind: 'warn' },
-    collected:   { label: 'Проба взята',        kind: 'info' },
-    in_progress: { label: 'В работе',           kind: 'info' },
-    resulted:    { label: 'Результаты внесены', kind: 'purple' },
-    completed:   { label: 'Выдан',              kind: 'ok' },
+    added:       { label: 'Ожидает оплату',              kind: '' },
+    queued:      { label: LAB_STATUS_WORD.queued,      kind: 'warn' },
+    collected:   { label: LAB_STATUS_WORD.collected,   kind: 'info' },
+    in_progress: { label: LAB_STATUS_WORD.in_progress, kind: 'info' },
+    resulted:    { label: LAB_STATUS_WORD.resulted,    kind: 'purple' },
+    completed:   { label: LAB_STATUS_WORD.completed,   kind: 'ok' },
 };
 
 // LAB_UNPAID_TAB_V1 (2026-09-15) — «Открытые» is the lab's WORK: paid and
@@ -113,13 +119,9 @@ const ST = {
 // RELEASE_SELECT_V1 (3.25.0) — and now they are not in the list at all (owner:
 // «booked should not appear in the lab list»): the read below starts at 'queued',
 // and the «Не оплачено» tab that showed them is removed.
-const FILTERS = [
-    { key: 'open',      label: 'Открытые',    match: (s) => s !== 'completed' && s !== 'added' },
-    { key: 'collect',   label: 'Забор',       match: (s) => s === 'queued' },
-    { key: 'work',      label: 'В работе',    match: (s) => s === 'collected' || s === 'in_progress' },
-    { key: 'resulted',  label: 'Результаты',  match: (s) => s === 'resulted' },
-    { key: 'all',       label: 'Все',         match: () => true },
-];
+// LAB_STATUS_TICKS_V1 (2026-11-21) — вкладка на каждый статус и «Готово» (выданное);
+// список и правило — lab-grouping.js LAB_TABS (проверяется без DOM).
+const FILTERS = LAB_TABS;
 
 // RELEASE_SELECT_V1 — что лаборатория читает как открытую работу: отпущенное кассой
 // и дальше. Строки в смете ('added') сюда не попадают ни одной вкладкой.
@@ -536,8 +538,8 @@ async function loadLabScope() {
 
 function paintFilters() {
     clear(refs.filterWrap);
-    const counts = {};
-    for (const f of FILTERS) counts[f.key] = state.rows.filter(r => f.match(r.status)).length;
+    // LAB_STATUS_TICKS_V1 — число на вкладке — пациенты (карточки под ней), а не анализы.
+    const counts = labTabCounts(state.rows, FILTERS);
     for (const f of FILTERS) {
         refs.filterWrap.appendChild(h('button', {
             type: 'button',
@@ -942,7 +944,8 @@ function paintRows() {
             || accession(r).toLowerCase().includes(q);
     });
 
-    if (refs.totalEl) refs.totalEl.textContent = trf('показано {n} из {all}', { n: visible.length, all: state.rows.length });
+    // LAB_STATUS_TICKS_V1 — «показано N из M» — пациенты, как и числа на вкладках.
+    if (refs.totalEl) refs.totalEl.textContent = trf('показано {n} из {all}', { n: new Set(visible.map(labGroupKey)).size, all: new Set(state.rows.map(labGroupKey)).size });
     if (!visible.length) { refs.emptyEl.style.display = ''; return; }
     refs.emptyEl.style.display = 'none';
 
@@ -1018,19 +1021,17 @@ function statePill(status) {
     return h('span', { class: 'lq-state', 'data-stage': String(n) }, stageTrack(n), st.label);
 }
 
-// Подпись состояния ВСЕЙ карточки (labCardState — чистая функция в
-// lab-grouping.js). Ступень берётся по САМОЙ ОТСТАЮЩЕЙ пробирке: карточка
-// продвинулась ровно настолько, насколько продвинулась её худшая строка.
-const CARD_STATE_LABEL = {
-    unpaid:   'Ожидает оплату',
-    fresh:    'Результаты не внесены',
-    partial:  'Внесены частично',
-    entered:  'Все результаты внесены',
-    released: 'Проверено и выдано',
-};
-function cardStatePill(key, stage) {
+// Подпись состояния ВСЕЙ карточки. Ступень берётся по САМОЙ ОТСТАЮЩЕЙ пробирке:
+// карточка продвинулась ровно настолько, насколько продвинулась её худшая строка.
+// LAB_STATUS_TICKS_V1 — и слово её же — статус этой строки, то же, что у вкладки
+// («Забор», «Проба взята», «В работе», «Внесены», «Готово»). Прежние слова карточки
+// («Результаты не внесены», «Все результаты внесены», «Проверено и выдано») с
+// вкладками не совпадали: под «Забором» стояло «Результаты не внесены».
+const STATUS_AT_STAGE = Object.keys(STAGE_OF).reduce((m, s) => { m[STAGE_OF[s]] = s; return m; }, []);
+function cardStatePill(stage) {
+    const st = ST[STATUS_AT_STAGE[stage]] || { label: '—' };
     return h('span', { class: 'lq-state lq-state-card', 'data-stage': String(stage) },
-        stageTrack(stage), CARD_STATE_LABEL[key] || key);
+        stageTrack(stage), st.label);
 }
 
 // НОМЕР ПРОБЫ. Тихий, моноширинный — и копируемый: лаборант переносит его в
@@ -1283,10 +1284,11 @@ function labGroupCard(g, byVisit = new Map()) {
         ),
         // 3. В КАКОМ СОСТОЯНИИ — и 4. ЧТО ДЕЛАТЬ ДАЛЬШЕ.
         h('div', { class: 'lq-status' },
-            cardStatePill(cardState, stage),
+            cardStatePill(stage),   // LAB_STATUS_TICKS_V1 — слово вкладки
             h('div', { class: 'lq-prog' },
                 h('div', { class: 'lq-bar' }, h('i', { style: { width: pct + '%', background: allDone ? 'var(--ok-500)' : 'var(--ink-400)' } })),
-                h('span', { class: 'lq-prog-txt' }, trf('{done} / {total} готово', { done, total })),
+                // LAB_STATUS_TICKS_V1 — «внесено», а не «готово»: «Готово» — вкладка выданного.
+                h('span', { class: 'lq-prog-txt' }, trf('{done} / {total} внесено', { done, total })),
                 awaiting ? h('span', { class: 'lq-prog-txt lq-prog-wait' }, trf('{n} к забору', { n: awaiting })) : null,
             ),
             h('span', { class: 'lq-gap' }),
@@ -1301,6 +1303,7 @@ function labGroupCard(g, byVisit = new Map()) {
         h('div', { class: 'lq-list' },
             manyLabels(days, tubes) ? h('div', { class: 'lq-tubes' }, ...labelChips(days, tubes, g.accession)) : null,   // LAB_ONE_BARCODE_V1 — по номеру на день
             pickAllRow(rows),   // LAB_DOC_SPLIT_V1 — отметить все анализы карточки
+            tickBar(rows),   // LAB_STATUS_TICKS_V1 — статус отмеченных одной кнопкой
             ...rows.map(r => lqItem(r, patient))),
     );
 }
@@ -1310,17 +1313,20 @@ function labGroupCard(g, byVisit = new Map()) {
 // только отмеченные (группа — «Отметить все» карточки). Подтверждённые вместе —
 // один документ в «Документах» (shared/lab-doc-batches.js); не отмечено ничего —
 // карточка работает, как прежде, со всеми анализами.
+// LAB_STATUS_TICKS_V1 (2026-11-21) — галочка теперь у КАЖДОГО анализа: ею же
+// отмечают, у каких анализов сменить статус (панель под отметками, tickBar).
+// «Подтвердить» и «Бланк» берут из отмеченных только анализы с результатом
+// (pickable); таких среди отмеченных нет — работают со всеми, как прежде.
 function pickable(r) {
     return (state.resultsByVs[r.id] || []).length > 0 && (r.status === 'resulted' || r.status === 'completed');
 }
 function pickedOf(rows) {
-    const mine = rows.filter((r) => state.picked.has(Number(r.id)));
+    const mine = rows.filter((r) => state.picked.has(Number(r.id)) && pickable(r));
     return mine.length ? mine : rows;
 }
 function pickBox(r) {
-    if (!pickable(r)) return h('span', { class: 'lq-pick lq-pick-none' });
     const box = h('input', { type: 'checkbox', class: 'lq-pick', 'data-pick': String(r.id),
-        title: tr('Отметить анализ: подтвердить или напечатать только отмеченные'), 'aria-label': tr('Отметить анализ') });
+        title: tr('Отметить анализ: сменить статус, подтвердить или напечатать только отмеченные'), 'aria-label': tr('Отметить анализ') });
     box.checked = state.picked.has(Number(r.id));
     if (box.checked) box.setAttribute('checked', '');
     box.addEventListener('change', () => {
@@ -1330,19 +1336,56 @@ function pickBox(r) {
     return box;
 }
 function pickAllRow(rows) {
-    const can = rows.filter(pickable);
-    if (can.length < 2) return null;
-    const n = can.filter((r) => state.picked.has(Number(r.id))).length;
+    if (rows.length < 2) return null;
+    const n = rows.filter((r) => state.picked.has(Number(r.id))).length;
     const box = h('input', { type: 'checkbox', class: 'lq-pick-all', 'aria-label': tr('Отметить все анализы') });
-    box.checked = n === can.length;
+    box.checked = n === rows.length;
     if (box.checked) box.setAttribute('checked', '');
     box.addEventListener('change', () => {
-        for (const r of can) { if (box.checked) state.picked.add(Number(r.id)); else state.picked.delete(Number(r.id)); }
+        for (const r of rows) { if (box.checked) state.picked.add(Number(r.id)); else state.picked.delete(Number(r.id)); }
         paintRows();
     });
     return h('label', { class: 'lq-pick-row', style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', padding: '4px 0' } },
-        box, h('span', null, tr('Отметить все анализы')),
-        n ? h('span', { class: 'muted' }, trf('Отмечено {n}: «Подтвердить» и «Бланк» — только для них', { n })) : null);
+        box, h('span', null, tr('Отметить все анализы')));
+}
+
+// LAB_STATUS_TICKS_V1 — ПАНЕЛЬ ОТМЕЧЕННЫХ: «Отмечено N: [Проба взята] [В работу]
+// [Вернуть в забор] · Снять отметки». Кнопка видна, только если ей есть кого
+// двигать (labMovePlan); анализ с результатом кнопки не двигают. Одна кнопка —
+// одна запись на все отмеченные анализы (пачка — .in('id', …)).
+function tickBar(rows) {
+    const mine = rows.filter((r) => state.picked.has(Number(r.id)));
+    if (!mine.length) return null;
+    const hasRes = (r) => (state.resultsByVs[r.id] || []).length > 0;
+    const moves = LAB_MOVES.filter((m) => labMovePlan(mine, m.to, hasRes, nowIso()).length);
+    const btn = (m) => h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-move': m.to,
+        title: tr(m.label), onclick: (e) => moveTicked(e && e.currentTarget, mine, m) }, tr(m.label));
+    return h('div', { class: 'lq-tickbar', style: { display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', fontSize: '12.5px', padding: '6px 0' } },
+        h('span', { class: 'lq-tickbar-n' }, trf('Отмечено {n}:', { n: mine.length })),
+        ...moves.map(btn),
+        mine.some(pickable)
+            ? h('span', { class: 'muted' }, tr('«Подтвердить» и «Бланк» — только для отмеченных с результатом')) : null,
+        h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: tr('Снять отметки'),
+            onclick: () => { for (const r of mine) state.picked.delete(Number(r.id)); paintRows(); } }, tr('Снять отметки')));
+}
+async function moveTicked(btnEl, rows, move) {
+    if (btnEl) btnEl.disabled = true;
+    const hasRes = (r) => (state.resultsByVs[r.id] || []).length > 0;
+    const plan = labMovePlan(rows, move.to, hasRes, nowIso());
+    let n = 0;
+    for (const p of plan) {
+        const { error } = await supabase.from('visit_services').update(p.values).in('id', p.ids);
+        if (error) {
+            toast(error.message || tr('Не удалось обновить статус.'), 'fail');
+            if (btnEl) btnEl.disabled = false;
+            if (n) await fetchAndPaint();   // часть уже записана — показать как есть
+            return;
+        }
+        n += p.ids.length;
+    }
+    for (const r of rows) state.picked.delete(Number(r.id));
+    toast(trf(move.done, { n }), 'ok');
+    await fetchAndPaint();
 }
 
 // LAB_ONE_SCREEN_V1 — кнопка-значок из системы (.btn-icon), а не свой
@@ -1364,11 +1407,10 @@ function actionButtons(r, patient, results) {
         class: 'btn btn-outline btn-sm', type: 'button', onclick,
     }, Icon(icon, { size: 13 }), ' ' + label);
 
-    if (r.status === 'queued') {
-        btns.push(step('Забор пробы', 'Flask', () => collectDialog(r, patient)));
-    } else if (r.status === 'collected') {
-        btns.push(step('В работу', 'Activity', () => advance(r, { status: 'in_progress' }, 'Проба в работе')));
-    } else if (r.status === 'in_progress') {
+    // LAB_STATUS_TICKS_V1 — «Забор пробы» (окно → «Проба взята») и «В работу» на строке
+    // заменены галочкой и панелью отмеченных (tickBar): та же запись, сразу для
+    // нескольких анализов. Этикетки — «Штрих-код» карточки и значок на строке.
+    if (r.status === 'in_progress') {
         if (canWriteLabResults()) btns.push(step('Результаты…', 'Edit', () => openResultsModal(r, patient)));   // LIVE_AUDIT_FIX_V1
     } else if (r.status === 'resulted') {
         if (canWriteLabResults()) {   // LIVE_AUDIT_FIX_V1
@@ -1564,37 +1606,6 @@ function labModal(title, subtitle, bodyEls, footEls, width = 520, opts = {}) {
     ));
     document.body.appendChild(overlay);
     return { close };
-}
-
-// -----------------------------------------------------------------------------
-// «Забор пробы»
-// -----------------------------------------------------------------------------
-function collectDialog(r, patient) {
-    const svc = r.services || {};
-    const printCb = h('input', { type: 'checkbox', checked: true });
-    const okBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Проба взята');
-    const m = labModal(trf('Забор пробы · {acc}', { acc: accession(r) }),
-        (patient.full_name || '—') + ' · ' + (svc.name || ''),
-        [
-            h('div', { class: 'row', style: { gap: '10px', marginBottom: '10px', alignItems: 'center' } },
-                tubePill(svc.tube_color),
-                svc.specimen ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, svc.specimen) : null,
-            ),
-            h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer' } },
-                printCb, 'Распечатать этикетку со штрих-кодом'),
-        ],
-        [okBtn]);
-    okBtn.addEventListener('click', async () => {
-        okBtn.disabled = true;
-        const stamp = nowIso();
-        const ok = await advance(r, { status: 'collected', sample_collected_at: stamp }, trf('Проба взята — {acc}', { acc: accession(r) }));
-        if (!ok) { okBtn.disabled = false; return; }
-        m.close();
-        if (printCb.checked) {
-            // LAB_TUBE_LABEL_V1 — та же этикетка строки, что «Печать этикетки»: местное время и название анализа.
-            printLabel({ ...r, sample_collected_at: stamp }, patient);
-        }
-    });
 }
 
 // -----------------------------------------------------------------------------
@@ -2041,8 +2052,8 @@ async function openResultsModal(r, patient) {
 // SAME data/save path openResultsModal uses) rather than a second implementation.
 // -----------------------------------------------------------------------------
 
-// Collect a single sample from inside the worksheet — keeps the same status
-// transition collectDialog uses (local's state machine needs the explicit
+// Collect a single sample from inside the worksheet — the same status transition
+// as «Проба взята» in the queue (LAB_STATUS_TICKS_V1 tickBar; local's state machine needs the explicit
 // 'collected' status write; sample_collected_at alone isn't enough locally).
 async function wsCollect(p, repaint) {
     const stamp = nowIso();

@@ -13970,6 +13970,16 @@ export const STRINGS = {
   "Результаты анализаторов — до 2 знаков": {"en":"Analyzer results — to 2 decimal places","ru":"Результаты анализаторов — до 2 знаков","uz":"Analizator natijalari — 2 xonagacha"},   // LAB_ROUND_V1
   "Результаты анализаторов — полностью": {"en":"Analyzer results — full values","ru":"Результаты анализаторов — полностью","uz":"Analizator natijalari — to‘liq"},   // LAB_ROUND_V1
   "Отметить анализ: подтвердить или напечатать только отмеченные": {"en":"Select the analysis: confirm or print only the selected ones","ru":"Отметить анализ: подтвердить или напечатать только отмеченные","uz":"Tahlilni belgilang: faqat belgilanganlarni tasdiqlash yoki chop etish"},   // LAB_DOC_SPLIT_V1
+  "Отметить анализ: сменить статус, подтвердить или напечатать только отмеченные": {"en":"Select the analysis: change the status, confirm or print only the selected ones","ru":"Отметить анализ: сменить статус, подтвердить или напечатать только отмеченные","uz":"Tahlilni belgilang: faqat belgilanganlarning holatini o‘zgartirish, tasdiqlash yoki chop etish"},   // LAB_STATUS_TICKS_V1
+  "Внесены": {"en":"Entered","ru":"Внесены","uz":"Kiritilgan"},   // LAB_STATUS_TICKS_V1 — вкладка и статус «результаты внесены»
+  "Вернуть в забор": {"en":"Back to collection","ru":"Вернуть в забор","uz":"Namuna olishga qaytarish"},   // LAB_STATUS_TICKS_V1
+  "Снять отметки": {"en":"Clear selection","ru":"Снять отметки","uz":"Belgilarni olib tashlash"},   // LAB_STATUS_TICKS_V1
+  "Отмечено {n}:": {"en":"{n} selected:","ru":"Отмечено {n}:","uz":"{n} ta belgilandi:"},   // LAB_STATUS_TICKS_V1
+  "{done} / {total} внесено": {"en":"{done} / {total} entered","ru":"{done} / {total} внесено","uz":"{total} tadan {done} kiritildi"},   // LAB_STATUS_TICKS_V1
+  "Проба взята: {n}": {"en":"Sample collected: {n}","ru":"Проба взята: {n}","uz":"Namuna olindi: {n}"},   // LAB_STATUS_TICKS_V1
+  "В работе: {n}": {"en":"In progress: {n}","ru":"В работе: {n}","uz":"Jarayonda: {n}"},   // LAB_STATUS_TICKS_V1
+  "Возвращено в забор: {n}": {"en":"Returned to collection: {n}","ru":"Возвращено в забор: {n}","uz":"Namuna olishga qaytarildi: {n}"},   // LAB_STATUS_TICKS_V1
+  "«Подтвердить» и «Бланк» — только для отмеченных с результатом": {"en":"«Confirm» and «Form» apply only to the selected ones with a result","ru":"«Подтвердить» и «Бланк» — только для отмеченных с результатом","uz":"«Tasdiqlash» va «Blank» faqat natijasi bor belgilanganlar uchun"},   // LAB_STATUS_TICKS_V1
   "Отметить анализ": {"en":"Select analysis","ru":"Отметить анализ","uz":"Tahlilni belgilash"},   // LAB_DOC_SPLIT_V1
   "Отметить все анализы": {"en":"Select all analyses","ru":"Отметить все анализы","uz":"Barcha tahlillarni belgilash"},   // LAB_DOC_SPLIT_V1
   "Отмечено {n}: «Подтвердить» и «Бланк» — только для них": {"en":"{n} selected: «Confirm» and «Form» apply only to them","ru":"Отмечено {n}: «Подтвердить» и «Бланк» — только для них","uz":"{n} ta belgilandi: «Tasdiqlash» va «Blank» faqat ular uchun"},   // LAB_DOC_SPLIT_V1

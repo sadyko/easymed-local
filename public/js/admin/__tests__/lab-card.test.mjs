@@ -393,10 +393,14 @@ test('решение о главном действии — чистая фун�
   assert.strictEqual(labPrimaryAction('released', {}), 'report');
 });
 
-test('у каждого состояния своё слово — и оно переводится', async () => {
+// LAB_STATUS_TICKS_V1 (2026-11-21) — слово карточки — статус её самого отстающего
+// анализа, то же слово, что у вкладки: прежние «Результаты не внесены» / «Внесены
+// частично» / «Все результаты внесены» / «Проверено и выдано» с вкладками не совпадали.
+test('у каждого состояния своё слово — слово вкладки самого отстающего анализа — и оно переводится', async () => {
   const want = {
-    fresh: 'Результаты не внесены', partial: 'Внесены частично',   // RELEASE_SELECT_V1 — без «unpaid»
-    entered: 'Все результаты внесены', released: 'Проверено и выдано',
+    fresh: 'Забор',          // к забору + проба взята → отстаёт забор
+    partial: 'В работе',     // внесён + в работе → отстаёт «в работе»
+    entered: 'Внесены', released: 'Готово',
   };
   for (const [name, label] of Object.entries(want)) {
     const c = await STATE_FIXTURES[name]();
@@ -552,9 +556,11 @@ test('все действия карточки на месте в каждом �
 });
 
 test('все действия строки анализа на месте — по одному на каждый статус', async () => {
+  // LAB_STATUS_TICKS_V1 — «Забор пробы» и «В работу» ушли со строки в панель отмеченных
+  // (галочка строки → «Проба взята» / «В работу»; lab-status-ticks.test.mjs).
   const want = {
-    queued:      ['Забор пробы'],
-    collected:   ['В работу'],
+    queued:      [],
+    collected:   [],
     in_progress: ['Результаты…'],
     resulted:    ['Проверить и выдать'],
     completed:   ['Отчёт'],
@@ -568,6 +574,10 @@ test('все действия строки анализа на месте — п
     for (const label of labels) {
       assert.ok(btns.some((b) => clean(b) === label), status + ': кнопка «' + label + '» пропала со строки');
     }
+    assert.ok(!btns.some((b) => clean(b) === 'Забор пробы' || clean(b) === 'В работу'),
+      status + ': на строке снова кнопка статуса — статус меняют галочкой');
+    assert.ok(walk(c).some((n) => n.tagName === 'INPUT' && n.getAttribute('data-pick') === '805'),
+      status + ': у анализа нет галочки');
     for (const b of btns) assert.ok((b._l.click || []).length === 1, status + ': кнопка ни к чему не подключена');
     // Перепечать этикетки живёт на строке с момента, когда проба существует.
     const label = btns.find((b) => b.getAttribute('title') === 'Печать этикетки');
@@ -622,6 +632,7 @@ const extTags = (root) => walk(root).filter((n) => n.attrs && n.attrs['data-exte
 const actionsOf = (c) => ({
   card: buttons(byClass(c, 'lq-do')[0] || mk('div')).map((b) => clean(b) + '|' + (b.getAttribute('title') || '')).sort(),
   row: buttons(byClass(c, 'lq-item-do')[0] || mk('div')).map((b) => clean(b) + '|' + (b.getAttribute('title') || '')).sort(),
+  tick: walk(c).filter((n) => n.tagName === 'INPUT' && n.getAttribute('data-pick')).length,   // LAB_STATUS_TICKS_V1 — статус меняют галочкой
 });
 
 test('EXTERNAL_LAB_V1: строка очереди подписана «Внешняя лаборатория», без отметки — нет', async () => {
@@ -639,7 +650,7 @@ test('EXTERNAL_LAB_V1: отметка не меняет поведения оч�
     const filter = status === 'completed' ? 'Все' : null;
     const off = actionsOf(await card([extVs(805, status, 0)], results, { filter }));
     const on = actionsOf(await card([extVs(805, status, 1)], results, { filter }));
-    if (status !== 'added') assert.ok(off.row.length > 0, status + ': стенд не нашёл действий строки — сравнение было бы пустым');
+    if (status !== 'added') assert.ok(off.row.length > 0 || off.tick > 0, status + ': стенд не нашёл действий строки — сравнение было бы пустым');
     assert.deepStrictEqual(on, off, status + ': у внешнего анализа другой набор действий');
   }
 });

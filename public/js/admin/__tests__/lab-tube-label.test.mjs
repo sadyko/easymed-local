@@ -231,9 +231,10 @@ test('добавили анализ до или после забора — но
   assert.deepStrictEqual([...new Set(labelsOf(printed[0]).map((l) => l.code))], ['90000028', '00000031']);
 });
 
-test('номер не зависит от вкладки: под «В работе» видна одна строка, номер и копии — те же', async () => {
-  const c = await mount(PHOTO(), { filter: 'В работе' });
-  assert.strictEqual(byClass(c, 'lq-item').length, 1, 'под «В работе» — только взятая проба № 28');
+test('номер не зависит от вкладки: под «Проба взята» видна одна строка, номер и копии — те же', async () => {
+  // LAB_STATUS_TICKS_V1 — взятая проба теперь в своей вкладке «Проба взята» (была внутри «В работе»).
+  const c = await mount(PHOTO(), { filter: 'Проба взята' });
+  assert.strictEqual(byClass(c, 'lq-item').length, 1, 'под «Проба взята» — только взятая проба № 28');
   barcodeBtn(c).click();
   await tick();
   assert.deepStrictEqual(labelsOf(printed[0]).map((l) => l.code), ['90000028', '90000028', '90000028', '00000031']);   // ревью S3, M-2
@@ -280,7 +281,7 @@ test('скан этикетки дня в поиске очереди наход
   assert.strictEqual(byClass(root, 'lq-card').length, 1, 'карточка визита по номеру дня');
 });
 
-// ═══ Строка: «Печать этикетки» и «Забор пробы» ═════════════════════════════
+// ═══ Строка: «Печать этикетки» и «Проба взята» ═════════════════════════════
 
 test('«Печать этикетки» строки — её номер, местное время и название анализа', async () => {
   const c = await mount(PHOTO());
@@ -292,23 +293,47 @@ test('«Печать этикетки» строки — её номер, мес
   assert.deepStrictEqual(labelsOf(printed[0]), [{ code: '00000028', date: '02.11.2026, 19:06', tests: 'Анализ крови' }]);
 });
 
-test('«Забор пробы» с галочкой печатает этикетку строки: её номер, название, время — местное, числом', async () => {
-  const c = await mount(PHOTO());
-  const item = byClass(c, 'lq-item').find((n) => buttons(n).some((b) => clean(b) === 'Забор пробы') && textOf(n).includes('Анализ крови'));
-  assert.ok(item, 'нет строки крови с «Забор пробы»');
-  buttons(item).find((b) => clean(b) === 'Забор пробы').click();
-  await tick();
-  const ok = buttons(fakeBody).find((b) => clean(b) === 'Проба взята');
-  assert.ok(ok, 'окно «Забор пробы» не открылось');
-  // В браузере setAttribute('checked') включает галочку; у поддельного DOM свойства нет — ставим, как браузер.
-  for (const n of walk(fakeBody)) if (n.tagName === 'INPUT' && n.attrs.type === 'checkbox') n.checked = n.hasAttribute('checked');
-  ok.click();
-  await tick(80);
-  assert.strictEqual(opened, 1, 'этикетка не напечатана');
-  const [l] = labelsOf(printed[0]);
-  assert.strictEqual(l.code, '00000031');
-  assert.strictEqual(l.tests, 'Анализ крови');
-  assert.match(l.date, /^\d\d\.\d\d\.\d{4}, \d\d:\d\d$/, 'время — местное, числом, а не ISO в UTC: ' + l.date);
+// LAB_STATUS_TICKS_V1 — окна «Забор пробы» больше нет: галочка → «Проба взята», и у
+// взятой строки появляется её «Печать этикетки» — тот же номер строки и местное время взятия.
+test('галочка → «Проба взята» → «Печать этикетки» строки: её номер, название, время — местное, числом', async () => {
+  const saved = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    if (String(url).startsWith('/api/db') && body && body.table === 'visit_services' && body.op === 'update') {
+      const f = (body.filters || []).find((x) => x && x.col === 'id');
+      const ids = f ? (f.op === 'in' ? f.val : [f.val]).map(Number) : [];
+      for (const r of VISIT_SERVICES) if (ids.includes(Number(r.id))) Object.assign(r, body.values);
+      return { ok: true, json: async () => ({ data: [] }) };
+    }
+    return saved(url, opts);
+  };
+  try {
+    VISIT_SERVICES = PHOTO(); LAB_PANELS = PANELS; printed = []; opened = 0;
+    const root = mk('div');
+    await renderLaboratory(root, { tabId: 't-1' });
+    await tick();
+    const box = walk(root).find((n) => n.tagName === 'INPUT' && n.getAttribute('data-pick') === '31');
+    assert.ok(box, 'у строки крови № 31 нет галочки');
+    box.checked = true;
+    box.dispatchEvent({ type: 'change', target: box });
+    await tick();
+    const take = buttons(byClass(root, 'lq-tickbar')[0] || mk('div')).find((b) => clean(b) === 'Проба взята');
+    assert.ok(take, 'после отметки нет «Проба взята»');
+    take.click();
+    await tick(80);
+    const item = byClass(root, 'lq-item').find((n) => walk(n).some((x) => x.tagName === 'INPUT' && x.getAttribute('data-pick') === '31'));
+    const pr = item && buttons(item).find((b) => b.getAttribute('title') === 'Печать этикетки');
+    assert.ok(pr, 'у взятой строки № 31 нет «Печать этикетки»');
+    pr.click();
+    await tick();
+    assert.strictEqual(opened, 1, 'этикетка не напечатана');
+    const [l] = labelsOf(printed[0]);
+    assert.strictEqual(l.code, '00000031');
+    assert.strictEqual(l.tests, 'Анализ крови');
+    assert.match(l.date, /^\d\d\.\d\d\.\d{4}, \d\d:\d\d$/, 'время — местное, числом, а не ISO в UTC: ' + l.date);
+  } finally {
+    globalThis.fetch = saved;
+  }
 });
 
 // ═══ Ревью U11 ══════════════════════════════════════════════════════════════
