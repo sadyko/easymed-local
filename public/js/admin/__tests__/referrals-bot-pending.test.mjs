@@ -73,7 +73,9 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/')) {
     const name = u.slice('/api/rpc/'.length).split('?')[0];
     calls.push({ name, body });
-    if (name === 'doctor_bot_settings_get') return jsonOk({ enabled: true, has_token: true, token_hint: 'abcd', bot_username: 'clinic_doctors_bot', last_check_status: 'ok' });
+    if (name === 'doctor_bot_settings_get') return jsonOk({ enabled: true, has_token: true, token_hint: 'abcd', bot_username: 'clinic_doctors_bot', last_check_status: 'ok',
+      message_template: 'Здравствуйте! {пациент} & Ко, {дата}.' + String.fromCharCode(10) + '{услуги}' + String.fromCharCode(10) + 'Спасибо!' });
+    if (name === 'doctor_bot_settings_save') return jsonOk({ enabled: true, has_token: true, token_hint: 'abcd', bot_username: 'clinic_doctors_bot', last_check_status: 'ok', message_template: body.message_template });
     if (name === 'doctor_bot_stats') return jsonOk({ doctors_active: 5, with_phone: 4, connected: links.filter((l) => l.status === 'confirmed').length,
       pending: links.filter((l) => l.status === 'pending').length, without_phone: 1, notifications_30d: 3, viewed_30d: 1 });
     if (name === 'doctor_bot_links_list') return jsonOk(links.map((l) => ({ ...l })));
@@ -85,6 +87,7 @@ globalThis.fetch = async (url, opts) => {
 };
 
 const { renderReferralsBot } = await import('../views/referrals-bot.js');
+const { DEFAULT_TEMPLATE } = await import('../doctor-bot-message.js');
 
 async function mount() {
   calls.length = 0; toastMsg = null; seedLinks();
@@ -130,4 +133,46 @@ test('«Отклонить» — с вопросом; отказ в вопрос
   assert.deepEqual(calls.filter((c) => c.name === 'doctor_bot_link_reject').map((c) => c.body), [{ id: 11 }]);
   assert.equal(toastMsg, 'Подключение отклонено.');
   assert.equal(byAttr(host, 'data-bot-pending').length, 0);
+});
+
+// DOCTOR_BOT_TEMPLATE_V1 — «Сообщение врачу»: текст клиники в поле, справа — как увидит
+// врач (строки по одной, {пациент} — жирным узлом, не innerHTML; «&» не превращается в
+// разметку); без {пациент} сохранить нельзя; «Сохранить текст» шлёт message_template.
+test('DOCTOR_BOT_TEMPLATE_V1: текст сообщения правится, образец меняется сразу, сохраняется через doctor_bot_settings_save', async () => {
+  const host = await mount();
+  const area = byAttr(host, 'data-bot-template')[0];
+  assert.ok(area, 'поле текста есть');
+  assert.equal(area.value, 'Здравствуйте! {пациент} & Ко, {дата}.\n{услуги}\nСпасибо!');
+  const bubble = byAttr(host, 'data-bot-sample')[0];
+  let t = textOf(bubble);
+  assert.ok(t.includes('Здравствуйте! Иванов Иван Иванович & Ко') && t.includes('• УЗИ брюшной полости') && t.includes('Спасибо!'), t);
+  assert.ok(!t.includes('<b>') && !t.includes('&amp;') && !t.includes('{пациент}'), 'разметка и метки не видны как текст: ' + t);
+  const bold = walk(bubble).find((n) => n.tagName === 'B');
+  assert.ok(bold && textOf(bold) === 'Иванов Иван Иванович');
+  assert.ok(textOf(host).includes('Сообщение врачу') && textOf(host).includes('Получил · Oldim'));
+
+  const save = byAttr(host, 'data-bot-template-save')[0];
+  assert.equal(save.disabled, true, 'без изменений сохранять нечего');
+  area.value = 'Без метки';
+  area.dispatchEvent({ type: 'input' });
+  assert.ok(textOf(byAttr(host, 'data-bot-template-problem')[0]).includes('{пациент}'), 'объяснено, чего не хватает');
+  assert.equal(save.disabled, true, 'без {пациент} — не сохранить');
+
+  area.value = 'Новый: {пациент}';
+  area.dispatchEvent({ type: 'input' });
+  assert.ok(textOf(byAttr(host, 'data-bot-sample')[0]).includes('Новый: Иванов Иван Иванович'), 'образец обновился сразу');
+  assert.equal(save.disabled, false);
+  save.click();
+  await tick(40);
+  assert.deepEqual(calls.filter((c) => c.name === 'doctor_bot_settings_save').map((c) => c.body), [{ message_template: 'Новый: {пациент}' }]);
+  assert.equal(toastMsg, 'Текст сообщения сохранён — врачи будут получать его.');
+  assert.equal(byAttr(host, 'data-bot-template')[0].value, 'Новый: {пациент}', 'после сохранения в поле сохранённый текст');
+});
+
+test('DOCTOR_BOT_TEMPLATE_V1: «Вернуть стандартный» ставит стандартный текст с благодарностью', async () => {
+  const host = await mount();
+  byAttr(host, 'data-bot-template-reset')[0].click();
+  const area = byAttr(host, 'data-bot-template')[0];
+  assert.equal(area.value, DEFAULT_TEMPLATE);
+  assert.ok(textOf(byAttr(host, 'data-bot-sample')[0]).includes('Спасибо за доверие к нашей клинике!'));
 });

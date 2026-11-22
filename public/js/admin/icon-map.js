@@ -1,180 +1,175 @@
-// COOLICONS_V1 — какое имя из кода какой файл набора рисует.
+// ICONS_LUCIDE_V1 — какое имя из кода какой файл набора рисует.
 //
 // Единственное место, где живёт это решение. Слева — имя, которым код зовёт
-// иконку (Icon('Clock')), справа — путь внутри public/assets/icons/ БЕЗ
-// расширения. Имена справа авторские и не переименовываются: так файл можно
-// сверить с сайтом набора глазами, не разбирая код.
+// иконку (Icon('Clock')), справа — имя файла в public/assets/icons/lucide/ БЕЗ
+// расширения. Имена справа — авторские имена Lucide (lucide.dev/icons): так
+// файл можно сверить с сайтом набора глазами, не разбирая код.
 //
-// ДВА НАБОРА. Путь ищется сначала в easymed/ (нарисовано здесь, ORIGIN.md),
-// потом в coolicons/ (вендоренный набор, CC BY 4.0). Строки ниже с папкой
-// Medical/ и имена Phone_In, Phone_Out, Phone_Missed, Phone_Hang_Up, Megaphone,
-// Microphone, Microphone_Off, Coins, Key, Target, Bot — свои: в coolicons таких
-// файлов нет вовсе, так что «сначала easymed» здесь не перехват, а
-// единственное место, где рисунок есть.
+// 2026-11-22, владелец: «use more professional icons everywhere, change all the
+// icons, use more medical icons, minimalistic, not like ai generated». Весь
+// интерфейс переведён с coolicons (+ своих дорисовок) на ОДИН набор — Lucide:
+// одна сетка, одна толщина, одна рука. Где у смысла есть медицинский значок,
+// взят он: «Стационар» — койка, «Лаборатория» — колба, «Пульс» — сердце с
+// кардиограммой, «Здание» клиники — больница с крестом.
 //
-// Почему таблица, а не «имя = имя файла»: код зовёт иконки по смыслу («Касса»,
-// «Стационар»), набор называет их по рисунку («Credit_Card_01», «Moving_Desk»).
-// Переименовать 442 файла под наш словарь — значит потерять возможность найти
-// иконку на coolicons.cool; звать их авторскими именами из 88 экранов — значит
-// переписать все экраны. Таблица разделяет эти два словаря, и правка иконки
-// становится правкой одной строки здесь.
+// Почему таблица, а не «имя = имя файла»: код зовёт иконки по смыслу
+// («Patients», «Wallet»), набор называет их по рисунку («users», «wallet»).
+// Таблица разделяет эти два словаря, и смена рисунка — правка одной строки
+// здесь плюс `node scripts/build-icon-paths.mjs`.
 //
-// НЕТ ТОЧНОГО АНАЛОГА — помечено «~». coolicons это общий интерфейсный набор:
-// в нём ровно одна медицинская иконка (Environment/First_Aid) и ни одной
-// специальной. Клинические места, где приближение было прямой ошибкой формы
-// (таблетка-чемоданчик, койка-стол, стетоскоп-крест, колба-цилиндр,
-// пульс-график, три одинаковых звонка), теперь нарисованы и живут в easymed/;
-// пометка «~» осталась только там, где приближение всё ещё приближение, чтобы
-// владелец мог посмотреть на экран и сказать «нет, вот это другое».
+// НЕТ ТОЧНОГО АНАЛОГА — помечено «~» (и перечислено в NO_EXACT_MATCH ниже):
+// там решение принято за владельца, и он вправе его отменить.
 
 export const ICON_MAP = Object.freeze({
     // --- навигация и стрелки ---
-    ArrowDown:    'Arrow/Arrow_Down_MD',
-    ArrowRight:   'Arrow/Arrow_Right_MD',
-    ArrowUp:      'Arrow/Arrow_Up_MD',
-    ChevronDown:  'Arrow/Chevron_Down',
-    ChevronLeft:  'Arrow/Chevron_Left',
-    ChevronRight: 'Arrow/Chevron_Right',
-    Refresh:      'Arrow/Arrows_Reload_01',
-    Repeat:       'Arrow/Arrow_Reload_02',
+    ArrowDown:    'arrow-down',
+    ArrowRight:   'arrow-right',
+    ArrowUp:      'arrow-up',
+    ChevronDown:  'chevron-down',
+    ChevronLeft:  'chevron-left',
+    ChevronRight: 'chevron-right',
+    Refresh:      'refresh-cw',
+    Repeat:       'repeat',
 
     // --- время ---
-    Calendar:     'Calendar/Calendar',
-    Clock:        'Calendar/Clock',
+    Calendar:     'calendar',
+    Clock:        'clock',
 
     // --- связь ---
-    Bell:         'Communication/Bell',
-    Mail:         'Communication/Mail',
-    Msg:          'Communication/Chat',
-    Send:         'Communication/Paper_Plane',
-    Phone:        'Communication/Phone',
-    // Своя трубка с меткой направления в свободном верхнем углу: стрелка внутрь,
-    //   стрелка наружу, крестик. Строка журнала звонков читается формой, а не
-    //   подписью рядом (см. telephony-logic.js).
-    PhoneIn:      'Communication/Phone_In',
-    PhoneOut:     'Communication/Phone_Out',
-    PhoneMissed:  'Communication/Phone_Missed',
-    // SOFTPHONE_V1 — «Отклонить» и «Завершить» у телефона Easy-Med: трубка, положенная
-    //   на рычаг (своя, в coolicons такой нет).
-    PhoneOff:     'Communication/Phone_Hang_Up',
-    Megaphone:    'Communication/Megaphone',
+    // Входящий, исходящий и пропущенный звонок — одна трубка со своей стрелкой:
+    //   строка журнала звонков читается формой (см. telephony-logic.js).
+    Bell:         'bell',
+    Mail:         'mail',
+    Msg:          'message-square',
+    Send:         'send',
+    Phone:        'phone',
+    PhoneIn:      'phone-incoming',
+    PhoneOut:     'phone-outgoing',
+    PhoneMissed:  'phone-missed',
+    PhoneOff:     'phone-off',     // SOFTPHONE_V1 — «Отклонить» и «Завершить»
+    Megaphone:    'megaphone',
 
     // --- правка ---
-    Copy:         'Edit/Copy',
-    Edit:         'Edit/Edit_Pencil_01',
-    // CASE_DOC_FORMAT_V1 — оформление текста прямо в разделе документа.
-    Bold:         'Edit/Bold',
-    Italic:       'Edit/Italic',
-    Underline:    'Edit/Underline',
-    ListBullet:   'Edit/List_Unordered',
-    ListNumber:   'Edit/List_Ordered',
-    TextPlain:    'Edit/Text',
-    Format:       'Edit/Font',
-    Layers:       'Edit/Layers',
-    Minus:        'Edit/Remove_Minus',
-    Move:         'Edit/Move',
-    Paperclip:    'Edit/Paperclip_Attechment_Tilt',
-    Plus:         'Edit/Add_Plus',
-    Ruler:        'Edit/Ruler',
+    Copy:         'copy',
+    Edit:         'pencil',
+    Bold:         'bold',          // CASE_DOC_FORMAT_V1 — оформление текста в документе
+    Italic:       'italic',
+    Underline:    'underline',
+    ListBullet:   'list',
+    ListNumber:   'list-ordered',
+    TextPlain:    'type',
+    Format:       'case-sensitive',
+    Layers:       'layers',
+    Minus:        'minus',
+    Move:         'move',
+    Paperclip:    'paperclip',
+    Plus:         'plus',
+    Ruler:        'ruler',
 
-    // --- окружение ---
-    Drop:         'Environment/Water_Drop',
-    Droplet:      'Environment/Water_Drop',
-    // ~ Лёгких нет (иконка в коде есть, ни один экран её не зовёт).
-    Lungs:        'Environment/Leaf',
-    // ~ Полукруга «контраст» нет (иконка в коде есть, ни один экран её не зовёт).
-    Contrast:     'Environment/Moon',
+    // --- медицина ---
+    Stethoscope:  'stethoscope',
+    Pulse:        'heart-pulse',   // кардиограмма; графики активности — Activity
+    Heart:        'heart',
+    Pill:         'pill',
+    Flask:        'flask-conical',
+    Bed:          'bed',
+    Thermo:       'thermometer',
+    Drop:         'droplet',
+    Droplet:      'droplet',
+    // ~ Лёгких в наборе нет: дыхание — «ветер» (иконка в коде есть, ни один экран её не зовёт).
+    Lungs:        'wind',
+
+    Building:     'hospital',      // здание клиники, филиал, подключение клиники
 
     // --- файлы ---
-    Doc:          'File/File_Document',
-    Folder:       'File/Folder',
-    NotePencil:   'File/Note_Edit',   // V3120_FIX — «Мой профиль» врача звал имя, которого в карте не было
+    Doc:          'file-text',
+    Folder:       'folder',
+    NotePencil:   'notebook-pen',
 
     // --- интерфейс ---
-    Link:         'Interface/Link',   // V3120_FIX — карточка «Контакты и соцсети»
-    Chart:        'Interface/Chart_Bar_Vertical_01',
-    Check:        'Interface/Check',
-    Download:     'Interface/Download',
-    Filter:       'Interface/Filter',
-    Heart:        'Interface/Heart_01',
-    Lock:         'Interface/Lock',
-    Receipt:      'Interface/Ticket_Voucher',
-    Search:       'Interface/Search_Magnifying_Glass',
-    Settings:     'Interface/Settings',
-    Trash:        'Interface/Trash_Empty',
-    Trend:        'Interface/Trending_Up',
-    Wallet:       'Interface/Credit_Card_01',
-    ZoomIn:       'Interface/Magnifying_Glass_Plus',
-    Coins:        'Interface/Coins',
-    Key:          'Interface/Key',
-    Target:       'Interface/Target',
-    // Activity — это графики активности и журналы движений (см. вызовы), линейный
-    //   график им точен; кардиограмма живёт отдельно, под именем Pulse.
-    Activity:     'Interface/Chart_Line',
-    // ~ Искр/«магии» нет. «Что нового» и автоматизации получают звезду.
-    Sparkles:     'Interface/Star',
-    // ~ Градусника нет (иконка в коде есть, ни один экран её не зовёт).
-    Thermo:       'Medical/Thermometer',
+    Link:         'link',
+    Chart:        'chart-column',
+    Check:        'check',
+    Download:     'download',
+    Filter:       'funnel',
+    Lock:         'lock',
+    Receipt:      'receipt-text',   // без знака доллара: клиника считает в сумах
+    Search:       'search',
+    Settings:     'settings',
+    Trash:        'trash-2',
+    Trend:        'trending-up',
+    Wallet:       'wallet',
+    ZoomIn:       'zoom-in',
+    Coins:        'coins',
+    Key:          'key',
+    Target:       'target',
+    Activity:     'activity',
+    // ~ «Искры» — знак ИИ, а владелец просил «not like ai generated»: «Что нового» и автоматизации получают звезду.
+    Sparkles:     'star',
 
-    // --- медицина (свой рисунок, public/assets/icons/easymed/) ---
-    Bed:          'Medical/Bed',
-    Flask:        'Medical/Flask',
-    Pill:         'Medical/Pill',
-    Pulse:        'Medical/Pulse',
-    Stethoscope:  'Medical/Stethoscope',
+    Contrast:     'contrast',
 
     // --- медиа ---
-    Headset:      'Media/Headphones',
-    // SOFTPHONE_V1 — «Микрофон вкл.» / «Микрофон выкл.» телефона Easy-Med. Микрофона
-    //   в coolicons нет (раньше здесь стоял «человек с волнами» User_Voice,
-    //   помеченный «~»), — нарисован свой, и перечёркнутый к нему.
-    Mic:          'Media/Microphone',
-    MicOff:       'Media/Microphone_Off',
-    Image:        'Media/Image_01',
-    Pause:        'Media/Pause',
-    Stop:         'Media/Stop',
+    Headset:      'headset',
+    Mic:          'mic',           // SOFTPHONE_V1 — «Микрофон вкл.» / «выкл.»
+    MicOff:       'mic-off',
+    Image:        'image',
+    Pause:        'pause',
+    Stop:         'square',
 
     // --- меню ---
-    Dot3:         'Menu/More_Horizontal',
-    Grid:         'Menu/More_Grid_Big',
-    X:            'Menu/Close_MD',
+    Dot3:         'ellipsis',
+    Grid:         'layout-grid',
+    X:            'x',
 
-    // --- карта и здания ---
-    Building:     'Navigation/Building_01',
-    Flag:         'Navigation/Flag',
-    Globe:        'Navigation/Globe',
-    MapPin:       'Navigation/Map_Pin',
-
-    // --- формы ---
-    Shield:       'Shape/Shield',   // LICENCE_CORE_V1 / SYSTEM_SETTINGS_V1 — карточка активации
+    // --- карта и места ---
+    Flag:         'flag',
+    Globe:        'globe',
+    MapPin:       'map-pin',
 
     // --- система ---
-    Camera:       'System/Camera',
-    Dashboard:    'System/Window_Sidebar',
-    Database:     'System/Data',     // SYSTEM_SETTINGS_V1 — карточка резервных копий
-    Print:        'System/Printer',
-    Scan:         'System/Qr_Code',  // кнопка «Штрих-код» в лаборатории
-    Bot:          'System/Bot',
-    // Ракеты в наборе нет вовсе, а зовут её с ПЕРВОГО экрана новой клиники —
-    //   шапка карточки «Настройка клиники» (setup-checklist.js). Пока имени не
-    //   было в этой таблице, там рисовался перечёркнутый круг «иконка не
-    //   найдена»: первое, что видела клиника, выглядело как ошибка. Нарисована
-    //   здесь, см. easymed/System/Rocket.svg.
-    Rocket:       'System/Rocket',
+    Shield:       'shield',
+    Camera:       'camera',
+    Dashboard:    'layout-dashboard',
+    Database:     'database',
+    Print:        'printer',
+    Scan:         'qr-code',
+    Bot:          'bot',
+    Rocket:       'rocket',        // шапка «Настройка клиники» (setup-checklist.js)
 
     // --- люди ---
-    ID:           'User/User_Card_ID',
-    Patients:     'User/Users',
-    User:         'User/User_01',
+    ID:           'id-card',
+    Patients:     'users',
+    User:         'user',
+
+    // --- меню слева (ICONS_HEALTH_V1, 2026-11-22) ---
+    // Свои имена у пунктов меню, чтобы смена рисунка раздела не меняла ту же
+    // иконку внутри экранов (Pulse — и «Процедуры» в меню, и кардиограмма на
+    // экране). Медицинские разделы — Healthicons (папка в имени), общие — Lucide.
+    NavPatients:    'healthicons/male-and_female',
+    NavDoctor:      'healthicons/doctor',
+    NavLab:         'healthicons/microscope',
+    NavProcedures:  'healthicons/syringe',
+    NavInpatient:   'healthicons/hospitalized',
+    NavMedicines:   'healthicons/medicines',
+    NavPatientDocs: 'healthicons/i-documents_accepted',
+    NavQueue:       'ticket',
+    NavKitchen:     'utensils',
+    NavDischarge:   'door-open',
+    NavCashier:     'banknote',
+    NavCashHead:    'landmark',
+    NavInventory:   'warehouse',
+    NavMyStock:     'package-open',
+    NavDepartment:  'building-2',
+    NavDashboard:   'gauge',
+    NavReports:     'chart-pie',
 
     // --- предупреждения ---
-    Help:         'Warning/Circle_Help',
-    Warning:      'Warning/Triangle_Warning',
     // Info — запасное имя центра уведомлений: notifications.js рисует
-    //   Icon(n.icon || 'Info'), то есть любое уведомление без своей иконки.
-    //   Имени в таблице не было, поэтому «запасной» вариант был как раз тем
-    //   единственным, который не рисовался.
-    Info:         'Warning/Info',
+    //   Icon(n.icon || 'Info') для любого уведомления без своей иконки.
+    Help:         'circle-help',
+    Warning:      'triangle-alert',
+    Info:         'info',
 });
 
 /**
@@ -185,5 +180,5 @@ export const ICON_MAP = Object.freeze({
  * мест, где решение принято за владельца и он вправе его отменить.
  */
 export const NO_EXACT_MATCH = Object.freeze([
-    'Contrast', 'Lungs', 'Sparkles', 'Thermo',
+    'Lungs', 'Sparkles',
 ]);

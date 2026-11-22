@@ -301,9 +301,12 @@ export function telephonyCallLog(db, args, user) {
       SELECT c.id, c.started_at, c.call_type, c.external_number, c.internal_number,
              c.waitsec, c.billsec, c.disposition, c.recording_url, c.patient_id,
              p.full_name AS patient_name, p.mrn AS patient_mrn,
-             u.full_name AS operator_name
+             u.full_name AS operator_name,
+             a.status AS ai_status, a.summary AS ai_summary, a.score AS ai_score,
+             a.wants_booking AS ai_wants_booking, a.booked AS ai_booked, a.crm_request_id AS ai_crm_request_id
         FROM calls c
         LEFT JOIN patients p ON p.id = c.patient_id
+        LEFT JOIN ai_call_analysis a ON a.call_id = c.id   -- AI_CALLS_V1
         LEFT JOIN users u ON u.pbx_extension IS NOT NULL AND u.pbx_extension <> ''
                          AND u.pbx_extension = c.internal_number
        ORDER BY c.started_at DESC, c.id DESC
@@ -311,6 +314,12 @@ export function telephonyCallLog(db, args, user) {
   return {
     may_hear: hear,
     may_dial: mayDial(db, user),
-    calls: rows.map((c) => ({ ...c, recording_url: hear ? c.recording_url : null, has_recording: !!c.recording_url })),
+    // AI_CALLS_V1 — разбор ИИ пересказывает сам разговор, поэтому виден тем же, кому
+    // разрешено его слушать («Прослушать запись»); остальным — ничего.
+    calls: rows.map(({ ai_status, ai_summary, ai_score, ai_wants_booking, ai_booked, ai_crm_request_id, ...c }) => ({
+      ...c, recording_url: hear ? c.recording_url : null, has_recording: !!c.recording_url,
+      ai: hear && ai_status ? { status: ai_status, summary: ai_summary || '', score: ai_score, wants_booking: ai_wants_booking === 1,
+        booked: ai_booked === 1, crm_request_id: ai_crm_request_id || null } : null,
+    })),
   };
 }

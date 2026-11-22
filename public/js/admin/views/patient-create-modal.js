@@ -786,7 +786,9 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null }
     // после того, как его завели.
     const cancelBtn = h('button', { class: 'btn btn-outline', type: 'button', onclick: close },
         tr('Отмена'));
-    const saveAndServiceBtn = h('button', { class: 'btn btn-outline', type: 'button',
+    // ADD_SERVICE_GREEN_V1 (2026-11-21, владелец: «add service button should be
+    // green») — зелёная (--ok), чтобы отличаться от синей «Создать пациента».
+    const saveAndServiceBtn = h('button', { class: 'btn btn-success btn-add-service', type: 'button',
         onclick: (ev) => guarded(ev, () => save({ openVisit: true })) },
         Icon('Plus', { size: 14 }), ' ', tr('Добавить услугу'));
     const saveOnlyBtn = h('button', { class: 'btn btn-primary', type: 'button',

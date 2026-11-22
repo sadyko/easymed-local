@@ -214,6 +214,7 @@ globalThis.fetch = async (url, opts = {}) => {
 const tick = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 
 const { renderPatientsHub, mountCalendarInto } = await import('../views/patients-hub.js');
+const { railToolsFor } = await import('../rail-tools.js');   // PATIENTS_RAIL_V1
 const { renderBookingDay } = await import('../views/booking-day.js');   // BOOKING_DAY_TO_WIZARD_V1 — с подменой окна услуг
 const { openPatientCreateModal } = await import('../views/patient-create-modal.js?v=onewin1');
 const { renderQueue, stopQueuePolling } = await import('../views/queue.js?v=q7');
@@ -226,7 +227,11 @@ const { setFullAccess, setEffectiveFromRole, isModuleAllowed, isRouteAllowed, ca
 const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
 const textOf = (el) => walk(el).map((n) => n._t || '').join('');
 const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
-const tabButtons = (root) => walk(root).filter((n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab');
+// PATIENTS_RAIL_V1 — кнопки вкладок живут в левой колонке: экран отдаёт их через
+// rail-tools.js, и тест берёт их оттуда же (тот же экземпляр модуля, что у экрана).
+const railButtons = () => ((railToolsFor('patients') || (() => []))() || []).flat().filter((n) => n && n.tagName === 'BUTTON');
+// DUP_TO_RAIL_V1 — в колонке под вкладками ещё и «Дубликаты» (своей группой); вкладки — без неё.
+const tabButtons = () => railButtons().filter((n) => !('data-rail-dup' in n.attrs));
 const tabLabel = (b) => walk(b).filter((n) => n.tagName !== 'SVG').map((n) => n._t || '').join('').trim();
 const panelFor = (root, id) => walk(root).find((n) => n.attrs['data-tab-panel'] === id);
 const visiblePanels = (root) => walk(root).filter((n) => n.attrs['data-tab-panel'] && n.style.display !== 'none');
@@ -270,7 +275,7 @@ test('каждая вкладка показывает СВОЁ: список п
 
   const btns = tabButtons(box);
   // BOOKING_DAY_V1 — четвёртая вкладка «Бронирование»: день одного врача.
-  assert.deepEqual(btns.map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование'], 'полоса вкладок не та');
+  assert.deepEqual(btns.map(tabLabel), ['Пациенты', 'Очередь', 'Записи', 'Бронирование'], 'полоса вкладок не та');
   assert.equal(hub.activeTab(), 'list', 'по умолчанию открывается не список');
   assert.equal(visiblePanels(box).length, 1, 'видна не ровно одна вкладка');
 
@@ -298,37 +303,23 @@ test('каждая вкладка показывает СВОЁ: список п
   hub.destroy();
 });
 
-test('полоса вкладок доступна с клавиатуры: стрелки, Home и End', async () => {
+// PATIENTS_RAIL_V1 — вкладки стали пунктами левой колонки: каждая в порядке обхода
+// Tab (настоящие <button>), выбранная помечена aria-current, ровно одна.
+test('кнопки раздела в колонке: каждая доступна с клавиатуры, выбранная помечена', async () => {
   reset();
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
   const btns = tabButtons(box);
-  // В tablist из порядка обхода Tab вынуто всё, кроме активной вкладки, —
-  // значит по стрелкам обязано ходить, иначе двух вкладок из трёх для
-  // клавиатуры просто не существует.
-  assert.deepEqual(btns.map((b) => b.attrs.tabindex), ['0', '-1', '-1', '-1']);
-  const press = (b, key) => b.dispatchEvent({ type: 'keydown', key, preventDefault() {} });
-
-  press(btns[0], 'ArrowRight'); await tick();
-  assert.equal(hub.activeTab(), 'queue');
-  press(btns[1], 'ArrowRight'); await tick();
-  assert.equal(hub.activeTab(), 'calendar');
-  press(btns[2], 'ArrowRight'); await tick();
-  assert.equal(hub.activeTab(), 'booking');   // BOOKING_DAY_V1
-  press(btns[3], 'ArrowRight'); await tick();
-  assert.equal(hub.activeTab(), 'list', 'стрелка вправо с последней вкладки не вернулась к первой');
-  press(btns[0], 'ArrowLeft'); await tick();
+  assert.ok(btns.every((b) => b.tagName === 'BUTTON' && b.attrs.tabindex !== '-1'), 'кнопка выпала из обхода Tab');
+  assert.equal(walk(box).filter((n) => n.attrs && n.attrs.role === 'tab').length, 0, 'в экране снова полоса вкладок');
+  const current = () => tabButtons(box).map((b) => b.attrs['aria-current'] || null);
+  assert.deepEqual(current(), ['page', null, null, null]);
+  btns[3].click(); await tick();
   assert.equal(hub.activeTab(), 'booking');
-  press(btns[3], 'Home'); await tick();
-  assert.equal(hub.activeTab(), 'list');
-  press(btns[0], 'End'); await tick();
-  assert.equal(hub.activeTab(), 'booking');
-  // Активная вкладка — единственная в порядке обхода, и она же помечена.
-  assert.deepEqual(tabButtons(box).map((b) => b.attrs['aria-selected']), ['false', 'false', 'false', 'true']);
-  assert.deepEqual(tabButtons(box).map((b) => b.attrs.tabindex), ['-1', '-1', '-1', '0']);
+  assert.deepEqual(current(), [null, null, null, 'page']);
+  assert.ok(hasClass(btns[3], 'active') && !hasClass(btns[0], 'active'), 'выделена не та кнопка');
   hub.destroy();
 });
-
 test('вкладка живёт в адресе: подмаршрут переживает перезагрузку и переходит replaceState', async () => {
   reset();
   // Перезагрузка на '#patients/queue': оболочка отдаёт payload.sub — раздел
@@ -428,7 +419,7 @@ test('регистратура видит все три вкладки, и ка�
 
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-  assert.deepEqual(tabButtons(box).map(tabLabel), ['Список', 'Очередь', 'Записи', 'Бронирование'],
+  assert.deepEqual(tabButtons(box).map(tabLabel), ['Пациенты', 'Очередь', 'Записи', 'Бронирование'],
     'регистратура недосчиталась вкладок');
   hub.destroy();
 
@@ -621,8 +612,10 @@ test('без права «Регистрация пациента» окно н�
     'входов создания пациента стало не три — тест перечисляет не все');
   assert.ok(/onCreatePatient: \(\) => openCreatePatient\(\)/.test(src),
     'калькулятор услуг больше не ходит через общий вход');
-  assert.strictEqual((src.match(/=> openFastRegistration\(\)/g) || []).length, 1,
-    'входов быстрой регистрации стало не один — тест перечисляет не все');
+  // FAST_REG_MERGED_V1 (2026-11-21) — отдельного входа в окно fast-registration.js
+  // со списка больше нет: «Быстрая регистрация» — это кнопка create-patient выше.
+  assert.strictEqual((src.match(/openFastRegistration/g) || []).length, 0,
+    'со списка снова ведёт отдельный вход быстрой регистрации — он пройдёт мимо этого перечня');
 
   // Вход 4 — кнопка «Быстрая регистрация» в шапке списка (views/patients.js).
   // FAST_REG_ONE_SCREEN_V1 — у неё СВОЁ окно (views/fast-registration.js), и
@@ -694,8 +687,9 @@ test('поиск по списку не проигрывает появлени�
     ') — это мигание на самом «печатаемом» экране продукта');
 
   // И смена фильтра — тоже не повод проигрывать появление снова.
-  const dupChip = walk(box).find((n) => n.tagName === 'BUTTON' && String(n.attrs.title || '').startsWith('Возможные дубликаты'));
-  assert.ok(dupChip, 'в шапке списка нет фильтра дубликатов');
+  // DUP_TO_RAIL_V1 — фильтр дубликатов стоит в левой колонке, не в шапке списка.
+  const dupChip = railButtons().find((n) => String(n.attrs.title || '').startsWith('Возможные дубликаты'));
+  assert.ok(dupChip, 'в колонке нет фильтра дубликатов');
   dupChip.click();
   await tick(80);
   assert.strictEqual(observersMade, 1, 'смена фильтра проиграла появление заново');
@@ -716,12 +710,12 @@ test('V3120_FIX: вкладки «Записи» и «Очередь» — то�
   const sessionUser = globalThis.window.easymed.state.user;
   const CASES = [
     // [роль сессии, разделы, ожидаемые вкладки]
-    ['nurse',     ['patients', 'queue'],        ['Список', 'Очередь']],
-    ['cashier',   ['patients', 'queue'],        ['Список', 'Очередь']],
-    ['lab',       ['patients', 'labs'],         ['Список']],
+    ['nurse',     ['patients', 'queue'],        ['Пациенты', 'Очередь']],
+    ['cashier',   ['patients', 'queue'],        ['Пациенты', 'Очередь']],
+    ['lab',       ['patients', 'labs'],         ['Пациенты']],
     // BOOKING_DAY_V1 — «Бронирование» видят те же, кому открыты «Записи».
-    ['registrar', ['patients', 'queue'],        ['Список', 'Очередь', 'Записи', 'Бронирование']],
-    ['doctor',    ['patients'],                 ['Список', 'Записи', 'Бронирование']],
+    ['registrar', ['patients', 'queue'],        ['Пациенты', 'Очередь', 'Записи', 'Бронирование']],
+    ['doctor',    ['patients'],                 ['Пациенты', 'Записи', 'Бронирование']],
   ];
   try {
     for (const [role, sections, want] of CASES) {
@@ -774,24 +768,21 @@ test('V3120_FIX / PATIENT_BOT_INVITE_V1: отметка Telegram в конце �
   }
 });
 
-test('V3120_FIX: «Баланс» в реестре показывает и депозит, и долг — долг не растворяется', async () => {
+// BALANCE_COL_REMOVED_V1 (2026-11-21, владелец: «remove the balance place») —
+// колонки «Баланс» в реестре нет; долг виден меткой у имени (DEBT_FLOW_V1).
+test('BALANCE_COL_REMOVED_V1: в реестре нет колонки «Баланс» и сумм депозита', async () => {
   reset();
   setFullAccess('Admin');
   AGGS = [{ patient_id: 'p-1', visit_count: 2, balance: 120000, debt: 375000, net_balance: -255000 }];
   try {
-    const { renderPatients } = await import('../views/patients.js?v=v3120bal');
+    const { renderPatients } = await import('../views/patients.js?v=balrm1');
     const box = mk('div');
     await renderPatients(box, { onNavigate() {}, embedded: true });
     await tick(60);
-    const t = textOf(box);
-    assert.match(t, /\+120\s000/, 'депозит пациента не виден: ' + t.slice(0, 300));
-    assert.match(t, /долг 375\s000/, 'долг пациента пропал из реестра');
-    // без долга — только депозит, без красной строки
-    AGGS = [{ patient_id: 'p-1', visit_count: 2, balance: 0, debt: 0, net_balance: 0 }];
-    const box2 = mk('div');
-    await renderPatients(box2, { onNavigate() {}, embedded: true });
-    await tick(60);
-    assert.equal(walk(box2).filter((n) => hasClass(n, 'pt-bal-debt')).length, 0, 'строка долга у пациента без долга');
+    const heads = walk(box).filter((n) => n.tagName === 'TH').map(textOf);
+    assert.ok(!heads.some((x) => /Баланс/.test(x)), 'колонка «Баланс» вернулась: ' + heads.join(' | '));
+    assert.doesNotMatch(textOf(box), /Депозит\s*120/, 'сумма депозита снова в строке реестра');
+    assert.equal(walk(box).filter((n) => hasClass(n, 'pt-bal-debt')).length, 0);
   } finally {
     AGGS = null;
   }

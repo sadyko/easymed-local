@@ -1306,7 +1306,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         return h('span', { class: 'rcal-av' + (hue ? ' ' + hue : '') }, initials(res.name));
     }
 
-    let railListEl, gridWrapEl, countEl, naprSelEl, dayLabelEl, dateInputEl, statsEl, branchSelEl;
+    let railListEl, gridWrapEl, countEl, naprSelEl, dayLabelEl, dateInputEl, branchSelEl;
     let miniEl, stepperEl, stepSelEl;
     // Полотно, посчитанное под то, что реально надо показать.
     let canvas = { from: CANVAS_FROM, to: CANVAS_TO };
@@ -1734,22 +1734,6 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         return body;
     }
 
-    function repaintStats() {
-        if (!statsEl) return;
-        const a = state.appts || [];
-        const by = (st) => a.filter(x => x.status === st).length;
-        const cards = [
-            ['Всего', a.filter(x => x.status !== 'cancelled').length, 'var(--ink-700, #334155)'],
-            ...STATUS_ORDER.map(k => [STATUS_META[k].label, by(k), STATUS_META[k].color]),
-        ];
-        clear(statsEl);
-        for (const [label, n, color] of cards) {
-            statsEl.appendChild(h('div', { class: 'rcal-stat' },
-                h('div', { class: 'rcal-stat-n', style: { color } }, String(n)),
-                h('div', { class: 'rcal-stat-l' }, tr(label))));
-        }
-    }
-
     /**
      * ПОЛОСА ЧЕСТНОСТИ. Показывается ровно тогда, когда в сетке есть чужое
      * здание — своё её не заслуживает и не получает.
@@ -1804,7 +1788,6 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
 
     function repaintGrid() {
         recomputeCanvas();
-        if (statsEl) repaintStats();
         hideTip();
         clear(gridWrapEl);
         if (state.failed.length) {
@@ -2065,8 +2048,10 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             ...STATUS_ORDER.map(k => h('span', { class: 'rcal-leg' }, h('span', { class: 'rcal-dot', style: { background: STATUS_META[k].color } }), tr(STATUS_META[k].label))),
             h('span', { class: 'rcal-leg' }, h('span', { class: 'rcal-leg-off' }), tr('вне приёма')));
         gridWrapEl = h('div', { class: 'rcal-gridwrap' });
-        statsEl = h('div', { class: 'rcal-stats' });
-        const main = h('div', { class: 'rcal-main' }, toolbar, statsEl, legend, gridWrapEl);
+        // RCAL_NO_STATS_V1 (2026-11-22, владелец со снимком полосы «Всего · Записан ·
+        // Подтверждён · Пришёл · Не пришёл · Отменён»: «remove this») — полосы счётчиков
+        // над сеткой больше нет; статусы называет легенда, а записи видны в самой сетке.
+        const main = h('div', { class: 'rcal-main' }, toolbar, legend, gridWrapEl);
 
         root.appendChild(h('div', { class: 'rcal-page' }, rail, main));
         refreshBranchOptions();

@@ -224,7 +224,8 @@ test('экран спрашивает порционник у сервера и 
   assert.equal('ward_id' in sheetCalls[0].args, false, 'без фильтра отделение не передаётся');
 
   const text = textOf(root);
-  assert.ok(text.includes('Порционник'));
+  // CLINIC_NO_BANNER_V1 (2026-11-21) — баннера с именем экрана нет: имя — пункт колонки.
+  assert.ok(!text.includes('Добрый') && !text.includes('Доброе'), 'на экране снова баннер с приветствием');
   assert.ok(text.includes('Стол №5 — 2 порц.'), 'итог кухни на экране');
   assert.ok(text.includes('Терапия') && text.includes('Хирургия'));
   assert.ok(text.includes('Юсупов Алишер'), 'пациент без стола показан');

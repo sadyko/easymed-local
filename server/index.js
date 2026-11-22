@@ -20,6 +20,7 @@ import { scheduleInboxPolling } from './services/meta/inbox-poller.js';   // MET
 import { recoverJobsAtBoot } from './services/ai/queue.js';   // AI_CHAT_V1 — ИИ-помощник в чатах
 import { flagChat } from './services/ai/guards.js';   // AI_CHAT_V1
 import { startAiWorker } from './services/ai/worker.js';   // AI_CHAT_V1
+import { startCallWorker } from './services/ai/calls.js';   // AI_CALLS_V1 — ИИ разбирает записи звонков
 import { startLisListeners } from './lis/index.js';   // LIS_INGEST_V1
 import { createApp } from './app.js';
 import { setDataDir, setAppVersion } from './services/control/config.js';   // SUPERVISED_INSTALL_V1 / UPDATE_DELIVERY_V1
@@ -360,6 +361,9 @@ if (isMain) {
       for (const f of recoverJobsAtBoot(db).failed) flagChat(db, f.channel, f.chat_key, 'unknown_send');
     } catch (e) { console.warn('[ai] boot recovery:', e && e.message); }
     try { startAiWorker(db); } catch (e) { console.warn('[ai] worker:', e && e.message); }
+    // AI_CALLS_V1 — разбор записей звонков: выключенная функция стоит одного чтения
+    // настроек в 20 секунд; таймер unref, сбой — предупреждение, не остановка.
+    try { startCallWorker(db); } catch (e) { console.warn('[ai-calls] worker:', e && e.message); }
     console.log('');
     console.log('Easy-Med Local is running.');
     console.log(`  On this PC:      http://localhost:${PORT}`);

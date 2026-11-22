@@ -7,7 +7,7 @@ try { document.title = (document.title || 'Easy-Med') + ' · b2107a'; } catch (e
 import { supabase, pingSupabase } from './supabase.js';
 import { SECTIONS } from './admin/sections.js?v=rolecmp1';
 import { h, Icon, clear, initials } from './admin/ui.js';
-import { activeSectionOf, isNavSectionOpen, setNavSectionOpen, navFitsOpen, groupBadge } from './admin/nav-fold.js?v=navfold1';   // NAV_GROUPS_V1 — свёрнутые группы меню; navFitsOpen, groupBadge — FIX_318_V1
+import { groupBadge } from './admin/nav-fold.js?v=navfold1';   // FIX_318_V1 — сумма счётчиков; DEPT_TOPNAV_V1 — теперь на вкладке отдела
 import { dateWords } from './shared/date-words.js';   // SIDEBAR_CLOCK_V1 — дата словами под часами
 import { loginStage, PULSE_SVG } from './shared/login-stage.js';   // LOGIN_STAGE_V1 — одна сцена входа с «/»
 import { phoneInput } from './admin/phone-input.js?v=ph1';
@@ -24,12 +24,11 @@ import {
     setActorRoleGrants,   // JOURNALS_V1_RJ3 — права каждой роли в силе (и дополнительных у администратора)
     scopedProviderId, ownDepartmentId, PERSONAL_VIEWS,   // ownDepartmentId / PERSONAL_VIEWS — MY_STOCK_V1
     canSeeAllLeads,   // CRM_HEAD_MERGE_TAGS_V1 — счётчик задач всей команды руководителю колл-центра
-    canCreatePatient,   // SIDEBAR_NEW_PATIENT_V1 — кнопка «Новый пациент» в шапке меню
     commerceToolLevel,   // COMMERCE_BLOCK_V1 — «Ссылки для рекламы»: своя строка «Ролей»
+    actorIsAdmin,   // REFERRALS_RAIL_SUB_V2 — вкладки ботов «Реферирования» только администратору
 } from './admin/permissions.js';
-// SIDEBAR_NEW_PATIENT_V1 — то же окно и ТОТ ЖЕ адрес модуля, что у «Пациентов»
-// (views/patients.js): разошедшийся ?v= завёл бы второй экземпляр окна.
-import { openPatientCreateModal } from './admin/views/patient-create-modal.js?v=onewin1';
+import { getScrollTop, setScrollTop } from './admin/scroll-root.js';   // SCROLL_IN_CONTENT_V1 — прокручивается область содержимого, а не окно
+import { railToolsFor, onRailToolsChange } from './admin/rail-tools.js';   // RAIL_TOOLS_V1 — кнопки экрана в колонке
 import {
     verifyLogin, actorFromUser,
     rehydrateUserFromSession, signOutAndReload,
@@ -91,7 +90,7 @@ import { overdueTaskCount } from './admin/views/crm-tasks.js';   // CRM_DEDUP_SE
 import { renderDocsArchive }  from './admin/views/docs-archive.js?v=pa1';   // CLINICAL_DOCS_ARCHIVE_V1 — restored after concurrent clobber; PRINT_AUTO_V1 — pa1 «Открыть» только показывает
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=jrn9';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder; JOURNALS_V1 — журналы (jrn1 карточки, jrn2 окно выбора услуг, jrn3 обрезка заключения, jrn4 «Печать», jrn5 «Скачать Excel» снова доступна, jrn6 печать и поиск окна выбора); JOURNALS_V1_RJ2C — jrn7 предел выбора и печати, выбор у каждого сотрудника, jrn8 «Итого — по всем строкам» на печати; JOURNALS_V1_ALL — jrn9 ничего не выбрано — все услуги
 import { renderWardBeds }     from './admin/views/ward-beds.js?v=board5';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled); BED_BOARD_SHARED_V1 — доска коек теперь ещё и окно выбора койки
-import { renderInpatient }    from './admin/views/admissions.js?v=inp3';   // INPATIENT_ONE_SECTION_V1 — «Стационар» одним разделом: заявки · койки · госпитализации
+import { renderInpatient, visibleTabs as inpatientTabs, currentInpatientTab, selectInpatientTab, defaultInpatientTab } from './admin/views/admissions.js?v=inp3';   // INPATIENT_ONE_SECTION_V1 — «Стационар» одним разделом: заявки · койки · госпитализации
 import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp8';   // MAR_NURSE_V1 — задачи медсестры: пациент — якорь, «5 прав»; inp7 — mar-sheet inp6 (OWN_SHELF_ONLY_V1, ревью F5); inp8 — mar-sheet inp7 (ревью F6)
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
 import { renderDischarge }   from './admin/views/discharge.js?v=disch1';   // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (Задача 8; экран был написан без маршрута)
@@ -109,7 +108,7 @@ import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=jrn1';   // ROO
 import { renderDepartments } from './admin/views/departments.js?v=dept1';   // DEPARTMENTS_V1 — отделы: руководитель, команда, помещения, снабжение
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
-import { renderReferrals }        from './admin/views/referrals.js?v=ref1';   // REFERRALS_CRM_V1 — «Реферирование» под CRM
+import { renderReferrals, TABS as REFERRAL_TABS } from './admin/views/referrals.js?v=ref1';   // REFERRALS_RAIL_SUB_V2 — вкладки подпунктами в колонке   // REFERRALS_CRM_V1 — «Реферирование» под CRM
 import { renderNavVisibility } from './admin/views/nav-visibility.js?v=navvis1';   // NAV_VISIBILITY_V1 — «Настройки → Видимость разделов»
 import { isHiddenView, normalizeHidden } from './admin/nav-visibility-logic.js?v=navvis1';   // NAV_VISIBILITY_V1
 import { renderMetaSettings }      from './admin/views/meta-settings.js?v=meta1';   // META_LEADS_V1 — Meta Lead Ads -> CRM
@@ -118,7 +117,7 @@ import { renderSmsSettings }      from './admin/views/sms-settings.js?v=sms1';  
 import { renderCommercePush }     from './admin/views/commerce-push.js?v=push2';   // SMS_PUSH_V1 — Push-уведомление: Telegram и SMS
 import { renderDailyReport }      from './admin/views/daily-report.js';   // DAILY_REPORT_BOT_V1 — отчёт совету директоров в Telegram
 import { renderAiAssistant }      from './admin/views/ai-assistant.js';   // AI_CHAT_V1 — ИИ-помощник: переключатель «ИИ отвечает в чатах»
-import { renderCommerceHub }      from './admin/views/commerce-hub.js?v=tools1';   // COMMERCE_TOOLS_V1 — витрина инструментов
+import { renderCommerceHub, BOARD as COMMERCE_BOARD, visibleChats as commerceChats, visibleTools as commerceTools } from './admin/views/commerce-hub.js?v=tools1';   // COMMERCE_TOOLS_V1 — витрина инструментов; COMMERCE_RAIL_V1 — те же списки в колонке
 import { renderClinicNews }       from './admin/views/clinic-news.js';   // CLINIC_NEWS_V1 — «Информационная доска»
 import { renderNewsStrip }        from './admin/clinic-news-strip.js';   // CLINIC_NEWS_STRIP_V1 — полоса новостей стойке и call-центру
 import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing
@@ -157,14 +156,11 @@ import { renderCaseOverview } from './admin/views/case-overview.js?v=co1';   // 
 // «Операции». Дизайн и принятые без него решения —
 // docs/specs/2026-10-17-sidebar-groups-design.md.
 //
-// Запись-заголовок с флагом — { section: 'Operations', fold: true } — группа,
-// которую можно свернуть щелчком по заголовку. NAV_UNFOLDED_V1 (2026-10-27,
-// владелец: «make this unfolded»): при загрузке страницы все группы раскрыты;
-// щелчок сворачивает до перезагрузки, группа открытого экрана раскрыта всегда
-// (renderSidebar, admin/nav-fold.js). Группа без флага («Клиника») раскрыта
-// всегда, и заголовок у неё не кнопка. FIX_318_V1 (B2) — если раскрытое меню не
-// входит в окно (ноутбук), по умолчанию раскрыта только группа открытого экрана
-// (fitSidebar ниже).
+// DEPT_TOPNAV_V1 (2026-11-21) — каждая запись-заголовок { section } — ОТДЕЛ
+// верхней полосы, пункты под ним — его функции в левой колонке
+// (navDepartments, renderSidebar). Флаг `fold` остался от свёрнутых групп
+// левой колонки (NAV_GROUPS_V1) и сейчас ничего не меняет: колонка показывает
+// один отдел целиком.
 //
 // Порядок пунктов — порядок владельца, и он же порядок firstAllowedView():
 // «первый доступный пункт меню» считается по этому списку. Видимое
@@ -177,10 +173,22 @@ const NAV = [
     // группами, без заголовка, и отделён чертой (.nav-top в admin.css). Домашний
     // экран от этого не меняется: firstAllowedView() перебирает пункты в
     // прежнем порядке (NAV_HOME_ORDER), где дашборд — в «Аналитике».
-    { id: 'dashboard', label: 'Dashboard', icon: 'Dashboard', top: true },
+    // REPORTS_DASHBOARD_V1 (2026-11-21, владелец: «remove dashboard block on top
+    // navigation bar … when you enter to reports, main block should show
+    // dashboard statistics») — отдельной вкладки «Дашборд» больше нет: пункт
+    // переехал первым в раздел «Отчёты» (секция Insights ниже), и вход в раздел
+    // открывает его. Порядок поиска домашнего экрана (NAV_HOME_ORDER) от этого
+    // не изменился — дашборд и раньше искался перед «Отчётами».
+    // REGISTRATION_DEPT_V1 (2026-11-21, владелец: «create registration block in
+    // top bar, and put patients there») — «Пациенты» своим разделом
+    // «Регистрация», первым в верхней полосе: с регистрации начинается приём.
+    // Пункт, его id, права и счётчик прежние — поменялся только отдел.
+    // «Очередь» (queue) осталась в «Клинике»: у кого есть «Пациенты», ей и так
+    // нет места в меню (foldsInto), а без «Пациентов» она — доска врача.
+    { section: 'Registration' },
+    { id: 'patients', label: 'Patients', icon: 'NavPatients' },
     { section: 'Clinical' },
-    { id: 'patients', label: 'Patients', icon: 'Patients' },
-    { id: 'consultation', label: 'My services', icon: 'Stethoscope' },   // DOCTOR_WORKSPACE_V1 — easymed's provider queue (was the simplified doctor-room stand-in; that route still works, just unlisted)
+    { id: 'consultation', label: 'My services', icon: 'NavDoctor' },   // DOCTOR_WORKSPACE_V1 — easymed's provider queue (was the simplified doctor-room stand-in; that route still works, just unlisted)
     // QUEUE_BOARD_V1 — доска номеров по назначениям. Стоит сразу под кабинетом
     // врача: отвечает на вопрос «кто ко мне ещё стоит», а номера для неё
     // выдаёт issue_queue_numbers при заведении услуги.
@@ -197,9 +205,17 @@ const NAV = [
     // дублирует вкладку, — `foldsInto` называет раздел, который его уже несёт.
     // Маршрут #queue при этом цел у всех: закладка и глубокая ссылка
     // открываются как открывались (см. switch в renderViewInner).
-    { id: 'queue',    label: 'Очередь', icon: 'Clock', foldsInto: 'patients' },
-    { id: 'labs',     label: 'Laboratory', icon: 'Flask' },   // LABS_UI_V1
-    { id: 'procedures', label: 'Процедуры', icon: 'Pulse' },   // PROCEDURES_V1 — очередь процедур (медсестра)
+    { id: 'queue',    label: 'Очередь', icon: 'NavQueue', foldsInto: 'patients' },
+    { id: 'labs',     label: 'Laboratory', icon: 'NavLab' },   // LABS_UI_V1
+    { id: 'procedures', label: 'Процедуры', icon: 'NavProcedures' },   // PROCEDURES_V1 — очередь процедур (медсестра)
+    // INPATIENT_DEPT_V1 (2026-11-21) — «Документы» подняты над стационарными
+    // пунктами: те ушли своим разделом ниже, а «Документы» остаются в «Клинике».
+    { id: 'patient-documents', label: 'Documents', icon: 'NavPatientDocs' },   // PATIENT_DOCUMENTS_V1
+    // INPATIENT_DEPT_V1 (2026-11-21, владелец: «bring inpatient block separately to
+    // navigation bar») — свой раздел «Стационар» в верхней полосе: окно
+    // госпитализаций и вся работа палат вокруг него — задачи медсестры,
+    // порционник, выписки. Пункты, права и маршруты прежние.
+    { section: 'Inpatient', fold: true },
     // INPATIENT_ONE_SECTION_V1 (2026-09-05) — «Стационар» ОДИН ПУНКТ, а не два.
     //
     // Здесь стояли два: «Inpatient ward» (заявки и очереди смены) и «Ward &
@@ -212,14 +228,14 @@ const NAV = [
     // Теперь это один раздел с полосой вкладок «Заявки · Койки ·
     // Госпитализации» (views/admissions.js, renderInpatient). Маршрут #beds цел
     // и ведёт в тот же раздел, открытый на вкладке «Койки» (LEGACY_ROUTES ниже).
-    { id: 'admissions', label: 'Inpatient ward', icon: 'Bed' },
+    { id: 'admissions', label: 'Inpatient ward', icon: 'NavInpatient' },
     // MAR_NURSE_V1 — задачи медсестры по листу назначений. Отдельный пункт, а не
     // вкладка внутри «Стационара»: это работа СМЕНЫ, к которой возвращаются
     // каждый час, а окно госпитализации открывают, когда кого-то кладут.
-    { id: 'mar-nurse', label: 'Treatment tasks', icon: 'Pill' },
+    { id: 'mar-nurse', label: 'Treatment tasks', icon: 'NavMedicines' },
     // KITCHEN_SHEET_V1 — порционник. Экран был написан Задачей 7 и остался без
     // единого входа: ни пункта меню, ни ветки маршрута. Здесь он их получает.
-    { id: 'kitchen-sheet', label: 'Kitchen sheet', icon: 'Doc' },
+    { id: 'kitchen-sheet', label: 'Kitchen sheet', icon: 'NavKitchen' },
     // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению»: ВТОРОЙ шаг выписки,
     // рабочее место старшей медсестры. Тот же случай, что у порционника
     // строкой выше: экран был написан Задачей 8 и остался без единого входа —
@@ -227,17 +243,18 @@ const NAV = [
     // вкладка «Стационара»: заявку подаёт врач в карте пациента, а оформляет
     // выписку другой человек и через несколько часов — это его собственный
     // список работы на смену, а не часть окна госпитализации.
-    { id: 'discharge', label: 'Discharges', icon: 'Check' },
+    { id: 'discharge', label: 'Discharges', icon: 'NavDischarge' },
     // INPATIENT_ONE_SECTION_V1 — пункт «Ward & beds» снят: доска коек стала
     // вкладкой «Койки» раздела «Стационар» выше. Крошка CRUMBS.beds, ключ прав
     // `beds` и маршрут #beds остаются на месте — исчез только второй вход в ту
     // же работу. Ветка `case 'beds'` в renderViewInner тоже цела: это пол под
     // маршрутом, чтобы адрес никогда не проваливался в «неизвестный экран».
-    { id: 'patient-documents', label: 'Documents', icon: 'Doc' },   // PATIENT_DOCUMENTS_V1
-    { section: 'Operations', fold: true },
     // NAV_GROUPS_V1 — CRM стоял вторым пунктом «Клиники»; владелец перенёс его
     // в «Операции» (17.10). Бейдж и обработчик счётчика не менялись.
-    { id: 'crm',      label: 'CRM · Заявки', icon: 'Headset', badgeKind: 'alert' },   // CRM_V1; badge — CRM_DEDUP_SEARCH_TASKS_V1: просроченные задачи, красным
+    // CRM_DEPT_V1 (2026-11-21, владелец: «bring CRM as a separate block to the
+    // top navigation») — свой раздел «CRM» в верхней полосе, перед «Операциями».
+    { section: 'CRM', fold: true },
+    { id: 'crm',     label: 'CRM · Заявки', icon: 'Headset', badgeKind: 'alert' },   // CRM_V1; badge — CRM_DEDUP_SEARCH_TASKS_V1: просроченные задачи, красным
     // REFERRALS_NAV_V1 (2026-10-26) — владелец, увидев экран кнопкой в шапке CRM:
     // «referirovanie should not be inside of CRM it should be separate section in
     // operation block». Свой пункт меню и свой ключ прав `referrals` (NAV_MODULES,
@@ -260,9 +277,15 @@ const NAV = [
     // перестановки.
     // CASHIER_UNPAID_BADGE_V1 — деньги, которые ждут: красный, как у чата выше,
     // потому что неоплаченный счёт — это работа кассира, а не справка.
-    { id: 'cashier-shifts', label: 'Cashier', icon: 'Wallet', badgeKind: 'alert' },   // CASHIER_LOCAL_V1 — Касса (module key 'cashier')
-    { id: 'cashier-head', label: 'Head cashier', icon: 'Coins' },   // CASHIER_LOCAL_V1 — Старший кассир (key 'cashier-head')
-    { id: 'inventory', label: 'Procurement', icon: 'Pill' },   // INVENTORY_UI_V1 — Закупки
+    { section: 'Operations', fold: true },   // CRM_DEPT_V1 — после ухода CRM в «Операциях» касса и старший кассир
+    { id: 'cashier-shifts', label: 'Cashier', icon: 'NavCashier', badgeKind: 'alert' },   // CASHIER_LOCAL_V1 — Касса (module key 'cashier')
+    { id: 'cashier-head', label: 'Head cashier', icon: 'NavCashHead' },   // CASHIER_LOCAL_V1 — Старший кассир (key 'cashier-head')
+    // PROCUREMENT_DEPT_V1 (2026-11-21, владелец: «put new block in top navigation
+    // as a Procurement and add there for now this two procurement instruments») —
+    // «Закупки» и «Мои запасы» своим разделом. «Мой отдел» едет с «Моими
+    // запасами» (одна галочка, MY_STOCK_V1 ниже) и виден только сотруднику с отделом.
+    { section: 'Procurement', fold: true },
+    { id: 'inventory', label: 'Procurement', icon: 'NavInventory' },   // INVENTORY_UI_V1 — Закупки
     // MY_STOCK_V1 (2026-09-23) — ДВА ЛИЧНЫХ ЭКРАНА, И ОНИ СТОЯТ ПОСЛЕДНИМИ В
     // СВОЕЙ ГРУППЕ НАМЕРЕННО. Группа была «Клиника»; NAV_GROUPS_V1 (17.10) —
     // владелец поставил «Мои запасы» в «Операции», и «Мой отдел» едет следом:
@@ -281,8 +304,8 @@ const NAV = [
     // от этой беды не спасает — при любом порядке найдётся роль, у которой
     // первым доступным окажется личный экран (кассир с отделом вместо кассы,
     // главный врач вместо дашборда).
-    { id: 'my-stock', label: 'My stock', icon: 'Layers' },   // MY_STOCK_V1
-    { id: 'my-department', label: 'My department', icon: 'Building' },   // MY_STOCK_V1
+    { id: 'my-stock', label: 'My stock', icon: 'NavMyStock' },   // MY_STOCK_V1
+    { id: 'my-department', label: 'My department', icon: 'NavDepartment' },   // MY_STOCK_V1
     // NAV_GROUPS_V1 — группа из одного пункта, так попросил владелец
     // («Settings (it should be Folded): Setting»). Заголовок и пункт зовутся
     // одинаково; бейдж обновления остаётся на пункте.
@@ -292,6 +315,11 @@ const NAV = [
     // side bar in main block build commercial instrument section»). SMS_PUSH_V1 —
     // плитки настроек остались в «Настройках»; здесь — Push-уведомление по Telegram и SMS.
     // CHATS_TO_COMMERCE_V1 — значок — непрочитанные обоих чатов (loadNavCounts), красный.
+    // COMMERCE_DEPT_V1 (2026-11-21, владелец: «bring commercial instrument
+    // separately with the name commerce to top bar») — свой раздел «Коммерция»
+    // в верхней полосе, а не пункт внутри «Настроек». Пункт, его id, права и
+    // значок прежние — поменялся только отдел, в котором он стоит.
+    { section: 'Commerce', fold: true },
     { id: 'commerce', label: 'Коммерческие инструменты', icon: 'Megaphone', badgeKind: 'alert' },
     // NAV_SECTION_KEY_V1 — раздел зовут 'Insights', а не 'Analytics': заголовок
     // переводится через t('sidebar.sections.' + section), и словарь (i18n.js)
@@ -300,7 +328,11 @@ const NAV = [
     // NAV_GROUPS_V1 — владелец назвал группу «Reports», но заголовок «Отчёты»
     // над пунктом «Отчёты» дублирует, а «Аналитика» уже переведена на три языка.
     { section: 'Insights', fold: true },
-    { id: 'reports-hub', label: 'Reports', icon: 'Chart' },   // REPORTS_HUB_V1
+    { id: 'dashboard', label: 'Dashboard', icon: 'NavDashboard' },   // REPORTS_DASHBOARD_V1 — первый пункт «Отчётов»
+    // REPORTS_RAIL_V1 — railAlways: виды отчётов (reports-hub.js setRailTools)
+    // стоят в колонке всегда, пока открыт раздел, а не только на самом хабе —
+    // со статистики отчёт выбирают тем же списком.
+    { id: 'reports-hub', label: 'Reports', icon: 'NavReports', railAlways: true },   // REPORTS_HUB_V1
 ];
 
 // Live nav badges — populated by loadNavCounts() from Supabase. Updated on
@@ -328,17 +360,17 @@ const navCounts = {
 
 const CRUMBS = {
     dashboard:     ['Insights', 'Dashboard'],
-    patients:      ['Clinical', 'Patients'],
+    patients:      ['Registration', 'Patients'],   // REGISTRATION_DEPT_V1
     'doctor-room': ['Clinical', "Doctor's room"],   // DOCTOR_ROOM_V1
     crm:           ['Clinical', 'CRM · Заявки'],   // CRM_V1
     employees:     ['Настройки', 'Сотрудники'],   // EMPLOYEE_EDITOR_V1
     services:      ['Clinical', 'Services'],   // SERVICES_CATALOG_V1
     requests:      ['Clinical', 'Заявки'],
-    'patient-card':['Clinical', 'Patients', 'Patient'],
+    'patient-card':['Registration', 'Patients', 'Patient'],   // REGISTRATION_DEPT_V1
     appointments:  ['Clinical', 'Календарь записи'],
     consultation:       ['Clinical', 'My services'],
     'service-workspace':['Clinical', 'My services', 'Patient workspace'],
-    registration:  ['Clinical', 'New patient registration'],
+    registration:  ['Registration', 'New patient registration'],   // REGISTRATION_DEPT_V1
     queue:         ['Clinical', 'Очередь'],   // QUEUE_BOARD_V1
     labs:          ['Clinical', 'Laboratory'],
     inventory:     ['Clinical', 'Procurement'],   // INVENTORY_UI_V1 — PROCUREMENT_WORKSPACE_V1
@@ -455,10 +487,17 @@ const backEl    = document.getElementById('section-back');   // APPBAR_BACK_V1
 const sidebarEl = document.getElementById('sidebar-body');
 
 // SIDEBAR_COLLAPSE_V1 — restore the persisted collapsed state before first paint (no flash).
-try {
-    if (localStorage.getItem('easymed_sidebar_collapsed') === '1')
-        document.querySelector('.app')?.classList.add('sidebar-collapsed');
-} catch (_) {}
+// DEPT_TOPNAV_V1 — рейка бывает только на широком экране: на узком колонка —
+// выдвижная панель, и в ней нужны подписи. Выбор человека в localStorage при
+// этом цел и возвращается, как только окно снова станет широким (resize ниже).
+function applyStoredCollapse() {
+    let on = false;
+    try { on = localStorage.getItem('easymed_sidebar_collapsed') === '1'; } catch (_) {}
+    let narrow = false;
+    try { narrow = !!(window.matchMedia && window.matchMedia('(max-width: 1024px)').matches); } catch (_) {}
+    document.querySelector('.app')?.classList.toggle('sidebar-collapsed', on && !narrow);
+}
+try { applyStoredCollapse(); } catch (_) {}
 const crumbsEl  = document.getElementById('crumbs');
 const statusEl  = document.getElementById('supabase-status');
 const searchEl  = document.getElementById('topbar-search');
@@ -939,11 +978,30 @@ export function backTargetOf(parent) {
     return home && isRouteAllowed(home) && !navHiddenFor(home) ? home : null;
 }
 
+// INLINE_HEAD_V1 (2026-11-21, владелец со снимком «Чат Facebook и Instagram»:
+// «this place is used not effective, as there are a lot of free spaces, correct
+// it and make accurate»). На экранах инструментов «Коммерции» шапка занимала две
+// строки: строка экрана («‹ Коммерческие инструменты» + имя) и под ней
+// подзаголовок с кнопками. «Назад» на витрину больше не нужен — все инструменты
+// стоят в колонке (COMMERCE_RAIL_V1), — и строка экрана складывается целиком, а
+// имя остаётся в шапке самого экрана (h1 не снимается, ONE_NAME_PER_SCREEN_V1 —
+// имя по-прежнему одно): имя, подзаголовок и кнопки — одной строкой.
+// PROCUREMENT_NO_HEAD_V1 (2026-11-21) — экраны без своей шапки: имя раздела —
+// заголовок колонки и выбранный в ней пункт (RAIL_TOOLS_V1), строка экрана
+// складывается. Имя в titleEl остаётся (скрытая строка) — для проверок и
+// возврата.
+const RAIL_NAMED_VIEWS = new Set(['inventory']);
+
+function inlineHeadView(view) {
+    return parentViewOf(view) === 'commerce'
+        && [...commerceRailGroups(), ...crmMessagesRailGroups()].flat().some((x) => x.route === view);   // MESSAGES_TO_CRM_V1 — и переехавшие в CRM
+}
+
 function renderBackControl() {
     if (!backEl) return;
     const pane = state.panes.find((p) => p.key === state.activeKey);
     const view = pane ? pane.view : state.view;
-    const target = backTargetOf(parentViewOf(view));
+    const target = (inlineHeadView(view) || OWN_BACK_VIEWS.has(view)) ? null : backTargetOf(parentViewOf(view));   // INLINE_HEAD_V1, OWN_BACK_VIEWS
     // Кнопка не просто прячется — она ОТКЛЮЧАЕТСЯ: спрятанная, но нажимаемая
     // кнопка ловит клавиатуру и уводит с экрана без предупреждения.
     backEl.hidden = !target;
@@ -958,10 +1016,36 @@ function renderBackControl() {
     backEl.onclick = () => navigate(target);
 }
 
+// PATIENT_CARD_ONE_BACK_V1 (2026-11-21, владелец со снимком карты пациента:
+// «why 2 patient back button and name of section, remove the repeatition»).
+// У карты пациента свой баннер со своей «‹ Пациенты» и именем пациента крупно —
+// строка экрана («‹ Пациенты» + «Пациент») повторяла и то и другое. Кнопка
+// оболочки у таких экранов не рисуется, имя прячется (OWN_BANNER_VIEWS), и
+// строка складывается целиком (APPBAR_EMPTY_V1).
+const OWN_BACK_VIEWS = new Set(['patient-card']);
+
 // Экраны, чей баннер сам называет раздел — имя в верхней панели им не нужно.
 // SECTION_HERO_V1 — баннер получили все клинические разделы (views/section-hero.js).
 const OWN_BANNER_VIEWS = new Set(['patients', 'crm', 'consultation', 'labs', 'procedures', 'admissions',
-    'mar-nurse', 'kitchen-sheet', 'discharge', 'patient-documents']);
+    'mar-nurse', 'kitchen-sheet', 'discharge', 'patient-documents',
+    // REPORTS_NO_NAME_V1 (2026-11-21, владелец со снимком «Дашборда»: «remove
+    // everywhere where it is repeating block name and taking space … check
+    // remove such text in reports everywhere»). Имя экрана в «Отчётах» уже
+    // стоит выделенным пунктом в колонке и вкладкой «Отчёты» сверху — строка
+    // экрана с ним складывается так же, как у разделов с баннером.
+    'dashboard', 'reports-hub',
+    // CASHIER_NO_NAME_V1 (2026-11-21, владелец со снимком «Кассы»: «remove such
+    // repetitions to use space smartly») — над тёмной плашкой смены стояла
+    // строка «Касса»: имя уже во вкладке сверху и выделенным пунктом колонки.
+    'cashier-shifts', 'cashier-head',
+    // …и у остальных пунктов меню, чьё имя стояло той же лишней строкой.
+    'queue', 'my-stock', 'my-department',
+    // SETTINGS_SUBNAV_V1 (2026-11-21, владелец со снимком хаба: «remove all the
+    // text repeating that it is setting block and texts from left up side»).
+    // «Настройки» уже стоят вкладкой сверху и заголовком колонки, группа —
+    // выделенным пунктом; строка экрана хаба с тем же словом складывается.
+    'settings',
+    'patient-card']);   // PATIENT_CARD_ONE_BACK_V1
 
 function renderSectionTitle() {
     if (!titleEl) return;
@@ -984,6 +1068,18 @@ function renderSectionTitle() {
     const viewNow = pane ? pane.view : state.view;
     titleEl.style.visibility = OWN_BANNER_VIEWS.has(viewNow) ? 'hidden' : '';
     renderBackControl();   // APPBAR_BACK_V1 — путь назад пересчитывается вместе с именем
+    // APPBAR_EMPTY_V1 (2026-11-21, владелец со снимком «Пациентов»: «there is
+    // enough space on top to slide the block up»). Органы управления ушли в
+    // полосу разделов (CONTROLS_IN_DEPTBAR_V1), и на экране с собственным
+    // баннером строка экрана осталась пустой полосой 56px: имя спрятано
+    // (visibility, место держит), «назад» нет. Пустая строка складывается
+    // целиком (admin.css .appbar--empty), и баннер поднимается к верху области.
+    // INLINE_HEAD_V1 — и у инструментов «Коммерции»: их имя — в шапке экрана.
+    const inlineHead = inlineHeadView(viewNow);
+    // PROCUREMENT_NO_HEAD_V1 — и у экранов, которые имя раздела носят в колонке
+    // (заголовок колонки + выбранный пункт), а своей шапки не рисуют.
+    titleEl.parentElement?.classList.toggle('appbar--empty', (OWN_BANNER_VIEWS.has(viewNow) || inlineHead || RAIL_NAMED_VIEWS.has(viewNow)) && (!backEl || !!backEl.hidden));
+    viewRoot?.classList.toggle('view-inline-head', inlineHead);
 }
 
 // ---------------------------------------------------------------------------
@@ -1067,6 +1163,7 @@ function dedupeSectionHeading(pane) {
     // пеший обход поддерева на каждую мутацию стоил бы заметно.
     try { if (root.querySelectorAll && !root.querySelectorAll('h1.page-title').length) return; }
     catch (e) { /* не умеем спросить — пройдём пешком */ }
+    if (inlineHeadView(pane.view)) return;   // INLINE_HEAD_V1 — строка экрана сложена, имя остаётся в шапке экрана
     const out = stripPageTitles(root, { name: '', removed: 0 }, false);
     if (!out.removed) return;
     // ИМЯ ЗАБИРАЕТ ТОЛЬКО ЭКРАН, КОТОРОГО НЕТ В МЕНЮ. У раздела с пунктом меню
@@ -1126,7 +1223,7 @@ window.easymedSetTabLabel = function setTabLabel(paneKey, label) {
 
 function snapshotActiveScroll() {
     const cur = state.panes.find(p => p.key === state.activeKey);
-    if (cur) cur.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+    if (cur) cur.scrollY = getScrollTop();   // SCROLL_IN_CONTENT_V1
 }
 
 // Show an already-mounted pane and mark it most-recently-used.
@@ -1155,9 +1252,7 @@ function activatePane(pane) {
     // бы прокруткой через всю страницу. Вернуться туда, где стоял, — не
     // переход, а восстановление состояния.
     if (!sameScreen) requestAnimationFrame(() => {
-        const top = pane.scrollY || 0;
-        try { window.scrollTo({ top, behavior: 'instant' }); }
-        catch (e) { window.scrollTo(0, top); }   // браузер без значения 'instant'
+        setScrollTop(pane.scrollY || 0);   // SCROLL_IN_CONTENT_V1 — мгновенно, в области содержимого
     });
 }
 
@@ -1548,47 +1643,272 @@ function navItemActive(item) {
 function navItemOwns(item) {
     return navItemActive(item)
         || parentViewOf(state.view) === item.id
-        || (item.id === 'reports-hub' && String(state.view).startsWith('report'));
+        || (item.id === 'reports-hub' && String(state.view).startsWith('report'))
+        // COMMERCE_RAIL_V1 — инструменты «Коммерции» её, даже те, чей «назад»
+        // ведёт в «Настройки» (ссылки для рекламы в Telegram).
+        || (item.id === 'commerce' && commerceRailGroups().flat().some((x) => x.route === state.view))
+        // MESSAGES_TO_CRM_V1 — чаты, Push, ссылки и доска — экраны раздела CRM.
+        || (item.id === 'crm' && crmMessagesRailGroups().flat().some((x) => x.route === state.view || parentViewOf(state.view) === x.route));
 }
 
-// NAV_GROUPS_V1 — группы, свёрнутые щелчком в ЭТОЙ загрузке страницы.
-// NAV_UNFOLDED_V1 (2026-10-27) — владелец, посмотрев на три свёрнутых заголовка:
-// «make this unfolded». Теперь по умолчанию всё раскрыто (на высоком окне меню
-// входит без прокрутки, лишние разделы прячет «Видимость разделов»), а щелчок по
-// заголовку сворачивает группу до перезагрузки. Нарочно не localStorage, как и
-// у «Настроек» (SETTINGS_HUB_LIST_V1). Группа открытого экрана раскрыта всегда.
-const navClosed = new Set();
-// FIX_318_V1 (B2) — «всё меню входит в окно» было неправдой на ноутбуке: на
-// 1366×768 (окно ~657px) раскрытое меню прокручивалось, на 1280×720 и
-// 1440×900 — тоже. Поэтому умолчание зависит от окна: раскрытое меню входит —
-// группы раскрыты (NAV_UNFOLDED_V1); не входит (navCompact) — раскрыта только
-// группа открытого экрана. Щелчок человека сильнее умолчания и теперь
-// запоминается в обе стороны: navOpened — раскрытые щелчком, navClosed —
-// свёрнутые. Решает fitSidebar() замером после каждой отрисовки и при смене
-// размера окна; navFoldGroups / navFoldActive — что нарисовала последняя.
-const navOpened = new Set();
-let navCompact = false;
-let navFoldGroups = [];
-let navFoldActive = null;
+// DEPT_TOPNAV_V1 (2026-11-21) — РАЗДЕЛЫ СВЕРХУ, ФУНКЦИИ СЛЕВА.
+//
+// Отделы — это не новый список, а заголовки групп самого NAV: «Дашборд»
+// (пункт top: true над группами) и «Клиника · Операции · Настройки ·
+// Аналитика». Функции отдела — пункты NAV под его заголовком, с теми же
+// правами, скрытием, бейджами и замками, что были у левой колонки. Порядок
+// NAV не менялся, поэтому firstAllowedView() и NAV_HOME_ORDER считают
+// домашний экран как прежде.
+//
+// Свёрнутых групп больше нет (NAV_GROUPS_V1 / FIX_318_V1 B2): колонка
+// показывает ОДИН отдел, и меню, которое не входило в окно ноутбука, теперь
+// входит само собой. Сумма счётчиков свёрнутой группы (FIX_318_V1 B6) живёт
+// дальше — на вкладке отдела, который сейчас не открыт.
+function navDepartments() {
+    const out = [];
+    let cur = null;
+    for (const item of NAV) {
+        if (item.section) {
+            cur = { key: item.section, label: () => t('sidebar.sections.' + item.section, item.section), items: [] };
+            out.push(cur);
+            continue;
+        }
+        if (item.top) {
+            // NAV_DASHBOARD_TOP_V1 — «Дашборд» стоит над группами: он и есть свой отдел.
+            out.push({ key: item.id, label: () => t('sidebar.nav.' + item.id, item.label), items: [item] });
+            continue;
+        }
+        if (cur) cur.items.push(item);
+    }
+    return out;
+}
 
-function fitSidebar() {
-    // На рейке 68px заголовков нет, пункты всех групп видны значками — мерить
-    // там нечего; замер после раскрытия колонки (wireSidebarCollapse).
+// Те же проверки, что renderSidebar делал в цикле, — вынесены, потому что
+// теперь их спрашивают двое: колонка (рисовать ли пункт) и верхняя полоса
+// (есть ли у отдела хоть одна видимая функция, то есть рисовать ли вкладку).
+function navItemVisible(item) {
+    if (!isModuleAllowed(item.id)) return false;   // роль (super admin = всё)
+    if (navHidden.has(item.id)) return false;      // NAV_VISIBILITY_V1 — скрыто для всей клиники
+    // QUEUE_ONE_ENTRY_V1 / FIX_318_V1 (B4) — пункт, который уже есть вкладкой
+    // внутри другого видимого раздела, вторым входом не рисуется.
+    if (item.foldsInto && isModuleAllowed(item.foldsInto) && !navHidden.has(item.foldsInto)) return false;
+    return true;
+}
+
+// Отдел, выбранный в ЭТОЙ загрузке страницы, — запасной ответ для экранов, у
+// которых нет пункта меню вовсе (карта пациента, «Нет доступа»): человек
+// остаётся в отделе, из которого пришёл, а не прыгает в первый.
+let deptSelected = null;
+// Последняя открытая функция каждого отдела: вкладка отдела возвращает туда,
+// где человек был, а панель берётся из кэша (VIEW_CACHE_MAX) без перерисовки.
+const deptLastView = new Map();
+
+function visibleDepartments() {
+    return navDepartments().filter((d) => d.items.some(navItemVisible));
+}
+
+// Отдел открытого маршрута. Считается из state.view при КАЖДОЙ отрисовке, а не
+// хранится: так F5, прямая ссылка и «Назад/Вперёд» (popstate → navigate →
+// renderSidebar) не могут показать один отдел при другом экране.
+function activeDepartment(depts) {
+    // COMMERCE_RAIL_V1 — экран, который несут два отдела (ссылки для рекламы:
+    // плитка в «Настройках» и пункт «Коммерции»), остаётся в том отделе, из
+    // которого его открыли.
+    const owners = depts.filter((d) => d.items.some((i) => navItemVisible(i) && navItemOwns(i)));
+    const owner = owners.find((d) => d.key === deptSelected) || owners[0];
+    if (owner) { deptSelected = owner.key; return owner; }
+    return depts.find((d) => d.key === deptSelected) || depts[0] || null;
+}
+
+function openDepartment(dept) {
+    // REPORTS_DASHBOARD_V1 — вход в «Отчёты» всегда открывает статистику
+    // (первый пункт), а не последний открытый отчёт.
+    const last = dept.key === 'Insights' ? null : deptLastView.get(dept.key);
+    const back = last && dept.items.find((i) => i.id === last && navItemVisible(i));
+    const target = back || dept.items.find((i) => navItemVisible(i) && !PERSONAL_VIEWS.has(i.id)) || dept.items.find(navItemVisible);
+    // COMMERCE_RAIL_V1 — «Коммерция» открывает инструмент (последний открытый,
+    // иначе первый), а не витрину: её карточки теперь стоят в колонке.
+    if (target && target.id === 'commerce') {
+        const route = commerceEntryRoute();
+        if (route) { deptSelected = dept.key; navigate(route); return; }
+    }
+    if (target) navigate(target.id);
+}
+
+function renderSectionTabs(depts, active) {
+    const bar = document.getElementById('dept-nav');
+    if (!bar) return;
+    clear(bar);
+    bar.setAttribute('aria-label', tr('Разделы'));
+    for (const d of depts) {
+        const on = active && d.key === active.key;
+        // DEPT_TAB_NO_BADGE_V1 (2026-11-21, владелец: «no numbers should be seen
+        // here») — сумма счётчиков на вкладке раздела (FIX_318_V1 B6) снята:
+        // числа видны только на самих функциях в колонке открытого раздела.
+        const menu = DROPDOWN_DEPTS.has(d.key);   // DEPT_DROPDOWN_V1
+        const btn = h('button', {
+            class: 'dept-tab' + (on ? ' active' : '') + (menu ? ' dept-tab--menu' : ''), type: 'button',
+            'data-dept': d.key,
+            ...(on ? { 'aria-current': 'true' } : {}),
+            ...(menu ? { 'aria-haspopup': 'menu', 'aria-expanded': 'false' } : {}),
+            onclick: () => (menu ? toggleDeptMenu(d, btn) : openDepartment(d)),
+        },
+            h('span', { class: 'dept-tab-label' }, d.label()),
+            menu ? h('span', { class: 'dept-tab-chev', 'aria-hidden': 'true' }, Icon('ChevronDown', { size: 14 })) : null,
+        );
+        bar.appendChild(btn);
+        // Полоса перерисовалась при открытом списке (счётчики, переход) —
+        // список остаётся открытым и привязывается к новой вкладке.
+        if (deptMenuEl && deptMenuEl.key === d.key) {
+            deptMenuEl.btn = btn;
+            btn.setAttribute('aria-expanded', 'true');
+            btn.classList.add('open');
+        }
+    }
+}
+
+// DEPT_DROPDOWN_V1 (2026-11-21, владелец: «make clinic button on top bar as a
+// drop down and put all of these, cabinet of doctor, lab, and others as a
+// dropdown») — вкладка «Клиника» не переходит сразу, а раскрывает список своих
+// функций (те же пункты, права, скрытие и замки, что в колонке). Выбор пункта —
+// переход на него; колонка слева, как и прежде, показывает функции раздела.
+//
+// Список рисуется в <body> с position: fixed под вкладкой, а не внутри полосы:
+// полоса вкладок прокручивается вбок (overflow-x), и вложенный список она бы
+// обрезала. Закрывается выбором, щелчком мимо, Esc, прокруткой и сменой размера.
+const DROPDOWN_DEPTS = new Set(['Clinical']);
+let deptMenuEl = null;
+function closeDeptMenu() {
+    if (!deptMenuEl) return;
+    const { el, btn, off } = deptMenuEl;
+    deptMenuEl = null;
+    off();
+    el.remove();
+    btn.setAttribute('aria-expanded', 'false');
+    btn.classList.remove('open');
+}
+function toggleDeptMenu(dept, btn) {
+    const same = deptMenuEl && deptMenuEl.key === dept.key;
+    closeDeptMenu();
+    if (same) return;
+    const items = dept.items.filter(navItemVisible);
+    if (!items.length) return;
+    const el = h('div', { class: 'dept-menu', role: 'menu', 'aria-label': dept.label() });
+    for (const item of items) {
+        const isActive = navItemActive(item);
+        const unlicensed = !isLicensed(item.id);
+        const n = Number(navCounts[item.id]) || 0;
+        el.appendChild(h('button', {
+            class: 'dept-menu-item' + (isActive ? ' active' : '') + (unlicensed ? ' nav-locked' : ''),
+            type: 'button', role: 'menuitem', 'data-dept-menu-item': item.id,
+            onclick: () => { closeDeptMenu(); deptSelected = dept.key; navigate(item.id); },
+        },
+            h('span', { class: 'nav-icon' }, Icon(item.icon, { size: 18 })),
+            h('span', { class: 'dept-menu-label' }, t('sidebar.nav.' + item.id, item.label)),
+            n > 0 ? h('span', { class: 'nav-badge' + (item.badgeKind === 'alert' ? ' alert' : '') }, formatBadge(n)) : null,
+            unlicensed ? h('span', { class: 'nav-lock-icon' }, Icon('Lock', { size: 14 })) : null,
+        ));
+    }
+    document.body.appendChild(el);
+    const r = btn.getBoundingClientRect();
+    const w = el.offsetWidth || 240;
+    el.style.top = Math.round(r.bottom + 6) + 'px';
+    el.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - w - 8))) + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+    btn.classList.add('open');
+    const onDoc = (ev) => { const b = deptMenuEl && deptMenuEl.btn; if (!el.contains(ev.target) && !(b && b.contains(ev.target))) closeDeptMenu(); };
+    const onKey = (ev) => {
+        if (ev.key === 'Escape') { const b = deptMenuEl && deptMenuEl.btn; closeDeptMenu(); try { b && b.focus(); } catch (_) {} return; }
+        if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+        const list = [...el.querySelectorAll('.dept-menu-item')];
+        if (!list.length) return;
+        ev.preventDefault();
+        const i = list.indexOf(document.activeElement);
+        const next = ev.key === 'ArrowDown' ? (i + 1) % list.length : (i <= 0 ? list.length - 1 : i - 1);
+        try { list[next].focus(); } catch (_) {}
+    };
+    const onMove = () => closeDeptMenu();
+    // Щелчок, открывший список, ещё всплывает — слушатели ставим на следующем такте.
+    const t0 = setTimeout(() => {
+        document.addEventListener('mousedown', onDoc, true);
+        document.addEventListener('keydown', onKey, true);
+        window.addEventListener('resize', onMove);
+        window.addEventListener('scroll', onMove, true);
+    }, 0);
+    deptMenuEl = { el, btn, key: dept.key, off: () => {
+        clearTimeout(t0);
+        document.removeEventListener('mousedown', onDoc, true);
+        document.removeEventListener('keydown', onKey, true);
+        window.removeEventListener('resize', onMove);
+        window.removeEventListener('scroll', onMove, true);
+    } };
+    try { el.querySelector('.dept-menu-item.active, .dept-menu-item')?.focus(); } catch (_) {}
+}
+
+// ---- Левая колонка: свернуть в рейку (широкий экран) / выдвижная панель (узкий)
+const NARROW_QUERY = '(max-width: 1024px)';
+function isNarrow() {
+    try { return !!(window.matchMedia && window.matchMedia(NARROW_QUERY).matches); } catch (_) { return false; }
+}
+function railIsOpen() { return !!document.querySelector('.app')?.classList.contains('rail-open'); }
+function setRailOpen(on, { focus = true } = {}) {
     const app = document.querySelector('.app');
-    if (app && app.classList.contains('sidebar-collapsed')) return;
-    const fits = navFitsOpen(sidebarEl, navFoldGroups);
-    if (fits === null || fits === !navCompact) return;
-    navCompact = !fits;
-    for (const g of navFoldGroups) {
-        setNavSectionOpen(g.header, g.navEl, isNavSectionOpen(g.item, { closed: navClosed, opened: navOpened, activeSection: navFoldActive, compact: navCompact }));
+    if (!app) return;
+    app.classList.toggle('rail-open', !!on);
+    const opener = document.getElementById('rail-open');
+    const scrim = document.getElementById('rail-scrim');
+    opener?.setAttribute('aria-expanded', on ? 'true' : 'false');
+    if (scrim) scrim.hidden = !on;
+    if (!focus) return;
+    if (on) {
+        const first = sidebarEl?.querySelector('.nav-item.active') || sidebarEl?.querySelector('.nav-item');
+        try { (first || document.getElementById('sidebar-toggle'))?.focus(); } catch (_) {}
+    } else {
+        try { opener?.focus(); } catch (_) {}
+    }
+}
+// Подписи колонки — через tr(), чтобы переключатель языка менял и их.
+// DEPT_DROPDOWN_RAIL_V1 (2026-11-21, владелец со снимком «Клиники»: «it
+// shouldn't repeat each other, each block should show its own instrument in
+// left side navigation bar»). У раздела-списка (DROPDOWN_DEPTS) функции уже
+// перечислены в выпадающем списке вкладки — колонка их не повторяет: она
+// показывает ОТКРЫТУЮ функцию и её собственные инструменты (вкладки кабинета,
+// режимы лаборатории — RAIL_TOOLS_V1), а заголовком колонки — её имя.
+function dropdownOpenItem(active) {
+    if (!active || !DROPDOWN_DEPTS.has(active.key)) return null;
+    return active.items.find((i) => navItemVisible(i) && navItemOwns(i))
+        || active.items.find((i) => i.id === deptLastView.get(active.key) && navItemVisible(i))
+        || null;
+}
+
+function paintRailChrome(active) {
+    const title = document.getElementById('rail-title');
+    const open = dropdownOpenItem(active);   // DEPT_DROPDOWN_RAIL_V1
+    if (title) title.textContent = open ? t('sidebar.nav.' + open.id, open.label) : (active ? active.label() : '');
+    document.getElementById('app-rail')?.setAttribute('aria-label', tr('Функции раздела'));
+    const opener = document.getElementById('rail-open');
+    if (opener) { const l = tr('Меню раздела'); opener.title = l; opener.setAttribute('aria-label', l); }
+    const toggle = document.getElementById('sidebar-toggle');
+    if (toggle) {
+        const collapsed = !!document.querySelector('.app')?.classList.contains('sidebar-collapsed');
+        const l = isNarrow() ? tr('Закрыть меню') : (collapsed ? tr('Развернуть меню') : tr('Свернуть меню'));
+        toggle.title = l;
+        toggle.setAttribute('aria-label', l);
+        toggle.setAttribute('aria-expanded', isNarrow() ? (railIsOpen() ? 'true' : 'false') : (collapsed ? 'false' : 'true'));
     }
 }
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-    let fitQueued = false;
+    // Перешли через границу узкого экрана — панель закрыта, подписи кнопки верные.
+    let railQueued = false;
     window.addEventListener('resize', () => {
-        if (fitQueued) return;
-        fitQueued = true;
-        requestAnimationFrame(() => { fitQueued = false; fitSidebar(); });
+        if (railQueued) return;
+        railQueued = true;
+        requestAnimationFrame(() => {
+            railQueued = false;
+            if (!isNarrow() && railIsOpen()) setRailOpen(false, { focus: false });
+            applyStoredCollapse();
+            paintRailChrome(activeDepartment(visibleDepartments()));
+        });
     });
 }
 
@@ -1646,17 +1966,6 @@ function setNavHidden(list) {
     }
 }
 
-function renderSidebarNewPatient() {
-    document.getElementById('sidebar-new')?.remove();
-    if (!sidebarEl || !sidebarEl.parentNode || !canCreatePatient()) return;
-    const label = tr('Новый пациент');
-    const btn = h('button', {
-        id: 'sidebar-new', class: 'sidebar-new', type: 'button', title: label, 'aria-label': label,
-        onclick: () => openPatientCreateModal({ onNavigate: navigate }),
-    }, Icon('Plus', { size: 16 }), h('span', { class: 'sidebar-new-label' }, label));
-    sidebarEl.parentNode.insertBefore(btn, sidebarEl);
-}
-
 function renderSidebar() {
     clear(sidebarEl);
 
@@ -1666,95 +1975,73 @@ function renderSidebar() {
     // шапки меню — знак, имя клиники, под ними во всю ширину «+ New patient» —
     // и попросил «new patient button there too». Новый класс (.sidebar-new), не
     // прежний призывной, и иначе устроен: кнопка живёт МЕЖДУ шапкой и
-    // списком пунктов, а не внутри #sidebar-body — замер окна (fitSidebar)
-    // считает только пункты. Открывает то же окно, что «Создать пациента» в
-    // «Пациентах» (openPatientCreateModal), и видна только тому, кому его
-    // можно открыть (canCreatePatient — тот же гейт, что спрашивает само окно).
-    renderSidebarNewPatient();
+    // списком пунктов, а не внутри #sidebar-body. Открывает то же окно, что
+    // «Создать пациента» в «Пациентах» (openPatientCreateModal), и видна только
+    // тому, кому его можно открыть (canCreatePatient — тот же гейт, что
+    // спрашивает само окно). DEPT_TOPNAV_V1 — стоит во главе колонки функций
+    // при любом отделе: регистрация нужна не только из «Клиники».
+    // SIDEBAR_NEW_PATIENT_REMOVED_V1 (2026-11-21, владелец: «remove new patient
+    // button from here») — снова убрана. Пациента заводят «Создать пациента» в
+    // «Пациентах» и окна быстрой регистрации (CRM, привязка, бронирование) —
+    // то же окно openPatientCreateModal.
 
-    // NAV_GROUPS_V1 — группа, в которой лежит открытый экран, рисуется
-    // раскрытой, что бы ни было свёрнуто. Считается ДО цикла: заголовок группы
-    // рождается раньше её пунктов.
-    const activeSection = activeSectionOf(NAV, navItemOwns);
-    let currentHeaderEl = null;   // pending section header, appended lazily
-    let currentNav = null;
-    let currentNavHasItems = false;
-    // FIX_318_V1 (B2, B6) — сворачиваемые группы этой отрисовки: замер окна
-    // (fitSidebar) и сумма счётчиков на заголовке (groupBadge).
-    const foldGroups = [];
-    let currentGroup = null;
-    for (const item of NAV) {
-        if (item.section) {
-            // Defer rendering the section header + nav container until we know
-            // at least one item under it is visible for the active role —
-            // otherwise an empty "Operations" header would dangle.
-            const navEl = h('div', { class: 'nav' });
-            currentNav = navEl;
-            currentNavHasItems = false;
-            currentGroup = null;
-            if (item.fold) {
-                // NAV_GROUPS_V1 — свёрнутая группа. Здесь стоял аккордеон для
-                // секции 'Soon' (COMING_SOON_V1, easymed_soon_collapsed), которой
-                // в NAV давно не было, — мёртвый код; эта ветка его заменяет.
-                // Заголовок — КНОПКА (клавиатура и aria-expanded сами собой),
-                // список прячется классом, а не inline-style: на рейке 68px
-                // заголовков нет, и там CSS показывает пункты всех групп.
-                const key = item.section;
-                const open = isNavSectionOpen(item, { closed: navClosed, opened: navOpened, activeSection, compact: navCompact });
-                const chev = h('span', { class: 'nav-section-chev' }, Icon('ChevronDown', { size: 14 }));
-                const header = h('button', { class: 'nav-section nav-section--toggle', type: 'button',
-                        onclick: () => {
-                            const willOpen = navEl.classList.contains('nav--folded');
-                            // FIX_318_V1 (B2) — выбор человека в обе стороны: раскрытая
-                            // щелчком на коротком окне не сворачивается при переходе.
-                            if (willOpen) { navClosed.delete(key); navOpened.add(key); }
-                            else { navOpened.delete(key); navClosed.add(key); }
-                            setNavSectionOpen(header, navEl, willOpen);
-                        } },
-                    h('span', { class: 'nav-section-title' }, t('sidebar.sections.' + key, key)),
-                    chev);
-                setNavSectionOpen(header, navEl, open);
-                currentHeaderEl = header;
-                currentGroup = { item, header, navEl, chev, counts: [] };
-            } else {
-                currentHeaderEl = h('div', { class: 'nav-section' },
-                    t('sidebar.sections.' + item.section, item.section));
-            }
+    // DEPT_TOPNAV_V1 — отделы сверху, функции ОДНОГО отдела здесь.
+    const depts = visibleDepartments();
+    const active = activeDepartment(depts);
+    renderSectionTabs(depts, active);
+    paintRailChrome(active);
+
+    const nav = h('div', { class: 'nav' });
+    sidebarEl.appendChild(nav);
+    let crmToolsShown = false;   // CRM_REPORT_LAST_V1
+    const ddOpen = dropdownOpenItem(active);   // DEPT_DROPDOWN_RAIL_V1 — только открытая функция
+    for (const item of (active ? active.items : [])) {
+        if (!navItemVisible(item)) continue;
+        if (active && DROPDOWN_DEPTS.has(active.key) && item !== ddOpen) continue;
+        const isActive = navItemActive(item);
+        if (isActive && active) deptLastView.set(active.key, item.id);
+        // COMMERCE_RAIL_V1 — пункт «Коммерческие инструменты» раскрыт в свои инструменты.
+        if (item.id === 'commerce') { nav.appendChild(commerceRail()); continue; }
+        // RAIL_TOOLS_V1 — открытый экран отдал колонке свои кнопки: рисуем их
+        // вместо пункта (имя пункта уже стоит заголовком колонки и баннера).
+        // SUBVIEW_KEEPS_RAIL_V1 (2026-11-21, владелец: «When I enter patient card my
+        // left side navigation is changing, it is incorrect logic») — подэкран
+        // (карта пациента, PARENT_OF) — часть раздела, из которого его открыли:
+        // колонка держит кнопки родителя и его выделение, а не сваливается в
+        // голый невыделенный пункт.
+        // CRM_TOOLS_STAY_V1 (2026-11-21, владелец: «when I go to chat place, crm
+        // button shouldn't disappear») — кнопки экрана держатся, пока открыт
+        // ЛЮБОЙ экран его пункта (navItemOwns: чаты, Push, ссылки и доска —
+        // экраны раздела CRM, MESSAGES_TO_CRM_V1), а не только сам экран.
+        const owner = isActive || parentViewOf(state.view) === item.id || navItemOwns(item);
+        const tools = (owner || item.railAlways) ? railToolsFor(item.id) : null;   // REPORTS_RAIL_V1 — railAlways
+        if (tools && item.id === 'crm') crmToolsShown = true;   // CRM_REPORT_LAST_V1
+        if (tools) {
+            const slot = h('div', { class: 'rail-tools' + (isActive ? '' : ' rail-tools--away'), 'data-rail-tools': item.id });
+            // CRM_TOOLS_STAY_V1 — открыт не сам экран (чат): кнопка экрана сначала
+            // возвращает на него (панель в кэше, её состояние цело), потом делает
+            // своё. Выделение вида в «гостях» снято (.rail-tools--away): выделен
+            // открытый чат, а не «Доска».
+            if (!isActive) slot.addEventListener('click', () => { if (!navItemActive(item)) navigate(item.id); }, true);
+            fillRailTools(slot, tools);
+            nav.appendChild(slot);
             continue;
         }
-        // Hide modules the active role can't access (super admin = all).
-        if (!isModuleAllowed(item.id)) continue;
-        if (navHidden.has(item.id)) continue;   // NAV_VISIBILITY_V1 — скрыто для всей клиники
-        // QUEUE_ONE_ENTRY_V1 — пункт, который для этой роли уже есть вкладкой
-        // внутри другого раздела, вторым входом не рисуется.
-        // FIX_318_V1 (B4) — если этот раздел скрыт для клиники, вкладки внутри
-        // него не видно, и пункт остаётся единственным входом: «Очередь» не
-        // уходит из меню вместе со скрытыми «Пациентами».
-        if (item.foldsInto && isModuleAllowed(item.foldsInto) && !navHidden.has(item.foldsInto)) continue;
-        if (currentNav && !currentNavHasItems) {
-            if (currentHeaderEl) sidebarEl.appendChild(currentHeaderEl);
-            sidebarEl.appendChild(currentNav);
-            currentNavHasItems = true;
-            if (currentGroup) foldGroups.push(currentGroup);   // FIX_318_V1 — только нарисованные группы
-        }
-        if (currentGroup) currentGroup.counts.push({ count: navCounts[item.id], alert: item.badgeKind === 'alert' });   // FIX_318_V1 (B6)
-        if (!currentNav) {
-            // NAV_DASHBOARD_TOP_V1 — пункт над группами: свой блок с чертой снизу.
-            currentNav = h('div', { class: item.top ? 'nav nav-top' : 'nav' });
-            sidebarEl.appendChild(currentNav);
-            currentNavHasItems = true;
-        }
-        const active = navItemActive(item);   // NAV_GROUPS_V1 — та же проверка, что ищет группу открытого экрана
         const badgeText = formatBadge(navCounts[item.id]);
         // LICENCE_CORE_V1 — an unbought module stays VISIBLE and gets a lock mark.
         // Hiding it would hide what the clinic could buy, and nobody asks for a
         // feature they have never seen. Deliberately NOT folded into
-        // isModuleAllowed() above: that gate hides, this one marks.
+        // navItemVisible() above: that gate hides, this one marks.
         const unlicensed = !isLicensed(item.id);
-        currentNav.appendChild(h('button', {
-            class: 'nav-item' + (active ? ' active' : '') + (unlicensed ? ' nav-locked' : ''),
+        nav.appendChild(h('button', {
+            // INPATIENT_SUBNAV_V1 — у пункта с подпунктами залит выбранный ПОДПУНКТ,
+            // а сам пункт только выделен жирным: две залитые кнопки подряд читаются
+            // как «открыто два места».
+            class: 'nav-item' + (owner ? (item.id === 'admissions' ? ' nav-parent-on' : ' active') : '') + (unlicensed ? ' nav-locked' : ''),   // SUBVIEW_KEEPS_RAIL_V1
+            type: 'button',
+            ...(owner ? { 'aria-current': 'page' } : {}),
             title: t('sidebar.nav.' + item.id, item.label),   // SIDEBAR_RAIL_V1 — readable when collapsed
-            onclick: () => navigate(item.id),
+            onclick: () => { if (isNarrow() && railIsOpen()) setRailOpen(false, { focus: false }); navigate(item.id); },
         },
             h('span', { class: 'nav-icon' }, Icon(item.icon, { size: 18 })),
             h('span', null, t('sidebar.nav.' + item.id, item.label)),
@@ -1770,23 +2057,206 @@ function renderSidebar() {
             }, badgeText),
             unlicensed && h('span', { class: 'nav-lock-icon' }, Icon('Lock', { size: 14 })),
         ));
+        if (item.id === 'admissions' && !unlicensed) nav.appendChild(inpatientSubRail());   // INPATIENT_SUBNAV_V1
+    }
+    // MESSAGES_TO_CRM_V1 — «Сообщения» и доска — под функциями раздела CRM, чертой.
+    if (active && active.key === 'CRM' && crmMessagesRailGroups().some((g) => g.length)) {
+        nav.appendChild(h('div', { class: 'rail-tools-sep', role: 'separator' }));
+        nav.appendChild(crmMessagesRail());
+    }
+    // CRM_REPORT_LAST_V1 — «Отчёт» CRM последним, своей группой (views/crm.js
+    // регистрирует его владельцем 'crm-end'). Только пока колонка показывает
+    // кнопки самого CRM: без них отчёту не к чему относиться.
+    const crmEnd = crmToolsShown ? railToolsFor('crm-end') : null;
+    if (crmEnd) {
+        nav.appendChild(h('div', { class: 'rail-tools-sep', role: 'separator' }));
+        // CRM_REPORT_AWAY_V1 (2026-11-22, владелец со снимком «Ссылок для рекламы»
+        // с залитым «Отчётом»: «why crm report block is not working»). У этой
+        // группы не было того, что есть у кнопок CRM выше (CRM_TOOLS_STAY_V1):
+        // открыт другой экран раздела (чат, Push, ссылки) — щелчок сначала
+        // возвращает на экран CRM, и выделение «в гостях» снято. Без этого
+        // «Отчёт» перерисовывал спрятанную панель CRM под открытыми «Ссылками»
+        // (на экране — ничего) и оставался залитым рядом с открытым пунктом.
+        const crmItem = NAV.find((n) => n.id === 'crm');
+        const crmOpen = !!crmItem && navItemActive(crmItem);
+        const slot = h('div', { class: 'rail-tools' + (crmOpen ? '' : ' rail-tools--away'), 'data-rail-tools': 'crm-end' });
+        if (!crmOpen && crmItem) slot.addEventListener('click', () => { if (!navItemActive(crmItem)) navigate('crm'); }, true);
+        fillRailTools(slot, crmEnd);
+        nav.appendChild(slot);
     }
     sidebarEl.appendChild(sidebarClock());
-    // FIX_318_V1 (B6) — сумма счётчиков группы на её заголовке. Свёрнутая
-    // «Операции» прятала красные счётчики (просроченные задачи CRM, неоплаченные
-    // счета, непрочитанный чат), а бейдж обновления у «Настроек» уходил в
-    // свёрнутую группу. Виден бейдж заголовка только у СВЁРНУТОЙ группы
-    // (admin.css .nav-section--folded .nav-section-badge): у раскрытой он
-    // повторял бы счётчики пунктов под ним. Щелчок по заголовку меняет только
-    // класс — бейдж появляется и прячется без перерисовки.
-    for (const g of foldGroups) {
-        const b = groupBadge(g.counts);
-        if (b) g.header.insertBefore(h('span', { class: 'nav-section-badge' + (b.alert ? ' alert' : '') }, formatBadge(b.total)), g.chev);
-    }
-    navFoldGroups = foldGroups;
-    navFoldActive = activeSection;
-    fitSidebar();   // FIX_318_V1 (B2)
 }
+
+// COMMERCE_RAIL_V1 (2026-11-21, владелец со снимком витрины «Коммерческие
+// инструменты»: «the same in here, all the items in main block should be on the
+// side navigation bar») — как у CRM: в отделе «Коммерция» колонка показывает не
+// один пункт-витрину, а сами инструменты, теми же тремя блоками, что витрина
+// (commerce-hub.js): «Сообщения» (чаты, Push, ссылки), «Для сотрудников»
+// (Информационная доска), «Инструменты». Списки и права — оттуда же
+// (visibleChats / visibleTools / isRouteAllowed): колонка не зовёт в «Нет
+// доступа». Непрочитанные чатов — на их пунктах (navCounts, loadNavCounts).
+let commerceLast = null;   // последний открытый инструмент — его откроет вкладка «Коммерция»
+// MESSAGES_TO_CRM_V1 (2026-11-21, владелец со снимком колонки «Коммерции»:
+// «can you bring these ones to CRM block») — «Сообщения» (чаты с пациентами,
+// Facebook/Instagram, Push, ссылки для рекламы) и «Информационная доска» стоят в
+// колонке раздела CRM, под кнопками доски. В «Коммерции» остаются инструменты.
+// Роль, которой раздел CRM не виден, находит их по-прежнему в «Коммерции» —
+// иначе чат пропал бы у неё из меню совсем.
+function crmMessagesRailGroups() {
+    const tools = commerceTools();
+    return [
+        [...commerceChats(), ...tools.filter((x) => x.group === 'messages')],
+        isRouteAllowed(COMMERCE_BOARD.route) ? [COMMERCE_BOARD] : [],
+    ];
+}
+function crmSectionVisible() {
+    const crm = NAV.find((i) => i.id === 'crm');
+    return !!crm && navItemVisible(crm);
+}
+function commerceRailGroups() {
+    const tools = commerceTools();
+    return [
+        ...(crmSectionVisible() ? [] : crmMessagesRailGroups()),   // MESSAGES_TO_CRM_V1
+        tools.filter((x) => x.group !== 'messages'),
+    ];
+}
+function crmMessagesRail() {
+    const slot = h('div', { class: 'rail-tools', 'data-rail-tools': 'crm-messages' });
+    fillRailTools(slot, () => crmMessagesRailGroups().map((g) => g.map((tool) => {
+        const on = state.view === tool.route || parentViewOf(state.view) === tool.route;
+        const n = Number(navCounts[tool.route]) || 0;
+        const isBoard = tool.route === COMMERCE_BOARD.route;
+        const newsCount = isBoard ? h('span', { class: 'crm-news-count', hidden: true }) : null;
+        const btn = h('button', {
+            class: 'nav-item' + (isBoard ? ' crm-news-btn' : '') + (on ? ' active' : ''), type: 'button', title: tool.title,
+            'data-crm-messages-rail': tool.route,
+            ...(isBoard ? { 'data-crm-news': '' } : {}),
+            ...(on ? { 'aria-current': 'page' } : {}),
+            onclick: () => { if (isNarrow() && railIsOpen()) setRailOpen(false, { focus: false }); navigate(tool.route); },
+        },
+            h('span', { class: 'nav-icon' + (isBoard ? ' crm-news-ic' : '') }, Icon(tool.icon, { size: 18 })),
+            h('span', null, tool.title),
+            n > 0 && h('span', { class: 'nav-badge alert' }, formatBadge(n)),
+            newsCount,
+        );
+        // CRM_HEAD_NEWS_V1 — доска переехала из кнопок экрана CRM сюда, вместе с
+        // числом объявлений и подсветкой (.has-news / .has-important, admin-views.css).
+        if (isBoard) supabase.rpc('clinic_news_list', {}).then(({ data, error }) => {
+            const items = !error && data && Array.isArray(data.items) ? data.items : [];
+            if (!items.length) return;
+            newsCount.textContent = items.length > 99 ? '99+' : String(items.length); newsCount.hidden = false;
+            btn.classList.add('has-news');
+            if (items.some((it) => it && it.important)) btn.classList.add('has-important');
+        }).catch(() => {});
+        return btn;
+    })));
+    return slot;
+}
+function commerceEntryRoute() {
+    const all = commerceRailGroups().flat();
+    return (commerceLast && all.find((x) => x.route === commerceLast) ? commerceLast : (all[0] && all[0].route)) || null;
+}
+function commerceRail() {
+    const slot = h('div', { class: 'rail-tools', 'data-rail-tools': 'commerce' });
+    fillRailTools(slot, () => commerceRailGroups().map((g) => g.map((tool) => {
+        const on = state.view === tool.route || parentViewOf(state.view) === tool.route;
+        if (on) commerceLast = tool.route;
+        const n = Number(navCounts[tool.route]) || 0;
+        // REFERRALS_RAIL_SUB_V1 — открытый инструмент со своими вкладками
+        // (реестр rail-tools: «Реферирование») — вкладки подпунктами под ним.
+        // REFERRALS_RAIL_SUB_V2 (2026-11-21, владелец: «when you go to other
+        // button the sub buttons shouldn't disappear») — подпункты видны ВСЕГДА:
+        // пока «Реферирование» открыто — живые вкладки самого экрана; открыт
+        // другой инструмент — те же вкладки ссылками (список TABS экрана, те же
+        // права «только администратору»), щелчок открывает «Реферирование» на
+        // этой вкладке (#referrals/<вкладка>).
+        const subBuild = on ? railToolsFor(tool.route) : null;
+        let sub = null;
+        if (subBuild) {
+            sub = h('div', { class: 'rail-sub', 'data-rail-sub': tool.route });
+            try { for (const g of subBuild() || []) for (const node of g || []) if (node) sub.appendChild(node); } catch (e) { console.warn('[rail-sub]', e); }
+        } else if (tool.route === 'referrals') {
+            const strip = h('div', { class: 'reg-tabs', role: 'list' });
+            for (const tab of REFERRAL_TABS) {
+                if (tab.adminOnly && !actorIsAdmin()) continue;
+                strip.appendChild(h('button', {
+                    class: 'reg-tab', type: 'button', 'data-rail-sub-link': tab.id,
+                    onclick: () => { if (isNarrow() && railIsOpen()) setRailOpen(false, { focus: false }); navigate('referrals', { sub: tab.sub || tab.id }); },   // у «Представителей» sub нет: явное имя, иначе закэшированный экран остался бы на прошлой вкладке (navigate пересобирает панель только при новом sub); неизвестное имя экран читает как «Представители»
+                }, Icon(tab.icon, { size: 14 }), h('span', null, tab.label)));
+            }
+            sub = h('div', { class: 'rail-sub', 'data-rail-sub': tool.route }, strip);
+        }
+        return [h('button', {
+            class: 'nav-item' + (on ? ' active' : ''), type: 'button', title: tool.title,
+            'data-commerce-rail': tool.route,
+            ...(on ? { 'aria-current': 'page' } : {}),
+            onclick: () => { if (isNarrow() && railIsOpen()) setRailOpen(false, { focus: false }); navigate(tool.route); },
+        },
+            h('span', { class: 'nav-icon' }, Icon(tool.icon, { size: 18 })),
+            h('span', null, tool.title),
+            n > 0 && h('span', { class: 'nav-badge alert' }, formatBadge(n)),
+        ), sub];
+    }).flat()));
+    return slot;
+}
+
+// INPATIENT_SUBNAV_V1 (2026-11-21, владелец: «make these buttons as a sub button
+// to inpatient button, and when you go other button they shouldn't disappear») —
+// вкладки «Стационара» (Заявки · Пациенты · Койки · Госпитализации) — подпункты
+// под его пунктом, ВСЕГДА, пока открыт отдел: и на соседнем «Задачи медсестры»,
+// и до первого входа в раздел. Список и отбор по ролям — из admissions.js
+// (visibleTabs), чтобы у врача, как и на экране, не было «Заявок». Выбранный
+// подпункт залит, только пока открыт сам «Стационар».
+function inpatientSubRail() {
+    const wrap = h('div', { class: 'nav-subs', 'data-inpatient-subs': '' });
+    const onView = state.view === 'admissions';
+    const cur = onView ? (currentInpatientTab() || (state.payload && state.payload.sub) || defaultInpatientTab()) : null;
+    for (const t of inpatientTabs()) {
+        const on = t.id === cur;
+        wrap.appendChild(h('button', {
+            class: 'nav-item nav-sub' + (on ? ' active' : ''), type: 'button', title: tr(t.label),
+            'data-inpatient-sub': t.id,
+            ...(on ? { 'aria-current': 'page' } : {}),
+            onclick: () => {
+                if (isNarrow() && railIsOpen()) setRailOpen(false, { focus: false });
+                if (state.view === 'admissions' && selectInpatientTab(t.id)) { renderSidebar(); return; }
+                // Экран в кэше — вернуть его как был и переключить вкладку на месте;
+                // нет — открыть раздел сразу на нужной вкладке.
+                if (currentInpatientTab()) { navigate('admissions'); selectInpatientTab(t.id); renderSidebar(); return; }
+                navigate('admissions', t.id === defaultInpatientTab() ? null : { sub: t.id });
+            },
+        }, h('span', { class: 'nav-icon' }, Icon(t.icon, { size: 16 })), h('span', null, tr(t.label))));
+    }
+    return wrap;
+}
+
+// RAIL_TOOLS_V1 — группы кнопок экрана, между группами — черта.
+function fillRailTools(slot, build) {
+    clear(slot);
+    let groups = [];
+    try { groups = build() || []; } catch (e) { console.warn('[rail-tools] build', e); }
+    let first = true;
+    for (const group of groups) {
+        const nodes = (group || []).filter(Boolean);
+        if (!nodes.length) continue;
+        if (!first) slot.appendChild(h('div', { class: 'rail-tools-sep', role: 'separator' }));
+        first = false;
+        for (const n of nodes) slot.appendChild(n);
+    }
+}
+// Экран перерисовал кнопки (сохранение, смена вида): меняем только их место в
+// колонке; места нет (колонка ещё рисует пункт) — перерисовываем колонку.
+onRailToolsChange((owner) => {
+    const slot = sidebarEl && sidebarEl.querySelector ? sidebarEl.querySelector('[data-rail-tools="' + owner + '"]') : null;
+    const build = railToolsFor(owner);
+    if (slot && build) { fillRailTools(slot, build); return; }
+    // REFERRALS_RAIL_SUB_V1 — подпункты инструмента «Коммерции» (их пункта нет в NAV):
+    // открыт этот инструмент — перерисовываем колонку.
+    if (state.view === owner) { renderSidebar(); return; }
+    const depts = visibleDepartments();
+    const active = activeDepartment(depts);
+    if (active && active.items.some((i) => i.id === owner && navItemVisible(i) && navItemActive(i))) renderSidebar();
+});
 
 /**
  * ЧАСЫ ВНИЗУ БОКОВОГО МЕНЮ — ЦИФЕРБЛАТ СО СТРЕЛКАМИ.
@@ -2055,6 +2525,7 @@ function renderCrumbs() {
     // not in the dictionary (e.g. a settings-section label coming from
     // sections.js) is shown as-is. Mapping keys are the raw English strings.
     const TR_SEG = {
+        'Registration': t('sidebar.sections.Registration', 'Registration'),   // REGISTRATION_DEPT_V1
         'Clinical':   t('sidebar.sections.Clinical',   'Clinical'),
         'Operations': t('sidebar.sections.Operations', 'Operations'),
         'Insights':   t('sidebar.sections.Insights',   'Insights'),
@@ -2539,6 +3010,22 @@ function applyPreview(roleId, { persist = true } = {}) {
 // Account controls — the "View as role" switcher (super admin only) +
 // Log out button. Mounts inside the topbar user-card popover; the popover
 // is toggled by the avatar button next to the language switcher.
+// USER_PILL_AVATAR_ONLY_V1 — имя и роль в окне учётной записи берутся из тех же
+// #user-name / #user-role, что пишет paintUserCard (и предпросмотр роли), —
+// заново при каждом открытии, чтобы смена роли в «View as role» была видна.
+function fillUserPopHead(root) {
+    const head = (root || document).querySelector && (root || document).querySelector('[data-user-pop-head]');
+    if (!head) return;
+    const name = document.getElementById('user-name');
+    const role = document.getElementById('user-role');
+    const n = head.querySelector('.user-pop-name');
+    const r = head.querySelector('.user-pop-role');
+    if (n) n.textContent = (name && name.textContent) || '';
+    if (r) r.textContent = (role && role.textContent) || '';
+    const btn = document.getElementById('user-card-btn');
+    if (btn && n && n.textContent) { btn.title = n.textContent + (r && r.textContent ? ' · ' + r.textContent : ''); btn.setAttribute('aria-label', btn.title); }
+}
+
 function renderAccountControls() {
     const foot = document.getElementById('user-popover');
     if (!foot) return;
@@ -2546,6 +3033,13 @@ function renderAccountControls() {
     if (old) old.remove();
 
     const wrap = h('div', { id: 'account-controls', style: { marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' } });
+
+    // USER_PILL_AVATAR_ONLY_V1 (2026-11-21, владелец: «remove the name and role
+    // name here, and it should be visible when you press on it») — в полосе
+    // остался только кружок с буквами; имя и роль — первой строкой этого окна.
+    wrap.appendChild(h('div', { class: 'user-pop-head', 'data-user-pop-head': '' },
+        h('div', { class: 'user-pop-name' }), h('div', { class: 'user-pop-role' })));
+    fillUserPopHead(wrap);
 
     // Role-preview switcher — only super admins may impersonate roles.
     if (state.user.is_super_admin) {
@@ -3146,7 +3640,7 @@ async function onAuthed(userRow, { fresh = false } = {}) {
     // (EASYPHONE_V1, порт 8020). Ставится ПОСЛЕ прав (applyActorPermissions выше):
     // у роли без права звонить и без журнала кнопки нет вовсе. Идемпотентна, как и
     // баннер лицензии; при смене языка ставится заново (onLangChange ниже).
-    mountPhoneButton({ onNavigate: navigate, shiftTarget: viewRoot });
+    mountPhoneButton({ onNavigate: navigate, shiftTarget: viewRoot, onlyRoles: ['callcenter'] });
     // UPDATE_DELIVERY_V1 — fire-and-forget, same posture as boot()'s own
     // renderNotifications() call: a check that cannot run (offline, RPC
     // error) must never block login or surface as an error to the clinic.
@@ -3302,19 +3796,38 @@ function wireSidebarCollapse() {
         // спрашивает сам.
         pulseFade(document.querySelector('.sidebar'));
         try { localStorage.setItem('easymed_sidebar_collapsed', on ? '1' : '0'); } catch (_) {}
-        if (!on) fitSidebar();   // FIX_318_V1 (B2) — на рейке замер пропускался; меню снова с заголовками
+        paintRailChrome(activeDepartment(visibleDepartments()));
     };
-    const toggle = () => setCollapsed(!app.classList.contains('sidebar-collapsed'));
     // APP_RELOAD_BTN_V1 — the topbar reload button is wired here (not via inline
     // onclick, which the CSP blocks) so it works in standalone/app mode.
     document.getElementById('topbar-reload')?.addEventListener('click', () => location.reload());
-    // Chevron collapses; the logo toggles (and is the only control left on the rail).
-    document.getElementById('sidebar-toggle')?.addEventListener('click', () => setCollapsed(true));
-    const logo = document.getElementById('sidebar-logo');
-    if (logo) {
-        logo.addEventListener('click', toggle);
-        logo.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
-    }
+    // DEPT_TOPNAV_V1 — колонка — под полосой разделов, и знак клиники в верхней полосе её
+    // больше не сворачивает: это делает стрелка в шапке колонки, которая на
+    // рейке остаётся видна (повёрнутой) и раскрывает колонку обратно. На узком
+    // экране колонка — выдвижная панель, и та же стрелка её закрывает.
+    document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
+        if (isNarrow()) { setRailOpen(false); return; }
+        setCollapsed(!app.classList.contains('sidebar-collapsed'));
+    });
+    document.getElementById('rail-open')?.addEventListener('click', () => {
+        setRailOpen(!railIsOpen());
+        paintRailChrome(activeDepartment(visibleDepartments()));
+    });
+    document.getElementById('rail-scrim')?.addEventListener('click', () => setRailOpen(false));
+    document.addEventListener('keydown', (e) => {
+        if (!railIsOpen()) return;
+        if (e.key === 'Escape') { e.preventDefault(); setRailOpen(false); return; }
+        // Открытая панель лежит поверх экрана под затемнением — Tab ходит по кругу
+        // внутри неё, а не уходит в невидимый экран под ней.
+        if (e.key !== 'Tab') return;
+        const rail = document.getElementById('app-rail');
+        const items = rail ? [...rail.querySelectorAll('button, [href], [tabindex]:not([tabindex="-1"])')].filter((n) => !n.disabled && n.offsetParent !== null) : [];
+        if (!items.length) return;
+        const first = items[0], last = items[items.length - 1];
+        if (!rail.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+        else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
 }
 
 // Renders the app shell for the now-authenticated actor.
@@ -3353,7 +3866,7 @@ function startApp({ fresh = false } = {}) {
         // асинхронные — их отказ ловится отдельно.
         const step = (name, fn) => { try { fn(); } catch (e) { console.warn('[lang] ' + name, e); } };
         step('topbar', applyTopbarLang);
-        step('phone', () => mountPhoneButton({ onNavigate: navigate, shiftTarget: viewRoot }));   // CRM_PHONE_V1 — подпись «Телефон» на новом языке
+        step('phone', () => mountPhoneButton({ onNavigate: navigate, shiftTarget: viewRoot, onlyRoles: ['callcenter'] }));   // CRM_PHONE_V1 — подпись «Телефон» на новом языке
         step('sidebar', renderSidebar);
         step('title', renderSectionTitle);
         step('crumbs', renderCrumbs);
@@ -3402,16 +3915,35 @@ function applyTopbarLang() {
     if (langBox) {
         langBox.querySelectorAll('button[data-lang]').forEach(b =>
             b.classList.toggle('on', b.dataset.lang === getLang()));
+        // LANG_DROPDOWN_V1 — на свёрнутой кнопке виден код текущего языка.
+        const cur = langBox.querySelector && langBox.querySelector('.lang-cur');
+        if (cur) cur.textContent = String(getLang() || '').toUpperCase();
     }
 }
 
+// LANG_DROPDOWN_V1 — язык выпадающим списком: кнопка с текущим кодом открывает
+// .lang-pop, выбор языка или щелчок мимо её закрывает. Без .lang-pop (стенды
+// оболочки рисуют три голые кнопки) — прежнее поведение: нажал код — сменил язык.
 function wireLangSwitcher() {
     const box = document.getElementById('topbar-lang');
     if (!box) return;
+    const trigger = box.querySelector && box.querySelector('.lang-trigger');
+    const pop = box.querySelector && box.querySelector('.lang-pop');
+    const close = () => { if (pop) pop.hidden = true; if (trigger) trigger.setAttribute('aria-expanded', 'false'); };
     box.addEventListener('click', (e) => {
         const b = e.target.closest('button[data-lang]');
-        if (b) setLang(b.dataset.lang);
+        if (b) { close(); setLang(b.dataset.lang); return; }
+        if (trigger && pop && e.target.closest('.lang-trigger')) {
+            e.stopPropagation();
+            const willOpen = pop.hidden;
+            pop.hidden = !willOpen;
+            trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+        }
     });
+    if (pop) {
+        document.addEventListener('click', (e) => { if (!pop.hidden && !box.contains(e.target)) close(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) close(); });
+    }
 }
 
 // Click the avatar pill in the topbar to reveal the View-as-role switcher +
@@ -3421,7 +3953,7 @@ function wireUserPopover() {
     const pop = document.getElementById('user-popover');
     if (!btn || !pop) return;
     const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
-    const open  = () => { pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); };
+    const open  = () => { fillUserPopHead(pop); pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); };   // USER_PILL_AVATAR_ONLY_V1
     btn.addEventListener('click', (e) => {
         e.stopPropagation();
         pop.hidden ? open() : close();

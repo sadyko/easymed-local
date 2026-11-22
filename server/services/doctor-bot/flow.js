@@ -19,6 +19,17 @@
 //     мигр. 257; «Реферирование → Telegram-бот», «Ожидают подтверждения»).
 //     До подтверждения бот ничего не присылает (notify.js), а врачу отвечает,
 //     что заявка у клиники (T.pending).
+//
+// DOCTOR_BOT_AUTO_LINK_V1 (владелец, 2026-11-20: «No need to approvement if
+// doctor is already in the base, just it has to connect automatically») —
+// подтверждения администратором больше НЕТ: свой контакт, номер которого
+// указан ровно у одного включённого врача-источника, подключается сразу
+// (status 'confirmed', confirmed_by NULL — «подтвердил номер», а не человек).
+// Защиты M2, которые остаются: принимается только СВОЙ контакт Telegram
+// (номер в нём Telegram проверил сам), номер у двух врачей не подключается
+// никому, выключенному врачу и врачу со сменённым номером бот не пишет
+// (notify.js, H3). Связки, которые успели встать в «ожидание» до этой
+// правки, подтверждает первый же проход уведомлений (confirmPendingLinks).
 import { sendMessage, ackQuietly } from '../telegram/api.js';
 import { phoneKey, digitsOf, isWholeUzPhone } from '../../../public/js/admin/views/crm-phone-match.js';
 
@@ -128,13 +139,14 @@ async function handleContact(db, token, msg, deps) {
   if (matches.length > 1) return sendMessage(token, chatId, T.ambiguous, { reply_markup: removeKeyboard }, deps);
   const src = matches[0];
 
-  // Тот же врач с того же чата и того же номера ещё раз — связка как есть:
-  // повторная кнопка не сбрасывает подтверждение клиники.
+  // Тот же врач с того же чата и того же номера ещё раз — связка та же;
+  // DOCTOR_BOT_AUTO_LINK_V1 — ждавшая подтверждения подключается сейчас.
   const cur = activeLink(db, chatId);
   if (cur && cur.referral_source_id === src.id && phoneKey(cur.phone) === phoneKey(digits)) {
-    db.prepare("UPDATE doctor_bot_links SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(cur.id);
-    const text = cur.status === 'confirmed' ? T.linked(src.name) : T.pending(src.name);
-    return sendMessage(token, chatId, text, { reply_markup: removeKeyboard }, deps);
+    db.prepare(`UPDATE doctor_bot_links SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+                       status = 'confirmed', confirmed_at = COALESCE(confirmed_at, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+                 WHERE id = ?`).run(cur.id);
+    return sendMessage(token, chatId, T.linked(src.name), { reply_markup: removeKeyboard }, deps);
   }
 
   const name = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ');
@@ -143,12 +155,12 @@ async function handleContact(db, token, msg, deps) {
     // строки остаются ради истории (кто и когда был подключён).
     db.prepare(`UPDATE doctor_bot_links SET revoked_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
                  WHERE revoked_at IS NULL AND (chat_id = ? OR referral_source_id = ?)`).run(String(chatId), src.id);
-    // FIX_318_V1 (M2) — новая связка ждёт подтверждения (status 'pending').
-    db.prepare(`INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, tg_user_id, tg_username, tg_name, last_seen_at, status)
-                VALUES (?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'pending')`)
+    // DOCTOR_BOT_AUTO_LINK_V1 — врач есть в базе: подключён сразу, без подтверждения.
+    db.prepare(`INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, tg_user_id, tg_username, tg_name, last_seen_at, status, confirmed_at)
+                VALUES (?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'confirmed', strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
       .run(src.id, String(chatId), digits, String(fromId), msg.from.username || '', name);
   })();
-  return sendMessage(token, chatId, T.pending(src.name), { reply_markup: removeKeyboard }, deps);
+  return sendMessage(token, chatId, T.linked(src.name), { reply_markup: removeKeyboard }, deps);
 }
 
 // Кнопка «Получил» под уведомлением: отмечает просмотр. Номер уведомления —

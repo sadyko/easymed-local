@@ -17,6 +17,7 @@ import { operatorRecent, isFlagged, flagChat } from './guards.js';
 import { conversationFor } from './conversation.js';
 import { clinicFacts } from './facts.js';
 import { askControlPlane } from './cp-client.js';
+import { readOwnKey, askOpenAiDirect, featureOn } from './own-key.js';   // AI_OWN_KEY_V1
 import { createTelegramAiLead } from './lead.js';
 import { sendChatMessage } from '../telegram/chat.js';
 import { getDecryptedToken } from '../telegram/settings.js';
@@ -32,7 +33,8 @@ const AI_USER = Object.freeze({ id: null, full_name: '', ai: true });
 const DEFAULT_DEPS = {
   now: () => Date.now(),
   telegramToken: (db) => getDecryptedToken(db),
-  ask: (payload) => askControlPlane(payload),
+  // AI_OWN_KEY_V1 — свой ключ OpenAI у клиники: спрашиваем ChatGPT сами; нет — сервер управления.
+  ask: (payload, db) => { const own = db ? readOwnKey(db) : null; return own ? askOpenAiDirect(payload, own) : askControlPlane(payload); },
   sendTelegram: (db, token, chatId, text) => sendChatMessage(db, token, chatId, text, AI_USER),
   telegramLead: (db, args) => createTelegramAiLead(db, args),
   sendMetaDm: (db, convId, text) => sendConversationMessage(db, Number(convId), text, null),
@@ -156,6 +158,7 @@ function sendAny(db, d, job, target, text, publicText = '') {
 function stopReason(db, job, t) {
   const s = readAiSettings(db, t);
   if (!s.enabled || s.blocked) return 'switch_off';
+  if (!featureOn(db, job.channel)) return 'feature_off';   // AI_OWN_KEY_V1 — функцию выключили, пока задача ждала
   if (operatorRecent(db, job.channel, job.chat_key, t) || isFlagged(db, job.channel, job.chat_key)) return 'operator';
   if (job.channel === 'meta_dm') {
     const conv = conversationById(db, Number(job.chat_key));
@@ -164,7 +167,7 @@ function stopReason(db, job, t) {
   return null;
 }
 
-const STOP_RESULT = { switch_off: 'dropped', operator: 'skipped', window_closed: 'handed_off' };
+const STOP_RESULT = { switch_off: 'dropped', operator: 'skipped', window_closed: 'handed_off', feature_off: 'dropped' };
 
 async function applyStop(db, d, job, reason, t) {
   if (reason === 'switch_off') {
@@ -175,6 +178,12 @@ async function applyStop(db, d, job, reason, t) {
     chats.push(...queuedTelegramChats(db));
     dropQueuedJobs(db, t);
     await ackTelegramChats(db, chats, d);
+  }
+  // AI_OWN_KEY_V1 — выключена одна функция, не весь ИИ: снимаем только эту задачу;
+  // бот Telegram подтверждает «сообщение принято» сам, как без ИИ.
+  else if (reason === 'feature_off') {
+    finishJob(db, job.id, 'dropped', 'feature_off', t);
+    if (job.channel === 'telegram') await ackTelegramChats(db, [job.chat_key], d);
   }
   // Оператор написал в чат — пациенту ответил человек, подтверждать нечего.
   else if (reason === 'operator') finishJob(db, job.id, 'dropped', 'operator', t);
@@ -240,11 +249,11 @@ export async function processOneJob(db, deps = {}) {
     const conv = conversationFor(db, job.channel, job.chat_key);
     const answer = (await d.ask({
       channel: job.channel, transcript: conv.transcript, patient_name: conv.patientName, post_text: conv.postText, facts: d.facts(db),
-    })) || { error: 'bad_response' };
+    }, db)) || { error: 'bad_response' };
     // Ответ шёл секунды: дальше — время ответа, а не взятия задачи.
     t = d.now();
 
-    if (answer.error === 'limit' || answer.error === 'no_module') {
+    if (answer.error === 'limit' || answer.error === 'no_module' || answer.error === 'bad_key') {   // AI_OWN_KEY_V1 — bad_key
       setAiBlocked(db, answer.error, isoOf(t));
       handOff(answer.error);
       finishJob(db, job.id, 'failed', answer.error, t);

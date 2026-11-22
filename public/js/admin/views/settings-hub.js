@@ -57,6 +57,7 @@ import { prepareConsultTypeSave } from '../../shared/consultation-price.js';   /
 // зданий карточками и страница здания) вместо общего редактора справочника;
 // карточку связи зданий он монтирует над списком, как раньше.
 import { renderBranchesEditor } from './branches-editor.js';
+import { setRailTools } from '../rail-tools.js';   // SETTINGS_SUBNAV_V1 — группы хаба в боковой колонке
 import { discountServicesField, discountRatesField, ratesSummaryText } from './discount-service-picker.js';   // DISCOUNT_V2 — «Только на эти услуги»: окно выбора   // BRANCH_PROFILE_V1 · DISCOUNT_RATES_V1 — ставки по услугам
 import { promoRatesApply, promoRatesEditable, hasRates } from '../discount-rates.js';   // ревью S5 L-2; DISCOUNT_RATES_NEW_FORM_V1
 import { specialtyOptions, canonicalSpecialty } from '../specialties.js?v=spec2';   // REFERRAL_SPECIALTY_SELECT_V1 — тот же список, что у «Сотрудников»
@@ -65,11 +66,30 @@ let state = { section: null, readOnly: false };   // null = hub; else one of LOO
 
 const refs = { container: null, onNavigate: null };
 
-export async function renderSettingsHub(container, { onNavigate, payload = null, onPayload = null } = {}) {
+export async function renderSettingsHub(container, { onNavigate, payload = null, onPayload = null, tabId = null } = {}) {
     refs.container  = container;
     refs.onNavigate = onNavigate;
     state = { section: null, readOnly: false };
     hubQuery = '';
+    // SETTINGS_SUBNAV_V1 — группа из адреса (#settings/<key>), её выбирают в
+    // боковой колонке; без подмаршрута — первая видимая группа.
+    selectedGroup = payload && typeof payload.sub === 'string' ? payload.sub : null;
+    // Без подмаршрута адрес обязан назвать показанную группу (HASH_TRUTH_V1):
+    // иначе «Назад» на запись «#settings» показал бы ту группу, что была
+    // открыта последней, а F5 по тому же адресу — первую.
+    if (!selectedGroup) {
+        const key = settingsGroupFor(null);
+        if (key) {
+            selectedGroup = key;
+            try { if (tabId && typeof window.easymedSetTabSub === 'function') window.easymedSetTabSub(tabId, key); } catch (_) {}
+            try {
+                if (String(location.hash || '') === '#settings') {
+                    const st = history.state && typeof history.state === 'object' ? history.state : { view: 'settings' };
+                    history.replaceState({ ...st, payload: { ...(st.payload || {}), sub: key } }, '', '#settings/' + key);
+                }
+            } catch (_) {}
+        }
+    }
     // CLINIC_API_STEP7_V1 — дорога в «Филиалы» из окна подключения (решение владельца
     // 11 по зданиям): переход с { section: 'branches' } открывает раздел сразу; хаб
     // из кэша оболочки получает такой переход через onPayload. Только «Филиалы»:
@@ -247,7 +267,7 @@ const goto = (url) => () => { window.location.href = url; };
 // отсутствие.
 export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт ради теста плиток по ролям
     {
-        title: 'Управление пользователями и сотрудниками', icon: 'ID', color: { bg: '#e4f3f1', fg: '#1f8a80' },
+        key: 'staff', title: 'Управление пользователями и сотрудниками', icon: 'ID', color: { bg: '#e4f3f1', fg: '#1f8a80' },
         items: [
             { label: 'Сотрудники', desc: 'Врачи, медсёстры, регистратура, администрация', icon: 'ID',       live: true, action: nav('employees'), route: 'employees' },
             { label: 'Роли',       desc: 'Кто что видит: роли и разделы меню',       icon: 'Settings', live: true, action: () => openSection('roles'), section: 'roles' },
@@ -256,7 +276,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
         ],
     },
     {
-        title: 'Настройки услуг', icon: 'Flask', color: { bg: '#efeafb', fg: '#6b4fb0' },
+        key: 'services', title: 'Настройки услуг', icon: 'Flask', color: { bg: '#efeafb', fg: '#6b4fb0' },
         items: [
             { label: 'Список услуг',        desc: 'Все услуги клиники: цены и куда ведёт каждая', icon: 'Receipt', live: true, action: nav('services'), route: 'services' },
             // SERVICES_PACKAGES_V1 — что из прайса видят сайт, Symptex и партнёры (макет screen-services.js).
@@ -275,7 +295,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
         ],
     },
     {
-        title: 'Основное', icon: 'Folder', color: { bg: '#fdf3e1', fg: '#b07d1f' },
+        key: 'general', title: 'Основное', icon: 'Folder', color: { bg: '#fdf3e1', fg: '#b07d1f' },
         items: [
             { label: 'Пациенты',            desc: 'Картотека: данные пациента, контакты, номер карты', icon: 'ID',       live: true, action: nav('settings:patients'), route: 'settings:patients' },   // PATIENTS_SECTION_V1 — easymed's section-CRUD register (route, NOT openSection: that's the hub's own lookup editor and has no patients config)
             { label: 'Категории пациентов', desc: 'Группы пациентов и скидка каждой группы',               icon: 'Layers',   live: true, action: () => openSection('patient_categories'), section: 'patient_categories' },
@@ -326,7 +346,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
         // to eleven unrelated rows. These are the ones a technician touches
         // when connecting the clinic to something, not ones a receptionist
         // opens daily.
-        title: 'Системные настройки', icon: 'Settings', color: { bg: '#e9ebfb', fg: '#4b52b0' },
+        key: 'system', title: 'Системные настройки', icon: 'Settings', color: { bg: '#e9ebfb', fg: '#4b52b0' },
         items: [
             { label: 'CRM-канбан',          desc: 'По каким шагам идёт заявка и откуда приходят люди', icon: 'Grid', live: true, action: nav('crm-settings'), route: 'crm-settings' },
             // TELEPHONY_ROUTING_V1 — обе подписи поехали вслед за карточкой
@@ -347,7 +367,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
         // рядом с ней. «Системные настройки» (CRM, телефония, Telegram, API)
         // остаются отдельной группой: это подключения к чужим сервисам, а не
         // сведения о клинике.
-        title: 'Настройки Easy-Med', icon: 'Shield', color: { bg: '#e4f3f1', fg: '#1f8a80' },
+        key: 'easymed', title: 'Настройки Easy-Med', icon: 'Shield', color: { bg: '#e4f3f1', fg: '#1f8a80' },
         items: [
             { label: 'Компания',            desc: 'Название, логотип, фирменный цвет и контакты клиники', icon: 'ID', live: true, action: nav('documents-settings'), route: 'documents-settings' },
             // Единственное «управление филиалами» в системе: один вход, а не
@@ -385,7 +405,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
         // одинаковых пункта «Помещения» — ровно ту путаницу, ради устранения
         // которой раздел и делался. Теперь вход один; старые редакторы остались
         // под ним, потому что дают поля, которых нет в мастере, и импорт.
-        title: 'Помещения', icon: 'Building', color: { bg: '#e8f6ed', fg: '#2e8b52' },
+        key: 'rooms', title: 'Помещения', icon: 'Building', color: { bg: '#e8f6ed', fg: '#2e8b52' },
         items: [
             { label: 'Помещения', desc: 'Этажи, кабинеты и палаты в одном месте: койки, цены, врачи', icon: 'Building', live: true, action: nav('rooms-setup'), route: 'rooms-setup' },
             // ROOMS_ONE_ENTRANCE_V1 (2026-09-11) — четыре старых редактора (Этажи,
@@ -397,7 +417,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
         ],
     },
     {
-        title: 'Управление плательщиками', icon: 'Coins', color: { bg: '#e9ebfb', fg: '#4b52b0' },
+        key: 'payers', title: 'Управление плательщиками', icon: 'Coins', color: { bg: '#e9ebfb', fg: '#4b52b0' },
         items: [
             { label: 'Компании-плательщики',       desc: 'Кто платит за пациента: страховые и компании', icon: 'Coins', live: true, action: () => openSection('payers'), section: 'payers' },
             { label: 'Страховые полисы',           desc: 'Что и на сколько процентов покрывает каждый плательщик',    icon: 'Doc',   live: true, action: () => openSection('payer_policies'), section: 'payer_policies' },
@@ -413,7 +433,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
     // settings:referral_sources / settings:referral_source_categories ведут туда
     // (LEGACY_ROUTES в admin.js). Ключи прав остались прежними.
     {
-        title: 'Зарплата врача', icon: 'Coins', color: { bg: '#fbeae9', fg: '#b0453b' },
+        key: 'doctor-pay', title: 'Зарплата врача', icon: 'Coins', color: { bg: '#fbeae9', fg: '#b0453b' },
         items: [
             { label: 'Ставки врачей', desc: 'Процент врача по каждой услуге', icon: 'Coins', live: true, action: () => openSection('doctor_rates'), section: 'doctor_rates' },
         ],
@@ -425,7 +445,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
     // и Instagram): заявки из рекламных форм сами попадают в CRM. Следующие
     // инструменты (Google Ads и т. п.) — плитками сюда же, не новыми группами.
     {
-        title: 'Коммерческие инструменты', icon: 'Megaphone', color: { bg: '#e7f0fb', fg: '#2f5fb3' },
+        key: 'commerce', title: 'Коммерческие инструменты', icon: 'Megaphone', color: { bg: '#e7f0fb', fg: '#2f5fb3' },
         items: [
             { label: 'Meta: заявки из рекламы', desc: 'Facebook и Instagram: заявки из рекламных форм сами попадают в CRM', icon: 'Megaphone', live: true, action: nav('meta-settings'), route: 'meta-settings' },
             // TG_DEEPLINK_V1 (2026-10-26, владелец: «and here generation of Deeplink,
@@ -457,6 +477,55 @@ let hubQuery = '';
 // что ушли, а перезагрузка страницы снова сворачивает всё.
 const openGroups = new Set();
 
+// SETTINGS_SUBNAV_V1 (2026-11-21, владелец со снимком хаба: «all block of
+// setting should be seen in right navigation and drop down items in main
+// block»). Группы хаба стали функциями раздела «Настройки» в боковой колонке,
+// а здесь показывается ОДНА выбранная группа — её строки сразу, без гармошки.
+// Адрес — #settings/<key>, поэтому F5, ссылка и «Назад» открывают ту же
+// группу. Поиск по-прежнему ищет по всем группам.
+let selectedGroup = null;
+
+/** Группы, у которых роль видит хоть одну строку. */
+export function settingsGroupsVisible() {
+    return GROUPS.filter((g) => g.items.some(tileVisible));
+}
+/** Ключ группы для подмаршрута: своя, если видна, иначе первая видимая. */
+export function settingsGroupFor(sub) {
+    const vis = settingsGroupsVisible();
+    const g = vis.find((x) => x.key === sub) || vis[0];
+    return g ? g.key : null;
+}
+
+// Кнопки колонки — тем же реестром, что у CRM (RAIL_TOOLS_V1): колонка рисует
+// их вместо пункта «Настройки», пока открыт он или любой его подэкран.
+// Регистрация — при загрузке модуля (admin.js импортирует его при старте), а
+// не при отрисовке хаба: человек, пришедший прямо в #employees, тоже видит
+// группы. Список и выделение считаются при каждой отрисовке колонки — права и
+// маршрут на этот момент. Открыта группа, если открыт хаб на ней, или экран,
+// на который ведёт одна из её строк (Сотрудники → «Управление пользователями»).
+function settingsRailGroups() {
+    const shell = (typeof window !== 'undefined' && window.easymed) || null;
+    const st = (shell && shell.state) || {};
+    const onHub = st.view === 'settings';
+    // Подэкран, у которого нет своей строки в хабе («Консультации врачей»
+    // открывают изнутри «Услуг для сайта»), держит выделенной группу, из
+    // которой пришли; прямой ссылкой — первую.
+    const owner = onHub ? null : settingsGroupsVisible().find((g) => g.items.some((i) => i.route && i.route === st.view));
+    const current = onHub ? settingsGroupFor(st.payload && st.payload.sub)
+        : (owner ? owner.key : settingsGroupFor(selectedGroup));
+    return [settingsGroupsVisible().map((g) => {
+        const on = g.key === current;
+        const label = tr(g.title);
+        return h('button', {
+            class: 'nav-item' + (on ? ' active' : ''), type: 'button', title: label,
+            'data-settings-group': g.key,
+            ...(on ? { 'aria-current': 'page' } : {}),
+            onclick: () => { if (shell && typeof shell.navigate === 'function') shell.navigate('settings', { sub: g.key }); },
+        }, h('span', { class: 'nav-icon' }, Icon(g.icon, { size: 18 })), h('span', null, label));
+    })];
+}
+setRailTools('settings', settingsRailGroups);
+
 // «N разделов» — Russian needs 3 plural forms, so build the count outside tr()
 // (which keys on whole source strings and cannot interpolate).
 function sectionsLabel(n) {
@@ -486,14 +555,14 @@ function renderHub(container) {
     });
     searchInp.addEventListener('input', () => { hubQuery = searchInp.value; renderList(list, foldAll); });
 
+    // SETTINGS_SUBNAV_V1 (2026-11-21, владелец: «optimize the space in each place
+    // of setting, and search place should be on the left side, remove all the
+    // text repeating that it is setting block») — ни имени «Настройки», ни
+    // подписи под ним: раздел назван вкладкой сверху и заголовком колонки,
+    // группа — выделенным пунктом и шапкой карточки. Над карточкой — только
+    // поиск, слева.
     container.appendChild(h('div', { class: 'fade-in' },
-        h('div', { class: 'page-head' },
-            h('div', null,
-                h('h1', { class: 'page-title' }, 'Настройки'),
-                h('p', { class: 'page-subtitle' }, 'Управление данными клиники — услуги, пользователи, плательщики, филиалы, направления и многое другое.'),
-            ),
-            h('div', { class: 'page-head-actions' }, foldAll, searchInp),
-        ),
+        h('div', { class: 'set-toolbar' }, searchInp, foldAll),
         list,
     ));
     renderList(list, foldAll);
@@ -519,22 +588,33 @@ function visibleGroups() {
 function renderList(list, foldAll) {
     clear(list);
     const searching = !!hubQuery.trim();
-    const shown = visibleGroups();
+    // SETTINGS_SUBNAV_V1 — без поиска на экране одна группа, выбранная в колонке;
+    // кнопка «Развернуть все» нужна только результатам поиска.
+    const all = visibleGroups();
+    const pick = settingsGroupFor(selectedGroup);
+    // Строки ВСЕХ групп остаются в разметке (невыбранные — hidden), как и при
+    // гармошке: статус обновления (paintUpdateStatus) пишет в строку «Система»,
+    // где бы она ни лежала, и тесты хаба читают все строки.
+    const shown = all;
     const syncFoldAll = () => {
-        foldAll.hidden = searching || !shown.length;
+        // SETTINGS_SUBNAV_V1 — гармошки больше нет: выбранная группа раскрыта
+        // всегда, результаты поиска — тоже. Кнопке нечего сворачивать.
+        foldAll.hidden = true;
         foldAll.textContent = tr(shown.every(v => openGroups.has(v.group.title)) ? 'Свернуть все' : 'Развернуть все');
     };
     syncFoldAll();
     if (!shown.length) { list.appendChild(h('div', { class: 'empty set-empty' }, 'Ничего не найдено.')); return; }
     shown.forEach((v, i) => {
         const title = v.group.title;
-        list.appendChild(buildGroupCard(v.group, v.items, {
+        const card = list.appendChild(buildGroupCard(v.group, v.items, {
             // Во время поиска каждая найденная группа раскрыта: свёрнутый
             // результат поиска бесполезен. Пустой запрос возвращает прежнее.
-            open: searching || openGroups.has(title),
+            open: true,
+            fixed: !searching,   // SETTINGS_SUBNAV_V1 — выбранная группа не сворачивается
             id: 'set-group-' + i,
             onToggle: (isOpen) => { if (isOpen) openGroups.add(title); else openGroups.delete(title); syncFoldAll(); },
         }));
+        if (!searching && v.group.key !== pick) card.hidden = true;
     });
 }
 
@@ -544,10 +624,23 @@ function renderList(list, foldAll) {
 // обновления, который paintUpdateStatus() уже вписал в строку «Система».
 // Строки свёрнутой группы остаются в DOM под `hidden` — по ним же читают хаб
 // тесты и ищет свою строку статус обновления.
-function buildGroupCard(group, items, { open, id, onToggle }) {
+function buildGroupCard(group, items, { open, fixed = false, id, onToggle }) {
     const c = group.color || { bg: 'var(--ink-50)', fg: 'var(--ink-600)' };
     const body = h('div', { class: 'set-card-body', id }, ...items.map(buildItemRow));
     body.hidden = !open;
+    // SETTINGS_SUBNAV_V1 — группа, выбранная в колонке: шапка — заголовок, а не
+    // кнопка, строки видны всегда.
+    if (fixed) {
+        return h('div', { class: 'card set-card is-open set-card--fixed' },
+            h('div', { class: 'set-card-head' },
+                h('span', { class: 'set-card-ico', style: { background: c.bg, color: c.fg } }, Icon(group.icon, { size: 17 })),
+                h('div', { class: 'set-card-txt' },
+                    h('h2', { class: 'set-card-title' }, group.title),
+                    h('div', { class: 'set-card-sub' }, sectionsLabel(items.length)),
+                ),
+            ),
+            body);
+    }
     const head = h('button', {
         type: 'button', class: 'set-card-head', title: 'Свернуть или развернуть',
         'aria-expanded': open ? 'true' : 'false', 'aria-controls': id,
@@ -606,6 +699,7 @@ function buildItemRow(item) {
 
     const row = h('div', {
         class: 'set-row set-row-link',
+        title: desc ? item.label + ' — ' + desc : item.label,   // SETTINGS_ROW_ONE_LINE_V1 — описание в подсказке
         role: 'button',
         tabindex: '0',
         onclick: item.action,
@@ -942,7 +1036,9 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
             { title: 'Вознаграждение за направления', cols: '1fr 1fr',
               fields: ['reward_mode', 'own_percent', 'own_rates', 'service_rates', 'inpatient_bonus_enabled', 'inpatient_pct', 'inpatient_fixed'] },
         ],
-        embed: 'referral_source_categories(name)',
+        // REFERRAL_SOURCES_REP_COLUMN_V1 — representative(full_name): имя медпредставителя
+        // по representative_id (embed в реестре), в том числе уже уволенного.
+        embed: 'referral_source_categories(name), representative(full_name)',
         filterRow: true,   // LOOKUP_COLUMN_FILTERS_V1 — с мигр. 117 здесь ещё и все врачи клиники
         // REFERRALS_CRM_V1 — врачи клиники (doctor_id, строка от триггера) в списке
         // внешних врачей не показываются: у них своя вкладка «Внутренние врачи», а
@@ -957,6 +1053,21 @@ export const LOOKUP_CONFIG = {   // DISCOUNT_V2 — экспорт ради те
             { key: 'district', label: 'Район' },
             { key: 'specialty', label: 'Специальность' },   // REFERRALS_CRM_V1 — колонка снимка владельца (мигр. 252)
             { key: 'referral_source_categories', label: 'Категория', embed: true },
+            // REFERRAL_SOURCES_REP_COLUMN_V1 (владелец, 2026-11-20: «add here who is med
+            // rep of doctor») — за кем закреплён врач, прямо в списке, а не только во
+            // вкладке «Представители».
+            { key: 'representative', label: 'Медпредставитель', embed: true, embedLabel: 'full_name' },
+        ],
+        // LOOKUP_EXTRA_COLUMNS_V1 (владелец, 2026-11-20: «add here filter at the end to
+        // see other information about doctor») — колонки по выбору, кнопка «Колонки» в
+        // конце шапки таблицы; выбор помнится на этом компьютере.
+        extraColumns: [
+            { key: 'payment_type', label: 'Тип оплаты' },
+            { key: 'card_number', label: 'Номер карты' },
+            { key: 'reward_mode', label: 'Вознаграждение',
+              format: (r) => (r.reward_mode === 'own' ? tr('Своя ставка') : r.reward_mode ? tr('По категории') : '') },
+            { key: 'own_percent', label: 'Свой процент',
+              format: (r) => (r.reward_mode === 'own' && r.own_percent != null ? r.own_percent + '%' : '') },
         ],
         fields: [
             { key: 'last_name',   label: 'Фамилия', type: 'text' },
@@ -1462,7 +1573,7 @@ async function renderEditor(container, key) {
         return allRows.filter((row) => {
             if (wantActive === 'yes' && !row.active) return false;
             if (wantActive === 'no' && row.active) return false;
-            for (const c of cfg.columns) {
+            for (const c of shownColumns()) {
                 const q = norm(filterInputs.get(c.key)?.value);
                 if (q && !norm(cellText(row, c)).includes(q)) return false;
             }
@@ -1470,17 +1581,77 @@ async function renderEditor(container, key) {
         });
     }
 
+    // LOOKUP_EXTRA_COLUMNS_V1 — колонки по выбору (cfg.extraColumns). Видимые
+    // колонки = обязательные + отмеченные; выбор хранится на этом компьютере
+    // (localStorage, в обёртке: в приватном окне его может не быть).
+    const extraDefs = Array.isArray(cfg.extraColumns) ? cfg.extraColumns : [];
+    const extraStoreKey = 'lookup.extraCols.' + key;
+    const extraCols = new Set();
+    try {
+        const saved = JSON.parse(localStorage.getItem(extraStoreKey) || '[]');
+        if (Array.isArray(saved)) for (const k of saved) if (extraDefs.some(c => c.key === k)) extraCols.add(k);
+    } catch { /* нет хранилища — показываем без дополнительных колонок */ }
+    const shownColumns = () => [...cfg.columns, ...extraDefs.filter(c => extraCols.has(c.key))];
+    const colCount = () => shownColumns().length + 1 + (extraDefs.length ? 1 : 0);
+
     function filterRowEl() {
+        // Набранный отбор переживает перерисовку шапки (смену колонок).
+        const prev = new Map([...filterInputs].map(([k, el]) => [k, el.value]));
+        filterInputs.clear();
         const onInput = () => paintRows(visibleRows());
-        const cell = (key, control) => { filterInputs.set(key, control); return h('td', { class: 'tbl-filter' }, control); };
+        const cell = (k, control) => {
+            if (prev.has(k)) control.value = prev.get(k);
+            filterInputs.set(k, control);
+            return h('td', { class: 'tbl-filter' }, control);
+        };
         return h('tr', { class: 'tbl-filter-row' },
-            ...cfg.columns.map(c => cell(c.key,
+            ...shownColumns().map(c => cell(c.key,
                 h('input', { type: 'text', placeholder: tr('Отбор…'), oninput: onInput }))),
             cell('__active', h('select', { onchange: onInput },
                 h('option', { value: '' }, tr('Все')),
                 h('option', { value: 'yes' }, tr('Только активные')),
                 h('option', { value: 'no' }, tr('Только неактивные')))),
+            extraDefs.length ? h('td', { class: 'tbl-filter' }) : null,
         );
+    }
+
+    let colsPanel = null;
+    const colsBadge = h('span', { class: 'lk-cols-badge', style: { display: 'none', marginLeft: '4px', fontWeight: 700, color: 'var(--primary-600)' } });
+    function paintColsBadge() {
+        colsBadge.style.display = extraCols.size ? '' : 'none';
+        colsBadge.textContent = '+' + extraCols.size;
+    }
+    function buildColsPanel() {
+        const boxes = extraDefs.map((c) => h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer' } },
+            h('input', { type: 'checkbox', 'data-lookup-col': c.key, checked: extraCols.has(c.key),
+                onchange: (e) => {
+                    if (e.currentTarget.checked) extraCols.add(c.key); else extraCols.delete(c.key);
+                    try { localStorage.setItem(extraStoreKey, JSON.stringify([...extraCols])); } catch { /* не запомнится — не страшно */ }
+                    paintColsBadge();
+                    paintHead();
+                    paintRows(visibleRows());
+                } }),
+            h('span', null, c.label)));
+        return h('div', { class: 'lk-cols-panel', style: { display: 'none', alignItems: 'center', gap: '14px', flexWrap: 'wrap',
+            padding: '10px 20px', background: 'var(--ink-50)', borderBottom: '1px solid var(--ink-100)', fontSize: '13.5px' } },
+            h('span', { class: 'cell-strong' }, 'Показать колонки:'), ...boxes);
+    }
+    function headRowEl() {
+        return h('tr', null,
+            ...shownColumns().map(c => h('th', null, c.label)),
+            h('th', null, 'Active'),
+            extraDefs.length ? h('th', { style: { width: '1%', whiteSpace: 'nowrap', textAlign: 'right' } },
+                h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-act': 'lookup-columns',
+                    title: tr('Показать другие сведения'),
+                    onclick: () => { if (colsPanel) colsPanel.style.display = colsPanel.style.display === 'none' ? 'flex' : 'none'; } },
+                    Icon('Grid', { size: 14 }), ' ', 'Колонки', colsBadge)) : null,
+        );
+    }
+    const thead = h('thead');
+    function paintHead() {
+        clear(thead);
+        thead.appendChild(headRowEl());
+        if (cfg.filterRow) thead.appendChild(filterRowEl());
     }
 
     const anyFilterSet = () => [...filterInputs.values()].some(el => (el.value || '') !== '');
@@ -1525,21 +1696,15 @@ async function renderEditor(container, key) {
                 ...(Array.isArray(state.extraActions) ? state.extraActions : []),   // REFERRALS_CRM_V1 — кнопки хозяина вкладки (Шаблон / Импорт / Экспорт)
                 addBtn,
             ),
-            h('table', { class: 'tbl' },
-                h('thead', null,
-                    h('tr', null,
-                        ...cfg.columns.map(c => h('th', null, c.label)),
-                        h('th', null, 'Active'),
-                    ),
-                    cfg.filterRow ? filterRowEl() : null,
-                ),
-                tbody,
-            ),
+            extraDefs.length ? (colsPanel = buildColsPanel()) : null,
+            h('table', { class: 'tbl' }, thead, tbody),
             emptyEl,
         ),
     ));
 
 
+    paintHead();
+    paintColsBadge();
     await load();
 
     // REFERRAL_EDIT_FROM_REPS_V1 — открыть карточку ОДНОЙ строки снаружи.
@@ -1560,7 +1725,7 @@ async function renderEditor(container, key) {
     async function load() {
         clear(tbody);
         tbody.appendChild(h('tr', null,
-            h('td', { colspan: String(cfg.columns.length + 1), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…')));
+            h('td', { colspan: String(colCount()), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…')));
         emptyEl.style.display = 'none';
         try {
             const cols = cfg.embed ? '*, ' + cfg.embed : '*';
@@ -1584,7 +1749,7 @@ async function renderEditor(container, key) {
             if (anyFilterSet()) {
                 emptyEl.style.display = 'none';
                 tbody.appendChild(h('tr', null, h('td', {
-                    colspan: String(cfg.columns.length + 1),
+                    colspan: String(colCount()),
                     style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' },
                 }, trf('Под отбор не попала ни одна строка из {n}.', { n: allRows.length }))));
             } else {
@@ -1606,11 +1771,12 @@ async function renderEditor(container, key) {
             // PACKAGES_V1 — колонка с format показывает то же, по чему её ищет
             // отбор (cellText): у «Скидок пациентов» срок и услуги до сих пор
             // печатались сырыми значениями.
-            ...cfg.columns.map(c => h('td', null,
+            ...shownColumns().map(c => h('td', null,
                 typeof c.format === 'function' ? fmtCell(c.format(row))
                 : c.embed ? fmtCell(row[c.key] ? row[c.key][c.embedLabel || 'name'] : null)
                         : fmtCell(enumLabel(cfg, c.key, row[c.key])))),
             h('td', null, Tag(row.active ? 'Yes' : 'No', { kind: row.active ? 'ok' : '', dot: true })),
+            extraDefs.length ? h('td') : null,
         );
     }
 

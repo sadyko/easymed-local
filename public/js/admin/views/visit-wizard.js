@@ -577,18 +577,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // на услуги»: одно окно, подпись по месту, откуда его открыли.
             opts.title ? tr(opts.title) : tr('Добавить услуги')),
         h('span', { style: { flex: 1 } }),
-        h('button', {
-            class: 'btn',
-            style: {
-                fontSize: '13.5px', fontWeight: '700',
-                background: '#dc2626', borderColor: '#dc2626', color: 'white',
-                padding: '8px 16px', borderRadius: '10px',
-                boxShadow: '0 2px 8px rgba(220,38,38,0.35)',
-            },
-            onmouseenter: (e) => { e.currentTarget.style.background = '#b91c1c'; },
-            onmouseleave: (e) => { e.currentTarget.style.background = '#dc2626'; },
-            onclick: close,
-        }, '✕ Закрыть'),
+        h('button', { class: 'modal-close', type: 'button', onclick: close }, '×')   // CLOSE_COMPACT_V1 — общая компактная «Закрыть» (admin.css)
     ));
 
     const stepsEl = h('div', {

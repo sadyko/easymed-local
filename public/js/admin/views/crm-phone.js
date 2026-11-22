@@ -44,7 +44,7 @@
 import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { supabase } from '../../supabase.js';
-import { grantLevel, grantAllows, hasActorRole, isRouteAllowed } from '../permissions.js';
+import { grantLevel, grantAllows, hasActorRole, actorRoleCodes, isRouteAllowed } from '../permissions.js';
 import { formatPhone } from '../phone-format.js';
 import { phoneKey } from './crm-phone-match.js';   // CRM_PERIOD_ALL_COLUMNS_V1 (ревью) — ключ номера для ответа сервера
 import { askRecordingUntilReady, recordingMessage, RECORDING_WAITING, RECORDING_GAVE_UP, RECORDING_RETRY_EVERY_MS }
@@ -225,7 +225,13 @@ export function mountPhoneButton(ctx = {}) {
     P.ctx = ctx;
     const old = typeof document.getElementById === 'function' ? document.getElementById(BTN_ID) : null;
     if (old) old.remove();
-    if (!phoneWorkplaceVisible()) { stopLivePoll(); return null; }
+    // PHONE_CALLCENTER_ONLY_V1 (2026-11-21, владелец: «Phone should appear only for
+    // call center role people not to all») — оболочка передаёт onlyRoles:
+    // ['callcenter'], и кнопка встаёт только тому, у кого эта роль (основная или
+    // дополнительная). Строго: неизвестная роль кнопку НЕ получает. Без onlyRoles
+    // (стенды) — прежнее правило прав.
+    const roleOk = !Array.isArray(ctx.onlyRoles) || actorRoleCodes().some((r) => ctx.onlyRoles.includes(r));
+    if (!roleOk || !phoneWorkplaceVisible()) { stopLivePoll(); return null; }
     // CALL_RING_V1 — живые звонки спрашиваются с этого мига, а не с первого
     // открытия панели: звонок должен быть виден и тому, кто панель ещё не открывал.
     P.muted = readMuted();
@@ -247,8 +253,9 @@ export function mountPhoneButton(ctx = {}) {
     P.btn = h('button', {
         id: BTN_ID, class: 'cph-topbtn' + (P.open ? ' on' : ''), type: 'button', 'data-crm-phone': '',
         'aria-pressed': P.open ? 'true' : 'false', title: 'Телефон: набор номера и журнал звонков',
+        'aria-label': 'Телефон',
         onclick: () => { if (P.open) closeDrawer(); else openDrawer(); },
-    }, P.btnDot, Icon('Phone', { size: 15 }), h('span', { class: 'cph-topbtn-t' }, 'Телефон'));
+    }, P.btnDot, Icon('Phone', { size: 15 }));   // PHONE_CALLCENTER_ONLY_V1 — только знак, без подписи
     paintTopBtn();
     // Место — слева от «Обновить». В стенде верхней панели нет: кнопку ставит вызвавший.
     const reload = typeof document.getElementById === 'function' ? document.getElementById('topbar-reload') : null;
@@ -834,8 +841,44 @@ function detailsEl(c) {
         h('div', { class: 'cph-x-row' },
             h('span', { class: 'muted' }, who ? trf('Оператор: {who}', { who }) : 'Оператор не опознан'),
             h('span', { class: 'muted' }, o.answered ? trf('Разговор {dur}', { dur: talkLabel(c.billsec) }) : 'Разговора не было — записывать нечего.')),
+        aiBlock(c),
         actions.length ? h('div', { class: 'cph-sum' }, ...actions) : null);
 }
+
+// AI_CALLS_V1 — разбор звонка ИИ: краткое содержание, оценка оператора, «хотел записаться»
+// и расшифровка по кнопке. Сервер отдаёт c.ai только тем, кому можно слушать запись.
+const AI_WAIT = { queued: 'ИИ разберёт звонок, когда запись будет готова.', working: 'ИИ разбирает звонок…' };
+function aiBlock(c) {
+    const a = c.ai;
+    if (!a) return null;
+    if (AI_WAIT[a.status]) return h('p', { class: 'cph-ai muted', 'data-cph-ai': 'wait' }, AI_WAIT[a.status]);
+    if (a.status !== 'done') return null;
+    const tags = [];
+    if (a.score != null) tags.push(h('span', { class: 'ai-score ' + (a.score >= 80 ? 'is-good' : a.score >= 50 ? 'is-mid' : 'is-low') }, trf('Оценка оператора {n}%', { n: a.score })));
+    if (a.wants_booking && a.booked) tags.push(h('span', { class: 'ai-flag-ok' }, 'Записался'));
+    if (a.wants_booking && !a.booked) tags.push(h('span', { class: 'ai-flag' }, a.crm_request_id ? 'Хотел записаться — заявка в CRM' : 'Хотел записаться, не записан'));
+    const more = h('div', { class: 'cph-ai-more' });
+    const btn = h('button', { class: 'btn btn-sm', type: 'button', 'data-cph-ai-more': String(c.id), onclick: async (ev) => {
+        ev.stopPropagation();
+        if (more.childNodes.length) { clear(more); btn.textContent = tr('Расшифровка и оценки'); return; }
+        btn.setAttribute('disabled', '');
+        try {
+            const { data, error } = await supabase.rpc('ai_call_get', { call_id: c.id });
+            if (error) throw error;
+            const s = (data && data.scores) || {};
+            more.appendChild(h('ul', { class: 'cph-ai-scores' }, ...AI_SCORE_LABELS.map(([k, label]) => h('li', null, tr(label) + ': ' + (s[k] ?? 0) + '/2'))));
+            if (data && data.feedback) more.appendChild(h('p', { class: 'cph-ai-feedback' }, data.feedback));
+            more.appendChild(h('pre', { class: 'cph-ai-transcript', 'data-cph-ai-transcript': '' }, (data && data.transcript) || ''));
+            btn.textContent = tr('Скрыть расшифровку');
+        } catch (e) { toast((e && e.message) || String(e), 'fail'); }
+        finally { btn.removeAttribute('disabled'); }
+    } }, 'Расшифровка и оценки');
+    return h('div', { class: 'cph-ai', 'data-cph-ai': 'done' },
+        h('div', { class: 'cph-ai-head' }, h('b', null, 'ИИ'), ...tags),
+        h('p', { class: 'cph-ai-summary' }, a.summary),
+        btn, more);
+}
+const AI_SCORE_LABELS = [['greeting', 'Приветствие'], ['needs', 'Выяснил потребность'], ['offer', 'Предложил запись'], ['politeness', 'Вежливость'], ['closing', 'Завершение']];
 
 // «Только что звонили» — честное имя полосы «Сейчас звонят» из EasyPhone: входящий
 // без ответа моложе двух минут. События «звонит сейчас» ни одна линия не присылает.

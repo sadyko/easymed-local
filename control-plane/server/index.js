@@ -7,6 +7,7 @@ import { ensureSigningKey, signingKeyIsProduction } from './services/signing.js'
 import { bootstrapVendorAdmin } from './services/vendor-auth.js';
 import { createApp } from './app.js';
 import { aiReadiness } from './services/ai-reply.js';   // AI_CHAT_V1
+import { aiProvider, openAiReadiness } from './services/ai-reply-openai.js';   // AI_OPENAI_V1
 
 // CONTROL_PLANE_V1 — the entry point. Everything here mirrors the clinic app's
 // server/index.js on purpose: same env-var pattern for the data directory, same
@@ -55,7 +56,9 @@ if (!signingKeyIsProduction()) {
 // Missing either is a WARNING, never a refusal to start: check-in and licences
 // matter more than the AI, and a clinic asking for an AI reply meanwhile just
 // gets 503 `upstream` and hands the chat to its operators.
-const aiProblems = await aiReadiness();
+// AI_OPENAI_V1 — с AI_PROVIDER=openai нужен только OPENAI_API_KEY.
+const openai = aiProvider() === 'openai';
+const aiProblems = openai ? openAiReadiness() : await aiReadiness();
 if (aiProblems.length) {
   console.warn('');
   console.warn('  WARNING: the clinics\' AI assistant will NOT work on this control plane:');
@@ -64,7 +67,9 @@ if (aiProblems.length) {
   console.warn('  Expected only on a development machine.');
   console.warn('');
 } else {
-  console.log('AI assistant: SDK and ANTHROPIC_API_KEY present.');
+  console.log(openai
+    ? `AI assistant: ChatGPT (${process.env.OPENAI_MODEL || 'gpt-4o-mini'}), OPENAI_API_KEY present.`
+    : 'AI assistant: SDK and ANTHROPIC_API_KEY present.');
 }
 
 const db = openDb(path.join(DATA_DIR, 'registry.db'));

@@ -55,8 +55,10 @@ export async function renderReferralsActivity(host, ctx = {}) {
             ...reps.map((r) => h('option', { value: String(r.id), selected: state.rep === String(r.id) }, r.full_name)));
         const search = h('input', { type: 'search', class: 'ref-search', value: state.q, placeholder: 'Врач, код, специальность', 'aria-label': 'Врач, код, специальность' });
         search.addEventListener('input', () => { state.q = search.value; paintBody(); });
+        // REP_OWN_DOCTORS_V1 — у представителя в списке только свои врачи: выбирать представителя не из чего.
+        const own = !!(state.data && state.data.own_only);
         refs.filters.appendChild(h('div', { class: 'ref-filters' },
-            windowSel, repSel, h('div', { class: 'ref-filters-search' }, search)));
+            windowSel, own ? null : repSel, h('div', { class: 'ref-filters-search' }, search)));
     }
 
     function repName(id) {

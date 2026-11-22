@@ -8,6 +8,7 @@
 // Перезапуск: 'working' — ответ ещё не отправлялся, задачу можно повторить;
 // 'sending' — неизвестно, ушёл ли ответ: повторять НЕЛЬЗЯ (пациент получил бы
 // его дважды), чат передаётся оператору.
+import { featureOn } from './own-key.js';   // AI_OWN_KEY_V1
 import { readAiSettings } from './settings.js';
 
 export const MAX_AGE_MS = 30 * 60_000;
@@ -18,6 +19,9 @@ const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 export function enqueueChatJob(db, { channel, chatKey, sourceId, createdAt, now = Date.now() }) {
   const s = readAiSettings(db, now);
   if (!s.enabled || s.blocked) return 'off';
+  // AI_OWN_KEY_V1 — функция выключена (например, ответы в Meta): сообщение не берём,
+  // как будто ИИ выключен для этого канала.
+  if (!featureOn(db, channel)) return 'off';
   const created = Date.parse(createdAt);
   if (!Number.isFinite(created) || !s.enabled_at || created < Date.parse(s.enabled_at) || now - created > MAX_AGE_MS) return 'old';
   // created_at пишется явно (а не часами SQLite): по нему считаются 10 минут

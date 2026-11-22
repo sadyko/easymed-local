@@ -29,7 +29,6 @@
 // палатных строк иначе не бывает: госпитализации между зданиями не ездят.
 import { supabase } from '../../supabase.js';
 import { h, Icon, toast, clear, fmtDateTime } from '../ui.js';
-import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentUser } from '../data.js';
 import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor бывает 1, а не true
@@ -64,7 +63,7 @@ export async function renderProcedures(container) {
     if (liveStop) { liveStop(); liveStop = null; }   // LIVE_REFRESH_V1
     clear(container);
     // SECTION_HERO_V1 — шапка раздела — тёмный баннер (своих вкладок у раздела нет).
-    container.appendChild(sectionHero({ section: 'procedures', title: 'Процедуры', sub: 'Очередь процедур — процедурный кабинет и палаты' }).el);
+    // CLINIC_NO_BANNER_V1 — без баннера: экран начинается сразу со своей работы.
     const body = h('div', { class: 'card', style: { padding: '0', overflow: 'hidden' } });
     container.appendChild(body);
     body.appendChild(h('div', { class: 'muted', style: { padding: '28px', textAlign: 'center' } }, tr('Загрузка…')));

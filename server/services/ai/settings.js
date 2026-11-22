@@ -6,7 +6,9 @@
 import { controlState } from '../control/state.js';
 import { getDataDir } from '../control/config.js';
 
-const BLOCKED = new Set(['', 'limit', 'no_module']);
+// AI_OWN_KEY_V1 — 'bad_key': свой ключ OpenAI клиники не принят (или на счёте нет денег).
+// Снимается, когда ключ сохраняют заново или удаляют (own-key.js).
+const BLOCKED = new Set(['', 'limit', 'no_module', 'bad_key']);
 const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 // AI_CHAT_V1: «ИИ остановлен» не должен держаться вечно. Лимит сервера

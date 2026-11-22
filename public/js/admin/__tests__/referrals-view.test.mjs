@@ -112,7 +112,11 @@ async function mount(sub = null) {
   await tick();
   return { root, api };
 }
-const tabButtons = (root) => findAll(root, (n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab');
+// REFERRALS_RAIL_SUB_V1 — полоса вкладок стоит в левой колонке «Коммерции»
+// подпунктами под «Реферированием»: стенд берёт её из того же реестра.
+const { railToolsFor } = await import('../rail-tools.js');
+const railNodes = () => { const b = railToolsFor('referrals'); return b ? b().flat().filter(Boolean).flatMap((n) => walk(n)) : []; };
+const tabButtons = (root) => railNodes().filter((n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab');
 const panel = (root, id) => findAll(root, (n) => n.attrs['data-tab-panel'] === id)[0];
 
 test('полоса вкладок: пять вкладок в порядке снимка, «Представители» раскрыта по умолчанию и смонтирована одна', async () => {

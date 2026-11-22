@@ -71,6 +71,13 @@
     --primary-700: #1c355b;
     --primary-800: #172b4a;
     --primary-900: #12223a;
+    /* BRAND_GRADIENT_V1 (2026-11-21, владелец: «check such things everywhere»)
+       — ОДИН синий для всех тёмных полос и баннеров: тот же градиент, что у
+       верхней полосы разделов (DEPTBAR_BLUE_V1). Экраны с инлайн-стилями берут
+       его по имени, а не переписывают цвета у себя. Белый текст на светлом
+       конце (500) — 6.76:1. */
+    --brand-gradient: linear-gradient(180deg, var(--primary-500) 0%, var(--primary-600) 100%);
+    --brand-gradient-hover: linear-gradient(180deg, var(--primary-600) 0%, var(--primary-700) 100%);
 
     --accent-500: #0ea5e9;
     --accent-600: #0284c7;
@@ -221,11 +228,20 @@
        белом), но он не зависит от того, что окажется под окном, и его умеют
        считать проверки контраста. Ореол ниже остаётся полупрозрачным — он
        тень, и лежать ему всегда на грунте. */
-    --window-line: #c0dfdd;
-    --shadow-window: 0 0 0 3px rgba(69, 111, 147, 0.05), 0 2px 10px rgba(69, 111, 147, 0.09);
+    /* WINDOW_CLEAR_LINE_V1 (2026-11-21, владелец со снимком «Настроек»: «in the
+       line of block like in shadow, make all such places accurate as clear line
+       without shadow»). Рамка окна — ОДНА чёткая линия нейтрального серого (как
+       у полей ввода), без кольца и ореола: кольцо 3px поверх бирюзовой линии и
+       размытие 10px читались мутной двойной границей. */
+    --window-line: #d3d9de;   /* = --ink-200 */
+    --shadow-window: none;
 
     --sidebar-w: 248px;
     --topbar-h: 56px;
+    /* DEPT_TOPNAV_V1 — высота верхней полосы разделов (знак клиники + вкладки).
+       Ей же считается высота правой колонки: колонка липнет под окном и не
+       уходит низом за край, пока полоса ещё видна. */
+    --deptbar-h: 52px;   /* DEPTBAR_COMPACT_V1 (2026-11-21, владелец: «a little high … a little lower») — было 64px */
 
     /* SHELL_REGIONS_V1 (2026-09-05, владелец: «can we make top section and the
        left panel separate? with constant design across all the modules»)
@@ -361,7 +377,22 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
    областью содержимого лежит полоса голого грунта, и она видна на любой
    ширине окна и в любом состоянии рейки (свёрнутая колонка меняет только
    --sidebar-w, зазор от этого не зависит). */
-.app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); column-gap: var(--shell-gap); min-height: 100vh; }
+/* DEPT_TOPNAV_V1 (2026-11-21) — ТРИ области вместо двух: полоса разделов во
+   всю ширину сверху, под ней колонка функций раздела слева и область
+   содержимого справа. Раскладка — по именам областей, поэтому порядок узлов в
+   admin.html (колонка раньше содержимого: с клавиатуры сначала функции, потом
+   экран) от картинки не зависит. Зазор грунта между содержимым и колонкой —
+   тот же column-gap, что был между колонкой и содержимым. */
+.app {
+    display: grid;
+    /* Дорожка колонки = её ширина + правое поле, чтобы рейка (68px) и колонка
+       (248px) были именно такой ширины, а не на зазор уже (поле — левое). */
+    grid-template-columns: calc(var(--sidebar-w) + var(--shell-gap)) minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas: "dept dept" "rail main";
+    column-gap: var(--shell-gap);
+    min-height: 100vh;
+}
 
 /* Sidebar */
 /* SIDEBAR_SEAMLESS_V1 (2026-09-05, owner: «make a blank left panel, but
@@ -385,6 +416,35 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     top: 0;
     height: 100vh;
     overflow: hidden;
+}
+/* DEPT_TOPNAV_V1 — колонка функций СЛЕВА и оформлена так же, как область
+   содержимого рядом (край --content-edge, радиус, тот же грунт): это вторая
+   область того же уровня, а не панель поверх страницы. Липнет с зазором
+   сверху; высота — окно минус полоса разделов, чтобы низ колонки (часы) был
+   виден и до прокрутки. */
+.app > .sidebar {
+    grid-area: rail;
+    align-self: start;
+    top: var(--shell-gap);
+    height: calc(100vh - var(--deptbar-h) - var(--shell-gap));
+    margin: 0 0 var(--shell-gap) var(--shell-gap);
+    border: 1px solid var(--content-edge);
+    border-radius: var(--r-lg);
+    background: var(--page-ground);
+}
+/* Шапка колонки: имя открытого раздела и стрелка сворачивания. Высота — как
+   у верхней строки содержимого слева, чтобы обе шапки стояли на одной линии. */
+.rail-head {
+    display: flex; align-items: center; gap: 8px;
+    min-height: var(--topbar-h);
+    padding: 0 10px 0 calc(var(--nav-gutter) + 12px);
+}
+.rail-title {
+    margin: 0; flex: 1 1 auto; min-width: 0;
+    font-size: var(--fs-1); font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--ink-500);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 /* BRAND_PLATE_V1 (2026-09-05, владелец: «can we make something about this place
    too? its not looking appealing») — шапка колонки меню.
@@ -434,13 +494,14 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
    одним объектом. Нижнее поле не трогаем — им шапка отделена от меню
    (contrast-badge-hatch: воздуха под шапкой вчетверо больше, чем между
    пунктами). */
-.sidebar-brand {
+.deptbar-brand {
     display: flex; align-items: center; gap: 11px;
     /* NAV_GROUPS_V1 — было 22px/24px: меню обязано входить в окно без прокрутки,
        и шапка отдаёт 14px снизу. Верхние 22px НЕ трогать: они ставят знак
        клиники на высоту имени раздела в верхней строке (shell-regions.test.mjs,
        «на одной высоте»); первая версия срезала их до 14px и уехала на 8px. */
-    padding: 22px 20px 10px;
+    padding: 0;
+    flex: 0 1 auto; min-width: 0; max-width: 280px;
 }
 /* BRAND_TILE_BLUE_V1 (2026-10-31, владелец: «make the logo place also blue
    background with rounded corners, make pretty»). Было 30px; 36px всё ещё
@@ -504,25 +565,88 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
    меняется), подпись «EASY·MED» — прописными вразрядку, как «NOVO MEDICS» на
    снимке: это подпись поставщика, ей рубрика к лицу (имени клиники — нет,
    contrast-badge-hatch.test.mjs). Знак — прежняя плоская заливка .brand-mark. */
-.sidebar-brand .brand-name { text-transform: uppercase; letter-spacing: 0.08em; }
+.deptbar-brand .brand-name { text-transform: uppercase; letter-spacing: 0.08em; }
 
-/* SIDEBAR_NEW_PATIENT_V1 — «+ Новый пациент» между шапкой и пунктами меню
-   (admin.js renderSidebarNewPatient). Залита тем же акцентом, что знак и
-   выбранный пункт: в колонке один акцент, просто его стало видно и здесь. На
-   свёрнутой рейке — квадрат с «+» под знаком, подпись прячется. */
-.sidebar-new {
-    display: flex; align-items: center; justify-content: center; gap: 8px;
-    margin: 6px 20px 14px; height: 40px; padding: 0 14px;
-    border: 1px solid var(--primary-600); border-radius: 11px;
-    background: var(--primary-600); color: var(--white);
-    font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 1px 2px rgba(11, 20, 24, 0.10);
-    transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+/* DEPT_TOPNAV_V1 (2026-11-21) — ВЕРХНЯЯ ПОЛОСА РАЗДЕЛОВ.
+   Слева знак и имя клиники (бывшая шапка левой колонки, BRAND_PLATE_V1 —
+   порядок строк тот же), за ними вкладки разделов (admin.js
+   renderSectionTabs). Полоса лежит на грунте, как и колонка раньше: залито в
+   ней одно — открытый раздел, тем же акцентом, что выбранная функция справа,
+   так что «где я» читается одинаково на обоих уровнях. */
+.deptbar {
+    grid-area: dept;
+    display: flex; align-items: center; gap: 24px;
+    min-height: var(--deptbar-h);
+    padding: 0 var(--shell-gap) 0 calc(var(--shell-gap) + 8px);
+    min-width: 0;
 }
-.sidebar-new:hover { background: var(--primary-700); border-color: var(--primary-700); }
-.sidebar-new:focus-visible { outline: 2px solid var(--primary-300); outline-offset: 2px; }
-.sidebar-collapsed .sidebar-new { margin: 6px auto 14px; width: 40px; padding: 0; }
-.sidebar-collapsed .sidebar-new-label { display: none; }
+.dept-nav {
+    flex: 1 1 auto; min-width: 0;
+    display: flex; align-items: center; gap: 4px;
+    /* Узкое окно: вкладки прокручиваются вбок внутри полосы, а не ломают
+       страницу горизонтальной прокруткой. Поле 3px — место для кольца фокуса. */
+    overflow-x: auto; scrollbar-width: none;
+    padding: 3px;
+}
+.dept-nav::-webkit-scrollbar { display: none; }
+.dept-tab {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; gap: 8px;
+    height: 38px; padding: 0 16px;
+    border: 1px solid transparent; border-radius: 10px;
+    background: transparent;
+    color: var(--ink-700);
+    font-family: inherit; font-size: var(--fs-2); font-weight: 600;
+    white-space: nowrap; cursor: pointer;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+.dept-tab:hover { background: var(--white); border-color: var(--ink-100); color: var(--ink-900); }
+.dept-tab.active,
+.dept-tab.active:hover {
+    background: var(--primary-600); border-color: var(--primary-600);
+    color: #fff;
+    box-shadow: var(--shadow-xs);
+}
+.dept-tab:focus-visible { outline: 2px solid var(--primary-600); outline-offset: 2px; }
+.dept-tab.active:focus-visible { outline-color: var(--primary-300); }
+/* Сумма счётчиков функций НЕоткрытого раздела — та же таблетка, что
+   .nav-section-badge (FIX_318_V1 B6) и счётчики в колонке. */
+.dept-tab-badge {
+    display: inline-flex; justify-content: center;
+    min-width: 20px; padding: 0 7px;
+    border-radius: 999px;
+    background: var(--ink-200, #d3d9de);
+    color: var(--ink-600, #475569);
+    font-size: var(--fs-1); font-weight: 700; line-height: 1.55;
+}
+.dept-tab-badge.alert { background: var(--crit-700, #b91c1c); color: #fff; }
+/* Кнопка выдвижной панели — только на узком экране (@media ниже). */
+.deptbar-menu {
+    display: none; place-items: center;
+    flex: 0 0 auto; order: -1;   /* первой в полосе — у того края, откуда выезжает панель */
+    width: 40px; height: 40px; padding: 0;
+    border: 1px solid var(--ink-200); border-radius: 10px;
+    background: var(--white); color: var(--ink-800);
+    cursor: pointer;
+}
+.deptbar-menu:hover { border-color: var(--primary-400); color: var(--primary-700); }
+.deptbar-menu[aria-expanded="true"] { background: var(--primary-600); border-color: var(--primary-600); color: #fff; }
+.rail-scrim { position: fixed; inset: 0; z-index: 55; background: rgba(11, 20, 24, 0.40); }
+.rail-scrim[hidden] { display: none; }
+
+/* SIDEBAR_NEW_PATIENT_REMOVED_V1 (2026-11-21) — «+ Новый пациент» в колонке
+   функций снят по просьбе владельца, вместе с правилами .sidebar-new. */
+
+/* CONTROLS_IN_DEPTBAR_V1 (2026-11-21) — органы управления в полосе разделов,
+   справа от вкладок. Вкладки (.dept-nav) сжимаются и прокручиваются вбок,
+   органы управления — нет. */
+.deptbar > .appbar-controls { margin-left: auto; }
+/* DEPTBAR_COMPACT_V1 — полоса стала ниже (64 → 52px), и всё в ней на ступень
+   меньше, чтобы сверху и снизу оставалось по 9–10px воздуха: знак 32px,
+   вкладки 34px, кнопки справа 32px. */
+.deptbar .brand-mark { width: 32px; height: 32px; }
+.deptbar .dept-tab { height: 34px; padding: 0 14px; }
+.deptbar .appbar-controls { --ctl-h: 32px; }
 
 .sidebar-body {
     flex: 1;
@@ -792,12 +916,80 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .nav-item.active,
 .nav-item.active:hover {
     background: var(--primary-600);
+    /* TOPBAR_BLUE_EVERYWHERE_V1 — тот же градиент, что верхняя полоса (500→600): плоский 600 был её самым тёмным краем и читался темнее. background остаётся плоским 600 под градиентом — его считает contrast-badge-hatch.test.mjs; белый текст на светлом конце (500) — 6.76:1. */
+    background-image: linear-gradient(180deg, var(--primary-500) 0%, var(--primary-600) 100%);
     color: #fff;
     font-weight: 600;
     box-shadow: var(--shadow-xs);
 }
 .nav-item.active .nav-icon,
 .nav-item.active:hover .nav-icon { color: #fff; }
+
+/* RAIL_TOOLS_V1 (2026-11-21) — кнопки открытого экрана в колонке вместо его
+   пункта (admin/rail-tools.js; сейчас — CRM). Те же .nav-item; группы
+   разделены волосяной чертой. Счётчики (задачи, объявления) — у правого края,
+   как .nav-badge у обычных пунктов. «Информация» несла размеры кнопки баннера
+   (.crm-news-btn в admin-views.css) — здесь они сняты, подсветка «есть
+   новости» осталась. */
+.rail-tools { display: flex; flex-direction: column; gap: 1px; }
+/* CRM_TOOLS_STAY_V1 — кнопки экрана видны, пока открыт другой экран того же
+   пункта (чат под CRM): выделение вида снято — выделен открытый чат. */
+.sidebar .rail-tools--away .nav-item.active,
+.sidebar .rail-tools--away .nav-item.active:hover { background: transparent; color: var(--ink-600); font-weight: 500; box-shadow: none; }
+.sidebar .rail-tools--away .nav-item.active .nav-icon { color: var(--ink-400); }
+.sidebar .rail-tools--away .nav-item.active:hover { background: var(--white); color: var(--ink-900); }
+/* REFERRALS_RAIL_SUB_V1 (2026-11-21) — вкладки открытого инструмента
+   («Реферирование»: .reg-tabs / .reg-tab с .on) подпунктами под ним: столбцом,
+   с отступом и тонкой линией слева, мельче пункта; выбранная — тонированная,
+   а не залитая: залит сам пункт инструмента над ними. */
+.sidebar .rail-sub { margin: 2px var(--nav-gutter) 6px calc(var(--nav-gutter) + 20px); padding-left: 8px; border-left: 1px solid var(--ink-200); }
+.sidebar .rail-sub .reg-tabs {
+    display: flex; flex-direction: column; flex-wrap: nowrap; gap: 1px;
+    margin: 0; padding: 0; border: 0; background: none; box-shadow: none;
+}
+.sidebar .rail-sub .reg-tab {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    padding: 6px 10px; border: 0; border-radius: 8px; background: transparent;
+    color: var(--ink-600); font: inherit; font-size: 13px; font-weight: 500; text-align: left;
+    white-space: nowrap; box-shadow: none; cursor: pointer;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.sidebar .rail-sub .reg-tab svg { width: 15px; height: 15px; flex: 0 0 15px; color: var(--ink-400); }
+.sidebar .rail-sub .reg-tab:hover { background: var(--white); color: var(--ink-900); }
+.sidebar .rail-sub .reg-tab.on,
+.sidebar .rail-sub .reg-tab.on:hover { background: var(--primary-50, #eef3f8); color: var(--primary-700); font-weight: 600; }
+.sidebar .rail-sub .reg-tab.on svg { color: var(--primary-600); }
+.sidebar .rail-sub .reg-tab:focus-visible { outline: 2px solid var(--primary-300); outline-offset: -2px; }
+/* HERO_TABS_TO_RAIL_V1 (2026-11-21) — вкладки баннера раздела («Кабинет врача»,
+   «Лаборатория»: системные .tabs / .tab с .on) стоят в колонке и выглядят её
+   пунктами. Отступ !important — у вкладок кабинета он задан в разметке. */
+.sidebar .rail-tools .tabs {
+    display: flex; flex-direction: column; flex-wrap: nowrap; gap: 1px;
+    margin: 0 !important; padding: 0; border: 0; background: none;
+}
+.sidebar .rail-tools .tabs > .tab {
+    display: flex; align-items: center; gap: 11px;
+    margin: 0 var(--nav-gutter); padding: 7px 12px;
+    border: 0; border-radius: 10px; background: transparent;
+    color: var(--ink-600); font-size: 13.5px; font-weight: 500; text-align: left;
+    white-space: nowrap;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.sidebar .rail-tools .tabs > .tab svg { width: 18px; height: 18px; flex: 0 0 18px; color: var(--ink-400); }
+.sidebar .rail-tools .tabs > .tab:hover { background: var(--white); color: var(--ink-900); }
+.sidebar .rail-tools .tabs > .tab.on,
+.sidebar .rail-tools .tabs > .tab.on:hover {
+    background: var(--primary-600); color: #fff; font-weight: 600; box-shadow: var(--shadow-xs);
+}
+.sidebar .rail-tools .tabs > .tab.on svg { color: #fff; }
+.sidebar .rail-tools .tabs > .tab .tab-count,
+.sidebar .rail-tools .tabs > .tab .nav-badge { margin-left: auto; }
+.rail-tools-sep { height: 1px; background: var(--ink-100); margin: 8px calc(var(--nav-gutter) + 12px); }
+.sidebar .rail-tools .crm-news-count { margin-left: auto; }
+.sidebar .rail-tools .crm-news-btn { height: auto; gap: 11px; padding-left: 12px; padding-right: 12px; border: 0; }
+.sidebar .rail-tools .crm-news-btn .crm-news-ic { width: 18px; height: 18px; border-radius: 0; background: transparent; color: var(--ink-400); }
+.sidebar .rail-tools .crm-news-btn.has-news .crm-news-ic { background: transparent; color: var(--primary-600); }
+.sidebar .rail-tools .crm-news-btn.has-important .crm-news-ic { background: transparent; color: var(--crit-700, #b91c1c); }
 /* On the filled ground the lock mark would sit at ~1.2:1 against white if it
    kept its ink colour; inherit instead, and lift the dimming that made an
    unlicensed row grey (it is now white-on-teal and legible either way). */
@@ -932,19 +1124,19 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .sidebar-toggle svg { width: 14px; height: 14px; }
 /* When collapsed, the brand-mark "+" is the only toggle — hide the chevron. */
-.sidebar-collapsed .sidebar-toggle { display: none; }
+/* DEPT_TOPNAV_V1 — знак клиники ушёл в верхнюю полосу и колонку больше не
+   раскрывает: на рейке остаётся стрелка, повёрнутая вправо («раскрыть»), и
+   раскрывает её она. */
+.sidebar-collapsed .sidebar-toggle { margin: 0 auto; }
+.sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+.sidebar-collapsed .rail-head { justify-content: center; padding: 0; }
+.sidebar-collapsed .rail-title { display: none; }
 
 /* SIDEBAR_COLLAPSE_FIX_V1 — the collapsed state had NO layout rule: clicking the
    chevron only hid the chevron itself, so the menu never actually folded. Collapse
    the grid column to an icon rail; every control already carries a title with its
    label (SIDEBAR_RAIL_V1), and the logo toggles back open. */
 .sidebar-collapsed { --sidebar-w: 68px; }
-.sidebar-collapsed .sidebar-brand { justify-content: center; padding-left: 0; padding-right: 0; }
-/* BRAND_PLATE_V1 — на рейке 68px остаётся ОДИН знак, и он же единственный
-   способ раскрыть меню обратно (стрелку выше прячут). Селектор нарочно снимает
-   всё, что НЕ .brand-mark: под него сам собой попал и новый .brand-text, и
-   попадёт любая следующая строка — знак так не спрячешь по недосмотру. */
-.sidebar-collapsed .sidebar-brand > div:not(.brand-mark) { display: none; }
 .sidebar-collapsed .nav-section { display: none; }
 .sidebar-collapsed .nav-item {
     position: relative;
@@ -969,6 +1161,8 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .sidebar-collapsed .nav-item.active,
 .sidebar-collapsed .nav-item.active:hover {
     background: var(--primary-600);
+    /* TOPBAR_BLUE_EVERYWHERE_V1 — тот же градиент, что верхняя полоса (500→600): плоский 600 был её самым тёмным краем и читался темнее. background остаётся плоским 600 под градиентом — его считает contrast-badge-hatch.test.mjs; белый текст на светлом конце (500) — 6.76:1. */
+    background-image: linear-gradient(180deg, var(--primary-500) 0%, var(--primary-600) 100%);
     color: #fff;
     box-shadow: var(--shadow-xs);
 }
@@ -1186,9 +1380,12 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
    перестала бы липнуть, а transform/filter сломали бы position: fixed у
    модальных окон, которые рисуются внутри. */
 .main {
+    grid-area: main;   /* DEPT_TOPNAV_V1 */
     display: flex; flex-direction: column; min-width: 0;
-    margin: var(--shell-gap) var(--shell-gap) var(--shell-gap) 0;
-    min-height: calc(100vh - var(--shell-gap) * 2);
+    /* DEPT_TOPNAV_V1 — сверху область содержимого держит полоса разделов,
+       слева — column-gap до колонки функций; свой зазор — справа и снизу. */
+    margin: 0 var(--shell-gap) var(--shell-gap) 0;
+    min-height: calc(100vh - var(--deptbar-h) - var(--shell-gap));
     background: var(--page-ground);
     border: 1px solid var(--content-edge);
     border-radius: var(--r-lg);
@@ -1282,12 +1479,30 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     border-radius: calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px) 0 0;
     position: sticky; top: 0; z-index: 30;
 }
+/* APPBAR_EMPTY_V1 — строка экрана, в которой нечего показать (имя спрятано за
+   баннером раздела, «назад» нет), не занимает места: admin.js
+   renderSectionTitle ставит .appbar--empty. Тот же селектор с id — иначе
+   display: flex правила выше победил бы. */
+.app .main > #topbar.appbar.appbar--empty { display: none; }
 
 /* SHELL_REGIONS_V1 — экран живёт ПОД верхней строкой, в той же области и с
    тем же горизонтальным полем. Было встроенным style= в admin.html: поле
    экрана и поле верхней строки стояли в разных файлах и разъехались бы на
    первой же правке. */
 .view-root { padding: 20px var(--content-pad) 28px; }
+
+/* NO_NESTED_FRAME_V1 (2026-11-21, владелец со снимком «Пациентов»: «can you
+   see everywhere block inside the block … block inside the block is taking
+   space, so we have to use it smartly»). Область содержимого была рамкой
+   (SHELL_REGIONS_V1: волосяной край, скруглённый угол, поле 24px), а экраны
+   внутри неё — белыми карточками со своей рамкой: блок в блоке, и по 25px
+   пустоты с каждой стороны на КАЖДОМ экране. Теперь рамкой остаётся только
+   то, что работает, — карточка экрана: область содержимого без края и без
+   своего поля, карточки встают вровень с краем колонки слева и с полосой
+   разделов сверху. Поле строки экрана — та же переменная, поэтому имя экрана
+   и карточки под ним стоят по одной линии. */
+.app > .main { border-color: transparent; background: transparent; --content-pad: 0px; }
+.app > .main > .view-root { padding-top: 0; padding-bottom: 16px; }
 
 /* Each mounted view pane (see VIEW_CACHE_MAX in admin.js). Cached-but-hidden
    panes are display:none'd from script; nothing else here to say. */
@@ -1313,14 +1528,33 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 
 /* Language switcher in the topbar — sits beside the connection status. */
-.topbar-lang {
-    display: inline-flex; gap: 2px;
-    background: var(--ink-50);
+/* LANG_DROPDOWN_V1 — одна кнопка с кодом текущего языка; список под ней. */
+.topbar-lang { position: relative; display: inline-flex; align-items: center; }
+.topbar-lang .lang-trigger {
+    display: inline-flex; align-items: center; gap: 4px;
+    height: 28px; padding: 0 8px 0 10px;
+    background: var(--ink-25);
+    border: 1px solid var(--ink-100);
     border-radius: 8px;
-    padding: 3px;
-    margin-right: 10px;
+    font: inherit; font-size: 12.5px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--ink-900);
+    cursor: pointer;
 }
-.topbar-lang button {
+.topbar-lang .lang-trigger:hover { background: var(--white); border-color: var(--ink-200); }
+.topbar-lang .lang-caret { color: var(--ink-500); font-size: 12.5px; }
+.topbar-lang .lang-pop {
+    position: absolute; top: calc(100% + 4px); right: 0; z-index: 60;
+    display: flex; flex-direction: column; gap: 2px;
+    min-width: 64px; padding: 4px;
+    background: var(--white);
+    border: 1px solid var(--ink-100);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md, 0 6px 18px rgba(11,20,24,0.12));
+}
+.topbar-lang .lang-pop[hidden] { display: none; }
+.topbar-lang .lang-pop button { text-align: left; }
+.topbar-lang .lang-pop button.on { box-shadow: none; background: var(--primary-50); }
+.topbar-lang button[data-lang] {
     border: 0; background: transparent;
     padding: 4px 9px;
     border-radius: 6px;
@@ -1336,6 +1570,235 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     color: var(--primary-700);
     box-shadow: var(--shadow-xs, 0 1px 2px rgba(11,20,24,0.06));
 }
+
+/* APPBAR_CONTROLS_UNIFIED_V1 (2026-11-21, владелец со снимком полосы: «make it
+   appropriate to each other as they dont appropriet in design») — органы
+   управления справа были пяти разных размеров: «Обновить» и «Телефон» 32px,
+   колокольчик 38px (стиль вписан в notifications.js), филиал и язык 28px,
+   учётная запись — выше всех. Теперь у всех одна высота (--ctl-h), одно
+   скругление, одна рамка и один белый фон; «Обновить» остаётся синей —
+   владелец просил её такой (RELOAD_BTN_BLUE_V1), меняется только размер.
+   Селекторы через .appbar-controls — сильнее и правил выше, и вписанного
+   .em-bell, и .cph-topbtn из admin-views.css (тот подключается позже). */
+.appbar-controls { --ctl-h: 36px; --ctl-r: 10px; gap: 8px; }
+.appbar-controls .appbar-reload,
+.appbar-controls .em-bell,
+.appbar-controls .cph-topbtn {
+    width: var(--ctl-h); height: var(--ctl-h);
+    padding: 0;
+    border-radius: var(--ctl-r);
+    display: inline-grid; place-items: center;
+    flex: 0 0 auto;
+}
+.appbar-controls .cph-topbtn { display: inline-flex; justify-content: center; gap: 4px; }
+.appbar-controls .em-bell,
+.appbar-controls .cph-topbtn:not(.on):not(.ring),
+.appbar-controls .branch-picker-btn,
+.appbar-controls .topbar-lang .lang-trigger,
+.appbar-controls .user-card.user-card--topbar {
+    background: var(--white);
+    border: 1px solid var(--ink-200);
+    color: var(--ink-700);
+}
+.appbar-controls .em-bell:hover,
+.appbar-controls .cph-topbtn:not(.on):not(.ring):hover,
+.appbar-controls .branch-picker-btn:hover,
+.appbar-controls .topbar-lang .lang-trigger:hover,
+.appbar-controls .user-card.user-card--topbar:hover {
+    background: var(--ink-25);
+    border-color: var(--ink-300);
+    color: var(--ink-900);
+}
+.appbar-controls .branch-picker-btn,
+.appbar-controls .topbar-lang .lang-trigger {
+    height: var(--ctl-h);
+    padding: 0 10px 0 12px;
+    border-radius: var(--ctl-r);
+    gap: 6px;
+    font-size: 13.5px; font-weight: 600; letter-spacing: 0;
+}
+.appbar-controls .branch-picker-btn .bp-caret,
+.appbar-controls .topbar-lang .lang-caret { color: var(--ink-400); font-size: 12.5px; margin: 0; }
+.appbar-controls .branch-picker-single { font-size: 13.5px; padding: 0 4px; }
+.appbar-controls .user-card.user-card--topbar {
+    height: var(--ctl-h);
+    padding: 0 10px 0 3px;
+    border-radius: var(--ctl-r);
+    gap: 8px;
+}
+.appbar-controls .user-card.user-card--topbar .avatar {
+    width: 28px; height: 28px; flex: 0 0 28px;
+}
+.appbar-controls .user-card.user-card--topbar .user-card-text { line-height: 1.2; }
+.appbar-controls .user-card.user-card--topbar .user-name { font-size: 12.5px; }
+.appbar-controls .user-card.user-card--topbar .user-role { font-size: 12.5px; font-weight: 500; letter-spacing: 0.02em; text-transform: none; line-height: 1.1; }
+.appbar-controls .user-card.user-card--topbar .user-card-chev { color: var(--ink-400); font-size: 12.5px; }
+.appbar-controls .em-bell-badge { top: -6px; right: -6px; }
+
+/* APPBAR_CONTROLS_BLOCK_V1 (2026-11-21, владелец со снимком полосы: «can you
+   make whole place as a block and give background blue color») — органы
+   управления справа стоят одним синим блоком (те же --primary-*, что у главных
+   кнопок), а сами кнопки внутри — полупрозрачные белые на синем, белые знаки и
+   текст. «Обновить» на синем блоке перестала бы выделяться синим — она теперь
+   белая с синей стрелкой: единственная залитая кнопка в блоке, как и прежде.
+   Выпадающие списки (язык, филиал, учётная запись) остаются белыми карточками
+   — они лежат вне блока поверх экрана. Селекторы на ступень сильнее
+   APPBAR_CONTROLS_UNIFIED_V1 выше, чтобы порядок в файле не решал. */
+/* DEPTBAR_BLUE_V1 (2026-11-21, владелец: «not only here but whole») — синей
+   стала ВСЯ верхняя полоса: знак и имя клиники, вкладки разделов и органы
+   управления лежат на одном синем фоне. Собственная подложка блока органов
+   управления (первая версия APPBAR_CONTROLS_BLOCK_V1) снята — на синей полосе
+   она была бы синим по синему. Открытый раздел — белая вкладка с синим текстом
+   (единственная залитая, как прежде синяя на светлом), остальные — белым
+   текстом; знак Easy-Med — белая плитка с синим знаком. */
+.app > .deptbar,
+.deptbar {
+    background: linear-gradient(180deg, var(--primary-500) 0%, var(--primary-600) 100%);
+    border-bottom: 1px solid var(--primary-700);
+    box-shadow: 0 2px 10px rgba(36, 66, 111, 0.18);
+}
+/* DEPTBAR_GAP_V1 (2026-11-21, владелец со снимком: «they are touching each
+   other with line») — синяя полоса легла вплотную на края колонки функций и
+   области содержимого: на светлой полосе стыка видно не было, на синей —
+   линия к линии. Между полосой и областями — тот же зазор грунта
+   (--shell-gap), что между колонкой и содержимым; высоты обеих областей
+   уменьшены на него же, чтобы низ колонки (часы) остался виден без прокрутки. */
+.app { row-gap: var(--shell-gap); }
+.app > .sidebar { height: calc(100vh - var(--deptbar-h) - 2 * var(--shell-gap)); }
+.app > .main { min-height: calc(100vh - var(--deptbar-h) - 2 * var(--shell-gap)); }
+.deptbar .brand-mark { background: #fff; color: var(--primary-700); }
+.deptbar .brand-mark:hover { background: var(--primary-50, #eef3f8); }
+.deptbar .brand-sub { color: #fff; }
+.deptbar .brand-name { color: rgba(255, 255, 255, 0.72); }
+.deptbar .brand-name .dot { color: #fff; }
+.deptbar .dept-tab { color: rgba(255, 255, 255, 0.88); }
+.deptbar .dept-tab:hover {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.22);
+    color: #fff;
+}
+.deptbar .dept-tab.active,
+.deptbar .dept-tab.active:hover {
+    background: #fff; border-color: #fff;
+    color: var(--primary-700);
+    box-shadow: 0 1px 3px rgba(11, 20, 24, 0.18);
+}
+.deptbar .dept-tab:focus-visible,
+.deptbar .dept-tab.active:focus-visible { outline-color: #fff; }
+.deptbar .dept-tab-badge { background: rgba(255, 255, 255, 0.22); color: #fff; }
+.deptbar .dept-tab.active .dept-tab-badge { background: var(--primary-50, #eef3f8); color: var(--primary-700); }
+.deptbar .dept-tab-badge.alert { background: var(--crit-700, #b91c1c); color: #fff; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.55); }
+
+/* DEPT_DROPDOWN_V1 (2026-11-21) — вкладка-список («Клиника»): стрелка справа,
+   открытая — подсвечена, как при наведении (активная остаётся белой). Сам
+   список (admin.js toggleDeptMenu) — в <body>, position: fixed под вкладкой:
+   полоса вкладок прокручивается вбок и обрезала бы вложенный список. */
+.dept-tab-chev { display: inline-flex; margin-left: -2px; opacity: .8; transition: transform var(--dur-1) var(--ease-out); }
+.dept-tab.open .dept-tab-chev { transform: rotate(180deg); }
+.deptbar .dept-tab.open:not(.active) { background: rgba(255, 255, 255, 0.14); border-color: rgba(255, 255, 255, 0.22); color: #fff; }
+.dept-menu {
+    position: fixed; z-index: 90;
+    min-width: 240px; max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 90px); overflow-y: auto;
+    display: flex; flex-direction: column; gap: 1px;
+    padding: 6px;
+    background: var(--white);
+    border: 1px solid var(--ink-200);
+    border-radius: 12px;
+    box-shadow: 0 14px 40px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.06);
+}
+.dept-menu-item {
+    display: flex; align-items: center; gap: 11px;
+    width: 100%; padding: 8px 10px;
+    border: 0; border-radius: 9px; background: transparent;
+    color: var(--ink-700); font: inherit; font-size: 13.5px; font-weight: 500; text-align: left;
+    cursor: pointer; white-space: nowrap;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.dept-menu-item:hover, .dept-menu-item:focus-visible { background: var(--ink-50); color: var(--ink-900); outline: none; }
+.dept-menu-item:focus-visible { box-shadow: 0 0 0 2px var(--primary-300) inset; }
+.dept-menu-label { flex: 1 1 auto; }
+.dept-menu-item .nav-badge { margin-left: auto; }
+.dept-menu-item.active { background: var(--primary-600); color: #fff; font-weight: 600; }
+.dept-menu-item.active .nav-icon { color: #fff; }
+.dept-menu-item.nav-locked { opacity: .7; }
+.deptbar .deptbar-menu { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.22); color: #fff; }
+.deptbar .deptbar-menu:hover { background: rgba(255, 255, 255, 0.22); border-color: rgba(255, 255, 255, 0.38); color: #fff; }
+.deptbar .deptbar-menu[aria-expanded="true"] { background: #fff; border-color: #fff; color: var(--primary-700); }
+.deptbar .appbar-controls {
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    border: 0;
+    box-shadow: none;
+}
+.deptbar .appbar-controls .em-bell,
+.deptbar .appbar-controls .cph-topbtn:not(.on):not(.ring),
+.deptbar .appbar-controls .branch-picker-btn,
+.deptbar .appbar-controls .topbar-lang .lang-trigger,
+.deptbar .appbar-controls .user-card.user-card--topbar {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.22);
+    color: #fff;
+}
+.deptbar .appbar-controls .em-bell:hover,
+.deptbar .appbar-controls .cph-topbtn:not(.on):not(.ring):hover,
+.deptbar .appbar-controls .branch-picker-btn:hover,
+.deptbar .appbar-controls .topbar-lang .lang-trigger:hover,
+.deptbar .appbar-controls .user-card.user-card--topbar:hover {
+    background: rgba(255, 255, 255, 0.22);
+    border-color: rgba(255, 255, 255, 0.38);
+    color: #fff;
+}
+.deptbar .appbar-controls .branch-picker-btn .bp-summary,
+.deptbar .appbar-controls .user-card.user-card--topbar .user-name { color: #fff; }
+.deptbar .appbar-controls .branch-picker-btn .bp-caret,
+.deptbar .appbar-controls .topbar-lang .lang-caret,
+.deptbar .appbar-controls .user-card.user-card--topbar .user-card-chev,
+.deptbar .appbar-controls .user-card.user-card--topbar .user-role { color: rgba(255, 255, 255, 0.78); }
+.deptbar .appbar-controls .branch-picker-single { color: #fff !important; }
+.deptbar .appbar-controls .user-card.user-card--topbar .avatar {
+    background: #fff; color: var(--primary-700);
+}
+.deptbar .appbar-controls .appbar-reload {
+    background: #fff;
+    border-color: #fff;
+    color: var(--primary-700);
+    box-shadow: 0 1px 3px rgba(11, 20, 24, 0.18);
+}
+.deptbar .appbar-controls .appbar-reload:hover {
+    background: var(--primary-50, #eef3f8);
+    box-shadow: 0 2px 8px rgba(11, 20, 24, 0.22);
+}
+.deptbar .appbar-controls .em-bell-badge { box-shadow: 0 0 0 2px var(--primary-600); }
+/* USER_PILL_AVATAR_ONLY_V1 (2026-11-21, владелец: «remove the name and role
+   name here, and it should be visible when you press on it») — учётная запись
+   в полосе — только кружок с буквами, квадратом той же высоты, что соседние
+   кнопки. Имя и роль — шапкой окна (.user-pop-head, admin.js
+   renderAccountControls). */
+.deptbar .appbar-controls .user-card.user-card--topbar {
+    width: var(--ctl-h);
+    padding: 0;
+    justify-content: center;
+}
+.deptbar .appbar-controls .user-card.user-card--topbar .user-card-text,
+.deptbar .appbar-controls .user-card.user-card--topbar .user-card-chev { display: none; }
+.user-pop-head {
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--ink-100);
+}
+.user-pop-name {
+    font-size: 13.5px; font-weight: 700;
+    color: var(--ink-900);
+    overflow-wrap: anywhere;
+}
+.user-pop-role {
+    margin-top: 2px;
+    font-size: 12.5px; font-weight: 500;
+    color: var(--ink-500);
+}
+.user-pop-role:empty { display: none; }
+.deptbar .appbar-controls :focus-visible { outline-color: #fff; }
 .topbar-search input {
     width: 100%;
     height: 36px;
@@ -1444,9 +1907,16 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .card-header {
     padding: 14px 18px;
     display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap;   /* CARD_HEADER_GROUP_V1 — на узком экране кнопки переносятся, а не вылезают за край */
     border-bottom: 1px solid var(--ink-100);
     gap: 12px;
 }
+/* CARD_HEADER_GROUP_V1 (2026-11-20) — заголовок слева, кнопки ОДНОЙ группой
+   справа. space-between раскладывал всех детей поровну: «Список источников»
+   ставил Шаблон, Импорт, Экспорт и Добавить через всю ширину шапки (снимок
+   владельца). Заголовок забирает свободное место, остальное прижимается
+   вправо через gap; с двумя детьми раскладка прежняя. */
+.card-header > :first-child { margin-right: auto; }
 .card-header h3 {
     margin: 0;
     font-size: 15px;
@@ -1484,11 +1954,19 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .btn:hover { background: var(--ink-50); border-color: var(--ink-300); }
 .btn:active { transform: translateY(0.5px); }
+/* TOPBAR_BLUE_EVERYWHERE_V1 (владелец: «and button colours too») — главная кнопка тем же
+   градиентом, что верхняя полоса и «Обновить» (.appbar-reload): 500→600, наведение 600→700.
+   Белый текст на самом светлом месте (--primary-500) — 6.76:1. */
+/* GRADIENT_BTN_EDGE_V1 (2026-11-21, владелец со снимком «Заявки на госпитализацию»:
+   «little bug in button») — плоская рамка --primary-600 вокруг градиента читалась
+   тёмным ободком у светлого верха. Рамка прозрачная, а градиент лежит и под
+   ней (background-origin: border-box) — край кнопки один, без ободка. */
 .btn-primary {
-    background: var(--primary-600); color: white; border-color: var(--primary-600);
+    background: linear-gradient(180deg, var(--primary-500) 0%, var(--primary-600) 100%); color: white; border-color: transparent;
+    background-origin: border-box;
     box-shadow: 0 1px 0 rgba(255,255,255,0.12) inset, 0 1px 2px rgba(11, 20, 24, 0.08);
 }
-.btn-primary:hover { background: var(--primary-700); border-color: var(--primary-700); }
+.btn-primary:hover { background: linear-gradient(180deg, var(--primary-600) 0%, var(--primary-700) 100%); border-color: transparent; background-origin: border-box; }
 .btn-ghost { background: transparent; color: var(--ink-600); border-color: transparent; }
 .btn-ghost:hover { background: var(--ink-50); color: var(--ink-900); border-color: transparent; }
 .btn-danger { background: var(--crit-500); color: white; border-color: var(--crit-500); }
@@ -1663,6 +2141,24 @@ table.list tbody tr:last-child td { border-bottom: 0; }
 html[lang="en"] .modal-close::after { content: 'Close'; }
 html[lang="uz"] .modal-close::after { content: 'Yopish'; }
 .modal-close:hover { background: #b91c1c; color: #fff; }
+/* CLOSE_COMPACT_V1 (2026-11-21, владелец со снимком: «close button is big in
+   every pop up … make compact not such big, but accurate»). Кнопка выросла
+   вдвое не от своих размеров: admin-views.css (позже в каскаде) ставит
+   .modal-close{display:inline-grid} — значок X и подпись ::after «Закрыть»
+   вставали ДРУГ НАД ДРУГОМ, двумя строками в красной плитке. Здесь — одна
+   строка: значок и слово рядом, высота 30px (ровня полям и кнопкам шапки
+   окна), плоская заливка без тени. button.modal-close — на ступень сильнее
+   правила admin-views.css, чтобы порядок файлов не решал. */
+button.modal-close {
+    display: inline-flex; flex-direction: row; align-items: center; justify-content: center;
+    gap: 4px;
+    height: 30px; padding: 0 10px 0 8px;
+    border-radius: 8px;
+    font-size: 12.5px; font-weight: 600; line-height: 1;
+    box-shadow: none;
+}
+button.modal-close svg { width: 14px; height: 14px; flex: 0 0 auto; }
+button.modal-close:focus-visible { outline: 2px solid #fca5a5; outline-offset: 2px; }
 .modal-body { padding: 20px 22px; overflow-y: auto; display: grid; gap: 14px; }
 .modal-foot {
     display: flex; justify-content: flex-end; gap: 8px;
@@ -1759,7 +2255,7 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
 .pc-id-photo .cam-wrap.mg-cam-wrap {
     flex: 1 1 auto; flex-direction: column; align-items: stretch; justify-content: space-between;
     gap: 8px; padding: 10px; border-radius: 12px;
-    background: linear-gradient(160deg, var(--primary-600), var(--primary-700));
+    background: linear-gradient(180deg, var(--primary-500) 0%, var(--primary-600) 100%);   /* TOPBAR_BLUE_EVERYWHERE_V1 */
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 .pc-id-photo .cam-box.mg-cam {
@@ -2820,8 +3316,8 @@ table.list .clickable-row:hover td { background: var(--primary-50); }
 .dash-hero {
     position: relative;
     background:
-        radial-gradient(120% 140% at 100% 0%, rgba(45, 212, 191, 0.18) 0%, transparent 55%),
-        linear-gradient(125deg, var(--primary-900) 0%, var(--primary-700) 55%, var(--primary-600) 100%);
+        /* TOPBAR_BLUE_EVERYWHERE_V1 — тот же синий, что верхняя полоса; бирюзовое пятно снято. */
+        linear-gradient(180deg, var(--primary-500) 0%, var(--primary-600) 100%);
     border-radius: 20px;
     padding: 26px 30px;
     color: white;
@@ -2834,7 +3330,7 @@ table.list .clickable-row:hover td { background: var(--primary-50); }
     position: absolute; inset: 0;
     background:
         radial-gradient(circle at 95% -20%, rgba(255,255,255,0.14) 0%, transparent 50%),
-        radial-gradient(circle at 80% 130%, rgba(46, 200, 191, 0.20) 0%, transparent 55%);
+        radial-gradient(circle at 80% 130%, rgba(255, 255, 255, 0.08) 0%, transparent 55%);
     pointer-events: none;
 }
 .dash-hero-content { position: relative; max-width: 720px; }
@@ -3012,6 +3508,8 @@ textarea:focus-visible,
 .nav-list-top .nav-item.active,
 .nav-list-top .nav-item.active:hover {
     background: var(--primary-600);
+    /* TOPBAR_BLUE_EVERYWHERE_V1 — тот же градиент, что верхняя полоса (500→600): плоский 600 был её самым тёмным краем и читался темнее. background остаётся плоским 600 под градиентом — его считает contrast-badge-hatch.test.mjs; белый текст на светлом конце (500) — 6.76:1. */
+    background-image: linear-gradient(180deg, var(--primary-500) 0%, var(--primary-600) 100%);
     color: #fff;
     box-shadow: var(--shadow-xs);
 }
@@ -3154,13 +3652,47 @@ textarea:focus-visible,
     .dash-kpi-row { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 1024px) {
-    .app { grid-template-columns: 1fr; }
-    .sidebar { display: none; }
-    /* SHELL_REGIONS_V1 — колонки на узком экране нет, значит зазор слева
-       больше некому держать: область содержимого получает его сама, иначе
-       она упрётся в край окна одной стороной и отступит другой. */
+    /* DEPT_TOPNAV_V1 — на узком экране колонки в сетке нет: функции раздела
+       выезжают панелью слева по кнопке #rail-open (прежде колонка здесь
+       просто пряталась, и на планшете меню не было вовсе). */
+    .app { grid-template-columns: minmax(0, 1fr); grid-template-areas: "dept" "main"; }
     .main { margin-left: var(--shell-gap); }
+    .deptbar-menu { display: grid; }
+    .app > .sidebar {
+        position: fixed; top: 0; left: 0; bottom: 0;
+        /* stretch, а не start: у абсолютно позиционированного элемента сетки
+           align-self решает высоту, и со start панель сжималась по содержимому. */
+        align-self: stretch;
+        height: auto; width: min(300px, 86vw);
+        margin: 0;
+        border-radius: 0 var(--r-lg) var(--r-lg) 0;
+        border-left: 0;
+        box-shadow: var(--shadow-lg);
+        z-index: 60;
+        transform: translateX(-100%);
+        visibility: hidden;   /* закрытая панель не ловит Tab */
+        /* visibility переключается дискретно и остаётся visible всё время
+           перехода, пока одна из сторон visible: панель видна, пока уезжает,
+           и видна сразу, как начала выезжать. */
+        transition: transform var(--dur-3) var(--ease-out), visibility var(--dur-3) var(--ease-out);
+    }
+    .app.rail-open > .sidebar {
+        transform: none;
+        visibility: visible;
+    }
     .vd-summary { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+    /* Телефон: имя клиники уступает место вкладкам; знак остаётся. */
+    .deptbar-brand .brand-text { display: none; }
+    /* Органы управления шапки (язык, учётная запись…) на телефоне не входили
+       в строку и давали всей странице горизонтальную прокрутку — переносим их
+       на вторую строку. Тот же селектор с id, что у SHELL_REGIONS_V1: правило
+       admin-views.css его не перебьёт. */
+    /* CONTROLS_IN_DEPTBAR_V1 — органы управления живут в полосе разделов:
+       на телефоне они уходят в ней на вторую строку во всю ширину. */
+    .deptbar { flex-wrap: wrap; row-gap: 8px; padding-top: 8px; padding-bottom: 8px; }
+    .deptbar > .appbar-controls { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
 }
 
 /* btn-amber — restored after parallel-session clobber (2026-06-15) */

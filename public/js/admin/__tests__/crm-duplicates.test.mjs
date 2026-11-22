@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, RPC, mk, walk, textOf, byAttr, tick, button, TOASTS } from './crm-harness.mjs';
+import { S, RPC, mk, walk, textOf, byAttr, tick, button, TOASTS, railNodes } from './crm-harness.mjs';
 
 const { renderCrm } = await import('../views/crm.js');
 
@@ -34,7 +34,8 @@ async function board(user) {
   await tick();
   return root;
 }
-const openBtn = (root) => byAttr(root, 'data-crm-duplicates-open')[0];
+// RAIL_TOOLS_V1 — кнопка раздела стоит в левой колонке оболочки.
+const openBtn = () => railNodes().find((n) => n.attrs && 'data-crm-duplicates-open' in n.attrs);
 
 test('кнопку «Дубликаты» видит администратор, оператор — нет', async () => {
   assert.ok(openBtn(await board(ADMIN)), 'администратору не показали «Дубликаты»');
@@ -49,7 +50,7 @@ test('группа: предложенная карточка выбрана; «
   RPC.length = 0;
   openBtn(root).click();
   await tick(40);
-  const modal = document.body.children.find((n) => n.attrs && 'data-crm-duplicates' in n.attrs);
+  const modal = walk(root).find((n) => n.attrs && 'data-crm-duplicates' in n.attrs);
   assert.ok(modal, 'окно «Дубликаты» не открылось');
   assert.ok(RPC.some((r) => r.name === 'crm_duplicate_groups'));
 
@@ -90,7 +91,7 @@ const openModal = async () => {
   RPC.length = 0;
   openBtn(root).click();
   await tick(40);
-  return document.body.children.find((n) => n.attrs && 'data-crm-duplicates' in n.attrs);
+  return walk(root).find((n) => n.attrs && 'data-crm-duplicates' in n.attrs);
 };
 const untick = (g, id) => {
   const t = byAttr(g, 'data-dup-tick').find((n) => n.getAttribute('data-dup-tick') === String(id));
@@ -148,7 +149,7 @@ test('отказ сервера — сказано вслух, группа ос
   const root = await board(ADMIN);
   openBtn(root).click();
   await tick(40);
-  const modal = document.body.children.find((n) => n.attrs && 'data-crm-duplicates' in n.attrs);
+  const modal = walk(root).find((n) => n.attrs && 'data-crm-duplicates' in n.attrs);
   const g = byAttr(modal, 'data-dup-group')[0];
   button(g, /Объединить/).click();
   await tick();

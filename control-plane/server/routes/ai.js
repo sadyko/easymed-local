@@ -1,5 +1,11 @@
 import express, { Router } from 'express';
 import { callClaude as realCallClaude, costMicroUsd } from '../services/ai-reply.js';
+import { aiProvider, callOpenAi } from '../services/ai-reply-openai.js';   // AI_OPENAI_V1
+
+// AI_OPENAI_V1 — кто отвечает, решает AI_PROVIDER сервера управления: 'openai' —
+// ChatGPT (ai-reply-openai.js), иначе Claude, как было. Тесты подменяют callClaude
+// целиком и до провайдера не доходят.
+const defaultCall = (payload) => (aiProvider() === 'openai' ? callOpenAi(payload) : realCallClaude(payload));
 import { isEntitled } from '../services/checkin.js';
 
 // AI_CHAT_V1 — POST /cp/v1/ai/chat-reply: клиника просит ответ пациенту.
@@ -33,7 +39,7 @@ const MAX_FACTS_CHARS = 250_000;
 const unknown = (res) => res.status(401).json({ error: { code: 'invalid_token', message: 'This install is not recognised.' } });
 const noModule = (res) => res.status(402).json({ error: { code: 'no_module' } });
 
-export function aiRoutes(db, { callClaude = realCallClaude, now = () => new Date() } = {}) {
+export function aiRoutes(db, { callClaude = defaultCall, now = () => new Date() } = {}) {
   const r = Router();
 
   const gate = (req, res, next) => {
@@ -96,7 +102,7 @@ export function aiRoutes(db, { callClaude = realCallClaude, now = () => new Date
       console.warn('[control-plane] AI upstream failure', (e && e.status) || 'no-status', type || 'no-type');
       return res.status(503).json({ error: { code: 'upstream' } });
     }
-    const { result, usage = {} } = answer || {};
+    const { result, usage = {}, cost_micro_usd: knownCost } = answer || {};   // AI_OPENAI_V1 — у ChatGPT своя цена
     if (!result) return res.status(503).json({ error: { code: 'upstream' } });
     // Учёт — после ответа Claude: запрос, упавший до ответа, денег не стоил.
     // Месяц — тот, что проверялся в gate, чтобы проверка и запись не
@@ -104,7 +110,8 @@ export function aiRoutes(db, { callClaude = realCallClaude, now = () => new Date
     db.prepare(`INSERT INTO ai_usage (clinic_id, month, requests, input_tokens, output_tokens, cost_micro_usd) VALUES (?, ?, 1, ?, ?, ?)
                 ON CONFLICT(clinic_id, month) DO UPDATE SET requests = requests + 1, input_tokens = input_tokens + excluded.input_tokens,
                   output_tokens = output_tokens + excluded.output_tokens, cost_micro_usd = cost_micro_usd + excluded.cost_micro_usd`)
-      .run(req.aiClinicId, req.aiMonth, Number(usage.input_tokens || 0), Number(usage.output_tokens || 0), costMicroUsd(usage));
+      .run(req.aiClinicId, req.aiMonth, Number(usage.input_tokens || 0), Number(usage.output_tokens || 0),
+        Number.isFinite(knownCost) ? knownCost : costMicroUsd(usage));
     res.json(result);
   });
 

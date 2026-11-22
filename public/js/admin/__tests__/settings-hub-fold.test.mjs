@@ -1,3 +1,7 @@
+// SETTINGS_SUBNAV_V1 (2026-11-21) заменил гармошку: группы — в боковой колонке,
+// здесь — одна выбранная (тесты ниже). Описание прежней гармошки оставлено как
+// история.
+//
 // SETTINGS_HUB_LIST_V1 (2026-10-16, owner: «make groups as a list and foldable,
 // default view is folded») — хаб «Настройки» показывает группы списком, одну
 // под другой, и каждая сворачивается щелчком по своей шапке.
@@ -119,19 +123,6 @@ async function mountHub() {
   return root;
 }
 
-test('при открытии все группы свёрнуты', async () => {
-  setFullAccess('Администратор');
-  const root = await mountHub();
-  const cs = cards(root);
-  assert.ok(cs.length >= 5, 'группы на экране: ' + cs.length);
-  for (const c of cs) {
-    assert.ok(headOf(c), `у группы «${titleOf(c)}» есть шапка .set-card-head`);
-    assert.ok(bodyOf(c), `у группы «${titleOf(c)}» есть тело .set-card-body`);
-    assert.ok(isFolded(c), `группа «${titleOf(c)}» должна быть свёрнута: aria-expanded=`
-      + headOf(c).attrs['aria-expanded'] + ', hidden=' + bodyOf(c).hidden);
-  }
-});
-
 test('группы идут в порядке объявления GROUPS, а не по числу разделов', async () => {
   setFullAccess('Администратор');
   const root = await mountHub();
@@ -140,60 +131,78 @@ test('группы идут в порядке объявления GROUPS, а н
   assert.deepStrictEqual(shown, declared, 'порядок на экране должен совпадать с порядком GROUPS');
 });
 
-test('щелчок по шапке раскрывает только эту группу, повторный — сворачивает', async () => {
+// SETTINGS_SUBNAV_V1 (2026-11-21, владелец со снимком хаба: «all block of
+// setting should be seen in right navigation and drop down items in main
+// block») — ГАРМОШКИ БОЛЬШЕ НЕТ. Группы — функции раздела «Настройки» в
+// боковой колонке, хаб показывает одну выбранную группу (#settings/<key>)
+// раскрытой и без кнопки-шапки. Строки остальных групп остаются в разметке
+// под hidden — статус обновления и соседние тесты читают их, как и раньше.
+const shownCards = (root) => cards(root).filter((c) => c.hidden !== true);
+async function mountHubAt(sub, extra = {}) {
+  const root = mk('div');
+  await renderSettingsHub(root, { onNavigate: () => {}, payload: sub ? { sub } : null, ...extra });
+  await tick();
+  return root;
+}
+
+test('на экране одна группа — выбранная, раскрытая, с заголовком вместо кнопки', async () => {
   setFullAccess('Администратор');
-  const root = await mountHub();
-  const [a, b] = cards(root);
-  const ta = titleOf(a), tb = titleOf(b);
-  headOf(a).click();
-  assert.deepStrictEqual(openTitles(root), [ta], `открыта только «${ta}», «${tb}» осталась свёрнутой`);
-  headOf(a).click();
-  assert.deepStrictEqual(openTitles(root), [], 'повторный щелчок свернул группу');
+  const root = await mountHubAt('system');
+  const shown = shownCards(root);
+  assert.deepStrictEqual(shown.map(titleOf), ['Системные настройки']);
+  const c = shown[0];
+  assert.ok(String(c.className).includes('set-card--fixed'), 'выбранная группа — .set-card--fixed');
+  assert.notStrictEqual(headOf(c).tagName, 'BUTTON', 'шапка выбранной группы — не кнопка: сворачивать нечего');
+  assert.strictEqual(bodyOf(c).hidden, false, 'строки выбранной группы видны');
+  assert.ok(cards(root).length >= 5, 'строки остальных групп остались в разметке: ' + cards(root).length);
 });
 
-test('открытая группа остаётся открытой при повторном монтировании хаба', async () => {
+test('без подмаршрута — первая видимая группа, и адрес её называет', async () => {
   setFullAccess('Администратор');
-  const root1 = await mountHub();
-  const first = cards(root1)[0];
-  const t = titleOf(first);
-  headOf(first).click();
-  const root2 = await mountHub();
-  assert.deepStrictEqual(openTitles(root2), [t], 'вернулись из справочника — группа всё ещё открыта');
-  // Прибираем за собой: модульное состояние переживает тесты этого файла.
-  headOf(cards(root2).find((c) => titleOf(c) === t)).click();
-  assert.deepStrictEqual(openTitles(root2), []);
+  const calls = [];
+  const prevHash = globalThis.location;
+  globalThis.location = { hash: '#settings' };
+  globalThis.history = { state: { view: 'settings', payload: null }, replaceState(st, _t, url) { calls.push([st, url]); }, pushState() {} };
+  window.easymedSetTabSub = (tab, sub) => calls.push(['tab', tab, sub]);
+  try {
+    const root = await mountHubAt(null, { tabId: 'settings' });
+    assert.deepStrictEqual(shownCards(root).map(titleOf), [GROUPS[0].title]);
+    assert.ok(calls.some((c) => c[0] === 'tab' && c[2] === GROUPS[0].key), 'панель запомнила группу (easymedSetTabSub)');
+    assert.ok(calls.some((c) => c[1] === '#settings/' + GROUPS[0].key), 'адрес переписан на #settings/' + GROUPS[0].key);
+  } finally {
+    globalThis.location = prevHash;
+    globalThis.history = { state: null, replaceState(){}, pushState(){} };
+    delete window.easymedSetTabSub;
+  }
 });
 
-test('поиск раскрывает группы с совпадениями, пустой запрос возвращает свёрнутый вид', async () => {
+test('неизвестная группа в адресе — первая видимая, а не пустой экран', async () => {
   setFullAccess('Администратор');
-  const root = await mountHub();
+  const root = await mountHubAt('no-such-group');
+  assert.deepStrictEqual(shownCards(root).map(titleOf), [GROUPS[0].title]);
+});
+
+test('у каждой группы есть свой ключ для адреса, и ключи не повторяются', () => {
+  const keys = GROUPS.map((g) => g.key);
+  assert.ok(keys.every((k) => typeof k === 'string' && /^[a-z-]+$/.test(k)), 'ключи: ' + keys.join(', '));
+  assert.strictEqual(new Set(keys).size, keys.length, 'ключи групп повторяются');
+});
+
+test('поиск ищет по ВСЕМ группам, пустой запрос возвращает выбранную', async () => {
+  setFullAccess('Администратор');
+  const root = await mountHubAt('staff');
   const inp = byClass(root, 'set-search')[0];
   assert.ok(inp, 'поле поиска на месте');
   inp.value = 'Telegram';
   inp.dispatchEvent({ type: 'input' });
   await tick(SEARCH_SETTLE_MS);
-  const found = cards(root);
-  assert.ok(found.some((c) => titleOf(c) === 'Системные настройки'), 'найдена группа с Telegram-ботом');
-  for (const c of found) assert.ok(isOpen(c), `найденная группа «${titleOf(c)}» показана раскрытой`);
+  assert.ok(shownCards(root).some((c) => titleOf(c) === 'Системные настройки'), 'найдено вне выбранной группы');
+  for (const c of shownCards(root)) assert.strictEqual(bodyOf(c).hidden, false, `найденная группа «${titleOf(c)}» раскрыта`);
+  assert.strictEqual(foldAllBtn(root).hidden, true, 'кнопке «Развернуть все» нечего сворачивать');
   inp.value = '';
   inp.dispatchEvent({ type: 'input' });
   await tick(SEARCH_SETTLE_MS);
-  assert.ok(cards(root).length >= 5, 'все группы вернулись');
-  assert.deepStrictEqual(openTitles(root), [], 'без запроса — снова всё свёрнуто');
-});
-
-test('«Развернуть все» раскрывает все группы и становится «Свернуть все»', async () => {
-  setFullAccess('Администратор');
-  const root = await mountHub();
-  const btn = foldAllBtn(root);
-  assert.ok(btn, 'кнопка .set-fold-all рядом с поиском');
-  assert.strictEqual(textOf(btn).trim(), 'Развернуть все');
-  btn.click();
-  assert.ok(cards(root).every(isOpen), 'все группы раскрыты');
-  assert.strictEqual(textOf(btn).trim(), 'Свернуть все');
-  btn.click();
-  assert.ok(cards(root).every(isFolded), 'все группы снова свёрнуты');
-  assert.strictEqual(textOf(btn).trim(), 'Развернуть все');
+  assert.deepStrictEqual(shownCards(root).map(titleOf), ['Управление пользователями и сотрудниками']);
 });
 
 // FIX_318_V1 (B5) — плитка, ведущая в раздел, который скрыт в «Видимости

@@ -500,7 +500,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // -- teal cover banner --
         const cover = h('div', {
             style: {
-                background: 'linear-gradient(120deg, var(--primary-800, #0b5d52), var(--primary-500, #17967f))',
+                // TOPBAR_BLUE_EVERYWHERE_V1 — тот же синий, что верхняя полоса разделов.
+                background: 'linear-gradient(180deg, var(--primary-500, #3d5c8c) 0%, var(--primary-600, #24426f) 100%)',
                 borderRadius: '16px 16px 0 0', padding: '14px 18px', minHeight: '68px',
                 display: 'flex', alignItems: 'flex-start', gap: '10px',
             },

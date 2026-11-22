@@ -39,7 +39,7 @@ test('findSourceByPhone: ключ номера — те же 9 цифр, что 
   assert.equal(findSourceByPhone(db, ''), null);
 });
 
-test('/start без связки — приветствие с кнопкой контакта; свой контакт известного номера — связка ЖДЁТ подтверждения клиники; после подтверждения — «Вы подключены»', async () => {
+test('/start без связки — приветствие с кнопкой контакта; свой контакт известного номера — подключён СРАЗУ, без подтверждения (DOCTOR_BOT_AUTO_LINK_V1)', async () => {
   const { db, A } = fresh();
   const { sent, deps } = fakeApi();
   await handleUpdate(db, 'tok', { message: { chat: { id: 500 }, from: { id: 500 }, text: '/start' } }, deps);
@@ -54,23 +54,35 @@ test('/start без связки — приветствие с кнопкой к
   assert.equal(link.phone, '998903106570');
   assert.equal(link.tg_username, 'oybek');
   assert.equal(link.tg_name, 'Ойбек Набиев');
-  // FIX_318_V1 (M2) — подключение без согласия клиники больше не открывает имена пациентов.
-  assert.equal(link.status, 'pending', 'ждёт администратора');
-  assert.equal(sent[1].params.text, T.pending('Набиев Ойбек'));
+  // DOCTOR_BOT_AUTO_LINK_V1 (владелец, 2026-11-20) — врач есть в базе: подключён сразу.
+  assert.equal(link.status, 'confirmed', 'подтверждение администратором больше не нужно');
+  assert.ok(link.confirmed_at, 'время подключения записано — визиты до него бот не шлёт');
+  assert.equal(link.confirmed_by, null, 'подтвердил номер, а не человек');
+  assert.equal(sent[1].params.text, T.linked('Набиев Ойбек'));
   assert.deepEqual(sent[1].params.reply_markup, { remove_keyboard: true });
 
   await handleUpdate(db, 'tok', { message: { chat: { id: 500 }, from: { id: 500 }, text: '/start' } }, deps);
-  assert.equal(sent[2].params.text, T.pending('Набиев Ойбек'), 'пока ждёт — напоминание, что ждёт');
-  db.prepare("UPDATE doctor_bot_links SET status = 'confirmed', confirmed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(link.id);
+  assert.equal(sent[2].params.text, T.linked('Набиев Ойбек'), '/start сразу после подключения — «Вы подключены»');
 
   await handleUpdate(db, 'tok', { message: { chat: { id: 500 }, from: { id: 500 }, text: 'спасибо' } }, deps);
   assert.equal(sent[3].params.text, T.gotMessage, 'подключённому — что сообщения не читаются');
   await handleUpdate(db, 'tok', { message: { chat: { id: 500 }, from: { id: 500 }, text: '/start' } }, deps);
   assert.equal(sent[4].params.text, T.linked('Набиев Ойбек'), '/start подключённого — напоминание, кто он');
   await handleUpdate(db, 'tok', contactMsg(500, 500, '+998903106570'), deps);
-  assert.equal(sent[5].params.text, T.linked('Набиев Ойбек'), 'тот же номер ещё раз — подтверждение не сбрасывается');
+  assert.equal(sent[5].params.text, T.linked('Набиев Ойбек'), 'тот же номер ещё раз — подключение не сбрасывается');
   assert.equal(activeLink(db, 500).status, 'confirmed');
   assert.equal(db.prepare('SELECT COUNT(*) n FROM doctor_bot_links').get().n, 1);
+});
+
+test('DOCTOR_BOT_AUTO_LINK_V1: связка, ждавшая подтверждения, подключается тем же номером ещё раз', async () => {
+  const { db, A } = fresh();
+  const { sent, deps } = fakeApi();
+  db.prepare("INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, status) VALUES (?, '501', '998903106570', 'pending')").run(A);
+  await handleUpdate(db, 'tok', contactMsg(501, 501, '+998903106570'), deps);
+  const link = activeLink(db, 501);
+  assert.equal(link.status, 'confirmed');
+  assert.ok(link.confirmed_at);
+  assert.equal(sent[0].params.text, T.linked('Набиев Ойбек'));
 });
 
 test('M2 (повтор R3): номер указан у двух врачей — связки нет, просьба позвонить в клинику', async () => {

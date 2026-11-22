@@ -10,7 +10,7 @@
 // ведёт доску. Прежних чипов data-op-chip и отдельного списка «По имени…» нет.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, RPC, mk, walk, textOf, byAttr, byClass, tick, crmView } from './crm-harness.mjs';
+import { S, CALLS, RPC, mk, walk, textOf, byAttr, byClass, tick, crmView, railNodes, crmPanel } from './crm-harness.mjs';
 import { TASK_LIST_SELECT } from '../views/crm-tasks.js';
 
 const { renderCrm, crmExcelRows } = await import('../views/crm.js');
@@ -141,11 +141,11 @@ test('«Отчёт» считает с фильтром оператора и н
   await pickOp(root, 'none');
   document.body.children.length = 0;
   CALLS.length = 0;
-  walk(root).find((n) => n.tagName === 'BUTTON' && /Отчёт/.test(textOf(n))).click();
+  railNodes().find((n) => n.tagName === 'BUTTON' && /Отчёт/.test(textOf(n))).click();   // RAIL_TOOLS_V1
   await tick(60);
   const q = CALLS.find((c) => c.table === 'crm_requests' && c.columns === 'id, status, source, sources, created_at, assigned_to');
   assert.ok(q && q.filters.some((f) => f.col === 'assigned_to' && f.op === 'is' && f.val === null), 'отчёт посчитан без фильтра оператора');
-  const modal = document.body.children.find((n) => String(n.className).includes('modal'));
+  const modal = crmPanel(root);   // CRM_PANELS_INLINE_V1
   assert.ok(byAttr(modal, 'data-report-operator').length && textOf(byAttr(modal, 'data-report-operator')[0]).includes('Оператор: Ничьи'));
   modal.remove();
   await reset(root);

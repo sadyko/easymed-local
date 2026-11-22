@@ -62,7 +62,7 @@ test('группы меню по-русски, каждый пункт — га�
   const root = await mount();
   const t = textOf(root);
   assert.ok(t.includes('Видимость разделов'));
-  for (const g of ['Клиника', 'Операции', 'Настройки']) assert.ok(t.includes(g), 'группа ' + g);
+  for (const g of ['Клиника', 'Касса', 'Настройки']) assert.ok(t.includes(g), 'группа ' + g);
   for (const l of ['Пациенты', 'Стационар', 'CRM · Заявки', 'Реферирование']) assert.ok(t.includes(l), 'пункт ' + l);
   assert.strictEqual(toggle(root, 'admissions').checked, undefined, 'скрытый — без галочки');
   assert.ok(t.includes('скрыт'), 'подпись «скрыт» у стационара');

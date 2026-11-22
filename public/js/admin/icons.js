@@ -1,8 +1,9 @@
-// COOLICONS_V1 — один набор иконок на весь интерфейс.
+// COOLICONS_V1 → ICONS_LUCIDE_V1 — один набор иконок на весь интерфейс.
 //
-// Раньше здесь лежали 77 контуров, нарисованных вручную. Теперь рисунки берутся
-// из набора coolicons (public/assets/icons/coolicons/, 442 файла, CC BY 4.0 —
-// см. ATTRIBUTION.md рядом с ними), а этот файл остался тем же самым фасадом:
+// С 2026-11-22 рисунки берутся из набора Lucide (public/assets/icons/lucide/,
+// лицензия ISC — см. LICENSE и ATTRIBUTION.md рядом с ними; владелец: «more
+// professional icons … more medical … minimalistic»). До того здесь был
+// coolicons. Этот файл остался тем же самым фасадом:
 //
 //     icon('Patients', { size: 18 })   →  HTMLElement (<svg>)
 //     iconHtml('Clock', { size: 16 })  →  строка '<svg …>…</svg>'
@@ -36,16 +37,15 @@
 //     — это пустые квадраты на всех экранах сразу), контуры видны в DOM, так
 //     что onboarding.js продолжает работать как работал.
 //
-// Цена — 43 КБ JS с контурами (icon-paths.js). Спрайт не вендорится вовсе:
+// Цена — около 18 КБ JS с контурами (icon-paths.js). Спрайт не вендорится:
 // возить оба представления одного и того же набора незачем.
 //
-// В icon-paths.js попадают только те иконки, что названы в icon-map.js, — 76
-// файлов из 442. Остальные всё равно лежат в public/assets/icons/coolicons/ и
-// едут в релиз: добавить иконку — это строка в карте и перегенерация, без
-// похода на сайт набора и без интернета у того, кто это делает.
+// В public/assets/icons/lucide/ лежат только те иконки, что названы в
+// icon-map.js. Добавить иконку — положить её SVG из lucide-static туда же,
+// дописать строку в карту и выполнить node scripts/build-icon-paths.mjs.
 
 import { ICON_MAP } from './icon-map.js';
-import { ICON_BODIES } from './icon-paths.js';
+import { ICON_BODIES, ICON_FILLED } from './icon-paths.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -59,6 +59,16 @@ const DEFAULT_STROKE = 1.75;
 
 function svg(size, stroke, body) {
     return `<svg xmlns="${NS}" aria-hidden="true" focusable="false" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+}
+
+// ICONS_HEALTH_V1 — медицинские иконки меню (Healthicons) нарисованы ЗАЛИВКОЙ:
+// цвет — fill, обводки нет (линия поверх закрашенной фигуры сделала бы её
+// жирной кляксой). Рисунок Healthicons занимает меньше поля, чем у Lucide
+// (≈3…21 из 24), поэтому поле подрезано до 2…22 — на экране он того же
+// оптического размера, что и линейные соседи по меню.
+const FILLED = new Set(ICON_FILLED);
+function filledSvg(size, body) {
+    return `<svg xmlns="${NS}" aria-hidden="true" focusable="false" width="${size}" height="${size}" viewBox="2 2 20 20" fill="currentColor" stroke="none">${body}</svg>`;
 }
 
 /** Имена, которые умеет рисовать этот модуль. */
@@ -125,6 +135,7 @@ export function iconHtml(name, { size = DEFAULT_SIZE, stroke = DEFAULT_STROKE } 
     const coolPath = ICON_MAP[name];
     const body = coolPath && ICON_BODIES[coolPath];
     if (!body) return missing(name, size, stroke);
+    if (FILLED.has(coolPath)) return filledSvg(size, body);
     return svg(size, stroke, body);
 }
 

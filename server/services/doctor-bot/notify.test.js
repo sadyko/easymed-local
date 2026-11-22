@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { pendingNotifications, runNotifyScan, composeMessage, QUIET_MINUTES, LOOKBACK_DAYS, SEEN_BUTTON } from './notify.js';
+import { pendingNotifications, runNotifyScan, composeMessage, confirmPendingLinks, messageTemplate, QUIET_MINUTES, LOOKBACK_DAYS, SEEN_BUTTON, THANKS_RU, THANKS_UZ } from './notify.js';
+import { T as FLOW_T } from './flow.js';
 import { TelegramError } from '../telegram/api.js';
 
 const NOW = new Date('2026-10-26T09:00:00.000Z');
@@ -72,6 +73,8 @@ test('runNotifyScan: текст с ФИО и услугами без цен, к�
   assert.ok(p.text.includes('<b>Иванов Иван</b>') && p.text.includes('• УЗИ брюшной полости') && p.text.includes('• Консультация'));
   assert.ok(!/100\s?000|50\s?000/.test(p.text), 'цен в сообщении нет');
   assert.ok(p.text.includes('26.10.2026'));
+  // DOCTOR_BOT_THANKS_V1 — благодарность за доверие внутри уведомления, на обоих языках.
+  assert.ok(p.text.includes(THANKS_RU) && p.text.includes(THANKS_UZ), 'нет благодарности за доверие: ' + p.text);
   assert.deepEqual(p.reply_markup.inline_keyboard[0][0], { text: SEEN_BUTTON, callback_data: 'seen:1' });
   const row = db.prepare('SELECT message_id, viewed_at FROM doctor_bot_notifications WHERE visit_id = 100').get();
   assert.equal(row.message_id, '77');
@@ -99,7 +102,22 @@ test('отказ Telegram: строка снимается (повтор в сл
 test('composeMessage без услуг и с HTML в имени', () => {
   const text = composeMessage({ patient: 'A <b> & B', visitDate: '2026-10-26T07:00:00.000Z', services: [] });
   assert.ok(text.includes('<b>A &lt;b&gt; &amp; B</b>'));
-  assert.ok(text.includes('Услуги ещё не добавлены.'));
+  assert.ok(text.includes('Услуги:\nещё не добавлены'), text);   // DOCTOR_BOT_TEMPLATE_V1 — {услуги} без услуг
+});
+
+// DOCTOR_BOT_TEMPLATE_V1 — проход берёт текст клиники из настроек.
+test('DOCTOR_BOT_TEMPLATE_V1: messageTemplate читает текст клиники, пусто — стандартный', () => {
+  const { db } = fresh();
+  assert.equal(messageTemplate(db), '');
+  db.prepare("UPDATE doctor_bot_settings SET message_template = 'Мой {пациент}' WHERE id = 1").run();
+  assert.equal(messageTemplate(db), 'Мой {пациент}');
+});
+
+test('DOCTOR_BOT_TEMPLATE_V1: composeMessage по шаблону — метки, экранирование, стандартный при пустом', () => {
+  const t = composeMessage({ patient: 'Ali & Vali', visitDate: '2026-10-26T07:00:00.000Z', services: ['УЗИ', 'ЭКГ'], template: 'A <{пациент}> {дата}\n{услуги}' });
+  assert.equal(t, 'A &lt;<b>Ali &amp; Vali</b>&gt; 26.10.2026\n• УЗИ\n• ЭКГ');
+  const d = composeMessage({ patient: 'P', visitDate: '2026-10-26T07:00:00.000Z', services: ['УЗИ'], template: '' });
+  assert.ok(d.startsWith('Пациент <b>P</b> пришёл 26.10.2026.\nУслуги:\n• УЗИ') && d.includes(THANKS_RU) && d.includes(THANKS_UZ), d);
 });
 
 // ---------------------------------------------------------------------------
@@ -127,7 +145,7 @@ test('H3 (повтор R2): врача выключили или сменили 
   assert.deepEqual(pendingNotifications(db2, { now: nowIso }), []);
 });
 
-test('M2: подключение без подтверждения администратора не получает ничего; визиты до подтверждения — тоже', () => {
+test('M2: связка в статусе «ждёт» сама по себе ничего не получает; визиты до подключения — тоже', () => {
   const { db, A, visit } = fresh();
   visit.run(100, 10, 3, iso(30), 'arrived', A, iso(30));
   db.prepare("UPDATE doctor_bot_links SET status = 'pending', confirmed_at = NULL").run();
@@ -153,4 +171,23 @@ test('H3: врача выключили посреди прохода — ост
   assert.equal(r.sent, 1, 'второе уведомление не ушло');
   assert.equal(sent.length, 1);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM doctor_bot_notifications').get().n, 1);
+});
+
+// DOCTOR_BOT_AUTO_LINK_V1 (владелец, 2026-11-20) — связки, вставшие в «ожидание» до отмены
+// подтверждения, проход уведомлений подключает сам и пишет врачу «Вы подключены»; выключенного
+// врача и сменённый номер — не трогает.
+test('DOCTOR_BOT_AUTO_LINK_V1: ждавшие связки подключаются проходом; выключенный врач и чужой номер — нет', async () => {
+  const { db, A, C } = fresh();
+  db.prepare('DELETE FROM doctor_bot_links').run();
+  db.prepare("INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, status) VALUES (?, '801', '998903106570', 'pending')").run(A);
+  db.prepare("INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, status) VALUES (?, '802', '998909999999', 'pending')").run(C);
+  const { sent, deps } = fakeApi();
+  const n = await confirmPendingLinks(db, 'tok', deps);
+  assert.equal(n, 1, 'подключена только связка с номером врача');
+  const st = Object.fromEntries(db.prepare('SELECT chat_id, status FROM doctor_bot_links').all().map((r) => [r.chat_id, r.status]));
+  assert.deepEqual(st, { 801: 'confirmed', 802: 'pending' });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].params.chat_id, '801');
+  assert.equal(sent[0].params.text, FLOW_T.linked('Набиев Ойбек'));
+  assert.equal(await confirmPendingLinks(db, 'tok', deps), 0, 'второй проход ничего не делает');
 });

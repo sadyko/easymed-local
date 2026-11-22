@@ -11,7 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { operatorKpi, kpiRange } from './operator-kpi.js';
+import { operatorKpi, kpiRange, salesTeamReport } from './operator-kpi.js';
 import { getRpc } from './index.js';
 
 const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
@@ -122,4 +122,50 @@ test('доступ: оператор — только себя; руководи
 
 test('RPC зарегистрирован', () => {
   assert.equal(typeof getRpc('crm_operator_kpi'), 'function');
+});
+
+// CRM_SALES_TEAM_V1 — отдел продаж по менеджерам: те же определения, что у
+// «Мой KPI», деньги — оплаты пациентов, доведённых менеджером до «Пришёл»,
+// после заявки; оператору чужие деньги не открываются.
+test('отдел продаж: заявки и деньги по каждому менеджеру, итог без повторов', () => {
+  const ADMIN = { id: 1, role: 'admin' };
+  const r = salesTeamReport(db, { days: 1 }, ADMIN);
+  const anna = r.managers.find((m) => m.user_id === 2);
+  const bek = r.managers.find((m) => m.user_id === 3);
+  assert.equal(anna.name, 'Оператор Анна');
+  assert.equal(anna.total, 3);
+  assert.equal(anna.came, 1);
+  assert.equal(anna.scheduled, 1);
+  assert.equal(anna.revenue, 200000, 'оплата до заявки (50 000) не засчитана, после — засчитана');
+  assert.equal(anna.paying_patients, 1);
+  assert.equal(anna.avg_check, 200000);
+  assert.equal(bek.revenue, 90000);
+  assert.equal(r.totals.revenue, 290000);
+  assert.equal(r.totals.paying_patients, 2);
+  assert.equal(r.totals.total, 4);
+  // Сортировка — по деньгам: Анна (200 000) выше Бека (90 000).
+  assert.ok(r.managers.indexOf(anna) < r.managers.indexOf(bek));
+  // То же число, что в «Мой KPI» Анны за тот же день.
+  assert.equal(operatorKpi(db, { period: 'today' }, ANNA).pay.revenue_base, anna.revenue);
+});
+
+test('отдел продаж: оператору — отказ; без CRM — отказ; RPC разрешён лапсу как чтение', async () => {
+  assert.throws(() => salesTeamReport(db, { days: 30 }, ANNA), (e) => e.status === 403);
+  assert.throws(() => salesTeamReport(db, { days: 30 }, { id: 4, role: 'nobody_role' }), (e) => e.status === 403);
+  assert.equal(typeof getRpc('crm_sales_team_report'), 'function');
+  const { isReadOnlyRpc } = await import('../control/gate.js');
+  assert.ok(isReadOnlyRpc('crm_sales_team_report'));
+});
+
+// CRM_SALES_CHARTS_V1 — ряд для графиков: день — шаг, пустые дни тоже есть,
+// деньги — по дню оплаты по тому же правилу, итог ряда = итог отчёта.
+test('отдел продаж: ряд по дням для графиков сходится с итогами', () => {
+  const r = salesTeamReport(db, { days: 7 }, { id: 1, role: 'admin' });
+  assert.equal(r.step, 'day');
+  assert.equal(r.series.length, 7, 'каждый день периода, и пустой тоже');
+  const sum = (k) => r.series.reduce((s, x) => s + x[k], 0);
+  assert.equal(sum('leads'), r.totals.total);
+  assert.equal(sum('came'), r.totals.came);
+  assert.equal(sum('revenue'), r.totals.revenue);
+  assert.equal(salesTeamReport(db, { days: 0 }, { id: 1, role: 'admin' }).step, 'month');
 });

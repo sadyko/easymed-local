@@ -70,7 +70,9 @@ test('manifest.json годен для установки: имя, start_url, sta
   for (const size of ['192x192', '512x512']) {
     const icon = icons.find((i) => String(i.sizes).split(/\s+/).includes(size) && /png/.test(String(i.type || 'png')));
     assert.ok(icon, 'нет значка ' + size);
-    const file = path.join(PUB, String(icon.src).replace(/^\//, ''));
+    // ICON_BLUE_V1 — у адреса значка есть ?v=… (сброс кэша значка установленного
+    // приложения при смене картинки); на диске файл без него.
+    const file = path.join(PUB, String(icon.src).replace(/^\//, '').replace(/\?.*$/, ''));
     assert.ok(fs.existsSync(file), 'значок ' + size + ' указан, но файла нет: ' + icon.src);
     // PNG по подписи, а не по имени: битый файл Chrome молча не примет.
     const sig = fs.readFileSync(file).subarray(0, 8).toString('hex');

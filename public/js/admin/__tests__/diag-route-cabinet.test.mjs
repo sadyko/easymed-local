@@ -83,6 +83,11 @@ const TODAY = localDay(0);
 const DOC = 12, OTHER = 10;   // 12 — синтетический сонолог; 10 — терапевт «Иванов» стенда
 
 const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
+// HERO_TABS_TO_RAIL_V1 — вкладки раздела стоят в левой колонке оболочки: стенд
+// достаёт их из того же реестра (admin/rail-tools.js), что и колонка.
+const { railToolsFor } = await import('../rail-tools.js');
+const railNodes = (owner) => { const b = railToolsFor(owner); return b ? b().flat().filter(Boolean).flatMap((n) => walk(n)) : []; };
+
 const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
 const tick = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 
@@ -307,13 +312,13 @@ test('D6: таймер 60 с — один; тик перечитывает; пр
     assert.equal(await cabinet.autoFreshTick(), true);
     assert.ok(textOf(w.root).includes('Тест-T02'), 'тик не перечитал список');
     // вкладку переключили — таймер снят
-    const dashTab = walk(w.root).find((n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab' && /Дашборд/.test(textOf(n)));
+    const dashTab = [...walk(w.root), ...railNodes('consultation')].find((n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab' && /Дашборд/.test(textOf(n)));
     dashTab.click();
     await tick(100);
     assert.ok(!cabinet.autoFreshRunning(), 'таймер пережил уход с вкладки');
     // вернулись на «Мои приёмы» — список перечитан, таймер снова один
     registerLater(s.t.db, 'T03');
-    walk(w.root).find((n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab' && /Мои приёмы/.test(textOf(n))).click();
+    [...walk(w.root), ...railNodes('consultation')].find((n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab' && /Мои приёмы/.test(textOf(n))).click();
     for (let i = 0; i < 30 && !textOf(w.root).includes('Тест-T03'); i++) await tick(60);
     assert.ok(textOf(w.root).includes('Тест-T03'), 'открытие вкладки не перечитало список');
     assert.ok(cabinet.autoFreshRunning());

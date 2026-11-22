@@ -355,7 +355,8 @@ test('снят ЗАГОЛОВОК, а не шапка: подзаголовок 
     const text = descendants(pane).map((n) => n._text || '').join(' ');
     assert.equal(TITLE_EL.textContent, 'Стационар', 'верхняя панель обязана называть раздел так же, как меню');
     assert.deepEqual(titlesIn(pane).map((n) => n.textContent), [], '«Стационар» напечатан второй раз внутри экрана');
-    assert.ok(text.includes('Заявки на госпитализацию и размещение на койках'), 'вместе с заголовком исчез подзаголовок');   // INPATIENT_QUEUES_SPLIT_V1
+    // INPATIENT_NO_SUBTITLE_V1 (2026-11-21) — подзаголовка у «Стационара» больше нет (решение владельца).
+    assert.ok(!text.includes('Заявки на госпитализацию и размещение на койках'), 'поясняющий подзаголовок вернулся');
     const btns = descendants(pane).filter((n) => n.tagName === 'BUTTON').map((n) => labelOf(n));
     assert.ok(btns.some((b) => b.includes('Заявка на госпитализацию')), 'кнопка действия уехала вместе с заголовком');
     assert.ok(btns.some((b) => b.includes('Обновить')), 'кнопка «Обновить» уехала вместе с заголовком');
@@ -489,6 +490,9 @@ test('ОБХОД ВСЕХ МАРШРУТОВ: ни один экран не на
             if (!alive) hollow.push(view);
         }
         const dup = titlesIn(pane);
+        // INLINE_HEAD_V1 — строка экрана сложена (инструменты «Коммерции»): имя
+        // стоит ОДИН раз — в шапке самого экрана.
+        if (String(VIEW_ROOT.className || '').split(/\s+/).includes('view-inline-head') && dup.length === 1) continue;   // фальшивый DOM не знает parentElement
         if (dup.length) doubled.push(view + ' -> «' + TITLE_EL.textContent + '» + «' + dup.map((d) => d.textContent).join('», «') + '»');
         if (!String(TITLE_EL.textContent || '').trim()) nameless.push(view);
     }

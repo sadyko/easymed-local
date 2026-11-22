@@ -547,7 +547,15 @@ export const REGISTRY = {
                  update:{roles:['admin'],columns:['name','category','category_id','last_name','first_name','middle_name',
                  'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','service_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','specialty','active'],bulkBy:['doctor_id']},delete:{roles:[]}},   // bulkBy: V3120_FIX (M9) — referral-reward-editor.js правит свой источник врача по doctor_id
                filters:['id','active','category_id','doctor_id'], json:['own_rates','service_rates'],   // REFERRAL_SERVICE_RATES_V1 (mig 273) — особые ставки по услугам, JSON как own_rates
-               embed:{ referral_source_categories:{table:'referral_source_categories',fk:'category_id',columns:['id','name']} } },
+               embed:{ referral_source_categories:{table:'referral_source_categories',fk:'category_id',columns:['id','name']},
+                       // REFERRAL_SOURCES_REP_COLUMN_V1 — имя медпредставителя в «Списке источников»
+                       representative:{table:'users',fk:'representative_id',columns:['id','full_name']} },
+               // REP_OWN_DOCTORS_V1 (2026-11-18). Владелец: «Med rep should not see internal doctors and they only
+               // have to see only their own doctors on their name, and even they shouldn't see other med rep's
+               // doctors». Медпредставитель получает только строки, где representative_id — он сам: ни врачей
+               // клиники (у их строк представителя нет), ни ничьих, ни чужих — в любом экране и в embed'ах.
+               // Остальным правило снято (lift 'not_representative', pay-visibility.js): их список не меняется.
+               scope:{ column:'representative_id', allRoles:['admin'], lift:'not_representative' } },
   // DOCTOR_WORKSPACE_V1 — columns the My-services doctor dashboard and the
   // workspace read. `active` is a generated mirror of is_active (mig 032) so
   // easymed's `.eq('active', true)` filters work unchanged; the rates/KPI

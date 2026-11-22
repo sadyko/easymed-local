@@ -454,7 +454,12 @@ test('возврат на экран остаётся МГНОВЕННЫМ, хо
     // чем она была плоха» обязано остаться в коде. Смотрим на то, что исполняется.
     const lines = read('js/admin.js').split('\n');
     const shell = lines.filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join(' ');
-    assert.ok(/behavior: 'instant'/.test(shell), 'восстановление прокрутки больше не просит мгновенности явно');
+    // SCROLL_IN_CONTENT_V1 (2026-11-21) — прокручивается область содержимого, и
+    // восстановление ушло в admin/scroll-root.js (setScrollTop): оболочка зовёт
+    // его, а мгновенность просит он.
+    assert.ok(/setScrollTop\(/.test(shell), 'оболочка больше не восстанавливает прокрутку через scroll-root.js');
+    const root = read('js/admin/scroll-root.js').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join(' ');
+    assert.ok(/behavior: 'instant'/.test(root), 'восстановление прокрутки больше не просит мгновенности явно');
     assert.ok(!/'instant' in window/.test(shell),
         "вернулась всегда-ложная проверка 'instant' in window — она просит 'auto', то есть плавно");
 });

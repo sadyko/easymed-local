@@ -23,6 +23,9 @@ const SHAPE_OK = {
   hand_off: (b) => isStr(b.text), // пусто допустимо — воркер подставит HANDOFF_TEXT
 };
 
+/** AI_OWN_KEY_V1 — та же проверка формы для ответа ChatGPT по своему ключу (own-key.js). */
+export const checkShape = (body) => !!body && OUTCOMES.has(body.outcome) && SHAPE_OK[body.outcome](body);
+
 export async function askControlPlane(payload, { dataDir = getDataDir(), endpoint, fetchImpl = globalThis.fetch, timeoutMs = TIMEOUT_MS } = {}) {
   const identity = readJsonFile(path.join(dataDir, 'control.json'));
   const token = identity && typeof identity.install_token === 'string' && identity.install_token ? identity.install_token : null;
@@ -51,6 +54,6 @@ export async function askControlPlane(payload, { dataDir = getDataDir(), endpoin
   // Anthropic или на сервере управления: 'network', очередь повторит с паузой.
   if (res.status === 400) return { error: 'bad_response' };
   if (!res.ok) return { error: res.status === 401 ? 'not_enrolled' : 'network' };
-  if (!body || !OUTCOMES.has(body.outcome) || !SHAPE_OK[body.outcome](body)) return { error: 'bad_response' };
+  if (!checkShape(body)) return { error: 'bad_response' };
   return body;
 }

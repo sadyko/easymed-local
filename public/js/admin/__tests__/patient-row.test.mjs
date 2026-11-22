@@ -380,11 +380,13 @@ test('крайние случаи не ломают строку: длинное
   const rows = rowsOf(box);
   assert.equal(rows.length, PATIENTS.length, 'нарисованы не все строки');
 
-  // Десять ячеек в КАЖДОЙ строке и ровно столько же заголовков
-  // (REG_LIST_AGE_COL_V1 — возраст; PATIENT_BOT_INVITE_V1 — бот пациента в конце).
-  assert.equal(headCells(box).length, 10, 'в шапке не десять колонок');
+  // Восемь ячеек в КАЖДОЙ строке и ровно столько же заголовков
+  // (PATIENT_ROW_ONE_LINE_V1 — ID своей колонкой, возраст у даты, без «Карточки»;
+  // PATIENT_BOT_INVITE_V1 — бот пациента в конце; BALANCE_COL_REMOVED_V1 —
+  // без «Баланса»).
+  assert.equal(headCells(box).length, 8, 'в шапке не восемь колонок');
   for (const [i, r] of rows.entries()) {
-    assert.equal(cellsOf(r).length, 10, 'строка ' + (i + 1) + ' не из десяти ячеек');
+    assert.equal(cellsOf(r).length, 8, 'строка ' + (i + 1) + ' не из восьми ячеек');
   }
 
   // ② длинное ФИО: обрезается многоточием, но полностью читается в подсказке.
@@ -395,24 +397,26 @@ test('крайние случаи не ломают строку: длинное
   assert.ok(/overflow:\s*hidden/.test(nmRule), 'обрезать имя нечем — многоточию не на чем сработать');
 
   // ③ без даты рождения — прочерк, и ни слова о возрасте.
-  const dobCell = cellsOf(rows[2])[2];
+  const dobCell = cellsOf(rows[2])[3];
   assert.equal(byClass(dobCell, 'pt-none').length, 1, 'пустая дата рождения не показала прочерк');
   assert.ok(!/лет/.test(textOf(dobCell)), 'у карты без даты рождения откуда-то взялся возраст');
-  assert.ok(!/лет/.test(textOf(cellsOf(rows[2])[3])), 'в колонке «Возраст» возраст без даты рождения');
-  // REG_LIST_AGE_COL_V1 — возраст стоит в своей колонке, а не под датой.
-  assert.ok(/лет/.test(textOf(cellsOf(rows[0])[3])), 'колонка «Возраст» пуста у карты с датой рождения');
-  assert.ok(!/лет/.test(textOf(cellsOf(rows[0])[2])), 'возраст остался под датой рождения');
+  // PATIENT_ROW_ONE_LINE_V1 — возраст в скобках у даты рождения, в той же строке.
+  assert.match(textOf(cellsOf(rows[0])[3]), /\(\d+ лет\)/, 'у даты рождения нет возраста в скобках');
+  assert.equal(walk(cellsOf(rows[0])[3]).filter((n) => n.tagName === 'DIV').length, 1, 'дата рождения снова в две строки');
 
   // ⑤ без визитов — так и сказано, а не «0».
   assert.ok(textOf(rows[4]).includes('визитов не было'),
     'карта без визитов не сказала об этом: ' + textOf(rows[4]));
 
-  // ① личность собрана в один блок: аватар, имя, номер карты рядом.
+  // ① личность: аватар и имя, пол и город — в той же строке.
   const ident = byClass(rows[0], 'pt-ident')[0];
   assert.ok(ident, 'блок личности не собран');
   assert.ok(walk(ident).some((n) => hasClass(n, 'avatar')), 'в блоке личности нет аватара');
-  assert.ok(textOf(ident).includes('P-26-00001'), 'номер карты ушёл из блока личности');
   assert.ok(textOf(ident).includes('Ташкент'), 'город ушёл из блока личности');
+  assert.equal(byClass(ident, 'pt-meta').length, 0, 'под именем снова вторая строка');
+  // PATIENT_ROW_ONE_LINE_V1 — номер карты своей колонкой, сразу за именем.
+  assert.equal(textOf(cellsOf(rows[0])[2]).trim(), 'P-26-00001', 'колонка ID не держит номер карты');
+  assert.equal(headCells(box)[2] && textOf(headCells(box)[2]).trim(), 'ID', 'у колонки номера карты не тот заголовок');
 });
 
 test('всё, что умел экран, цело: поиск, сортировки, дубликаты, листание', async () => {
@@ -438,11 +442,15 @@ test('всё, что умел экран, цело: поиск, сортиров
   for (const need of ['Последний визит — сначала недавние', 'Последний визит — сначала давние', 'Сначала новые', 'A–Z', 'МРН']) {
     assert.ok(sortLabels.includes(need), 'пропала сортировка «' + need + '»: ' + sortLabels.join(' | '));
   }
-  assert.ok(labels.some((l) => l.includes('Дубликаты')), 'кнопка дубликатов пропала');
+  // DUP_TO_RAIL_V1 — «Дубликаты» ушли из шапки в левую колонку (patients-hub.js).
+  assert.ok(!labels.some((l) => l.includes('Дубликаты')), 'кнопка дубликатов вернулась в шапку списка');
+  const { duplicatesRailButton } = await import('../views/patients.js');
+  assert.ok(labelOf(duplicatesRailButton()).includes('Дубликаты'), 'кнопки дубликатов для колонки нет');
   assert.ok(labels.some((l) => l.includes('Калькулятор')), 'калькулятор пропал');
   assert.ok(labels.some((l) => l.includes('Госпитализация')), 'заявка на госпитализацию пропала');
-  assert.ok(labels.some((l) => l.includes('Создать пациента')), 'создание пациента пропало');
-  assert.ok(labels.some((l) => l.includes('Быстрая регистрация')), 'быстрая регистрация пропала');
+  // FAST_REG_MERGED_V1 — одна кнопка: «Создать пациента» переименована в «Быстрая регистрация».
+  assert.equal(labels.filter((l) => l.includes('Быстрая регистрация')).length, 1, 'кнопок «Быстрая регистрация» не одна');
+  assert.ok(!labels.some((l) => l.includes('Создать пациента')), 'старое имя кнопки вернулось');
   assert.ok(buttons(box).some((b) => b.attrs['data-onb'] === 'create-patient'),
     'подсказка онбординга потеряла свою цель');
 
@@ -459,67 +467,34 @@ test('всё, что умел экран, цело: поиск, сортиров
   assert.ok(buttons(box).some((b) => b.attrs.title === 'Обменяться данными с другими филиалами'),
     'кнопка синхронизации филиала пропала из шапки списка');
 
-  // Строка по-прежнему ведёт в карточку — и кликом по строке, и кнопкой.
+  // Строка по-прежнему ведёт в карточку кликом. PATIENT_ROW_ONE_LINE_V1 — кнопки
+  // «Карточка» больше нет: владелец её снял, клик по строке делает то же.
   rowsOf(box)[0].click();
   assert.equal(navigated.at(-1)[0], 'patient-card', 'клик по строке больше не открывает карту');
-  const card = buttons(box).find((b) => labelOf(b).includes('Карточка'));
-  assert.ok(card, 'кнопка «Карточка» пропала');
-  card.click();
-  assert.equal(navigated.at(-1)[0], 'patient-card', 'кнопка «Карточка» больше не открывает карту');
+  assert.equal(buttons(box).filter((b) => labelOf(b).includes('Карточка')).length, 0, 'кнопка «Карточка» вернулась');
 });
 
 // ===========================================================================
 // FAST_REGISTRATION_V1 — пульсирующая кнопка вместо поиска по дате рождения
 // ===========================================================================
-test('FAST_REGISTRATION_V1: на месте поиска по дате рождения — ОДНА пульсирующая кнопка, и она открывает быструю регистрацию', async () => {
+// FAST_REG_MERGED_V1 (2026-11-21, владелец: «rename create a patient button to fast
+// registration and remove fast registration button, as the function is the same»).
+test('FAST_REG_MERGED_V1: «Быстрая регистрация» — одна кнопка, это прежняя «Создать пациента»', async () => {
   const { box } = await paint();
-
-  const btn = buttons(box).find((b) => labelOf(b).includes('Быстрая регистрация'));
-  assert.ok(btn, 'кнопки «Быстрая регистрация» нет в шапке списка');
-  assert.ok(hasClass(btn, 'btn-primary'),
-    'быстрая регистрация — главное действие регистратуры, а нарисована не первичной кнопкой: ' + btn.className);
-  assert.ok(hasClass(btn, 'btn-pulse'), 'кнопка не пульсирует: ' + btn.className);
-  assert.equal(btn.attrs['data-onb'], 'fast-registration', 'кнопка потеряла свою метку');
-
-  // REG_LIST_HEAD_V3 (2026-10-31, владелец: «put the button on one line and
-  // search place belove them separately») — кнопка в ряду кнопок, ПЕРЕД
-  // сортировкой; поиск и поиск по дате рождения — ниже, отдельным рядом.
-  const order = walk(box);
-  const iSearch = order.findIndex((n) => n.tagName === 'INPUT' && n.attrs.type === 'search');
-  const iSort   = order.findIndex((n) => n.attrs && 'data-sort-select' in n.attrs);   // PATIENT_SORT_DROPDOWN_V1
-  const iBtn    = order.indexOf(btn);
-  assert.ok(iSearch > -1 && iSort > -1, 'шапка списка потеряла поиск или сортировку — сравнивать не с чем');
-  assert.ok(iBtn < iSort && iSort < iSearch,
-    'ряды шапки не в том порядке (кнопка ' + iBtn + ', сортировка ' + iSort + ', поиск ' + iSearch + ')');
-
-  // Пульс — НАСТОЯЩЕЕ правило файла стилей, а не класс без объявления.
-  const rule = cssRule('.btn-pulse');
-  assert.ok(/animation:\s*em-btn-pulse/.test(rule), '.btn-pulse ничем не пульсирует: ' + rule);
-
-  // И пульсирует на экране ровно одна вещь: два пульсирующих пятна отменяют
-  // друг друга (домашнее правило в admin-views.css).
-  assert.equal(byClass(box, 'btn-pulse').length, 1,
-    'на экране больше одного пульсирующего элемента: ' + byClass(box, 'btn-pulse').length);
-
-  // FAST_REG_ONE_SCREEN_V1 — клик открывает ОДНО окно быстрой регистрации
-  // (views/fast-registration.js): и реквизиты пациента, и таблица услуг в нём
-  // же. Раньше открывалось окно заведения «в быстром режиме», а услуги ждали во
-  // ВТОРОМ окне — и закрытое второе окно оставляло пациента без визита и счёта.
-  // Окно грузится динамическим импортом, поэтому его ждут, а не читают сразу.
+  const btns = buttons(box).filter((b) => labelOf(b).includes('Быстрая регистрация'));
+  assert.equal(btns.length, 1, 'кнопок «Быстрая регистрация» не одна: ' + btns.length);
+  const btn = btns[0];
+  assert.ok(hasClass(btn, 'btn-primary'), 'главное действие регистратуры нарисовано не первичной кнопкой');
+  assert.equal(btn.attrs['data-onb'], 'create-patient', 'кнопка потеряла метку подсказки онбординга');
+  assert.equal(walk(box).filter((n) => n.attrs && n.attrs['data-onb'] === 'fast-registration').length, 0,
+    'отдельная кнопка быстрой регистрации вернулась');
+  assert.equal(byClass(box, 'btn-pulse').length, 0, 'на списке снова пульсирует кнопка');
+  // Открывает окно заведения пациента (с «Добавить услугу»), а не прежнее окно fast-registration.js.
   document.body.children.length = 0;
   btn.click();
   await tick(80);
-  const dlg = walk(document.body).find((n) => n.attrs['data-dialog'] === 'fast-registration');
-  assert.ok(dlg, 'кнопка не открыла окно быстрой регистрации');
-  const inside = textOf(dlg).replace(/\s+/g, ' ');
-  assert.ok(inside.includes('Быстрая регистрация'), 'окно не назвалось быстрой регистрацией');
-  // Реквизиты пациента — тот же сборщик полей, что и в окне заведения, только
-  // компактной раскладкой (FAST_REG_COMPACT_V1): один раздел по образцу.
-  assert.ok(inside.includes('Реквизиты пациента'), 'в окне нет реквизитов пациента: ' + inside.slice(0, 200));
-  assert.ok(inside.includes('Услуги'), 'в окне нет таблицы услуг: ' + inside.slice(0, 200));
-  // И второго окна не открылось: окно заведения пациента тут больше ни при чём.
-  assert.ok(!walk(document.body).some((n) => n.attrs['data-dialog'] === 'patient-create'),
-    'быстрая регистрация всё ещё открывает окно заведения пациента');
+  assert.ok(walk(document.body).some((n) => n.attrs['data-dialog'] === 'patient-create'), 'кнопка не открыла окно заведения пациента');
+  assert.ok(!walk(document.body).some((n) => n.attrs['data-dialog'] === 'fast-registration'), 'кнопка открыла прежнее окно быстрой регистрации');
 });
 
 // ===========================================================================

@@ -44,21 +44,33 @@ const GROUPS = parseNav(NAV_SRC);
 // требует её комментарий. «Мой отдел» (my-department) тоже не назван —
 // виден только сотруднику с отделом — и едет вместе с «Моими запасами».
 const OWNER_ORDER = [
-    ['Clinical',   false, ['patients', 'consultation', 'queue', 'labs', 'procedures', 'admissions',
-                           'mar-nurse', 'kitchen-sheet', 'discharge', 'patient-documents']],
+    // REGISTRATION_DEPT_V1 (2026-11-21) — «Пациенты» своим разделом «Регистрация», первым.
+    ['Registration', false, ['patients']],
+    ['Clinical',   false, ['consultation', 'queue', 'labs', 'procedures', 'patient-documents']],
+    // INPATIENT_DEPT_V1 (2026-11-21) — стационар своим разделом.
+    ['Inpatient',  true,  ['admissions', 'mar-nurse', 'kitchen-sheet', 'discharge']],
     // REFERRALS_NAV_V1 (2026-10-26) — «Реферирование» своим пунктом сразу за CRM (владелец:
     // «it should be separate section in operation block»).
     // CHATS_TO_COMMERCE_V1 (2026-10-31) — оба чата ушли на витрину «Коммерческие инструменты».
     // REFERRALS_TO_COMMERCE_V1 — и «Реферирование» туда же.
-    ['Operations', true,  ['crm', 'cashier-shifts', 'cashier-head', 'inventory', 'my-stock', 'my-department']],
-    ['Settings',   true,  ['settings', 'commerce']],   // COMMERCE_NAV_V1
+    // CRM_DEPT_V1 / PROCUREMENT_DEPT_V1 (2026-11-21) — CRM и закупки своими разделами.
+    ['CRM',        true,  ['crm']],
+    ['Operations', true,  ['cashier-shifts', 'cashier-head']],
+    ['Procurement', true, ['inventory', 'my-stock', 'my-department']],
+    ['Settings',   true,  ['settings']],
+    // COMMERCE_DEPT_V1 (2026-11-21) — «Коммерческие инструменты» своим разделом «Коммерция».
+    ['Commerce',   true,  ['commerce']],
     // NAV_DASHBOARD_TOP_V1 (2026-10-31) — «Дашборд» поднят над группами.
-    ['Insights',   true,  ['reports-hub']],
+    ['Insights',   true,  ['dashboard', 'reports-hub']],   // REPORTS_DASHBOARD_V1
 ];
 
-test('«Дашборд» — первым пунктом меню, над всеми группами и отдельно от них', () => {
-    assert.deepEqual(GROUPS.top, ['dashboard']);
-    assert.ok(/\.nav-top\s*\{[^}]*border-bottom/.test(MAIN_CSS), 'блок над группами не отделён чертой');
+// REPORTS_DASHBOARD_V1 (2026-11-21) — отдельной вкладки «Дашборд» больше нет:
+// владелец «remove dashboard block on top navigation bar … when you enter to
+// reports, main block should show dashboard statistics».
+test('REPORTS_DASHBOARD_V1: «Дашборд» — первый пункт «Отчётов», над группами его нет', () => {
+    assert.deepEqual(GROUPS.top || [], []);
+    assert.deepEqual(GROUPS.find((g) => g.section === 'Insights').ids, ['dashboard', 'reports-hub']);
+    assert.match(SHELL, /dept\.key === 'Insights' \? null : deptLastView/, 'вход в «Отчёты» открывает статистику');
 });
 
 test('разбор NAV не пустой (сломанный разбор не должен пройти за чистый)', () => {
@@ -134,19 +146,35 @@ test('setNavSectionOpen — класс на списке, класс и aria-exp
     assert.equal(header.attrs['aria-expanded'], 'true');
 });
 
-test('renderSidebar: свёрнутая группа — кнопка с шевроном, решает nav-fold, аккордеона «Soon» нет', () => {
-    // Комментарии снимаем: запись «здесь стоял аккордеон Soon» обязана остаться
-    // в коде, а проверяется то, что исполняется.
-    const body = SHELL.slice(SHELL.indexOf('function renderSidebar()'), SHELL.indexOf('sidebarEl.appendChild(sidebarClock())'))
-        .split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n');
-    assert.match(body, /if \(item\.fold\)/, 'ветка свёрнутой группы читает флаг fold');
-    assert.match(body, /h\('button', \{ class: 'nav-section nav-section--toggle'/, 'заголовок свёрнутой группы — кнопка');
-    // NAV_UNFOLDED_V1 + FIX_318_V1 (B2) — щелчок запоминается в обе стороны
-    // (closed / opened), короткое окно (compact) сворачивает по умолчанию.
-    assert.match(body, /isNavSectionOpen\(item, \{ closed: navClosed, opened: navOpened, activeSection, compact: navCompact \}\)/);
-    assert.match(body, /activeSectionOf\(NAV, navItemOwns\)/, 'группа открытого экрана считается до цикла');
-    assert.ok(!/easymed_soon_collapsed|=== 'Soon'/.test(body), 'мёртвый аккордеон Soon остался');
-    assert.ok(!/localStorage/.test(body), 'состояние групп не пишется в localStorage (решение спека)');
+// DEPT_TOPNAV_V1 (2026-11-21) — группы NAV стали РАЗДЕЛАМИ верхней полосы, а
+// колонка показывает функции одного раздела. Свёрнутых групп в колонке больше
+// нет; чистые функции nav-fold.js выше остаются проверенными как модуль.
+test('renderSidebar: колонка рисует функции ОДНОГО раздела — того, что несёт открытый маршрут', () => {
+    const strip = (src) => src.split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    const body = strip(SHELL.slice(SHELL.indexOf('function renderSidebar()'), SHELL.indexOf('sidebarEl.appendChild(sidebarClock())')));
+    assert.match(body, /const depts = visibleDepartments\(\);\s*const active = activeDepartment\(depts\);/, 'раздел считается до отрисовки пунктов');
+    assert.match(body, /renderSectionTabs\(depts, active\)/, 'полоса разделов перерисовывается вместе с колонкой');
+    assert.match(body, /for \(const item of \(active \? active\.items : \[\]\)\)/, 'колонка перебирает только функции открытого раздела');
+    assert.ok(!/nav-section--toggle|isNavSectionOpen|easymed_soon_collapsed/.test(body), 'в колонке остались свёрнутые группы');
+    assert.ok(!/localStorage/.test(body), 'выбор раздела не пишется в localStorage — его решает маршрут');
+    // Раздел открытого экрана — из маршрута (navItemOwns: подэкраны «Настроек»,
+    // родители по PARENT_OF, отчёты), а не из запомненного щелчка.
+    const active = strip(SHELL.slice(SHELL.indexOf('function activeDepartment('), SHELL.indexOf('function openDepartment(')));
+    assert.match(active, /navItemVisible\(i\) && navItemOwns\(i\)/);
+});
+
+test('разделы — это группы NAV: «Дашборд» сам себе раздел, остальные — заголовки групп', () => {
+    const body = SHELL.slice(SHELL.indexOf('function navDepartments()'), SHELL.indexOf('function navItemVisible('));
+    assert.match(body, /if \(item\.section\)/);
+    assert.match(body, /if \(item\.top\)/, '«Дашборд» над группами — отдельный раздел');
+    assert.match(body, /t\('sidebar\.sections\.' \+ item\.section, item\.section\)/, 'имя раздела — прежний перевод заголовка группы');
+});
+
+test('DEPT_TAB_NO_BADGE_V1: на вкладках разделов чисел нет — счётчики только в колонке', () => {
+    const body = SHELL.slice(SHELL.indexOf('function renderSectionTabs('), SHELL.indexOf('// ---- Левая колонка'));
+    assert.doesNotMatch(body, /dept-tab-badge/, 'владелец: «no numbers should be seen here»');
+    assert.doesNotMatch(body, /groupBadge\(/);
+    assert.match(body, /'aria-current': 'true'/, 'открытый раздел помечен для читалки');
 });
 
 test('CSS: свёрнутый список скрыт, на рейке (sidebar-collapsed) показан; шеврон поворачивается', () => {
@@ -226,4 +254,18 @@ test('FIX_318_V1: CSS — бейдж заголовка виден только 
     assert.match(MAIN_CSS, /^\.nav-section-badge \{[^}]*display: none;/m, 'у раскрытой группы бейдж заголовка дублировал бы бейджи пунктов');
     assert.match(MAIN_CSS, /^\.nav-section--folded \.nav-section-badge \{[^}]*display: inline-flex;/m);
     assert.match(MAIN_CSS, /^\.nav-section-badge\.alert \{/m, 'красный бейдж заголовка');
+});
+
+// MESSAGES_TO_CRM_V1 (2026-11-21, владелец: «can you bring these ones to CRM
+// block») — чаты, Push, ссылки для рекламы и доска — в колонке раздела CRM.
+test('MESSAGES_TO_CRM_V1: «Сообщения» и доска рисуются в колонке CRM, «Коммерция» их не держит', () => {
+    const crmGroups = SHELL.slice(SHELL.indexOf('function crmMessagesRailGroups()'), SHELL.indexOf('function crmSectionVisible()'));
+    assert.match(crmGroups, /commerceChats\(\)/, 'чаты пациентов не в CRM');
+    assert.match(crmGroups, /group === 'messages'/, 'Push и ссылки не в CRM');
+    assert.match(crmGroups, /COMMERCE_BOARD/, 'информационная доска не в CRM');
+    const commerce = SHELL.slice(SHELL.indexOf('function commerceRailGroups()'), SHELL.indexOf('function crmMessagesRail()'));
+    assert.match(commerce, /crmSectionVisible\(\) \? \[\] : crmMessagesRailGroups\(\)/, 'роль без CRM потеряла бы чаты');
+    assert.match(SHELL, /active\.key === 'CRM' && crmMessagesRailGroups\(\)/, 'колонка CRM не рисует «Сообщения»');
+    const crm = read('public/js/admin/views/crm.js');
+    assert.doesNotMatch(crm, /newsBoardButton\(\)/, 'второй вход в доску в кнопках CRM');
 });

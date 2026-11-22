@@ -24,7 +24,7 @@ const I18N = {
     en: {
         sidebar: {
             newPatient: 'New patient',
-            sections: { Clinical: 'Clinical', Operations: 'Operations', Settings: 'Settings', Insights: 'Insights', Soon: 'Soon' },   // NAV_GROUPS_V1 — Settings
+            sections: { Registration: 'Registration', Clinical: 'Clinical', Inpatient: 'Inpatient', CRM: 'CRM', Operations: 'Cashier', Procurement: 'Procurement', Settings: 'Settings', Commerce: 'Commerce', Insights: 'Reports', Soon: 'Soon' },   // NAV_GROUPS_V1 — Settings
             nav: {
                 patients:     'Patients',
                 appointments: 'Reception',
@@ -132,7 +132,7 @@ const I18N = {
     ru: {
         sidebar: {
             newPatient: 'Новый пациент',
-            sections: { Clinical: 'Клиника', Operations: 'Операции', Settings: 'Настройки', Insights: 'Аналитика', Soon: 'Скоро' },   // NAV_GROUPS_V1
+            sections: { Registration: 'Регистрация', Clinical: 'Клиника', Inpatient: 'Стационар', CRM: 'CRM', Operations: 'Касса', Procurement: 'Закупки', Settings: 'Настройки', Commerce: 'Коммерция', Insights: 'Отчёты', Soon: 'Скоро' },   // NAV_GROUPS_V1
             nav: {
                 patients:     'Пациенты',
                 appointments: 'Регистратура',
@@ -230,7 +230,7 @@ const I18N = {
     uz: {
         sidebar: {
             newPatient: 'Yangi bemor',
-            sections: { Clinical: 'Klinika', Operations: 'Operatsiyalar', Settings: 'Sozlamalar', Insights: 'Tahlil', Soon: 'Tez orada' },   // NAV_GROUPS_V1
+            sections: { Registration: 'Roʻyxatga olish', Clinical: 'Klinika', Inpatient: 'Statsionar', CRM: 'CRM', Operations: 'Kassa', Procurement: 'Xaridlar', Settings: 'Sozlamalar', Commerce: 'Tijorat', Insights: 'Hisobotlar', Soon: 'Tez orada' },   // NAV_GROUPS_V1
             nav: {
                 patients:     'Bemorlar',
                 appointments: 'Registratura',

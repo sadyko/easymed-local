@@ -13,6 +13,19 @@ import { dmy, subline } from '../referrals-logic.js';
 export async function renderReferralsRepBot(host) {
     const state = { s: null, stats: null, links: null, added: null, error: null, busy: false };
     const refs = { body: h('div') };
+    // REP_BOT_TAB_FIX_V1 (2026-11-18) — эти три константы стоят ДО первого
+    // `await load()`: load() → paint() → pendingCard()/linksCard() берут их
+    // сразу. Раньше они были объявлены ниже вызова, и вкладка всякий раз
+    // падала «Cannot access 'repCell' before initialization» (снимок владельца):
+    // функции поднимаются, const — нет.
+    const act = (l, name, okText) => async (ev) => {
+        const btn = ev && ev.currentTarget;
+        if (btn) btn.disabled = true;
+        try { await rpc(name, { id: l.id }); toast(okText, 'success'); await reloadLists(); }
+        catch (e) { toast((e && e.message) || tr('Не удалось сохранить.'), 'error'); if (btn) btn.disabled = false; }
+    };
+    const repCell = (l) => nameCell(l.rep_name, subline([l.rep_phone]));
+    const tgCell = (l) => subline([l.tg_name, l.tg_username ? '@' + l.tg_username : '']) || '—';
     clear(host);
     host.appendChild(refs.body);
     await load();
@@ -39,6 +52,7 @@ export async function renderReferralsRepBot(host) {
         if (state.error) { refs.body.appendChild(errorEl(state.error)); return; }
         if (!state.s) { refs.body.appendChild(loadingEl()); return; }
         refs.body.appendChild(tokenCard());
+        refs.body.appendChild(howCard());   // REP_BOT_TAB_FIX_V1
         const t = state.stats || {};
         refs.body.appendChild(kpiRow(
             kpi(String(t.reps_active ?? '…'), 'Медпредставителей'),
@@ -52,15 +66,6 @@ export async function renderReferralsRepBot(host) {
         refs.body.appendChild(linksCard());
         refs.body.appendChild(addedCard());
     }
-
-    const act = (l, name, okText) => async (ev) => {
-        const btn = ev && ev.currentTarget;
-        if (btn) btn.disabled = true;
-        try { await rpc(name, { id: l.id }); toast(okText, 'success'); await reloadLists(); }
-        catch (e) { toast((e && e.message) || tr('Не удалось сохранить.'), 'error'); if (btn) btn.disabled = false; }
-    };
-    const repCell = (l) => nameCell(l.rep_name, subline([l.rep_phone]));
-    const tgCell = (l) => subline([l.tg_name, l.tg_username ? '@' + l.tg_username : '']) || '—';
 
     // Подтверждение — единственное, что даёт чату Telegram право заводить
     // врачей в справочник: до него бот на всё отвечает «заявка у клиники».
@@ -127,6 +132,65 @@ export async function renderReferralsRepBot(host) {
             h('p', { class: 'muted', style: { margin: '0', padding: '12px 18px 0', fontSize: '13.5px' } },
                 tr('Последние 50. Врач сразу попадает во вкладку «Врачи-источники», закреплённым за представителем; категорию и вознаграждение задайте там.')),
             simpleTable(columns, rows, { emptyText: tr('Через бота пока никого не добавили.') }));
+    }
+
+    // REP_BOT_TAB_FIX_V1 — «Как это работает»: пять шагов и образец переписки
+    // (владелец: «put there explanation and sample view of process»). Реплики
+    // бота — сокращённые русские половины настоящих сообщений
+    // (server/services/rep-bot/flow.js, таблица T): образец не обещает того,
+    // чего бот не говорит. Узбекские половины в образце опущены ради места.
+    function howCard() {
+        const steps = [
+            'Вставьте токен бота выше — бот включится сам.',
+            'Медпредставитель открывает бота, нажимает «Start» и кнопкой «Отправить номер» присылает свой номер. Номер должен совпадать с номером в его карточке сотрудника, роль — «Медпредставитель».',
+            'Заявка появляется ниже, в «Ожидают подтверждения». Сверьте имя и последние цифры номера и нажмите «Подтвердить».',
+            'Представитель нажимает «Добавить врача» и отвечает на вопросы: ФИО, телефон, специальность, место работы, район. Необязательное можно пропустить.',
+            'Бот показывает «Проверьте данные врача». После «Сохранить» врач сразу появляется во вкладке «Врачи-источники», закреплённым за этим представителем.',
+        ];
+        const list = h('ol', { style: { margin: '0', paddingLeft: '20px', fontSize: '13.5px', lineHeight: '1.6' } },
+            ...steps.map((t) => h('li', { style: { marginBottom: '4px' } }, tr(t))));
+
+        const bubble = (who, ...content) => h('div', { style: {
+            alignSelf: who === 'rep' ? 'flex-end' : 'flex-start', maxWidth: '82%',
+            padding: '8px 11px', borderRadius: who === 'rep' ? '12px 12px 3px 12px' : '12px 12px 12px 3px',
+            background: who === 'rep' ? 'var(--brand-50, #e8eefb)' : 'var(--white, #fff)',
+            border: '1px solid var(--ink-100)', fontSize: '13.5px', lineHeight: '1.45' } }, ...content);
+        const key = (t) => h('span', { style: { display: 'inline-block', padding: '3px 9px', borderRadius: '8px',
+            border: '1px solid var(--ink-200)', background: 'var(--ink-25, #f6f8f9)', fontSize: '12.5px', fontWeight: '600' } }, tr(t));
+        const note = (t) => h('div', { style: { alignSelf: 'center', fontSize: '12.5px', color: 'var(--ink-500)',
+            padding: '4px 10px', borderRadius: '999px', background: 'var(--ink-50, #f1f4f5)' } }, Icon('Check', { size: 12 }), ' ', tr(t));
+
+        const sample = h('div', { 'data-repbot-sample': '', style: { display: 'flex', flexDirection: 'column', gap: '7px',
+            padding: '14px', borderRadius: '12px', background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)' } },
+            bubble('rep', '/start'),
+            bubble('bot', tr('Это бот клиники для медпредставителей. Отправьте свой номер телефона кнопкой ниже.'), h('div', { style: { marginTop: '6px' } }, key('Отправить номер'))),
+            bubble('rep', '+998 90 111 22 33'),
+            bubble('bot', tr('Заявка на подключение отправлена в клинику. Когда администратор её подтвердит, вы сможете добавлять врачей.')),
+            note('Администратор нажимает «Подтвердить» на этой вкладке'),
+            bubble('bot', tr('Вы подключены. Нажмите «Добавить врача», чтобы завести нового врача — он будет закреплён за вами.')),
+            bubble('rep', key('Добавить врача')),
+            bubble('bot', tr('ФИО врача — фамилия, имя и отчество через пробел.')),
+            bubble('rep', tr('Каримов Азиз Бахтиёрович')),
+            bubble('bot', tr('Телефон врача, например +998 90 123 45 67. Нет номера — «Пропустить».')),
+            bubble('rep', '+998 90 123 45 67'),
+            bubble('bot', tr('Специальность, место работы, район — или «Пропустить».')),
+            bubble('bot',
+                h('b', null, tr('Проверьте данные врача')),
+                h('div', { style: { marginTop: '4px' } }, tr('ФИО'), ': ', tr('Каримов Азиз Бахтиёрович')),
+                h('div', null, tr('Телефон'), ': +998 90 123 45 67'),
+                h('div', null, tr('Специальность'), ': ', tr('терапевт')),
+                h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } }, key('Сохранить'), key('Отмена'))),
+            bubble('rep', key('Сохранить')),
+            bubble('bot', tr('Врач добавлен: Каримов Азиз Бахтиёрович, № 17. Он закреплён за вами.')));
+
+        return h('div', { class: 'card', style: { marginBottom: '16px' }, 'data-repbot-how': '' },
+            h('div', { class: 'card-header' }, h('h3', null, Icon('Info', { size: 16 }), ' ', tr('Как это работает'))),
+            h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '18px', padding: '16px 18px' } },
+                h('div', { style: { flex: '1 1 320px', minWidth: '0' } }, list),
+                h('div', { style: { flex: '1 1 320px', minWidth: '0' } },
+                    h('div', { style: { fontSize: '12.5px', fontWeight: '700', color: 'var(--ink-500)', marginBottom: '8px',
+                        textTransform: 'uppercase', letterSpacing: '.04em' } }, tr('Пример переписки в боте')),
+                    sample)));
     }
 
     function statusTag() {

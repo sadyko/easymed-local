@@ -27,6 +27,9 @@
 //        'confirmed', мигр. 257); «о визитах до подключения» — до подтверждения.
 import { sendMessage, TelegramError } from '../telegram/api.js';
 import { phoneKey } from '../../../public/js/admin/views/crm-phone-match.js';
+import { T as FLOW_T } from './flow.js';
+// DOCTOR_BOT_TEMPLATE_V1 — текст уведомления: шаблон клиники, общий модуль с вкладкой.
+import { renderDoctorMessage, DEFAULT_TEMPLATE, SEEN_BUTTON as SHARED_SEEN_BUTTON } from '../../../public/js/admin/doctor-bot-message.js';
 
 /** FIX_318_V1 (H3) — номер связки — номер врача в справочнике (ключ номера CRM). */
 export function linkMatchesSource(linkPhone, sourcePhone) {
@@ -36,9 +39,7 @@ export function linkMatchesSource(linkPhone, sourcePhone) {
 
 export const QUIET_MINUTES = 2;
 export const LOOKBACK_DAYS = 3;
-export const SEEN_BUTTON = 'Получил · Oldim';
-
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+export const SEEN_BUTTON = SHARED_SEEN_BUTTON;
 
 /** «26.10.2026» по местному времени сервера из ISO-строки визита. */
 export function dmyLocal(iso) {
@@ -48,17 +49,46 @@ export function dmyLocal(iso) {
   return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear();
 }
 
-export function composeMessage({ patient, visitDate, services = [] }) {
-  const day = dmyLocal(visitDate);
-  const lines = [`Пациент <b>${esc(patient)}</b> пришёл ${esc(day)}.`];
-  if (services.length) {
-    lines.push('Услуги:');
-    for (const s of services) lines.push('• ' + esc(s));
-  } else {
-    lines.push('Услуги ещё не добавлены.');
+// DOCTOR_BOT_THANKS_V1 (владелец, 2026-11-20: «Name of patient and bought
+// services without price and than you message for trust inside the message») —
+// благодарность за доверие — в самом уведомлении, на обоих языках.
+export const THANKS_RU = 'Спасибо за доверие к нашей клинике!';
+export const THANKS_UZ = 'Klinikamizga bildirgan ishonchingiz uchun rahmat!';
+
+// DOCTOR_BOT_TEMPLATE_V1 — благодарность теперь — часть стандартного шаблона
+// (DEFAULT_TEMPLATE); клиника может переписать весь текст на вкладке.
+export function composeMessage({ patient, visitDate, services = [], template = '' }) {
+  return renderDoctorMessage(template, { patient, day: dmyLocal(visitDate), services });
+}
+
+/** Шаблон клиники из настроек; '' — стандартный (и в сборке без миграции 293). */
+export function messageTemplate(db) {
+  try { return (db.prepare('SELECT message_template FROM doctor_bot_settings WHERE id = 1').get() || {}).message_template || ''; }
+  catch { return ''; }
+}
+export { DEFAULT_TEMPLATE };
+
+/**
+ * DOCTOR_BOT_AUTO_LINK_V1 — связки, вставшие в «ожидание» до отмены
+ * подтверждения, подключаются сами: не отозваны, врач включён, номер связки —
+ * всё ещё номер ровно этого врача. Врачу — «Вы подключены» (он видел только
+ * «заявка отправлена»); не дошло — не страшно, подключение уже действует.
+ */
+export async function confirmPendingLinks(db, token, deps = {}) {
+  const rows = db.prepare(`SELECT l.id, l.chat_id, l.phone AS link_phone, rs.phone AS source_phone, rs.name
+                             FROM doctor_bot_links l JOIN referral_sources rs ON rs.id = l.referral_source_id
+                            WHERE l.status = 'pending' AND l.revoked_at IS NULL AND rs.active = 1 AND rs.doctor_id IS NULL`).all()
+    .filter((r) => linkMatchesSource(r.link_phone, r.source_phone));
+  let confirmed = 0;
+  for (const r of rows) {
+    const ch = db.prepare(`UPDATE doctor_bot_links SET status = 'confirmed', confirmed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+                            WHERE id = ? AND status = 'pending' AND revoked_at IS NULL`).run(r.id);
+    if (!ch.changes) continue;
+    confirmed += 1;
+    try { await sendMessage(token, r.chat_id, FLOW_T.linked(r.name), {}, deps); }
+    catch (e) { console.warn('[doctor-bot] linked notice', r.id, 'failed:', (e && e.message) || e); }
   }
-  lines.push('', `Bemor <b>${esc(patient)}</b> ${esc(day)} kuni keldi.`);
-  return lines.join('\n');
+  return confirmed;
 }
 
 export function pendingNotifications(db, { now = new Date().toISOString() } = {}) {
@@ -102,11 +132,13 @@ export function visitServices(db, visitId) {
 }
 
 export async function runNotifyScan(db, token, deps = {}) {
+  await confirmPendingLinks(db, token, deps);   // DOCTOR_BOT_AUTO_LINK_V1
   const list = pendingNotifications(db, { now: deps.now || new Date().toISOString() });
+  const template = list.length ? messageTemplate(db) : '';   // DOCTOR_BOT_TEMPLATE_V1
   let sent = 0;
   for (const p of list) {
     if (!linkDeliverable(db, p.link_id)) continue;   // FIX_318_V1 (H3) — отозвали, пока шёл проход
-    const text = composeMessage({ patient: p.patient, visitDate: p.visit_date, services: visitServices(db, p.visit_id) });
+    const text = composeMessage({ patient: p.patient, visitDate: p.visit_date, services: visitServices(db, p.visit_id), template });
     const ins = db.prepare(`INSERT INTO doctor_bot_notifications (visit_id, referral_source_id, link_id, chat_id, text)
                             VALUES (?,?,?,?,?)`).run(p.visit_id, p.source_id, p.link_id, p.chat_id, text);
     const id = Number(ins.lastInsertRowid);

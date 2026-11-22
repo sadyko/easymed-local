@@ -18,6 +18,18 @@ export function renderBranchPicker(mount) {
     return (t('branch.nSelected', '{n} branches')).replace('{n}', String(sel.size));
   };
 
+  // BRANCH_SHORT_V1 (2026-11-21, владелец: «no need name branch, just name of
+  // branch should appear only 3 letter») — в полосе без подписи «Филиал:», от
+  // имени филиала — первые три буквы; полное имя — в подсказке и в списке.
+  const short = (s) => { const a = Array.from(String(s || '').trim()); return a.length > 3 ? a.slice(0, 3).join('') + '…' : a.join(''); };
+  const oneName = () => {
+    const all = getAvailableBranches();
+    const sel = new Set(getSelectedBranchIds());
+    if (sel.size !== 1 || isAllSelected()) return null;
+    const b = all.find((x) => sel.has(x.id));
+    return b ? b.name : null;
+  };
+
   function paint() {
     mount.innerHTML = '';
     const all = getAvailableBranches();
@@ -26,7 +38,8 @@ export function renderBranchPicker(mount) {
       const single = document.createElement('span');
       single.className = 'branch-picker-single';
       single.style.cssText = 'font-size:12.5px;font-weight:600;color:var(--ink-600,#324049);white-space:nowrap;padding:0 4px;';
-      single.textContent = all[0].name;
+      single.textContent = short(all[0].name);
+      single.title = all[0].name;
       mount.appendChild(single);
       return;
     }
@@ -34,8 +47,10 @@ export function renderBranchPicker(mount) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'branch-picker-btn';
-    btn.innerHTML = `<span class="bp-label">${t('branch.label', 'Branch')}:</span> <span class="bp-summary"></span> <span class="bp-caret">▾</span>`;
-    btn.querySelector('.bp-summary').textContent = summary();
+    btn.innerHTML = `<span class="bp-summary"></span> <span class="bp-caret">▾</span>`;
+    const one = oneName();
+    btn.querySelector('.bp-summary').textContent = one ? short(one) : summary();
+    btn.title = t('branch.label', 'Branch') + ': ' + (one || summary());
     btn.addEventListener('click', (e) => { e.stopPropagation(); open = !open; pop.style.display = open ? 'block' : 'none'; });
 
     const pop = document.createElement('div');

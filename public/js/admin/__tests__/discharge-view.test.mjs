@@ -293,7 +293,8 @@ test('очередь спрашивается у сервера и показы�
     'право нажать спрашивается ОДИН раз на экран, а не по строке');
 
   const text = textOf(root);
-  assert.ok(text.includes('Выписки к оформлению'));
+  // CLINIC_NO_BANNER_V1 (2026-11-21) — баннера с именем экрана нет: имя — пункт колонки.
+  assert.ok(!text.includes('Добрый') && !text.includes('Доброе'), 'на экране снова баннер с приветствием');
   assert.ok(text.includes('Иванов Иван') && text.includes('Сидорова Мария'));
   assert.ok(text.includes('Терапия · K-1'), 'палата и койка');
   assert.ok(text.includes('Переведён в другое учреждение') && text.includes('Городская больница №2'));
