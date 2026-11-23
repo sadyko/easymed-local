@@ -2,19 +2,12 @@
 // отдельный от авторизованного /api/storage ЕРП (server/routes/storage.js).
 // Обход пути должен быть невозможен теми же способами, что и в storage.js:
 // '.', '..', обратный слэш, кодированный слэш.
-//
-// WEBSITE_V1 (Easy-Med): у Chilla тесты поднимали весь сайт через app.test.js;
-// здесь приложения сайта ещё нет (оно в задаче 7), поэтому тест монтирует
-// только mediaRoute на голый express — проверяется ровно эта раздача.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import express from 'express';
-import { openDb } from '../db/connection.js';
-import { migrate } from '../db/migrate.js';
-import { mediaRoute } from './media.js';
+import { startSite } from './app.test.js';
 import { seedDoctor } from './test-seed.js';
 import { invalidateContentCache } from './content.js';
 
@@ -25,15 +18,6 @@ function makeMediaDir() {
   fs.mkdirSync(path.join(dir, 'sub'));
   fs.writeFileSync(path.join(dir, 'sub', 'pic.webp'), Buffer.from('fake-webp-bytes'));
   return dir;
-}
-
-// Совместим по форме с startSite(null, { mediaDir }) из Chilla.
-function startSite(db, { mediaDir, storageDir } = {}) {
-  const app = express();
-  app.get('/media/*rest', mediaRoute(mediaDir, db, { storageDir }));
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => resolve({ server, base: 'http://127.0.0.1:' + server.address().port }));
-  });
 }
 
 test('GET /media/<file> отдаёт картинку с правильным типом и кэшем', async () => {
@@ -141,20 +125,21 @@ test('GET /media/<file>.svg — Content-Type svg и жёсткий CSP на эт
 // WEBSITE_V1 (Easy-Med) — фото врача берётся из профиля, но ТОЛЬКО у показанного врача.
 test('GET /media/doctor/<id> — фото показанного врача; скрытого — 404', async () => {
   invalidateContentCache();
-  const db = openDb(':memory:'); migrate(db);
   const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'easymed-storage-'));
-  const mediaDir = path.join(storageDir, 'website');
-  fs.mkdirSync(mediaDir);
-  const photo = (id, bytes) => {
+  fs.mkdirSync(path.join(storageDir, 'website'));
+  const photo = (db, id, bytes) => {
     const dir = path.join(storageDir, 'doctor-photos', 'doctors', String(id));
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'face.jpg'), Buffer.from(bytes));
     db.prepare('UPDATE users SET photo_url = ? WHERE id = ?').run('/api/storage/doctor-photos/doctors/' + id + '/face.jpg', id);
   };
-  const shown = seedDoctor(db, { ru: 'Показан Врач' });
-  const hidden = seedDoctor(db, { ru: 'Скрыт Врач', shown: false });
-  photo(shown, 'shown-bytes'); photo(hidden, 'hidden-bytes');
-  const { server, base } = await startSite(db, { mediaDir, storageDir });
+  let shown, hidden;
+  // mediaDir не передаётся: приложение само берёт <storageDir>/website, как в бою
+  const { server, base, db } = await startSite((db) => {
+    shown = seedDoctor(db, { ru: 'Показан Врач' });
+    hidden = seedDoctor(db, { ru: 'Скрыт Врач', shown: false });
+    photo(db, shown, 'shown-bytes'); photo(db, hidden, 'hidden-bytes');
+  }, { storageDir });
   try {
     const ok = await fetch(base + '/media/doctor/' + shown);
     assert.equal(ok.status, 200);

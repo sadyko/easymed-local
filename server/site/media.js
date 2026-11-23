@@ -9,17 +9,10 @@ import path from 'node:path';
 import { DEFAULT_LANG } from './i18n.js';
 import { doctorBySlug } from './content.js';
 import { photoFile } from '../services/api/snapshot.js';
+import { renderNotFound } from './render/notfound.js';
 
-// WEBSITE_V1 (Easy-Med) — фирменная 404 грузится лениво: страницы сайта
-// (render/*) переносятся отдельной задачей, а раздача картинок не должна
-// падать на импорте, пока их нет. Нет рендера — отдаём короткую HTML-404.
-async function notFound(db, res) {
-  let html = '<!doctype html><meta charset="utf-8"><title>404</title><h1>404</h1>';
-  try {
-    const { renderNotFound } = await import('./render/notfound.js');
-    html = renderNotFound(db, DEFAULT_LANG);
-  } catch { /* запасная страница выше */ }
-  return res.status(404).type('html').send(html);
+function notFound(db, res) {
+  return res.status(404).type('html').send(renderNotFound(db, DEFAULT_LANG));
 }
 
 // Разрешённые для публичной отдачи расширения — всё остальное (в т.ч. .txt,
@@ -46,7 +39,7 @@ function safeResolve(mediaDir, rest) {
 
 // Возвращает Express-обработчик GET /media/*rest для смонтированного mediaDir.
 export function mediaRoute(mediaDir, db, { storageDir } = {}) {
-  return async (req, res) => {
+  return (req, res) => {
     // WEBSITE_V1 (Easy-Med) — фото врача живёт в профиле (корзина doctor-photos),
     // а не в корзине сайта. Отдаём его только врачу, которого показывает сайт
     // (doctorBySlug — тот же показ, что у партнёров): скрытый врач по прямой
