@@ -5,6 +5,8 @@
 // экран считает ИМТ по мере ввода (views/title-sheet.js). Две копии разошлись
 // бы на первой правке диапазона. Здесь нет русского текста намеренно: слова
 // отказов — у сервера, подписи полей — у экрана (i18n).
+import { missingTitleFields } from './inpatient-required.js';   // INPATIENT_REQUIRED_V1
+
 export const MEASURES = Object.freeze({
     height_cm: { min: 30, max: 250, int: false },
     weight_kg: { min: 1,  max: 400, int: false },
@@ -44,9 +46,12 @@ export function bmiOf(heightCm, weightKg) {
     return Math.round((wgt / (m * m)) * 10) / 10;
 }
 
-/** Полон ли лист: все измерения и оба ответа медсестры на месте. */
-export function sheetCompleteness(row) {
-    if (!row) return { complete: false, missing: REQUIRED_KEYS.slice() };
-    const missing = REQUIRED_KEYS.filter((k) => row[k] === null || row[k] === undefined || row[k] === '');
+/**
+ * Полон ли лист. INPATIENT_REQUIRED_V1 — список обязательных полей задаёт клиника
+ * (лист, карточка пациента, отметки бумаг); без списка — прежние восемь, как было.
+ * Есть ли лист вообще, решает вызывающий: без листа и без требований пустот нет.
+ */
+export function sheetCompleteness(row, keys = REQUIRED_KEYS, patient = null) {
+    const missing = missingTitleFields({ sheet: row || null, patient }, keys);
     return { complete: missing.length === 0, missing };
 }

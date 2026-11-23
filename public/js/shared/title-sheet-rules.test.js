@@ -29,6 +29,15 @@ test('sheetCompleteness: шесть измерений и два ответа м
         { complete: false, missing: ['weight_kg', 'sanitation'] });
 });
 
+test('INPATIENT_REQUIRED_V1: sheetCompleteness со списком клиники и карточкой пациента', () => {
+    const sheet = { height_cm: 172, consent_signed_at: null };
+    assert.deepEqual(sheetCompleteness(sheet, ['height_cm', 'phone', 'consent_signed'], { phone: '+998900000000' }),
+        { complete: false, missing: ['consent_signed'] });
+    assert.deepEqual(sheetCompleteness(Object.assign({}, sheet, { consent_signed_at: '2026-11-23T08:00:00Z' }), ['height_cm', 'phone', 'consent_signed'], { phone: '+998900000000' }),
+        { complete: true, missing: [] });
+    assert.deepEqual(sheetCompleteness(null, []), { complete: true, missing: [] }, 'ничего не требуется — пустот нет (наличие листа проверяет вызывающий)');
+});
+
 test('диапазоны — те, что в спецификации', () => {
     assert.deepEqual(Object.keys(MEASURES), ['height_cm', 'weight_kg', 'temp_c', 'bp_sys', 'bp_dia', 'pulse_bpm']);
     assert.deepEqual([MEASURES.height_cm.min, MEASURES.height_cm.max], [30, 250]);
