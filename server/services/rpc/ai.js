@@ -7,7 +7,9 @@
 import { grantAllowsAdminOr, grantAllows, isAdminUser } from '../grants.js';
 import { ownKeyInfo, readFeatures, saveFeatures, saveOwnKey, clearOwnKey, OwnKeyError } from '../ai/own-key.js';   // AI_OWN_KEY_V1
 import { callAnalysis, operatorScores } from '../ai/calls.js';   // AI_CALLS_V1
-import { PHONE_ROLES } from './phone.js';
+// Ревью слияния 2026-11-23 — тот же список ролей, что у «Прослушать запись» в phone.js (PHONE_ROLES), своей
+// строкой: сторож ворот (gate-fallbacks.test.js) читает список ролей из того же файла, что и вызов.
+const HEAR_ROLES = Object.freeze(['admin', 'registrar', 'callcenter']);
 import { canViewSection } from '../roles.js';
 import { readAiSettings, setAiEnabled, setAiBlocked, hasAiModule, clearNoModuleBlock } from '../ai/settings.js';
 import { dropQueuedJobs, queuedTelegramChats } from '../ai/queue.js';
@@ -111,7 +113,7 @@ export function aiFlags(db, _args, user) {
 // AI_CALLS_V1 — разбор одного звонка целиком (расшифровка, оценки). Ворота те же, что у
 // записи разговора: «Прослушать запись» (crm.recording) — текст разговора не шире голоса.
 export function aiCallGet(db, args, user) {
-  if (!grantAllows(db, user, 'crm.recording', 'edit', PHONE_ROLES)) {   // как mayHear в phone.js
+  if (!grantAllows(db, user, 'crm.recording', 'edit', HEAR_ROLES)) {   // как mayHear в phone.js
     throw new RpcError('Разбор звонка виден тем, кому разрешено слушать записи разговоров.', 403);
   }
   const id = Number(args && args.call_id);
