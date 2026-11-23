@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
-import { seedDoctor, seedService } from './test-seed.js';
+import { seedDoctor, seedService } from '../test-helpers/site-seed.js';
 import { publishedDoctors, doctorBySlug, publishedServices, serviceBySlug, departmentDoctors,
   departmentServices, invalidateContentCache, configureContent } from './content.js';
 import { pickContent } from './i18n.js';

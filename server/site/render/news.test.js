@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startSite } from '../app.test.js';
-import { seedSite } from '../test-seed.js';
+import { seedSite } from '../../test-helpers/site-seed.js';
 import { invalidateContentCache } from '../content.js';
 
 // WEBSITE_V1 (Easy-Med, этап 1) — в Chilla новость заводилась через RPC

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startSite } from '../app.test.js';
-import { seedSite } from '../test-seed.js';
+import { seedSite } from '../../test-helpers/site-seed.js';
 import { invalidateContentCache } from '../content.js';
 
 // HERO_ELEGANT_V1 — герой главной собирается из settings.hero по частям.

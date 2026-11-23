@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { invalidateContentCache, publishedDoctors, publishedServices } from './content.js';
-import { seedDoctor, seedService } from './test-seed.js';
+import { seedDoctor, seedService } from '../test-helpers/site-seed.js';
 import { handleRequest } from './requests.js';
 import { firstStageKey } from '../services/crm/contact-window.js';
 import { _setSender } from './notify.js'; // WEBSITE_V1 (задача W3-5)

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { startSite } from './app.test.js';
-import { seedDoctor } from './test-seed.js';
+import { seedDoctor } from '../test-helpers/site-seed.js';
 import { invalidateContentCache } from './content.js';
 
 function makeMediaDir() {
@@ -151,5 +151,31 @@ test('GET /media/doctor/<id> — фото показанного врача; с�
   } finally {
     server.close(); db.close();
     fs.rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+// Папка данных может лежать под папкой с точкой в имени (res.sendFile по умолчанию
+// проверяет КАЖДЫЙ сегмент пути на dotfiles и отдаёт 404) — фото врача всё равно отдаётся.
+test('GET /media/doctor/<id> — фото отдаётся, даже если папка данных под ".dotdir"', async () => {
+  invalidateContentCache();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'easymed-dot-'));
+  const storageDir = path.join(root, '.dotdir', 'storage');
+  fs.mkdirSync(path.join(storageDir, 'website'), { recursive: true });
+  let shown;
+  const { server, base, db } = await startSite((db) => {
+    shown = seedDoctor(db, { ru: 'Точка Врач' });
+    const dir = path.join(storageDir, 'doctor-photos', 'doctors', String(shown));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'face.jpg'), Buffer.from('dot-bytes'));
+    db.prepare('UPDATE users SET photo_url = ? WHERE id = ?').run('/api/storage/doctor-photos/doctors/' + shown + '/face.jpg', shown);
+  }, { storageDir });
+  try {
+    const res = await fetch(base + '/media/doctor/' + shown);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type'), /image\/jpeg/);
+    assert.equal(Buffer.from(await res.arrayBuffer()).toString(), 'dot-bytes');
+  } finally {
+    server.close(); db.close();
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

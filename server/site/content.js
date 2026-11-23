@@ -29,6 +29,7 @@ export function invalidateContentCache() {
 // получила бы photo_path и показала сломанную картинку вместо аватара с
 // инициалами. Не настроен (тесты без диска) — прежнее поведение: photo_url
 // непуст — photo_path есть. Смена каталога сбрасывает кэш врачей.
+// Папка хранилища — глобальна для модуля: одно приложение сайта на процесс (побеждает последний configureContent).
 let storageDir = null;
 export function configureContent({ storageDir: dir } = {}) {
   storageDir = dir || null;

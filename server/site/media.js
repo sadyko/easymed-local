@@ -55,7 +55,14 @@ export function mediaRoute(mediaDir, db, { storageDir } = {}) {
       if (!file || !type || type === CONTENT_TYPES['.svg'] || !fs.existsSync(file)) return notFound(db, res);
       res.setHeader('Content-Type', type);
       res.setHeader('Cache-Control', 'public, max-age=3600');
-      return res.sendFile(path.resolve(file));
+      // Не res.sendFile: он по умолчанию (dotfiles:'ignore') проверяет КАЖДЫЙ сегмент пути —
+      // папка данных под '.something' дала бы 404 на все фото. Отдаём потоком, как ниже.
+      const photoStream = fs.createReadStream(file);
+      photoStream.on('error', () => {
+        if (!res.headersSent) res.status(404).end();
+        else res.destroy();
+      });
+      return photoStream.pipe(res);
     }
     const abs = safeResolve(mediaDir, req.params.rest);
     const ext = abs ? path.extname(abs).toLowerCase() : '';

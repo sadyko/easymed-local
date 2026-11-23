@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startSite } from '../app.test.js';
-import { seedSite, seededSlugs } from '../test-seed.js';
+import { seedSite, seededSlugs } from '../../test-helpers/site-seed.js';
 import { invalidateContentCache } from '../content.js';
 
 test('список врачей: показывает опубликованных, скрывает неопубликованных', async () => {

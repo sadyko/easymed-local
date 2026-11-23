@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { startSite } from './app.test.js';
-import { seedSite, seededSlugs } from './test-seed.js';
+import { seedSite, seededSlugs } from '../test-helpers/site-seed.js';
 import { invalidateContentCache } from './content.js';
 import { LANGS } from './i18n.js';
 

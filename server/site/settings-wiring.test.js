@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startSite } from './app.test.js';
-import { seedSite } from './test-seed.js';
+import { seedSite } from '../test-helpers/site-seed.js';
 import { invalidateContentCache } from './content.js';
 
 // Тот же приём, что и setBaseUrl() в seo.test.js: читаем settings, подмешиваем

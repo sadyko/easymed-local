@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startSite } from '../app.test.js';
-import { seedSite, seededSlugs } from '../test-seed.js';
+import { seedSite, seededSlugs } from '../../test-helpers/site-seed.js';
 import { invalidateContentCache } from '../content.js';
 
-// seedSite (test-seed.js) не привязывает врача doc1 к отделению —
+// seedSite (site-seed.js) не привязывает врача doc1 к отделению —
 // departmentDoctors() ищет по users.department_id, которого в общем
 // фикстуре нет (он не нужен другим сьютам). Здесь это единственный тест,
 // которому нужна такая связь, поэтому она добавляется прямо в подготовке.

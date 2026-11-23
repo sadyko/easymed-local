@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
-import { seedDoctor, seedService } from './test-seed.js';
+import { seedDoctor, seedService } from '../test-helpers/site-seed.js';
 import { publicDoctors } from '../services/api/snapshot.js';
 import { servicePublicState } from '../../public/js/shared/service-public.js';
 
