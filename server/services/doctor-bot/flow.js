@@ -139,10 +139,19 @@ async function handleContact(db, token, msg, deps) {
   if (matches.length > 1) return sendMessage(token, chatId, T.ambiguous, { reply_markup: removeKeyboard }, deps);
   const src = matches[0];
 
+  // DOCTOR_BOT_ADMIN_REVOKE_V1 (ревью слияния 2026-11-23) — администратор уже отклонял или отключал этого
+  // врача или этот Telegram (revoked_by — отметка человека, а не смены чата). Автоподключение
+  // (DOCTOR_BOT_AUTO_LINK_V1) не отменяет его решения: связка снова ЖДЁТ подтверждения клиники, имена
+  // пациентов этому чату не уходят, пока администратор не подтвердит.
+  const adminRevoked = !!db.prepare(`SELECT 1 FROM doctor_bot_links WHERE revoked_by IS NOT NULL
+                                       AND (referral_source_id = ? OR tg_user_id = ?) LIMIT 1`).get(src.id, String(fromId));
   // Тот же врач с того же чата и того же номера ещё раз — связка та же;
   // DOCTOR_BOT_AUTO_LINK_V1 — ждавшая подтверждения подключается сейчас.
   const cur = activeLink(db, chatId);
   if (cur && cur.referral_source_id === src.id && phoneKey(cur.phone) === phoneKey(digits)) {
+    if (adminRevoked && cur.status !== 'confirmed') {   // DOCTOR_BOT_ADMIN_REVOKE_V1 — ждёт администратора
+      return sendMessage(token, chatId, T.pending(src.name), { reply_markup: removeKeyboard }, deps);
+    }
     db.prepare(`UPDATE doctor_bot_links SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
                        status = 'confirmed', confirmed_at = COALESCE(confirmed_at, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
                  WHERE id = ?`).run(cur.id);
@@ -155,11 +164,19 @@ async function handleContact(db, token, msg, deps) {
     // строки остаются ради истории (кто и когда был подключён).
     db.prepare(`UPDATE doctor_bot_links SET revoked_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
                  WHERE revoked_at IS NULL AND (chat_id = ? OR referral_source_id = ?)`).run(String(chatId), src.id);
-    // DOCTOR_BOT_AUTO_LINK_V1 — врач есть в базе: подключён сразу, без подтверждения.
-    db.prepare(`INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, tg_user_id, tg_username, tg_name, last_seen_at, status, confirmed_at)
-                VALUES (?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'confirmed', strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
-      .run(src.id, String(chatId), digits, String(fromId), msg.from.username || '', name);
+    // DOCTOR_BOT_AUTO_LINK_V1 — врач есть в базе: подключён сразу, без подтверждения;
+    // DOCTOR_BOT_ADMIN_REVOKE_V1 — кроме того, кого администратор уже отклонял / отключал: ждёт подтверждения.
+    if (adminRevoked) {
+      db.prepare(`INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, tg_user_id, tg_username, tg_name, last_seen_at, status)
+                  VALUES (?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'pending')`)
+        .run(src.id, String(chatId), digits, String(fromId), msg.from.username || '', name);
+    } else {
+      db.prepare(`INSERT INTO doctor_bot_links (referral_source_id, chat_id, phone, tg_user_id, tg_username, tg_name, last_seen_at, status, confirmed_at)
+                  VALUES (?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'confirmed', strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
+        .run(src.id, String(chatId), digits, String(fromId), msg.from.username || '', name);
+    }
   })();
+  if (adminRevoked) return sendMessage(token, chatId, T.pending(src.name), { reply_markup: removeKeyboard }, deps);
   return sendMessage(token, chatId, T.linked(src.name), { reply_markup: removeKeyboard }, deps);
 }
 

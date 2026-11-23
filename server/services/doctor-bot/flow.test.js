@@ -140,3 +140,33 @@ test('кнопка «Получил»: ставит viewed_at только св�
   assert.equal(acks.length, 2);
   assert.equal(acks[1].params.text, T.seen);
 });
+
+// DOCTOR_BOT_ADMIN_REVOKE_V1 (ревью слияния 2026-11-23) — администратор отклонил или отключил связку
+// (revoked_by): тот же врач / тот же Telegram, снова отправив номер, НЕ подключается сам — связка ждёт
+// подтверждения клиники, уведомления с именами пациентов ему не идут. Без решения администратора —
+// автоподключение как было.
+test('DOCTOR_BOT_ADMIN_REVOKE_V1: после «Отключить» администратора повторный номер — заявка ждёт клинику, а не связка', async () => {
+  const { db, A } = fresh();
+  const { sent, deps } = fakeApi();
+  await handleUpdate(db, 'tok', contactMsg(501, 501, '+998903106570'), deps);
+  assert.equal(activeLink(db, 501).status, 'confirmed', 'стенд: автоподключение не сработало');
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (1, 'adm', 'x', 'Админ', 'admin')").run();
+  db.prepare("UPDATE doctor_bot_links SET revoked_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), revoked_by = 1 WHERE chat_id = '501'").run();
+  sent.length = 0;
+  await handleUpdate(db, 'tok', contactMsg(501, 501, '+998903106570'), deps);
+  const again = activeLink(db, 501);
+  assert.equal(again && again.status, 'pending', 'отключённый администратором врач подключился сам');
+  assert.equal(sent[0].params.text, T.pending('Набиев Ойбек'));
+  // ещё раз тем же номером — всё равно ждёт (не «подключается сейчас»)
+  sent.length = 0;
+  await handleUpdate(db, 'tok', contactMsg(501, 501, '+998903106570'), deps);
+  assert.equal(activeLink(db, 501).status, 'pending');
+  // с другого чата, но тот же Telegram — тоже ждёт
+  await handleUpdate(db, 'tok', contactMsg(777, 501, '+998903106570'), deps);
+  assert.equal(activeLink(db, 777).status, 'pending');
+  // решения администратора нет (смена чата сама отзывает прежнюю связку без revoked_by) — сразу
+  const fresh2 = fresh();
+  await handleUpdate(fresh2.db, 'tok', contactMsg(601, 601, '+998903106570'), deps);
+  await handleUpdate(fresh2.db, 'tok', contactMsg(602, 601, '+998903106570'), deps);
+  assert.equal(activeLink(fresh2.db, 602).status, 'confirmed', 'смена чата без решения администратора требует подтверждения');
+});
