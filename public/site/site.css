@@ -1,0 +1,1832 @@
+/* ==========================================================================
+   Easy-Med public website — design system
+   Premium, trustworthy, modern medical. Brand teal #167873.
+
+   MOBILE FIRST IS NOT A STYLE CHOICE HERE — ~90% of visitors arrive on a
+   phone. Everything outside a media query IS the phone layout. Desktop only
+   ever widens it, at 720px (two columns) and 900px (full nav + no mobile bar).
+   Nothing in this file may cause horizontal scroll at 360px.
+
+   This is the site's OWN system. It shares nothing with the clinic app's
+   stylesheet and must never import from it.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Fonts — Manrope, self-hosted (CSP forbids external origins).
+   Manrope ships as a VARIABLE font: Google serves ONE file per subset
+   covering weights 200-800, so vendoring per-weight copies would download
+   the same bytes three times. Hence one file per subset, `font-weight:400 800`.
+   Files: public/site/fonts/, served from /assets/fonts/.
+   -------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/assets/fonts/manrope-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/assets/fonts/manrope-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/assets/fonts/manrope-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/assets/fonts/manrope-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* --------------------------------------------------------------------------
+   Tokens
+   -------------------------------------------------------------------------- */
+:root {
+  /* BRAND_MEDICAL_BLUE_V1 — основной цвет сайта #005EB8.
+     Это NHS Blue: цвет британской системы здравоохранения, отобранный и
+     проверенный на доступность именно для медицины. Пациент читает его как
+     больничный, а не как корпоративный.
+
+     Третий вариант по счёту, и единственный, который работает И фоном,
+     И акцентом. Предыдущие два были слишком тёмными: #1D2733 давал против
+     чернил 1.09:1, #0c3468 — 1.34:1, то есть акцент сливался с обычным
+     текстом, и приходилось заводить второй цвет. У #005EB8 — 2.59:1, и
+     отдельный акцентный токен больше не нужен: цвет на сайте один. */
+  --brand: #005EB8;
+  --brand-600: #004f9b;        /* наведение */
+  --brand-700: #00407d;        /* нажатие */
+  --brand-050: #ebf2f9;        /* мягкая подложка */
+
+  --ink: #132125;
+  --ink-2: #3f565b;
+  --ink-3: #6b8085;
+  --line: #dde5ef;        /* была зеленоватая под бирюзу */
+  --bg: #ffffff;
+  --bg-soft: #f6f9fd;     /* была зеленоватая под бирюзу */
+  --amber: #c9972c;
+  --amber-050: #fdf6e6;
+  --danger: #b3261e;
+  --danger-050: #fdecea;
+
+  /* HERO_ELEGANT_V1 — тёплая терракотовая пара только для героя главной.
+     Это НЕ второй бренд-цвет: единственная его работа — быть якорем взгляда
+     на цене, поэтому и живёт он на одном экране, а не в кнопках и ссылках.
+
+     Контраст СЧИТАН, а не прикинут. Худшая (самая тёмная) точка подложки
+     героя — --hero-tint-2 #f7efe6, по ней и меряем:
+       --hero-accent      #a4442a на #f7efe6 = 5.36:1 — число цены. Оно
+                          крупное (28-40px, вес 700), то есть по WCAG ему
+                          хватило бы и 3:1, но шкала проходит и строгий
+                          порог 4.5:1 — запас, а не впритык.
+       --hero-accent-ink  #8f3a1f на подложке третьей кнопки (accent 8% на
+                          #f7efe6 → #f0e1d7) = 5.89:1 — это МЕЛКИЙ текст
+                          (16px), ему нужны именно 4.5:1, потому оттенок и
+                          взят темнее самого --hero-accent.
+       --ink-2            #3f565b на #f7efe6 = 6.85:1 — кикер (12px) и
+                          мелкие «от»/валюта. Осознанно НЕ --ink-3 (#6b8085):
+                          он даёт 3.65:1 и порог 4.5:1 не берёт.
+     Акцентом красится ТОЛЬКО крупное число: «от» и слово валюты остаются
+     приглушённо-серыми — иначе мелкий текст пришлось бы тянуть до 4.5:1
+     акцентным цветом, а вместе с ним развалилась бы и сама иерархия строки. */
+  --hero-accent: #a4442a;
+  --hero-accent-ink: #8f3a1f;
+  --hero-tint-1: #fdf8f1;
+  --hero-tint-2: #f7efe6;
+
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+
+  --shadow: 0 10px 30px rgba(19, 33, 37, .08);
+  --shadow-sm: 0 2px 10px rgba(19, 33, 37, .06);
+  --shadow-lg: 0 22px 60px rgba(19, 33, 37, .14);
+
+  --maxw: 1140px;
+  --gutter: 16px;
+  --header-h: 60px;
+  --bar-h: 70px; /* fits a two-line label under the icon */
+
+  /* Fluid type scale — the small end is the phone, deliberately. */
+  --fs-xs: .75rem;
+  --fs-sm: .875rem;
+  --fs-base: 1rem;
+  --fs-lg: clamp(1.0625rem, .98rem + .38vw, 1.1875rem);
+  --fs-xl: clamp(1.25rem, 1.12rem + .6vw, 1.5rem);
+  --fs-2xl: clamp(1.5rem, 1.28rem + 1.05vw, 2.125rem);
+  --fs-3xl: clamp(1.875rem, 1.5rem + 1.8vw, 3rem);
+  --fs-hero: clamp(2rem, 1.5rem + 2.6vw, 3.5rem);
+
+  --font: 'Manrope', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --ease: cubic-bezier(.22, .8, .32, 1);
+}
+
+/* --------------------------------------------------------------------------
+   Reset / base
+   -------------------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  /* Anchor targets must clear the sticky header. */
+  scroll-padding-top: calc(var(--header-h) + 12px);
+}
+
+body {
+  margin: 0;
+  /* Always paint the background explicitly — never inherit the UA's. */
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: var(--fs-base);
+  line-height: 1.6;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+  /* Room for the fixed mobile action bar; reclaimed at >=900px. */
+  padding-bottom: calc(var(--bar-h) + env(safe-area-inset-bottom, 0px));
+}
+
+img, svg, video { max-width: 100%; height: auto; display: block; }
+/* SITE_MINIMAL_V1 — заголовки были 800-м весом. Именно он, а не цвета и не
+   отступы, делал страницу «кричащей»: сверхжирный шрифт на каждом заголовке
+   не оставляет воздуха и читается как реклама, а не как клиника. 600 держит
+   ту же структуру, но перестаёт давить.
+
+   Крупным кеглям — меньше отрицательного трекинга: на 40-56px минус .015em
+   слипается, тогда как на мелком тексте он же и нужен. */
+h1, h2, h3, h4 { margin: 0 0 .5em; line-height: 1.2; font-weight: 600; letter-spacing: -.01em; }
+h1 { font-weight: 500; letter-spacing: -.02em; }
+.hero h1 { font-weight: 400; }
+h1 { font-size: var(--fs-3xl); }
+h2 { font-size: var(--fs-2xl); }
+h3 { font-size: var(--fs-xl); }
+h4 { font-size: var(--fs-lg); }
+p { margin: 0 0 1em; }
+p:last-child { margin-bottom: 0; }
+a { color: var(--brand); text-decoration: none; }   /* BRAND_MEDICAL_BLUE_V1 — заметнее среди текста, чем -600 */
+a:hover { color: var(--brand-700); }
+ul, ol { margin: 0 0 1em; padding-left: 1.25em; }
+address { font-style: normal; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
+
+:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 200;
+  background: var(--brand);
+  color: #fff;
+  padding: 12px 18px;
+  border-radius: 0 0 var(--radius) 0;
+}
+.skip-link:focus { left: 0; color: #fff; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px;
+  padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   Layout primitives
+   -------------------------------------------------------------------------- */
+.container {
+  width: 100%;
+  max-width: var(--maxw);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.section { padding-block: clamp(2.5rem, 1.8rem + 3.4vw, 5rem); }
+.section--soft { background: var(--bg-soft); }
+.section--brand { background: var(--brand); color: #fff; }
+.section--brand h2, .section--brand h3 { color: #fff; }
+.section--tight { padding-block: clamp(1.75rem, 1.4rem + 1.8vw, 3rem); }
+
+.section-head { margin-bottom: clamp(1.25rem, 1rem + 1.2vw, 2.25rem); max-width: 62ch; }
+.section-head > .badge { margin-bottom: .75rem; }
+.section-head h1, .section-head h2 { margin-bottom: .35em; }
+.section-head p { color: var(--ink-2); font-size: var(--fs-lg); margin: 0; }
+.section-head--center { margin-inline: auto; text-align: center; }
+
+.section-actions { margin-top: 1.75rem; display: flex; flex-wrap: wrap; gap: 12px; }
+.section-head--center + .section-actions,
+.section-actions--center { justify-content: center; }
+
+/* Grids collapse to a single column on phones — always. */
+.grid-3, .grid-4 { display: grid; grid-template-columns: 1fr; gap: 16px; }
+
+@media (min-width: 720px) {
+  .grid-3, .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+}
+@media (min-width: 900px) {
+  /* SITE_MINIMAL_V1 — 24px между карточками на широком экране читаются как
+     «слиплись»: минимализм держится на расстоянии, а не на украшениях. */
+  .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; }
+  .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; }
+}
+
+.stack > * + * { margin-top: 1rem; }
+.muted { color: var(--ink-2); }
+.text-center { text-align: center; }
+
+/* --------------------------------------------------------------------------
+   Buttons — 48px tall on phones, comfortably above the 44px tap-target floor.
+   -------------------------------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 12px 20px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--bg-soft);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color .18s var(--ease), color .18s var(--ease),
+              border-color .18s var(--ease), transform .12s var(--ease),
+              box-shadow .18s var(--ease);
+}
+.btn:hover { background: var(--brand-050); color: var(--ink); }
+.btn:active { transform: translateY(1px); }
+.btn[disabled], .btn[aria-disabled='true'] { opacity: .55; pointer-events: none; }
+
+.btn-primary {
+  background: var(--brand);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(22, 120, 115, .26);
+}
+.btn-primary:hover { background: var(--brand-600); color: #fff; }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--brand-600);
+  border-color: var(--line);
+}
+
+/* CONTACT_HOME_V1 — «Вызвать такси» под картой. Жёлтый — цвет службы, по
+   которому кнопку узнают не читая; поэтому она НЕ брендовая. Текст тёмный:
+   белый на жёлтом даёт 1.8:1 и не читается вовсе. */
+.btn-taxi {
+  background: #ffdb4d;
+  border-color: #ffdb4d;
+  color: #1a1a1a;
+  font-weight: 600;
+}
+.btn-taxi:hover { background: #ffd11a; border-color: #ffd11a; color: #1a1a1a; }
+.btn-ghost:hover { background: var(--brand-050); border-color: var(--brand-050); color: var(--brand-700); }
+
+.btn-lg { min-height: 54px; padding: 15px 28px; font-size: var(--fs-lg); }
+.btn-block { display: flex; width: 100%; }
+
+.section--brand .btn-primary { background: #fff; color: var(--brand-700); box-shadow: none; }
+.section--brand .btn-ghost { color: #fff; border-color: rgba(255, 255, 255, .45); }
+.section--brand .btn-ghost:hover { background: rgba(255, 255, 255, .12); color: #fff; }
+
+.ico { width: 20px; height: 20px; flex: none; }
+
+/* --------------------------------------------------------------------------
+   Card / badge / stat
+   -------------------------------------------------------------------------- */
+/* SITE_MINIMAL_V1 — у карточки было СРАЗУ ТРИ средства отделения: фон, рамка
+   и тень. Каждое по отдельности работает, вместе — визуальный шум, из-за
+   которого сетка карточек выглядит нагромождением коробок. Оставляем
+   волосяную рамку: она самая тихая и не создаёт ложной «высоты» на белом.
+   Тень возвращается только на наведении — как отклик, а не как оформление. */
+.card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px;
+  box-shadow: none;
+  transition: box-shadow .22s var(--ease), transform .22s var(--ease), border-color .22s var(--ease);
+}
+.card h3 { margin-bottom: .35em; }
+.card p { color: var(--ink-2); }
+.card--link:hover, a.card:hover { box-shadow: var(--shadow); transform: translateY(-3px); border-color: var(--brand-050); }
+.card--flat { box-shadow: none; }
+
+/* DEPT_COMPACT_V1 — сетка отделений.
+   ДВЕ колонки уже на телефоне: названия короткие («ЛОР», «Урология»), и в одну
+   колонку они растягивают раздел на несколько экранов впустую. Тап-цель при
+   этом остаётся крупной — минимум 56px по высоте, это больше рекомендованных
+   44px, промахнуться пальцем не получится. */
+.dept-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+/* DEPT_ICONS_V1 — плитка с иконкой и шевроном.
+   Раскладка стала горизонтальной: иконка — название — стрелка. Вертикальная
+   колонка имела смысл, пока в плитке могло быть описание; описания нет ни у
+   одного отделения, и центрированное одно слово выглядело как ячейка таблицы.
+   Тап-цель 56px и две колонки на телефоне сохранены намеренно — это уже
+   проверенное поведение (DEPT_COMPACT_V1), менять его заодно незачем. */
+.dept-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--ink);
+  font-weight: 500;
+  line-height: 1.3;
+  transition: border-color .18s var(--ease), background-color .18s var(--ease),
+              box-shadow .18s var(--ease);
+}
+.dept-tile__ico {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  background: var(--brand-050);
+  color: var(--brand);
+}
+.dept-tile__ico svg { width: 19px; height: 19px; }
+.dept-tile__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dept-tile__name { font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.dept-tile__desc { font-size: var(--fs-xs); color: var(--ink-3); font-weight: 400; }
+/* Шеврон — на крупных экранах. На телефоне он съедал бы место у названия ради
+   подсказки, которой там и так не нужно: по плитке очевидно, что её нажимают. */
+.dept-tile__go { display: none; }
+
+.dept-tile:hover {
+  border-color: var(--brand);
+  background: var(--brand-050);
+  color: var(--brand-700);
+}
+.dept-tile:hover .dept-tile__ico { background: var(--bg); color: var(--brand); }
+
+/* Первая плитка выделена: среди двенадцати одинаковых прямоугольников взгляду
+   не за что зацепиться, и порядок, который задала клиника, ничего не значит. */
+.dept-tile--lead {
+  border-color: transparent;
+  background: var(--brand);
+  color: #fff;
+}
+.dept-tile--lead .dept-tile__ico { background: rgba(255, 255, 255, .18); color: #fff; }
+.dept-tile--lead .dept-tile__desc { color: rgba(255, 255, 255, .78); }
+.dept-tile--lead:hover {
+  background: var(--brand-700, var(--brand));
+  color: #fff;
+  border-color: transparent;
+}
+.dept-tile--lead:hover .dept-tile__ico { background: rgba(255, 255, 255, .26); }
+
+@media (min-width: 720px) {
+  .dept-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .dept-tile { min-height: 64px; padding: 12px 14px; }
+  .dept-tile__name { font-size: var(--fs-base); }
+  .dept-tile__go {
+    flex: 0 0 auto;
+    margin-left: auto;
+    display: grid;
+    place-items: center;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: var(--brand-050);
+    color: var(--brand);
+    transition: transform .18s var(--ease), background-color .18s var(--ease);
+  }
+  .dept-tile__go svg { width: 15px; height: 15px; }
+  .dept-tile:hover .dept-tile__go { transform: translateX(2px); background: var(--bg); }
+  .dept-tile--lead .dept-tile__go { background: rgba(255, 255, 255, .22); color: #fff; }
+}
+@media (min-width: 1100px) {
+  .dept-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* HOME_MEDION_V1 — ряд преимуществ под геро: иконка в мягком круге, затем
+   заголовок и текст. Иконка декоративная, поэтому размер задан здесь, а не
+   в разметке. */
+.value-card { display: flex; flex-direction: column; gap: 10px; }
+.value-card__icon {
+  width: 46px; height: 46px; border-radius: 14px;
+  display: inline-grid; place-items: center;
+  background: var(--accent-soft, #eef5f4);
+  color: var(--accent, #167873);
+  flex: 0 0 auto;
+}
+.value-card__icon svg { width: 24px; height: 24px; }
+.value-card h3 { margin: 0; }
+.value-card p { margin: 0; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--brand-050);
+  color: var(--brand-700);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+.badge--amber { background: var(--amber-050); color: #7a5a10; }
+.badge--outline { background: transparent; border: 1px solid var(--line); color: var(--ink-2); }
+
+.stat {
+  text-align: center;
+  padding: 18px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+}
+.stat__value {
+  display: block;
+  font-size: var(--fs-2xl);
+  font-weight: 800;
+  color: var(--brand);
+  line-height: 1.1;
+  letter-spacing: -.02em;
+}
+.stat__label { display: block; margin-top: 4px; font-size: var(--fs-sm); color: var(--ink-2); }
+.section--brand .stat { background: rgba(255, 255, 255, .1); }
+.section--brand .stat__value, .section--brand .stat__label { color: #fff; }
+
+/* --------------------------------------------------------------------------
+   Hero
+   -------------------------------------------------------------------------- */
+.hero {
+  position: relative;
+  /* HERO_FIT_V1 — сверху воздуха больше, чем снизу: заголовок набран крупно и
+     тонко, и упираться им в нижнюю границу шапки нельзя — именно в этот зазор
+     он и «подныривает» при первом же движении колёсика. */
+  padding-block: clamp(3rem, 2rem + 4vw, 6rem) clamp(2rem, 1.4rem + 3vw, 4.5rem);
+  background:
+    radial-gradient(120% 90% at 100% 0%, var(--brand-050) 0%, rgba(232, 244, 242, 0) 60%),
+    var(--bg-soft);
+  overflow: hidden;
+}
+.hero__inner { position: relative; z-index: 1; }
+.hero h1 { font-size: var(--fs-hero); margin-bottom: .4em; }
+.hero__lead {
+  font-size: var(--fs-lg);
+  color: var(--ink-2);
+  max-width: 56ch;
+  margin-bottom: 1.5rem;
+}
+.hero__actions { display: flex; flex-direction: column; gap: 12px; }
+.hero__actions .btn { width: 100%; }
+.hero__media { margin-top: 1.75rem; border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow); }
+.hero__media img { width: 100%; object-fit: cover; }
+.hero__stats { margin-top: 1.75rem; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+@media (min-width: 720px) {
+  .hero__actions { flex-direction: row; flex-wrap: wrap; }
+  .hero__actions .btn { width: auto; }
+  .hero__stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (min-width: 900px) {
+  .hero__inner { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 48px; align-items: center; }
+  .hero__media { margin-top: 0; }
+  .hero__stats { grid-column: 1 / -1; margin-top: 2.5rem; }
+}
+
+/* --------------------------------------------------------------------------
+   HERO_ELEGANT_V1 — герой ГЛАВНОЙ (.home-hero). Всё ниже намеренно заужено
+   до .home-hero: те же .hero есть на списках услуг/врачей/новостей, и там
+   заголовок обязан остаться прежнего размера и веса.
+
+   Порядок сверху вниз ровно тот, что видит глаз: кикер → заголовок → цена →
+   абзац → кнопки. Ни один из блоков не обязателен: незаполненный герой
+   схлопывается до «заголовок + абзац + одна кнопка» и остаётся целым.
+   -------------------------------------------------------------------------- */
+.home-hero {
+  /* Потолок шкалы поднят с 3.5rem до 4rem ТОЛЬКО здесь: переопределяем сам
+     токен на секции, а правило .hero h1 { font-size: var(--fs-hero) } выше
+     остаётся одно на все страницы — на остальных оно читает :root-значение. */
+  --fs-hero: clamp(2.25rem, 1.45rem + 3.6vw, 4rem);
+  /* Тёплая кремовая подложка — только полоса героя; сама страница остаётся
+     на --bg. Бирюзовое пятно в правом верхнем углу — из общего .hero. */
+  background:
+    radial-gradient(115% 85% at 96% 0%, var(--brand-050) 0%, rgba(232, 244, 242, 0) 52%),
+    linear-gradient(168deg, var(--hero-tint-1) 0%, var(--hero-tint-2) 100%);
+}
+
+/* Кикер — самая мелкая строка на экране, поэтому цвет --ink-2 (6.85:1 на
+   тёмной точке подложки), а не --ink-3 (3.65:1 — не проходит). */
+.hero__kicker {
+  margin: 0 0 14px;
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  font-weight: 700;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+/* Вес 400, а не 300: вендоренный Manrope — вариативный шрифт с диапазоном
+   400-800 (см. @font-face в начале файла), веса 300 в файле физически нет, и
+   браузер всё равно отрисовал бы им же. «Тонкость» на таком кегле даёт не
+   вес, а плотность: отрицательный трекинг и интерлиньяж 1.05. */
+.home-hero h1 {
+  font-weight: 400;
+  line-height: 1.05;
+  letter-spacing: -.02em;
+  margin-bottom: .32em;
+  overflow-wrap: break-word;   /* длинное слово не должно распирать экран 360px */
+}
+
+/* Цена — якорь блока: число крупное и тёплое, «от» и валюта мелкие и тихие.
+   Это обычный абзац, а не заголовок: страницу он не структурирует. */
+.hero__price {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 .4em;
+  margin: 0 0 1.35rem;
+  color: var(--ink-2);
+}
+.hero__price-from,
+.hero__price-currency {
+  font-size: .9375rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.hero__price-amount {
+  /* Нижняя граница 1.75rem = 28px — НЕ округление «на глаз»: ниже 24px текст
+     перестаёт считаться крупным, и к акценту применился бы порог 4.5:1 вместо
+     3:1. На 360px шкала упирается ровно в этот пол (16.8px + 3.1vw = 27.96px),
+     то есть мельче 28px число не станет нигде. Потолок 2.5rem = 40px
+     достигается около 748px ширины. */
+  font-size: clamp(1.75rem, 1.05rem + 3.1vw, 2.5rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -.02em;
+  color: var(--hero-accent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.home-hero .hero__lead {
+  line-height: 1.75;
+  max-width: 46ch;
+  margin-bottom: 1.75rem;
+}
+
+/* Три кнопки разного веса: залитая, обводка, мягкая заливка без рамки.
+   Разный вес — это и есть подсказка, что нажимать в первую очередь. */
+.hero__cta3 {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 48px;
+  padding: 12px 20px;
+  border-radius: var(--radius-pill);
+  background: rgba(164, 68, 42, .08);
+  color: var(--hero-accent-ink);
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  transition: background-color .18s var(--ease), color .18s var(--ease);
+}
+.hero__cta3:hover { background: rgba(164, 68, 42, .15); color: var(--hero-accent-ink); }
+.hero__cta3-ico { width: 18px; height: 18px; flex: none; }
+.home-hero .hero__actions .hero__cta3 { width: 100%; }
+
+/* Коллаж: переднее фото аркой, за ним второе — ниже и правее, приглушённое.
+   Радиусы на телефоне меньше: арка в 140px на карточке шириной 300px
+   превратила бы фото в полукруг. */
+.hero__collage {
+  position: relative;
+  margin-top: 2rem;
+  padding: 0 30px 40px 0;
+}
+.hero__collage--single { padding: 0; }
+/* HERO_PHOTO_FIT_V1 — у фото героя не было ПОТОЛКА по высоте.
+   width:100% + aspect-ratio 4/5 означает: какой ширины контейнер, такой и
+   рост. Двухколоночная сетка включается с 900px, поэтому на окне ~800px фото
+   занимало всю ширину и вырастало в стену около 1000px — заголовок и кнопка
+   оказывались где-то наверху, оторванными от всего остального.
+   Потолок + object-fit: cover обрезают, а не сплющивают. min(70vh, 620px):
+   vh держит фото в пределах экрана на невысоких окнах, 620px не даёт ему
+   раздуться на больших. */
+.hero__photo img {
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  max-height: min(70vh, 620px);
+  object-fit: cover;
+  /* Если кадр всё же придётся резать, срезаем снизу, а не по центру: на
+     портрете сверху лицо. Тот же приём, что у .doc-hero__photo img. */
+  object-position: center 20%;
+}
+
+/* HERO_SLIDESHOW_V1 — смена кадров заголовка.
+   Кадры лежат друг на друге и переключаются прозрачностью, а не подменой src:
+   подмена даёт белую вспышку на весь заголовок, пока грузится файл.
+   Скрытый кадр убран из потока через hidden, поэтому без JS виден только
+   первый — стопки картинок не будет. */
+.hero__slideshow { position: relative; }
+.hero__slideshow .hero__slide {
+  display: block;
+  width: 100%;
+  height: auto;
+  transition: opacity .6s var(--ease, ease);
+}
+.hero__slideshow .hero__slide:not(:first-child) { position: absolute; inset: 0; }
+.hero__slideshow .hero__slide[hidden] { display: none; }
+
+/* Просьба системы «меньше движения» уважается и на уровне стиля: даже если
+   скрипт почему-то запустится, перехода не будет. */
+@media (prefers-reduced-motion: reduce) {
+  .hero__slideshow .hero__slide { transition: none; }
+}
+
+/* Пока колонка одна, фото работает баннером, а не портретом: вертикальный
+   кадр в полную ширину отталкивает текст героя за пределы первого экрана. */
+@media (max-width: 899px) {
+  .hero__collage--single .hero__photo img { aspect-ratio: 16 / 10; }
+}
+.hero__photo--front {
+  position: relative;
+  z-index: 2;
+  width: 78%;
+  border-radius: 96px 96px 18px 18px;
+  overflow: hidden;
+  /* Кольцо цветом страницы (не подложки героя) — переднее фото должно
+     «вырезаться» из коллажа, а не сливаться со вторым. */
+  box-shadow: 0 0 0 8px var(--bg), var(--shadow-lg);
+}
+.hero__collage--single .hero__photo--front { width: 100%; }
+.hero__photo--back {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 56%;
+  border-radius: 74px 74px 16px 16px;
+  overflow: hidden;
+  filter: saturate(.72);
+  box-shadow: var(--shadow);
+}
+
+@media (min-width: 720px) {
+  .home-hero .hero__actions .hero__cta3 { width: auto; }
+}
+@media (min-width: 900px) {
+  /* Фото не загружены — колонки нет вовсе, иначе текст жался бы в половину
+     ширины ради пустого места справа. */
+  .hero__inner--solo { grid-template-columns: minmax(0, 1fr); }
+  .hero__collage { margin-top: 0; padding: 0 44px 56px 0; }
+  .hero__photo--front { border-radius: 140px 140px 24px 24px; }
+  .hero__photo--back { border-radius: 110px 110px 20px 20px; }
+}
+
+/* --------------------------------------------------------------------------
+   Site header — compact sticky bar
+   -------------------------------------------------------------------------- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  /* HERO_FIT_V1 — шапка была полупрозрачной с размытием. Под мелким текстом
+     это незаметно, но крупный тонкий заголовок героя, проезжая под ней при
+     прокрутке, просвечивал размытым пятном и выглядел обрезанным по живому.
+     Сплошной белый: содержимое либо видно, либо нет — без промежуточного
+     состояния, которое читается как дефект отрисовки. */
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+.site-header__inner {
+  min-height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 1.0625rem;
+  letter-spacing: -.02em;
+  padding-block: 8px;
+}
+.brand:hover { color: var(--brand-700); }
+/* The mark is the clinic logo image (122×128 intrinsic — slightly taller
+   than wide, so the height is fixed and the width follows the ratio). */
+.brand__mark {
+  flex: none;
+  width: auto;
+  height: 30px;
+}
+.brand__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.header-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.header-actions .header-phone,
+.header-actions .header-cta { display: none; }
+
+.header-phone {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 10px;
+  color: var(--ink);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.header-phone:hover { color: var(--brand-600); }
+.header-phone .ico { color: var(--brand); }
+
+/* Hamburger */
+.nav-toggle {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.nav-toggle__bars, .nav-toggle__bars::before, .nav-toggle__bars::after {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  transition: transform .22s var(--ease), opacity .16s var(--ease);
+}
+.nav-toggle__bars { position: relative; }
+.nav-toggle__bars::before, .nav-toggle__bars::after { content: ''; position: absolute; left: 0; }
+.nav-toggle__bars::before { top: -6px; }
+.nav-toggle__bars::after { top: 6px; }
+.nav-toggle[aria-expanded='true'] .nav-toggle__bars { background: transparent; }
+.nav-toggle[aria-expanded='true'] .nav-toggle__bars::before { top: 0; transform: rotate(45deg); }
+.nav-toggle[aria-expanded='true'] .nav-toggle__bars::after { top: 0; transform: rotate(-45deg); }
+
+/* Mobile nav drawer: closed by default, opened by site.js via [data-open]. */
+.site-nav {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  display: none;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  padding: 8px var(--gutter) 18px;
+  max-height: calc(100vh - var(--header-h));
+  overflow-y: auto;
+}
+.site-nav[data-open] { display: block; }
+.site-nav__list { list-style: none; margin: 0; padding: 0; }
+.site-nav__link {
+  display: block;
+  padding: 13px 4px;
+  min-height: 48px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  font-weight: 600;
+}
+.site-nav__link.is-current { color: var(--brand-600); }
+.site-nav__foot { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.site-nav__foot .header-phone { display: inline-flex; padding-left: 0; }
+.site-nav__foot .btn { width: 100%; }
+
+/* Language switcher — visible on phones too: uz/ru switching is core here,
+   so it is a primary mobile control and keeps a generous 36px-tall hit area.
+   The pills tile with no gap: every pixel of the group belongs to one of the
+   three languages, with no dead strips and no overlapping hit boxes.
+   Width budget at 360px: 328 available - 8 (header gap) - 114 (this group)
+   - 6 (actions gap) - 44 (hamburger) = 156px left for the brand. */
+.lang-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  padding: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+}
+.lang-switch__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: .04em;
+  transition: background-color .18s var(--ease), color .18s var(--ease);
+}
+.lang-switch__item:hover { color: var(--brand-700); }
+.lang-switch__item.is-current { background: var(--brand); color: #fff; box-shadow: var(--shadow-sm); }
+.site-footer .lang-switch { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .16); }
+.site-footer .lang-switch__item { color: rgba(255, 255, 255, .8); }
+.site-footer .lang-switch__item.is-current { background: #fff; color: var(--brand-700); }
+
+/* HEADER_FIT_V1 — горизонтальное меню включается с 1100px, а не с 900px.
+   Семь пунктов + логотип + переключатель языка + кнопка записи требуют около
+   1135px; на 900-1200px они не помещались и меню переносилось во вторую
+   строку. Бургер до 1200px — это не шаг назад: на планшете он привычнее
+   двухэтажной шапки. Остальные правила с 900px (сетки карточек и т.п.)
+   не затронуты — сменён брейкпоинт только этого блока. */
+@media (min-width: 1200px) {
+  /* HEADER_FIT_V1 — шапка съезжала вправо, а слева оставалась широкая пустота.
+     Причина не в центрировании: .container отцентрован верно. Ряд шапки
+     ПЕРЕПОЛНЯЛ его. Логотип + семь пунктов меню (все white-space: nowrap) +
+     переключатель языка + телефон + кнопка — это около 1290px содержимого в
+     контейнере на 1140px. Сжаться меню не могло: у .site-nav не задан
+     min-width: 0, а по умолчанию min-width: auto не даёт флекс-элементу стать
+     уже своего содержимого. Лишнее уезжало за правый край, а body с
+     overflow-x: hidden прятал и полосу прокрутки — из-за чего это выглядело
+     не переполнением, а сбитой вёрсткой.
+
+     Лечим причину с двух сторон: шапке даём больше ширины, чем тексту страницы
+     (у шапки своя задача — уместить навигацию, а не держать удобную длину
+     строки), и разрешаем меню сжиматься и переноситься. */
+  .site-header .container { max-width: 1320px; }
+  .site-header__inner { min-height: 72px; gap: 16px; }
+  .brand { flex: none; font-size: 1.1875rem; }
+  .brand__mark { height: 36px; }
+  .nav-toggle { display: none; }
+  .site-nav {
+    position: static;
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    overflow: visible;
+    max-height: none;
+  }
+  /* Перенос — предохранитель: на промежуточных ширинах и на языке с длинными
+     словами меню станет в две строки, но НЕ вылезет за край. */
+  .site-nav__list { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 2px; }
+  .site-nav__foot { display: none; }
+  .site-nav__link {
+    min-height: 40px;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    font-size: var(--fs-sm);
+    white-space: nowrap;
+  }
+  .site-nav__link:hover { background: var(--bg-soft); color: var(--brand-700); }
+  .site-nav__link.is-current { background: var(--brand-050); color: var(--brand-700); }
+  /* HEADER_FIT_V1 — до 1400px телефон из шапки убран. Он самый дорогой по
+     ширине элемент ряда (~165px) и единственный, который ДУБЛИРУЕТСЯ: есть и в
+     нижней мобильной панели, и в подвале, и на странице контактов. Резать ради
+     него меню или кнопку записи было бы хуже — те нигде не повторяются. */
+  .header-actions .header-cta { display: inline-flex; }
+}
+
+@media (min-width: 1400px) {
+  /* Телефон прибавляет к ряду ещё ~165px: вместе с ним строка не влезает даже
+     в 1320px, поэтому здесь шапке добавляется и ширина. */
+  .site-header .container { max-width: 1400px; }
+  .header-actions .header-phone { display: inline-flex; }
+  .header-actions .header-cta { min-height: 44px; padding: 10px 20px; }
+}
+
+/* --------------------------------------------------------------------------
+   Doctor card
+   -------------------------------------------------------------------------- */
+.doctor-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow .22s var(--ease), transform .22s var(--ease);
+  color: inherit;
+}
+.doctor-card:hover { box-shadow: var(--shadow); transform: translateY(-3px); }
+/* Живой фильтр (doctors.js) прячет карточки атрибутом hidden. Собственный
+   display: flex перебил бы браузерное [hidden] — правило задаётся явно,
+   как у .svc-row[hidden] на странице услуг. */
+.doctor-card[hidden] { display: none; }
+/* Ссылка занимает всю верхнюю часть карточки: фото и подпись кликабельны как
+   раньше, но кнопки теперь ЕЁ СОСЕДИ, а не потомки — вложенная в <a> ссылка
+   невалидна, браузер закрыл бы внешний тег сам и вытолкнул кнопки наружу. */
+.doctor-card__link {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  color: inherit;
+}
+.doctor-card__link:hover .doctor-card__name { text-decoration: underline; }
+.doctor-card__photo {
+  display: block;                /* <span> по умолчанию inline — aspect-ratio на нём не работает */
+  aspect-ratio: 1 / 1;
+  background: var(--brand-050);
+  overflow: hidden;
+}
+.doctor-card__photo img { width: 100%; height: 100%; object-fit: cover; object-position: center top; }
+/* No photo? A calm neutral doctor icon beats a broken-image icon —
+   and beats initials, which read as content (DOC_AVATAR_ICON_V1). */
+.doctor-card__avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--brand-050) 0%, #d5e9e6 100%);
+  color: var(--brand-600);
+}
+.doctor-card__avatar svg, .doc-hero__avatar svg {
+  width: 42%;
+  height: 42%;
+  opacity: .55;   /* приглушённый штрих: заглушка, а не иллюстрация */
+}
+.doctor-card__body { padding: 16px 18px 12px; display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; }
+.doctor-card__name { display: block; font-size: var(--fs-lg); font-weight: 600; margin: 0; }
+.doctor-card__specialty { color: var(--brand-600); font-weight: 600; font-size: var(--fs-sm); }
+.doctor-card__meta { margin-top: auto; padding-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; font-size: var(--fs-sm); color: var(--ink-3); }
+
+/* DOCTOR_CARD_ACTIONS_V1 — две кнопки внизу карточки.
+   Ряд, а не колонка: «Подробнее» и «Оставить заявку» равнозначны по ширине,
+   и человек выбирает между ними, а не читает список. Кнопки ниже обычных
+   (--fs-sm, 38px): в сетке по четыре карточки полноразмерная пара кнопок
+   занимала бы больше места, чем имя врача. */
+.doctor-card__actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 18px 18px;
+}
+.doctor-card__btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+  font-size: var(--fs-sm);
+  box-shadow: none;
+}
+
+/* На узкой карточке две кнопки в ряд ужимаются до нечитаемого; с 400px и ниже
+   ставим их друг под друга. */
+@media (max-width: 400px) {
+  .doctor-card__actions { flex-direction: column; }
+}
+
+/* --------------------------------------------------------------------------
+   Doctor profile — hero row + free-form detail blocks (bio/education/focus)
+   -------------------------------------------------------------------------- */
+.doc-hero__inner { display: flex; flex-direction: column; gap: 20px; }
+.doc-hero__photo {
+  width: 160px;
+  height: 160px;
+  margin-inline: auto;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--brand-050);
+  flex: none;
+}
+.doc-hero__photo img { width: 100%; height: 100%; object-fit: cover; object-position: center top; }
+.doc-hero__avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--brand-050) 0%, #d5e9e6 100%);
+  color: var(--brand-600);
+}
+.doc-hero__body { text-align: center; }
+.doc-hero__name { margin-bottom: .2em; }
+.doc-hero__specialty { color: var(--brand-600); font-weight: 600; }
+.doc-hero__meta { margin-top: 10px; color: var(--ink-3); font-size: var(--fs-sm); }
+.doc-hero__langs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
+.doc-hero__body .btn { margin-top: 18px; width: 100%; }
+.doc-details { display: flex; flex-direction: column; gap: 16px; margin-top: 28px; }
+.doc-section { color: var(--ink-2); }
+
+@media (min-width: 720px) {
+  .doc-hero__inner { flex-direction: row; align-items: flex-start; gap: 32px; text-align: left; }
+  .doc-hero__photo { width: 220px; height: 220px; margin-inline: 0; }
+  .doc-hero__body { text-align: left; }
+  .doc-hero__langs { justify-content: flex-start; }
+  .doc-hero__body .btn { width: auto; }
+}
+
+/* --------------------------------------------------------------------------
+   Testimonial
+   -------------------------------------------------------------------------- */
+.testimonial {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 22px 20px 20px;
+  box-shadow: var(--shadow-sm);
+}
+.testimonial::before {
+  content: '\201C';
+  position: absolute;
+  top: 2px;
+  right: 16px;
+  font-size: 4rem;
+  line-height: 1;
+  color: var(--brand-050);
+  font-weight: 800;
+  pointer-events: none;
+}
+.testimonial__text { position: relative; color: var(--ink); margin-bottom: 14px; }
+.testimonial__rating { color: var(--amber); letter-spacing: .12em; font-size: var(--fs-sm); }
+.testimonial__author { font-weight: 700; font-size: var(--fs-sm); }
+.testimonial__role { color: var(--ink-3); font-size: var(--fs-sm); }
+
+/* --------------------------------------------------------------------------
+   FAQ (<details>, no JS required)
+   -------------------------------------------------------------------------- */
+.faq-item {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.faq-item > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 18px;
+  min-height: 52px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item > summary::after {
+  content: '';
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--brand);
+  border-bottom: 2px solid var(--brand);
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform .2s var(--ease);
+}
+.faq-item[open] > summary::after { transform: rotate(-135deg) translate(-2px, -2px); }
+.faq-item[open] > summary { color: var(--brand-700); }
+.faq-item__body { padding: 0 18px 16px; color: var(--ink-2); }
+
+/* --------------------------------------------------------------------------
+   Forms — inputs are 16px+ so iOS never zooms on focus.
+   -------------------------------------------------------------------------- */
+.form-field { display: block; margin-bottom: 16px; }
+.form-field__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.form-field__req { color: var(--danger); margin-left: 2px; }
+.form-field input,
+.form-field select,
+.form-field textarea {
+  display: block;
+  width: 100%;
+  min-height: 50px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 1rem; /* never below 16px — iOS zooms otherwise */
+  line-height: 1.4;
+  transition: border-color .18s var(--ease), box-shadow .18s var(--ease);
+}
+.form-field textarea { min-height: 120px; resize: vertical; }
+.form-field select { appearance: none; padding-right: 40px; background-image: none; }
+.form-field input::placeholder, .form-field textarea::placeholder { color: var(--ink-3); }
+.form-field input:focus, .form-field select:focus, .form-field textarea:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-050);
+}
+.form-field__error { display: none; margin-top: 6px; font-size: var(--fs-sm); color: var(--danger); font-weight: 600; }
+.form-field.is-invalid input,
+.form-field.is-invalid select,
+.form-field.is-invalid textarea { border-color: var(--danger); background: var(--danger-050); }
+.form-field.is-invalid .form-field__error { display: block; }
+.form-field__hint { margin-top: 6px; font-size: var(--fs-sm); color: var(--ink-3); }
+
+.form-note { padding: 14px 16px; border-radius: var(--radius); background: var(--brand-050); color: var(--brand-700); font-size: var(--fs-sm); }
+.form-note--error { background: var(--danger-050); color: var(--danger); }
+
+@media (min-width: 720px) {
+  .form-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+}
+
+/* --------------------------------------------------------------------------
+   Footer
+   -------------------------------------------------------------------------- */
+.site-footer {
+  background: var(--ink);
+  color: rgba(255, 255, 255, .78);
+  padding-top: clamp(2rem, 1.6rem + 2vw, 3.5rem);
+  margin-top: clamp(2.5rem, 2rem + 2vw, 4rem);
+}
+.site-footer a { color: rgba(255, 255, 255, .8); }
+.site-footer a:hover { color: #fff; }
+.site-footer__grid { display: grid; grid-template-columns: 1fr; gap: 28px; }
+.site-footer__name { font-size: var(--fs-xl); font-weight: 600; color: #fff; margin-bottom: 8px; }
+.site-footer__address { max-width: 40ch; }
+.site-footer__social { display: flex; gap: 10px; margin-top: 16px; }
+.social-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, .08);
+  color: rgba(255, 255, 255, .85);
+  transition: background-color .18s var(--ease), color .18s var(--ease);
+}
+.social-link:hover { background: var(--brand); color: #fff; }
+.social-link svg { width: 21px; height: 21px; }
+.site-footer__nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+/* Full-width flex, not inline-flex: the whole column row is tappable, so a
+   thumb does not have to land exactly on the short text of "Врачи". */
+.site-footer__nav a { display: flex; align-items: center; min-height: 44px; }
+.site-footer__contacts { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+/* Every link in this column is a tap target — the phone number is a primary
+   conversion action. :not(.btn) so the CTA keeps its own 48px metrics, and
+   the rule covers any link added here later without a second fix. */
+.site-footer__contacts a:not(.btn) { display: flex; align-items: center; min-height: 44px; }
+.site-footer__phone { font-size: var(--fs-xl); font-weight: 700; color: #fff !important; }
+.site-footer__contacts .btn { margin-top: 10px; }
+.site-footer .btn-ghost { color: #fff; border-color: rgba(255, 255, 255, .28); }
+.site-footer .btn-ghost:hover { background: rgba(255, 255, 255, .1); color: #fff; }
+.site-footer__bottom {
+  margin-top: 28px;
+  padding-block: 18px;
+  border-top: 1px solid rgba(255, 255, 255, .12);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: flex-start;
+  font-size: var(--fs-sm);
+}
+
+@media (min-width: 720px) {
+  .site-footer__grid { grid-template-columns: 1.4fr 1fr 1fr; gap: 32px; }
+  .site-footer__bottom { flex-direction: row; align-items: center; justify-content: space-between; }
+}
+
+/* --------------------------------------------------------------------------
+   Sticky mobile action bar — Call / Book / Directions.
+   The single most important control on this site; gone from 900px up.
+   -------------------------------------------------------------------------- */
+.mobile-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 110;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-shadow: 0 -6px 22px rgba(19, 33, 37, .1);
+}
+.mobile-bar__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: var(--bar-h);
+  padding: 8px 4px;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1.15;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+}
+/* "Записаться на приём" is far wider than a 120px third of a 360px screen —
+   wrap to two lines rather than truncate a call-to-action mid-word. */
+.mobile-bar__item span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.mobile-bar__item .ico { width: 21px; height: 21px; color: var(--brand); }
+.mobile-bar__item:active { background: var(--bg-soft); }
+.mobile-bar__item--primary { background: var(--brand); color: #fff; }
+.mobile-bar__item--primary .ico { color: #fff; }
+.mobile-bar__item--primary:active { background: var(--brand-600); }
+
+@media (min-width: 900px) {
+  .mobile-bar { display: none; }
+  body { padding-bottom: 0; }
+}
+
+/* --------------------------------------------------------------------------
+   404
+   -------------------------------------------------------------------------- */
+.notfound { background: var(--bg-soft); }
+.notfound__inner { max-width: 40rem; margin-inline: auto; text-align: center; }
+.notfound__code {
+  font-size: clamp(4.5rem, 3rem + 12vw, 9rem);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -.05em;
+  color: var(--brand);
+  opacity: .18;
+  margin-bottom: -.15em;
+}
+.notfound__title { margin-bottom: .35em; }
+.notfound__text { color: var(--ink-2); font-size: var(--fs-lg); margin-bottom: 1.75rem; }
+.notfound__actions { display: flex; flex-direction: column; gap: 12px; }
+.notfound__actions .btn { width: 100%; }
+
+@media (min-width: 720px) {
+  .notfound__actions { flex-direction: row; justify-content: center; }
+  .notfound__actions .btn { width: auto; }
+}
+
+/* --------------------------------------------------------------------------
+   Home page — the only page that owns the hero look, so its few extras live
+   here, all namespaced .home-*.
+   -------------------------------------------------------------------------- */
+
+/* HERO_TWO_COLUMN_V1 — правило W1 «у главной нет фото» пережило само условие.
+   Его комментарий гласил: ставить фото негде, поэтому колонка одна. Фото
+   теперь задаётся (hero.img1) и задано, а правило осталось — и выигрывало
+   у двухколоночного:
+
+     .hero__inner        { display: grid }   специфичность 0,1,0, строка ~437
+     .home-hero .hero__inner { display: block }   специфичность 0,2,0, и НИЖЕ
+
+   Медиазапрос специфичности не добавляет, поэтому на главной сетка не
+   включалась НИКОГДА, сколько бы фото ни было. Следствие — то, из-за чего
+   и стали разбираться: одна колонка отдаёт фото всю ширину (~850px), коробка
+   становится 850x620 при исходнике 872x1090, и object-fit: cover срезает
+   по ~221px сверху и снизу. С портрета уходили голова и руки, оставался халат.
+
+   Центрирование в одну колонку остаётся там, где оно ВЕРНО: на узком экране
+   (колонок нет по определению) и когда фото не загружено (--solo). */
+@media (max-width: 899px) {
+  .home-hero .hero__inner { display: block; }
+  .home-hero .hero__copy { max-width: 44rem; margin-inline: auto; text-align: center; }
+  .home-hero .hero__lead { margin-inline: auto; }
+}
+
+@media (min-width: 900px) {
+  .home-hero .hero__inner--solo .hero__copy { max-width: 44rem; margin-inline: auto; text-align: center; }
+  .home-hero .hero__inner--solo .hero__lead { margin-inline: auto; }
+}
+
+@media (min-width: 720px) and (max-width: 899px) {
+  .home-hero .hero__actions { justify-content: center; }
+}
+@media (min-width: 900px) {
+  .home-hero .hero__inner--solo .hero__actions { justify-content: center; }
+}
+
+.home-faq { max-width: 46rem; }
+
+.home-contact { display: grid; grid-template-columns: 1fr; gap: 20px; align-items: start; }
+.home-contact__list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 20px; }
+/* Every contact line is a tap target, same 44px floor as the footer column. */
+.home-contact__list > * { display: flex; align-items: center; min-height: 44px; }
+.home-contact__phone { font-size: var(--fs-xl); font-weight: 700; }
+
+/* Map embed: the wrapper owns the size, because the pasted <iframe> carries
+   whatever width/height the map provider felt like — it must not escape. */
+.home-map {
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+.home-map > * { display: block; width: 100%; height: 100%; border: 0; }
+
+@media (min-width: 720px) {
+  .home-map { aspect-ratio: 16 / 9; }
+}
+@media (min-width: 900px) {
+  .home-contact { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 36px; }
+}
+
+/* --------------------------------------------------------------------------
+   Services list/detail, departments list/detail (task 8)
+   -------------------------------------------------------------------------- */
+.svc-group + .svc-group { margin-top: clamp(1.75rem, 1.4rem + 1.8vw, 3rem); }
+.svc-group__title { margin-bottom: 1rem; }
+.svc-empty, .dept-empty { color: var(--ink-2); }
+
+.svc-hero__inner { text-align: center; }
+.svc-hero__meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
+.svc-hero__lead { color: var(--ink-2); font-size: var(--fs-lg); margin-top: 12px; }
+.svc-hero__actions { display: flex; flex-direction: column; gap: 12px; margin-top: 18px; }
+.svc-details { display: flex; flex-direction: column; gap: 16px; margin-top: 28px; text-align: left; }
+.svc-section { color: var(--ink-2); }
+
+/* DEPT_LIST_ROWS_V1 — страница отделений: те же плитки .dept-tile, что на
+   главной, но одной колонкой — оглавление, а не сетка пустых карточек.
+   Ширина ограничена: строка на всю 1200px-страницу превращала бы шеврон в
+   точку на горизонте, а глаз терял бы связь названия со стрелкой. */
+.dept-rows { display: flex; flex-direction: column; gap: 10px; max-width: 760px; }
+
+.dept-hero__inner { display: flex; flex-direction: column; gap: 20px; text-align: center; }
+.dept-hero__photo { border-radius: var(--radius-lg); overflow: hidden; background: var(--brand-050); }
+.dept-hero__photo img { width: 100%; height: 100%; object-fit: cover; }
+.dept-hero__lead { color: var(--ink-2); font-size: var(--fs-lg); margin-top: 10px; }
+.dept-hero__body .btn { margin-top: 18px; width: 100%; }
+
+@media (min-width: 720px) {
+  .svc-hero__actions { flex-direction: row; justify-content: center; }
+  .dept-hero__body { text-align: left; }
+  .dept-hero__inner { text-align: left; }
+  .dept-hero__body .btn { width: auto; }
+}
+
+/* --------------------------------------------------------------------------
+   About / contact / FAQ / legal pages (task 9)
+   -------------------------------------------------------------------------- */
+.about-hero__inner { max-width: 46rem; }
+.about-hero__lead { color: var(--ink-2); font-size: var(--fs-lg); }
+.about-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+.contact-grid { display: grid; grid-template-columns: 1fr; gap: 24px; align-items: start; }
+.contact-info__list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 20px; }
+/* Every contact line is a tap target, same 44px floor as elsewhere on the site. */
+.contact-info__list > * { display: flex; align-items: center; min-height: 44px; }
+.contact-info__phone { font-size: var(--fs-xl); font-weight: 700; }
+.contact-hours { margin-top: 20px; }
+.contact-hours h2 { font-size: var(--fs-lg); margin-bottom: .5em; }
+.contact-hours__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.contact-hours__list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: var(--fs-sm); }
+.contact-hours__day { font-weight: 600; }
+.contact-hours__time { color: var(--ink-2); }
+.contact-map { margin-top: 20px; }
+
+.contact-forms { display: grid; grid-template-columns: 1fr; gap: 28px; }
+.contact-form-wrap h2 { margin-bottom: .6em; }
+
+.faq-list { max-width: 46rem; }
+
+.legal-page__inner { max-width: 62ch; }
+.legal-content p { color: var(--ink-2); }
+
+/* --------------------------------------------------------------------------
+   Appointment page + thank-you page (task 10)
+   -------------------------------------------------------------------------- */
+.appt-hero__inner { text-align: center; }
+.appt-wrap { max-width: 40rem; margin-inline: auto; }
+.appt-radios { display: flex; flex-wrap: wrap; gap: 10px 20px; margin-top: 4px; }
+.appt-radio { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: var(--fs-sm); }
+.appt-radio input { width: auto; min-height: 0; }
+
+.appt-thanks__inner { max-width: 40rem; margin-inline: auto; text-align: center; }
+.appt-thanks__inner p { color: var(--ink-2); font-size: var(--fs-lg); margin-bottom: 1.5rem; }
+
+/* --------------------------------------------------------------------------
+   News / blog — list cards + article page (W4 Task 1)
+   -------------------------------------------------------------------------- */
+.news-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow .22s var(--ease), transform .22s var(--ease);
+  color: inherit;
+}
+a.news-card:hover, .news-card:hover { box-shadow: var(--shadow); transform: translateY(-3px); color: inherit; }
+.news-card__cover { aspect-ratio: 16 / 9; background: var(--brand-050); overflow: hidden; }
+.news-card__cover img { width: 100%; height: 100%; object-fit: cover; }
+.news-card__body { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; }
+.news-card__date { color: var(--ink-3); font-size: var(--fs-sm); }
+.news-card__title { font-size: var(--fs-lg); font-weight: 700; margin: 0; }
+/* Excerpt clamps to 3 lines — a longer one shouldn't stretch one card taller
+   than its row-mates (same reasoning as .mobile-bar__item span above). */
+.news-card__excerpt {
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Article page — a readable single column, not the site's --maxw container:
+   a news article is prose, not a dashboard, so it gets its own narrower cap
+   (same 46rem as .home-faq/.faq-list — the site's established prose width). */
+.news-post__inner { max-width: 46rem; margin-inline: auto; }
+.news-post__cover {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--brand-050);
+  margin-bottom: 20px;
+}
+.news-post__cover img { width: 100%; height: auto; display: block; aspect-ratio: 16 / 9; object-fit: cover; }
+.news-post__title { margin-bottom: .3em; }
+.news-post__date { color: var(--ink-3); font-size: var(--fs-sm); margin-bottom: 1.25em; }
+.news-post__body { color: var(--ink-2); font-size: var(--fs-lg); line-height: 1.75; }
+.news-post__body p + p { margin-top: 1.1em; }
+
+/* Honeypot field — invisible to people, present in the DOM for bots. Kept
+   off-screen rather than display:none/visibility:hidden, which some spam
+   scripts specifically detect and skip. */
+.hp {
+  position: absolute;
+  left: -9999px;
+  top: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+@media (min-width: 720px) {
+  .about-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (min-width: 900px) {
+  .contact-grid { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 36px; }
+  .contact-forms { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* --------------------------------------------------------------------------
+   Motion preferences — honour them completely, not partially.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  .card--link:hover, a.card:hover, .doctor-card:hover, .news-card:hover { transform: none; }
+}
+
+/* --------------------------------------------------------------------------
+   Print
+   -------------------------------------------------------------------------- */
+@media print {
+  .site-header, .mobile-bar, .site-footer__social, .lang-switch, .skip-link { display: none !important; }
+  body { padding-bottom: 0; background: #fff; }
+  .card, .doctor-card, .testimonial, .news-card { box-shadow: none; }
+}
+
+/* WEBSITE_SERVICES_LIST_V1 — каталог услуг строками.
+   В группе десятки позиций вида «… тип 11», «… тип 12»: отличаются
+   только ценой, и сравнить их можно, только когда цены стоят одна под
+   другой в одном столбце. Поэтому цена — фиксированной ширины и с цифрами
+   одинаковой ширины (tabular-nums), а не внутри потока текста.
+   Плитки (.card) остались за страницей отделения — там их несколько. */
+.svc-rows { display: flex; flex-direction: column; }
+.svc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 13px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: inherit;
+  transition: background .18s var(--ease), border-color .18s var(--ease);
+}
+.svc-row + .svc-row { margin-top: 8px; }
+a.svc-row:hover, .svc-row:hover {
+  background: var(--brand-050);
+  border-color: var(--brand-600);
+  color: inherit;
+}
+.svc-row__link {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: inherit;
+}
+.svc-row__link:hover .svc-row__name { text-decoration: underline; }
+/* Кнопка в каждой строке — мельче обычной: с высотой 48px она бы
+   задавала высоту всего ряда, и семьсот строк растянулись бы вдвое. */
+.svc-row__cta {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 7px 16px;
+  font-size: var(--fs-sm);
+  box-shadow: none;
+}
+.svc-row__name { font-weight: 700; color: var(--brand-700); line-height: 1.35; }
+.svc-row__desc {
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.svc-row__price {
+  flex: 0 0 auto;
+  min-width: 13.5rem;
+  text-align: right;
+  font-weight: 800;
+  color: var(--brand-600);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* На телефоне столбец цен шириной в полэкрана отнимает место у
+   названия, которое и есть главное. Складываем в две строки. */
+@media (max-width: 640px) {
+  .svc-row { flex-wrap: wrap; align-items: flex-start; gap: 4px 12px; }
+  .svc-row__link { flex: 1 1 100%; }
+  .svc-row__price { min-width: 0; text-align: left; order: 2; }
+  .svc-row__cta { order: 3; margin-left: auto; }
+}
+
+/* QUICK_REQUEST_V1 — компактное окно заявки (имя + телефон).
+   Форму открывает клик по «Оставить заявку» у услуги или врача; услуга/врач
+   подставляются скриптом в скрытые поля, поэтому видимых полей ровно два. */
+.qr[hidden] { display: none; }
+.qr {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.qr__backdrop { position: absolute; inset: 0; background: rgba(19, 33, 37, .5); }
+.qr__card {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  max-height: 92vh;
+  overflow-y: auto;
+  background: var(--bg);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+  box-shadow: var(--shadow-lg);
+}
+.qr__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: none;
+  color: var(--ink-3);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--radius-pill);
+}
+.qr__close:hover { background: var(--bg-soft); color: var(--ink); }
+.qr__title { font-size: var(--fs-xl); margin: 0 44px .25em 0; }
+/* Выбранная услуга — подпись, а не поле: менять её здесь нельзя, она пришла
+   с кнопки. Показываем, чтобы человек видел, на что именно оставляет заявку. */
+.qr__subject {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--brand-050);
+  color: var(--brand-700);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.qr__subject[hidden] { display: none; }
+.qr__form .form-field + .form-field { margin-top: 14px; }
+.qr__submit { width: 100%; margin-top: 18px; }
+
+/* На большом экране — обычное центрированное окно, а не «шторка» снизу. */
+@media (min-width: 720px) {
+  .qr { align-items: center; padding: 24px; }
+  .qr__card { border-radius: var(--radius-lg); padding: 28px; }
+}
+
+/* SERVICES_FILTER_V1 — панель поиска и чипсы групп над каталогом.
+   Липкая: в списке из семисот строк панель, уехавшая вверх, бесполезна —
+   человек долистал до середины и уже не может ни искать, ни сменить группу,
+   не возвращаясь наверх. Высоту шапки берём токеном, а не числом: шапка её
+   меняет по брейкпоинтам, и зашитые 62px разошлись бы с ней на широком
+   экране, оставив щель. */
+.svc-filter {
+  position: sticky;
+  top: calc(var(--header-h) + 1px);
+  z-index: 20;
+  margin: 0 0 1.5rem;
+  padding: 12px 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.svc-filter__search { display: flex; gap: 8px; }
+.svc-filter__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 46px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+.svc-filter__input:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.svc-filter__go { flex: 0 0 auto; min-height: 46px; padding: 10px 22px; }
+
+.svc-filter__groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.svc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.svc-chip:hover { background: var(--brand-050); border-color: var(--brand-050); color: var(--brand-700); }
+.svc-chip.is-current {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+/* Счётчик внутри чипса наследует цвет — на выбранном (тёмном) он белый,
+   на остальных серый; отдельного правила на состояние не нужно. */
+.svc-chip__n { opacity: .6; font-variant-numeric: tabular-nums; font-weight: 700; }
+
+.svc-none {
+  margin: 2rem 0;
+  padding: 28px 20px;
+  text-align: center;
+  color: var(--ink-3);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-lg);
+}
+.svc-none__reset { display: block; margin-top: 10px; font-weight: 700; }
+
+/* Живой поиск прячет строки и опустевшие группы атрибутом hidden. У .svc-row
+   и .svc-group свои display, которые перебили бы браузерное [hidden] —
+   поэтому правило задаётся явно. */
+.svc-row[hidden], .svc-group[hidden], .svc-none[hidden] { display: none; }
+
+@media (max-width: 560px) {
+  /* Кнопка «Найти» под полем: на узком экране она отъедала у поля половину
+     ширины, и в нём не помещалось ни одного слова запроса. */
+  .svc-filter__search { flex-wrap: wrap; }
+  .svc-filter__go { width: 100%; }
+}
+
+/* HOME_SERVICES_LIST_V1 — обёртка списка услуг на ГЛАВНОЙ.
+   Строка .svc-row принадлежит странице услуг (SERVICES_FILTER_V1) и там лежит
+   внутри своих групп; на главной группы не нужны, нужен просто вертикальный
+   стек с тем же шагом. Своя обёртка, а не .svc-group, чтобы не зависеть от
+   чужого блока и не пришлось бы его править ради главной. */
+.svc-list { display: flex; flex-direction: column; gap: 10px; }
+
+/* CONTACT_CARD_V1 — карточка контактов: строка = иконка, мелкая подпись,
+   значение. Подпись нужна потому, что одного значка недостаточно: «конверт»
+   и «булавка» человек читает по-разному, а «АДРЕС» — однозначно.
+
+   Классы объявлены здесь и переиспользуются секцией контактов на главной —
+   один дизайн в двух местах не должен разойтись двумя копиями вёрстки. */
+.contact-card {
+  display: flex;
+  flex-direction: column;
+  padding: clamp(20px, 1.2rem + 1.2vw, 32px);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.contact-card__title { font-size: var(--fs-xl); margin: 0 0 4px; }
+.contact-card__rows { display: flex; flex-direction: column; margin-bottom: 24px; }
+
+.contact-card__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.contact-card__row:last-child { border-bottom: 0; }
+
+/* Иконка выровнена по подписи, а не по значению: подпись — первая строка
+   блока, и значок, съехавший к ней, читается как её маркер. */
+.contact-card__ico {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  color: var(--brand-600);
+}
+.contact-card__ico svg { width: 100%; height: 100%; display: block; }
+
+.contact-card__body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.contact-card__label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+/* Значение переносится по словам, но длинный адрес или почта без пробелов
+   не должны распирать карточку на экране 360px. */
+.contact-card__value {
+  font-size: var(--fs-base);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.contact-card__value a { font-weight: 600; }
+
+/* Кнопка прижата к низу карточки: в двухколоночной раскладке карточка тянется
+   по высоте карты, и кнопка, оставшаяся сразу под строками, висела бы
+   посередине. */
+.contact-card__cta { margin-top: auto; }
+
+/* Правая колонка: карта и кнопка под ней. */
+.contact-side { display: flex; flex-direction: column; gap: 12px; }
+.contact-side__actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.contact-side .contact-map { margin-top: 0; }
+
+/* Карты нет — второй колонке нечего занимать, и карточка идёт во всю ширину
+   вместо половины с пустотой справа. */
+.contact-grid--solo { grid-template-columns: minmax(0, 1fr); }
+.contact-grid--solo .contact-card { max-width: 42rem; }
+
+.contact-hours-wrap { margin-top: 28px; }
+.contact-hours-wrap .contact-hours { margin-top: 0; max-width: 42rem; }
+
+@media (min-width: 900px) {
+  /* Карточка и карта одной высоты: разъехавшиеся низы двух колонок читаются
+     как незавершённая вёрстка. */
+  .contact-grid { align-items: stretch; }
+  .contact-side .home-map { flex: 1 1 auto; }
+}
