@@ -174,8 +174,9 @@ const RPC = {
         if (candidatesFail) { const e = new Error(candidatesFail); e.status = 400; throw e; }
         return reviews.admissionAttendingCandidates(db, a, u);
     },
-    admission_set_attending: (a, u) => reviews.admissionSetAttending(db, a, u),
+    admission_set_attending: (a, u) => { setAttendingCalls += 1; return reviews.admissionSetAttending(db, a, u); },   // INPATIENT_REQUIRED_V1 — счётчик вызовов
 };
+let setAttendingCalls = 0;
 
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
@@ -383,4 +384,69 @@ test('окно больше не перечисляет колонки users —
     // Признак врача больше не повторяется в браузере — одна копия правила.
     assert.ok(!/is_doctor\s*===\s*true/.test(body),
         'в окне снова заведена вторая копия признака «врач» — она разойдётся с серверной');
+});
+
+// ===========================================================================
+// 5. INPATIENT_REQUIRED_V1 — отметка пустого выбора и лечащий врач прямо с койки
+// ===========================================================================
+
+const hasCls = (e, c) => String((e && e.className) || '').split(/\s+/).includes(c);
+
+test('INPATIENT_REQUIRED_V1: «Лечащий врач» отмечен; «Назначить» без врача — окно «Заполнено не всё» без «Сохранить как есть», запрос не уходит', async () => {
+    const { overlay, select, admission } = await openPicker();
+    // Строка «Не заполнено: Лечащий врач» — первой в теле окна; подпись поля — со звездой отметок.
+    const body = walk(overlay).find((e) => hasCls(e, 'modal-body'));
+    assert.ok(hasCls(body.children[0], 'rq-summary'), 'строка «Не заполнено» — первой в окне');
+    assert.equal(body.children[0].hidden, false);
+    assert.ok(textOf(body.children[0]).includes('Лечащий врач'));
+    const label = walk(overlay).find((e) => e.tagName === 'LABEL' && textOf(e).includes('Лечащий врач'));
+    assert.ok(hasCls(label, 'rq-req'), 'подпись поля без отметки «обязательно»');
+    assert.equal(walk(label).filter((e) => hasCls(e, 'req')).length, 0, 'звезда одна — от отметок, не вторая из field()');
+
+    setAttendingCalls = 0;
+    findBtn(overlay, 'Назначить').click();
+    await settle();
+    const ask = BODY.children.find((c) => c.attrs && c.attrs['data-dialog'] === 'required-missing');
+    assert.ok(ask, 'пустой выбор врача не спросили');
+    assert.match(textOf(ask), /Заполнено не всё/);
+    assert.match(textOf(ask), /Лечащий врач/);
+    assert.equal(findBtn(ask, 'Сохранить как есть'), undefined, 'без лечащего врача сохранить нельзя');
+    assert.equal(setAttendingCalls, 0, 'запрос ушёл без врача');
+    findBtn(ask, 'Дописать').click();
+    await settle();
+    assert.equal(BODY.children.includes(ask), false, 'окно вопроса не закрылось');
+    assert.ok(topOverlay(), 'окно назначения закрылось вместе с вопросом');
+
+    // Выбрали врача — отметка гаснет, назначение проходит.
+    select.value = '5';
+    select.dispatchEvent({ type: 'change', target: select });
+    assert.equal(body.children[0].hidden, true, 'выбранный врач всё ещё «не заполнен»');
+    findBtn(overlay, 'Назначить').click();
+    await settle();
+    assert.equal(setAttendingCalls, 1);
+    assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(admission.id).status, 'active');
+});
+
+test('INPATIENT_REQUIRED_V1: переключатель выключен — лечащий врач назначается лежащему на койке без осмотра, осмотр не записан', async () => {
+    if (db) db.close();
+    db = makeDb(STAFF);
+    candidatesFail = null;
+    BODY.children.length = 0;
+    db.prepare('UPDATE inpatient_settings SET intake_before_attending = 0 WHERE id = 1').run();
+    const { admission } = inpatient.admissionOrderCreate(db, { patient_id: 1, department: 'Терапия' }, REGISTRAR);
+    inpatient.admissionAdmit(db, { admission_id: admission.id, bed_id: 1 }, NURSE);
+    assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(admission.id).status, 'admitted');
+    modals.openAdmissionAttendingModal({
+        admission: Object.assign({}, admission, { status: 'admitted', patients: { mrn: 'P-26-70125', full_name: 'Шодибоева Замира' } }),
+    });
+    await settle();
+    const overlay = topOverlay();
+    walk(overlay).find((e) => e.tagName === 'SELECT').value = '5';
+    findBtn(overlay, 'Назначить').click();
+    await settle();
+    const row = db.prepare('SELECT status, attending_doctor_id, examined_at, examined_by FROM admissions WHERE id=?').get(admission.id);
+    assert.equal(row.status, 'active', 'с койки — сразу лечение');
+    assert.equal(row.attending_doctor_id, 5);
+    assert.equal(row.examined_at, null, 'осмотра не было — и записан он не должен быть');
+    assert.equal(row.examined_by, null);
 });

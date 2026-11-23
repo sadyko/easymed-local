@@ -1593,15 +1593,32 @@ export function openAdmissionAttendingModal({ admission, onDone } = {}) {
             : '';
     });
 
+    // INPATIENT_REQUIRED_V1 — «Лечащий врач» отмечен обязательным: звезда, красная рамка,
+    // «Не заполнено» и строка «Не заполнено: Лечащий врач» первой в окне (переход к полю).
+    // Звезду ставят отметки — field() свою не рисует, иначе их было бы две.
+    const docField = field(tr('Лечащий врач'), sel);
+    const marks = requiredMarks({ fields: [{
+        key: 'attending', label: tr('Лечащий врач'), el: sel, box: docField,
+        labelEl: (docField.children && docField.children[0]) || null,
+        isEmpty: () => !sel.value,
+    }] });
+
     modal(tr('Назначить лечащего врача'), 'User', [
+        marks.summary,
         patientAnchor(p.full_name || '', [p.mrn, admission.admission_no].filter(Boolean).join(' · ')),
-        field(tr('Лечащий врач'), sel, { required: true }),
+        docField,
         note,
         h('div', { class: 'muted', style: { fontSize: '12.5px' } },
             tr('С этого момента идёт лечение: лечащий врач ведёт назначения, услуги и стол этого пациента.')),
     ], tr('Назначить'), async () => {
         if (refusal) { toast(refusal, 'fail'); return false; }
-        if (!sel.value) { toast(tr('Выберите врача.'), 'fail'); return false; }
+        // INPATIENT_REQUIRED_V1 — без врача назначать нечего: окно «Заполнено не всё» с
+        // одним «Дописать» (сохранить как есть здесь нельзя), фокус — к полю.
+        if (!sel.value) {
+            await askSaveAnyway({ missing: [tr('Лечащий врач')], hard: true });
+            marks.focusFirst();
+            return false;
+        }
         const { error } = await supabase.rpc('admission_set_attending', {
             admission_id: admission.id, doctor_id: Number(sel.value),
         });

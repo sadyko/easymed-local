@@ -134,6 +134,8 @@ let admitAnswer = () => ({ ok: true, data: { admission: { id: 11, status: 'admit
 // INPATIENT_REVIEW_V1 — что этому человеку разрешает СЕРВЕР. Экран спрашивает
 // это одним запросом на отрисовку и рисует кнопки по ответу.
 let capsAnswer = { admit: true, cancel_order: true, examine: false, set_attending: false };
+// INPATIENT_REQUIRED_V1 — положение переключателей в том же ответе; undefined — поля нет (старый сервер).
+let requiredAnswer;
 
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
@@ -152,7 +154,7 @@ globalThis.fetch = async (url, opts = {}) => {
             return ok({ admission: { id: body.admission_id, status: 'ordered', department: 'Терапия', admission_type: 'planned' },
                 patient: { id: 101, full_name: 'Иванов Иван Иванович', mrn: 'ID-1', gender: 'male' }, sheet: null, bmi: null, complete: false, missing: [], due_at: null });
         }
-        if (name === 'inpatient_capabilities') return ok({ roles: [], can: capsAnswer });
+        if (name === 'inpatient_capabilities') return ok({ roles: [], can: capsAnswer, required: requiredAnswer });
         if (name === 'admission_reviews_list') return ok({ admission_id: body.admission_id, reviews: [] });
         if (name === 'admission_review_save') {
             return ok({
@@ -483,9 +485,14 @@ test('после публикации осмотра экран сразу сп�
         'после осмотра маршрут ждёт лечащего врача — окно обязано открыться само');
 
     // Без выбранного врача запрос не уходит.
+    // INPATIENT_REQUIRED_V1 — отказ говорит окно «Заполнено не всё» (только «Дописать»), а не всплывашка.
     findBtn(overlay, 'Назначить').click();
     await settle();
     assert.equal(rpcCalls.filter((c) => c.name === 'admission_set_attending').length, 0);
+    const ask = BODY.children[BODY.children.length - 1];
+    assert.equal(ask.attrs['data-dialog'], 'required-missing', 'пустой выбор врача не спросили');
+    findBtn(ask, 'Дописать').click();
+    await settle();
 
     const sel = walk(overlay).find((e) => e.tagName === 'SELECT');
     sel.value = '77';
@@ -857,5 +864,85 @@ test('ADMITTING_DOCTOR_V1: приёмный врач видит «Осмотр �
         admissionsRows = savedRows;
         capsAnswer = savedCaps;
         delete globalThis.window.easymed;
+    }
+});
+
+// ─── INPATIENT_REQUIRED_V1 — лечащий врач прямо с койки ──────────────────────
+// Переключатель «лечащий врач только после осмотра» выключен (required в ответе
+// inpatient_capabilities): лежащему на койке сразу назначают лечащего врача, и
+// плитка «Ждут лечащего врача» считает его (он остаётся и в «Ждут первичного
+// осмотра» — осмотра не было). Без поля required — как сегодня.
+const tileVal = (root, key) => {
+    const tile = walk(root).find((e) => e.tagName === 'BUTTON' && String(e.className || '').split(/\s+/).includes('wt-tile-' + key));
+    assert.ok(tile, 'нет плитки ' + key);
+    const v = walk(tile).find((e) => String(e.className || '') === 'wt-tile-v');
+    return v ? textOf(v).trim() : '';
+};
+
+test('INPATIENT_REQUIRED_V1: без обязательного осмотра лежащему сразу «Назначить лечащего врача», и он в «Ждут лечащего врача»', async () => {
+    const savedRows = admissionsRows; const savedCaps = capsAnswer;
+    try {
+        admissionsRows = [IN_BED];
+        capsAnswer = { set_attending: true, examine: true };
+        requiredAnswer = { intake_before_attending: false };
+        const root = await renderScreen({ only: 'patients' });
+        const btn = findBtn(root, 'Назначить лечащего врача');
+        assert.ok(btn, 'лежащему без осмотра нужна кнопка назначения лечащего врача');
+        assert.equal(findBtn(root, 'Провести первичный осмотр'), undefined, 'у строки одно действие — назначение');
+        assert.equal(tileVal(root, 'attending'), '1', '«Ждут лечащего врача» считает лежащего');
+        assert.equal(tileVal(root, 'exam'), '1', 'и «Ждут первичного осмотра» — тоже: осмотра не было');
+
+        btn.click();
+        await settle();
+        const overlay = BODY.children[BODY.children.length - 1];
+        assert.ok(textOf(overlay).includes('Назначить лечащего врача'), 'кнопка открывает окно выбора лечащего');
+        walk(overlay).find((e) => e.tagName === 'SELECT').value = '77';
+        findBtn(overlay, 'Назначить').click();
+        await settle();
+        const call = rpcCalls.find((c) => c.name === 'admission_set_attending');
+        assert.ok(call, 'admission_set_attending не вызван');
+        assert.equal(call.args.admission_id, 13);
+
+        // Права назначать нет — сегодняшняя подпись, кого ждут.
+        capsAnswer = { set_attending: false, examine: false };
+        const root2 = await renderScreen({ only: 'patients' });
+        assert.equal(findBtn(root2, 'Назначить лечащего врача'), undefined, 'кнопка, которая ответит отказом, — тупик');
+        assert.ok(textOf(root2).includes('Ждёт главного врача'));
+    } finally {
+        admissionsRows = savedRows; capsAnswer = savedCaps; requiredAnswer = undefined;
+    }
+});
+
+test('INPATIENT_REQUIRED_V1: приёмный врач без обязательного осмотра назначает лечащего сам', async () => {
+    const savedRows = admissionsRows; const savedCaps = capsAnswer;
+    globalThis.window.easymed = { navigate() {}, state: { user: { id: 77, role: 'doctor', full_name: 'Юсупов А.' } } };
+    try {
+        capsAnswer = { examine: false, set_attending: false, admit: false };
+        requiredAnswer = { intake_before_attending: false };
+        admissionsRows = [{ ...IN_BED, admitting_doctor_id: 77, admitting: { full_name: 'Юсупов А.' } }];
+        const root = await renderScreen({ only: 'patients' });
+        assert.ok(findBtn(root, 'Назначить лечащего врача'), 'сервер пускает приёмного врача этого пациента по имени');
+        assert.equal(findBtn(root, 'Осмотр приёмного врача'), undefined);
+    } finally {
+        admissionsRows = savedRows; capsAnswer = savedCaps; requiredAnswer = undefined;
+        delete globalThis.window.easymed;
+    }
+});
+
+test('INPATIENT_REQUIRED_V1: переключатель включён или сервер старый — как сегодня: осмотр, «Ждут лечащего врача» 0', async () => {
+    const savedRows = admissionsRows; const savedCaps = capsAnswer;
+    try {
+        admissionsRows = [IN_BED];
+        capsAnswer = { set_attending: true, examine: true };
+        for (const req of [undefined, { intake_before_attending: true }]) {
+            requiredAnswer = req;
+            const root = await renderScreen({ only: 'patients' });
+            assert.ok(findBtn(root, 'Провести первичный осмотр'), 'осмотр — как сегодня: ' + JSON.stringify(req));
+            assert.equal(findBtn(root, 'Назначить лечащего врача'), undefined, 'лечащего — только после осмотра: ' + JSON.stringify(req));
+            assert.equal(tileVal(root, 'attending'), '0');
+            assert.equal(tileVal(root, 'exam'), '1');
+        }
+    } finally {
+        admissionsRows = savedRows; capsAnswer = savedCaps; requiredAnswer = undefined;
     }
 });

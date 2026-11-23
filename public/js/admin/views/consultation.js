@@ -105,6 +105,7 @@ const state = {
         // счётчика на вкладке, читается своим маленьким запросом при входе.
         waiting: 0,
         loaded: false, loading: false, rows: [], scope: 'own', can: {}, capsAsked: false,
+        withoutExam: false,   // INPATIENT_REQUIRED_V1 — лечащий врач прямо с койки (переключатель выключен)
     },
     // Dashboard tab state — lazy-loaded on first open of the dashboard tab.
     dash: {
@@ -207,7 +208,7 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // Оставленное состояние жило дольше сессии: список пациентов в койках
     // протухает быстрее «моего дня», а надстройку «главный врач» администратор
     // может снять — и кабинет продолжал бы показывать весь стационар.
-    state.inpt = { loaded: false, loading: false, rows: [], scope: 'own', can: {}, capsAsked: false };
+    state.inpt = { loaded: false, loading: false, rows: [], scope: 'own', can: {}, capsAsked: false, withoutExam: false };   // INPATIENT_REQUIRED_V1 — withoutExam
     if (state.tab === 'appointments') { await loadQueueOnce(); }
     paint();
     // Адрес открывает ЛЮБУЮ вкладку, а не только ту, на которую нажали, —
@@ -959,10 +960,14 @@ async function loadInpatientCaps() {
         const { data } = await supabase.rpc('inpatient_capabilities', {});
         state.inpt.scope = (data && data.scope) === 'all' ? 'all' : 'own';
         state.inpt.can = (data && data.can) || {};
+        // INPATIENT_REQUIRED_V1 — «лечащий врач только после осмотра» выключен: лежащему
+        // на койке лечащего назначают сразу. Нет поля (старый сервер) — как сегодня.
+        state.inpt.withoutExam = !!(data && data.required && data.required.intake_before_attending === false);
     } catch (e) {
         // Не ответил сервер — остаёмся на самом узком: свои пациенты.
         state.inpt.scope = 'own';
         state.inpt.can = {};
+        state.inpt.withoutExam = false;
     }
 }
 
@@ -1066,7 +1071,16 @@ function inpatientRow(r, onChange) {
         const fn = typeof window !== 'undefined' && window.easymed && window.easymed.navigate;
         if (fn) fn('case-file', { admissionId: r.id, kind: 'intake' });
     };
-    if (r.status === 'admitted') {
+    // INPATIENT_REQUIRED_V1 — «Назначить лечащего врача» одной кнопкой на оба пути.
+    const attendingBtn = () => h('button', { class: 'btn btn-primary btn-sm', type: 'button',
+        onclick: () => openAdmissionAttendingModal({ admission: r, onDone: onChange }) },
+        Icon('User', { size: 13 }), ' ', 'Назначить лечащего врача');
+    // INPATIENT_REQUIRED_V1 — осмотр перед лечащим врачом выключен: поступившему сразу
+    // назначают лечащего — тот, кто вправе назначать, и приёмный врач этого пациента.
+    // Осмотр остаётся в карточке госпитализации; у строки одно действие.
+    if (r.status === 'admitted' && state.inpt.withoutExam && (state.inpt.can.set_attending || mine)) {
+        right.push(attendingBtn());
+    } else if (r.status === 'admitted') {
         right.push(mine
             ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: toIntake },
                 Icon('Stethoscope', { size: 13 }), ' ', tr('Осмотр приёмного врача'))
@@ -1079,9 +1093,7 @@ function inpatientRow(r, onChange) {
                     : Tag('Ждёт главного врача', { kind: 'warn', dot: true })));
     } else if (r.status === 'examined') {
         right.push((state.inpt.can.set_attending || mine)
-            ? h('button', { class: 'btn btn-primary btn-sm', type: 'button',
-                onclick: () => openAdmissionAttendingModal({ admission: r, onDone: onChange }) },
-                Icon('User', { size: 13 }), ' ', 'Назначить лечащего врача')
+            ? attendingBtn()
             : Tag('Ждёт лечащего врача', { kind: 'warn', dot: true }));
     } else {
         right.push(Tag(admissionStatusLabel(r.status), { kind: 'ok' }));
@@ -1128,7 +1140,9 @@ export function waitingOf(rows) {
     const can = state.inpt.can || {};
     return (rows || []).filter((r) => {
         const mine = meDoc != null && r.admitting_doctor_id != null && String(r.admitting_doctor_id) === String(meDoc);
-        if (r.status === 'admitted') return mine || !!can.examine;
+        // INPATIENT_REQUIRED_V1 — без обязательного осмотра поступивший ждёт и назначения
+        // лечащего: это работа того, кто назначает.
+        if (r.status === 'admitted') return mine || !!can.examine || (state.inpt.withoutExam === true && !!can.set_attending);
         if (r.status === 'examined') return mine || !!can.set_attending;
         return false;
     }).length;

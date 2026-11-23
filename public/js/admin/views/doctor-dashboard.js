@@ -90,6 +90,7 @@ import { onLineStatus } from '../queue-fresh.js';   // QUEUE_FRESH_V1 — под
 import { pastelFor, pastelForDashTile } from '../pastel.js';   // PASTEL_IDENTITY_V1 — оттенок = личность, не тяжесть
 // HEAD_DOCTOR_WARD_VIEW_V1 — «в койке» одним списком на сервер и браузер.
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';
+import { waitsForAttending } from '../../shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1 — кто ждёт лечащего врача
 // CABINET_REDESIGN_V1 — график и подгонка общие со сводкой клиники.
 import { barChart } from './dash-charts.js';
 import { fitViewport } from './dash-kpi.js';
@@ -146,10 +147,12 @@ async function loadWardHead() {
     ward.wide = false; ward.loaded = false;
     ward.exam = 0; ward.attending = 0; ward.inBed = 0;
     let scope = 'own';
+    let withoutExam = false;   // INPATIENT_REQUIRED_V1 — лечащий врач прямо с койки (переключатель выключен)
     try {
         const { data } = await supabase.rpc('inpatient_capabilities', {});
         scope = (data && data.scope) === 'all' ? 'all' : 'own';
-    } catch (e) { scope = 'own'; }
+        withoutExam = !!(data && data.required && data.required.intake_before_attending === false);
+    } catch (e) { scope = 'own'; withoutExam = false; }
     if (scope !== 'all') return;              // палатный врач полосы не видит
     ward.wide = true;
     // ТОЛЬКО КЛИНИЧЕСКИЕ КОЛОНКИ. `id, status` — всё, что нужно счётчикам.
@@ -161,7 +164,9 @@ async function loadWardHead() {
     const rows = data || [];
     ward.inBed = rows.length;
     ward.exam = rows.filter((r) => r.status === 'admitted').length;
-    ward.attending = rows.filter((r) => r.status === 'examined').length;
+    // INPATIENT_REQUIRED_V1 — без обязательного осмотра лечащего ждёт и поступивший
+    // (и в «Ждут первичного осмотра» он остаётся: осмотра не было).
+    ward.attending = rows.filter((r) => waitsForAttending(r, withoutExam)).length;
     ward.loaded = true;
 }
 

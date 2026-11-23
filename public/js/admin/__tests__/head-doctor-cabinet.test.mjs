@@ -385,3 +385,50 @@ test('у палатного врача полосы главного врача 
     assert.ok(own, 'счётчик палатного врача не сужен на него самого: ' + JSON.stringify(c.filters));
   }
 });
+
+// ===========================================================================
+// INPATIENT_REQUIRED_V1 — ЛЕЧАЩИЙ ВРАЧ ПРЯМО С КОЙКИ
+// ===========================================================================
+// Переключатель «лечащий врач только после осмотра» выключен (required в ответе
+// inpatient_capabilities): поступившего без осмотра сразу назначают лечащим, и
+// кабинет предлагает именно это действие, считает его в «ждут меня», а полоса
+// главного врача — в «Ждут лечащего врача» (и в «Ждут первичного осмотра» тоже).
+const OFF = { intake_before_attending: false };
+
+test('INPATIENT_REQUIRED_V1: без обязательного осмотра у поступившего — «Назначить лечащего врача» вместо осмотра', async () => {
+  const host = await openWard(HEAD, { ...HEAD_CAPS, required: OFF });
+  const btns = allButtons(host).filter((b) => /Назначить лечащего врача/.test(textOf(b)));
+  assert.strictEqual(btns.length, 2, 'и поступивший, и осмотренный ждут назначения лечащего');
+  assert.strictEqual(buttonByText(host, /Провести первичный осмотр/), undefined, 'у строки одно действие — назначение');
+
+  // Приёмный врач этого пациента без права назначать — назначает сам (сервер пускает по имени).
+  const rows = ADM.map((r) => (r.id === 'a-1' ? { ...r, admitting_doctor_id: 'u-ward' } : r));
+  const ward = await openWard(WARD, { ...WARD_CAPS, required: OFF }, rows);
+  assert.ok(buttonByText(ward, /Назначить лечащего врача/), 'приёмному врачу — назначение лечащего');
+  assert.strictEqual(buttonByText(ward, /Осмотр приёмного врача/), undefined);
+});
+
+test('INPATIENT_REQUIRED_V1: счётчик «ждут меня» считает поступившего, когда лечащего назначают без осмотра', async () => {
+  const { waitingOf } = await import('../views/consultation.js');
+  const waiting = [{ status: 'admitted', admitting_doctor_id: null }];
+  const NO_EXAM = { roles: ['admin'], scope: 'all', can: { set_attending: true, examine: false } };
+  await openWard(HEAD, { ...NO_EXAM, required: OFF });
+  assert.strictEqual(waitingOf(waiting), 1, 'поступивший ждёт назначения лечащего — моей работы');
+  await openWard(HEAD, NO_EXAM);
+  assert.strictEqual(waitingOf(waiting), 0, 'с обязательным осмотром — как сегодня: осмотр не мой');
+});
+
+test('INPATIENT_REQUIRED_V1: полоса главного врача — поступивший и в «Ждут первичного осмотра», и в «Ждут лечащего врача»', async () => {
+  for (const [required, attending] of [[OFF, 2], [undefined, 1]]) {
+    reset();
+    loginAs(HEAD);
+    CAPS = { ...HEAD_CAPS, required };
+    ADMISSION_ROWS = ADM;
+    const host = mk('div');
+    await renderConsultation(host, { onNavigate: () => {}, payload: null });
+    await tick(80);
+    const st = dash.wardHeadState();
+    assert.strictEqual(st.exam, 1, 'осмотра не было — ждёт осмотра: ' + JSON.stringify(required));
+    assert.strictEqual(st.attending, attending, 'ждут лечащего врача: ' + JSON.stringify(required));
+  }
+});

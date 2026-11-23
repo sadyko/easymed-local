@@ -61,6 +61,7 @@ import { renderWardBeds, admissionsHistoryCard } from './ward-beds.js?v=board5';
 // вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
 import { animateIn } from '../motion.js?v=mo1';   // TAB_NO_SCROLL_V1 — прокрутки к вкладкам больше нет
 import { pastelFor } from '../pastel.js';   // PASTEL_IDENTITY_V1 — один человек, один оттенок
+import { waitsForAttending } from '../../shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1 — кто ждёт лечащего врача
 
 // Раздел живёт под ключом `beds` («Стационар и палаты»): окно медсестры и доска
 // коек — две стороны одной работы, и раздавать их порознь значило бы выдать
@@ -151,10 +152,15 @@ async function paint(root, onNavigate = null, { only = null } = {}) {
     // нельзя: право на шаг зависит от роли, а не от пациента, и это были бы
     // десятки одинаковых запросов на один список.
     let can = {};
+    // INPATIENT_REQUIRED_V1 — переключатель «лечащий врач только после осмотра» выключен:
+    // лежащему на койке лечащего назначают сразу. Положение — в том же ответе; нет поля
+    // (старый сервер) или сбой — как сегодня.
+    let withoutExam = false;
     try {
         const { data } = await supabase.rpc('inpatient_capabilities', {});
         can = (data && data.can) || {};
-    } catch (e) { can = {}; }
+        withoutExam = !!(data && data.required && data.required.intake_before_attending === false);
+    } catch (e) { can = {}; withoutExam = false; }
 
     // INPATIENT_HEAD_LEFT_V1 (2026-11-21, владелец со снимком шапки: «put these
     // buttons to the left side and remove reload button») — «Обновить» снята
@@ -202,7 +208,7 @@ async function paint(root, onNavigate = null, { only = null } = {}) {
     if (wardOnly) {
         // WARD_TABLE_V1 — плитки очередей + одна таблица; waitingExam/waitingDoc
         // считаются внутри по тем же статусам.
-        grid.appendChild(wardTable({ rows: inWard, can, reload, onNavigate }));
+        grid.appendChild(wardTable({ rows: inWard, can, withoutExam, reload, onNavigate }));   // INPATIENT_REQUIRED_V1
     } else {
         grid.appendChild(waitingBedCard(waitingBed, reload, onNavigate));
     }
@@ -333,7 +339,9 @@ function waitingBedCard(list, reload, onNavigate) {
 const WARD_GROUPS = [
     { key: 'all',       label: 'В отделении',             icon: 'Bed',         pick: (r) => IN_BED_STATUSES.includes(r.status) },
     { key: 'exam',      label: 'Ждут первичного осмотра', icon: 'Stethoscope', pick: (r) => r.status === 'admitted',    warn: true },
-    { key: 'attending', label: 'Ждут лечащего врача',     icon: 'User',        pick: (r) => r.status === 'examined',    warn: true },
+    // INPATIENT_REQUIRED_V1 — без обязательного осмотра лечащего ждёт и только что положенный
+    // на койку (он остаётся и в «Ждут первичного осмотра»: осмотра не было). ctx.withoutExam.
+    { key: 'attending', label: 'Ждут лечащего врача',     icon: 'User',        pick: (r, ctx) => waitsForAttending(r, !!(ctx && ctx.withoutExam)), warn: true },
     { key: 'discharge', label: 'К выписке',               icon: 'Check',       pick: (r) => r.status === 'discharging' },
 ];
 function dayInWard(iso) {
@@ -359,9 +367,13 @@ const WARD_COLS = [
     { key: 'action',  label: 'Действие',                text: () => '', nofilter: true },
 ];
 
-function wardTable({ rows, can, reload, onNavigate }) {
+function wardTable({ rows, can, withoutExam = false, reload, onNavigate }) {
     const state = { group: 'all', text: {} };
-    const inWard = rows.filter(WARD_GROUPS[0].pick);
+    // INPATIENT_REQUIRED_V1 — группа решает по строке и по переключателю; второй аргумент
+    // filter (номер строки) в pick не попадает.
+    const ctx = { withoutExam: !!withoutExam };
+    const pickOf = (g) => (r) => g.pick(r, ctx);
+    const inWard = rows.filter(pickOf(WARD_GROUPS[0]));
     const tilesEl = h('div', { class: 'wt-tiles', role: 'group', 'aria-label': tr('Очереди отделения') });
     const tbody = h('tbody');
     const count = h('div', { class: 'ar-count' });
@@ -391,7 +403,7 @@ function wardTable({ rows, can, reload, onNavigate }) {
     function paintTiles() {
         clear(tilesEl);
         for (const g of WARD_GROUPS) {
-            const n = inWard.filter(g.pick).length;
+            const n = inWard.filter(pickOf(g)).length;   // INPATIENT_REQUIRED_V1
             const on = state.group === g.key;
             // WARD_TILES_FILL_V1 — плитки залиты цветом группы, текст белый
             // (владелец: «make this cards more prominent, using a fill of color
@@ -418,7 +430,16 @@ function wardTable({ rows, can, reload, onNavigate }) {
         if (fn) fn('case-file', { admissionId: a.id, kind: 'intake' });
     };
 
+    // INPATIENT_REQUIRED_V1 — «Назначить лечащего врача» одной кнопкой на оба пути: после осмотра и прямо с койки.
+    const attendingBtn = (a) => h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => { stop(ev); openAdmissionAttendingModal({ admission: a, onDone: reload }); } },
+        Icon('User', { size: 13 }), ' ', tr('Назначить лечащего врача'));
+
     function actionCell(a) {
+        // INPATIENT_REQUIRED_V1 — осмотр перед лечащим врачом выключен: лежащему на койке
+        // сразу назначают лечащего. Вправе те же, кто назначает его после осмотра, и
+        // приёмный врач этого пациента (сервер пускает его по имени). Осмотр не пропал —
+        // он в карточке госпитализации и в истории болезни; у строки одно действие.
+        if (a.status === 'admitted' && withoutExam && (can.set_attending || isAdmitting(a))) return attendingBtn(a);
         if (a.status === 'admitted') {
             if (isAdmitting(a)) {
                 return h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => { stop(ev); goToIntake(a); } },
@@ -434,8 +455,7 @@ function wardTable({ rows, can, reload, onNavigate }) {
         }
         if (a.status === 'examined') {
             return (can.set_attending || isAdmitting(a))
-                ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => { stop(ev); openAdmissionAttendingModal({ admission: a, onDone: reload }); } },
-                    Icon('User', { size: 13 }), ' ', tr('Назначить лечащего врача'))
+                ? attendingBtn(a)
                 : Tag(tr('Ждёт лечащего врача'), { kind: 'warn', dot: true });
         }
         // V3120_CLEANUP — лист назначений закрыт этой роли: кнопки нет (вела в «Нет доступа»).
@@ -483,7 +503,8 @@ function wardTable({ rows, can, reload, onNavigate }) {
     function paintRows() {
         if (!inWard.length) { msg(tr('В отделении никого нет.')); count.textContent = ''; return; }
         const group = WARD_GROUPS.find((g) => g.key === state.group) || WARD_GROUPS[0];
-        const shown = inWard.filter(group.pick).filter((r) => WARD_COLS.every((c) => c.nofilter || !state.text[c.key] || c.text(r).toLowerCase().includes(state.text[c.key])));
+        // INPATIENT_REQUIRED_V1 — pickOf: группа считается с переключателем.
+        const shown = inWard.filter(pickOf(group)).filter((r) => WARD_COLS.every((c) => c.nofilter || !state.text[c.key] || c.text(r).toLowerCase().includes(state.text[c.key])));
         clear(tbody);
         if (!shown.length) msg(tr('По фильтру ничего не найдено.'));
         // WARD_BANDS_OUT_V1 — без полос-разделов по палатам: порядок тот же
