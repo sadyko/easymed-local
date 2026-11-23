@@ -36,6 +36,8 @@ export const STRINGS = {
   "АД нижнее": {"en":"Diastolic BP","ru":"АД нижнее","uz":"Diastolik AQB"},   // INPATIENT_REQUIRED_V1
   "Осмотр медсестры": {"en":"Nurse’s examination","ru":"Осмотр медсестры","uz":"Hamshira ko‘rigi"},   // INPATIENT_REQUIRED_V1
   "Поступление в стационар": {"en":"Admission to hospital","ru":"Поступление в стационар","uz":"Statsionarga yotqizish"},   // INPATIENT_REQUIRED_V1
+  // INPATIENT_REQUIRED_V1 — титульный лист в истории болезни называет пустые поля (views/title-sheet.js)
+  "Лист заполнен не до конца: {list}.": {"en":"The sheet is not fully filled in: {list}.","ru":"Лист заполнен не до конца: {list}.","uz":"Varaq to‘liq to‘ldirilmagan: {list}."},   // INPATIENT_REQUIRED_V1
   // DOC_HISTORY_V1 — версии документа приёма неизменяемы: отказ триггеров миграции 289
   "История изменений документа не меняется.": {"en":"The document’s change history cannot be modified.","ru":"История изменений документа не меняется.","uz":"Hujjat o‘zgarishlari tarixini o‘zgartirib bo‘lmaydi."},   // DOC_HISTORY_V1
   "История изменений документа не удаляется.": {"en":"The document’s change history cannot be deleted.","ru":"История изменений документа не удаляется.","uz":"Hujjat o‘zgarishlari tarixini o‘chirib bo‘lmaydi."},   // DOC_HISTORY_V1

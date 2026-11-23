@@ -265,6 +265,13 @@ const panelFor = (root, id) => walk(root).find((n) => n.attrs['data-tab-panel'] 
 const visiblePanels = (root) => walk(root).filter((n) => n.attrs['data-tab-panel'] && n.style.display !== 'none');
 const btns = (root, label) => walk(root).filter((n) => n.tagName === 'BUTTON' && textOf(n).includes(label));
 const topOverlay = () => BODY.children.filter((c) => c.className === 'modal').pop() || null;
+// INPATIENT_REQUIRED_V1 — пустой лист спрашивает «Сохранить как есть»; эти проверки — про размещение.
+// remove() здесь ничего не делает: отвеченное окно остаётся последним .modal, поэтому окно
+// листа берут до нажатия «Положить».
+async function saveAnyway(ms = 80) {
+    const top = topOverlay();
+    if (top && textOf(top).includes('Заполнено не всё')) { btns(top, 'Сохранить как есть')[0].click(); await settle(ms); }
+}
 const lastToast = () => {
     const t = BODY.children.filter((c) => c.attrs && c.attrs.id === 'toast').pop();
     return t ? t.textContent : '';
@@ -516,6 +523,7 @@ test('выбранная койка отмечается, и «Положить�
     assert.ok(textOf(topOverlay()).includes('Титульный лист'), 'после «Далее» должен открыться титульный лист');
     btns(topOverlay(), 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0].click();
     await settle(80);
+    await saveAnyway();   // INPATIENT_REQUIRED_V1
 
     const call = rpcCalls.find((c) => c.name === 'admission_admit');
     assert.ok(call, 'размещение не ушло на сервер');
@@ -560,6 +568,7 @@ test('заявка без палаты: сначала выбирают ПАЛА
     await settle(80);
     btns(topOverlay(), 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0].click();
     await settle(80);
+    await saveAnyway();   // INPATIENT_REQUIRED_V1
     const call = rpcCalls.find((c) => c.name === 'admission_admit');
     assert.ok(call, 'размещение не ушло на сервер');
     assert.equal(call.args.admission_id, 12);
@@ -592,11 +601,13 @@ test('отказ сервера доходит словами, окно не з�
         await settle();
         btns(topOverlay(), 'Далее').filter((b) => textOf(b).trim() === 'Далее')[0].click();   // TITLE_SHEET_V1
         await settle(80);
-        btns(topOverlay(), 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0].click();
+        const sheet = topOverlay();   // INPATIENT_REQUIRED_V1 — окно вопроса встанет поверх
+        btns(sheet, 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0].click();
         await settle(80);
+        await saveAnyway();   // INPATIENT_REQUIRED_V1
 
         assert.match(lastToast(), /Койка на уборке/);
-        const submit = btns(topOverlay(), 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0];
+        const submit = btns(sheet, 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0];
         assert.ok(submit && !submit.hasAttribute('disabled'), 'после отказа кнопку надо вернуть в работу');
     } finally { admitRefusal = null; }
 });
@@ -625,6 +636,7 @@ test('размещение, сделанное в окне, тут же видн
     await settle(80);
     btns(topOverlay(), 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0].click();
     await settle(90);
+    await saveAnyway(90);   // INPATIENT_REQUIRED_V1
 
     // После: перешли на доску — койка занята ЭТИМ пациентом. Ради этого
     // вкладка и перечитывается при каждом показе, а не монтируется однажды.

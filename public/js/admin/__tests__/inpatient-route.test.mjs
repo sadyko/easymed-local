@@ -106,6 +106,11 @@ const lastToast = () => {
     return t ? t.textContent : '';
 };
 const settle = () => new Promise((r) => setTimeout(r, 30));
+// INPATIENT_REQUIRED_V1 — пустой лист спрашивает «Сохранить как есть»; эти проверки — про размещение.
+async function saveAnyway() {
+    const top = topOverlay();
+    if (top && textOf(top).includes('Заполнено не всё')) { findBtn(top, 'Сохранить как есть').click(); await settle(); }
+}
 
 // ─── правá берём у СЕРВЕРА, а не переписываем ──────────────────────────────
 const { TRANSITION_ROLES, inpatientCapabilities } = await import('../../../../server/services/rpc/inpatient-flow.js');
@@ -699,6 +704,7 @@ test('маршрут стационара проходится целиком: �
         walk(sheet).find((e) => e.tagName === 'INPUT' && (e.attrs.placeholder || '') === 'кг').value = '80';
         findBtn(sheet, 'Положить').click();
         await settle();
+        await saveAnyway();   // INPATIENT_REQUIRED_V1 — температура, АД, пульс… пусты
 
         const call = rpcCalls.find((c) => c.name === 'admission_admit');
         assert.ok(call, 'размещение не ушло на сервер');

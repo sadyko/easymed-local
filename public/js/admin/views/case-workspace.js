@@ -44,6 +44,9 @@ import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагноз
 import { setupA4Fit } from './a4-paginate.js';   // FORM_003_ONE_PAGE_V1
 import { setupA4Sheets } from './a4-sheets.js';   // A4_SHEETS_V1 — документ отдельными листами
 import { lockSignButton } from '../act-as-client.js';   // ADMIN_ACT_AS_V1 (ревью-2) — «Собрать историю» от имени
+// INPATIENT_REQUIRED_V1 — правила клиники «что обязательно» для редакторов; модули без ?v=.
+import { loadInpatientRules } from './required-marks.js';
+import { DEFAULT_RULES } from '../../shared/inpatient-required.js';
 
 const state = {
     admissionId: null,
@@ -56,6 +59,7 @@ const state = {
     failed: null,
     overview: null,    // CASE_OVERVIEW_V1 — ответ admission_overview для шапки
     charges: null,     // ACT_ADD_SERVICE_V1 — начисленное: им вкладки показывают назначенное
+    rules: null,       // INPATIENT_REQUIRED_V1 — правила клиники «что обязательно» (loadInpatientRules)
 };
 
 function reset(admissionId) {
@@ -105,7 +109,7 @@ async function load() {
     // связями. Отдельного RPC для карточки не существует — я сперва позвал
     // несуществующий `admission_card`, и шапка молча осталась бы без имени
     // пациента, а редактор — без его данных.
-    const [{ data: docs, error: docsErr }, { data: adm }, { data: ov }] = await Promise.all([
+    const [{ data: docs, error: docsErr }, { data: adm }, { data: ov }, rules] = await Promise.all([
         supabase.rpc('admission_case_docs', { admission_id: state.admissionId }),
         supabase.from('admissions')
             // A4_LETTERHEAD_V2 — шапка называет дату рождения: без неё бумагу в
@@ -114,7 +118,11 @@ async function load() {
                   + 'attending:attending_doctor_id(full_name, specialty)')
             .eq('id', state.admissionId).single(),
         supabase.rpc('admission_overview', { admission_id: state.admissionId }),   // CASE_OVERVIEW_V1 — для шапки
+        // INPATIENT_REQUIRED_V1 — что клиника требует: отметки и «Сохранить как есть» в
+        // редакторах. Сбой — сегодняшние правила (loadInpatientRules не бросает).
+        loadInpatientRules(),
     ]);
+    state.rules = rules || DEFAULT_RULES;
     state.overview = ov || null;
     // ACT_ADD_SERVICE_V1 — начисленное нужно вкладкам «Обследования» и
     // «Операция», чтобы показать НАЗНАЧЕННОЕ. Отказ по праву здесь не беда:
@@ -580,9 +588,11 @@ function paintPane(pane, root, onNavigate) {
     };
     // TITLE_SHEET_V1 — титульный лист медсестры: своя форма, тот же лист A4.
     const ed = state.open.kind === TITLE_SHEET_KIND
-        ? buildTitleSheetEditor({ admission: Object.assign({}, state.admission, { id: state.admissionId }), onDone })
+        ? buildTitleSheetEditor({ admission: Object.assign({}, state.admission, { id: state.admissionId }), onDone,
+            rules: state.rules || DEFAULT_RULES })   // INPATIENT_REQUIRED_V1
         : buildReviewEditor({
             admission: Object.assign({}, state.admission, { id: state.admissionId }),
+            rules: state.rules || DEFAULT_RULES,   // INPATIENT_REQUIRED_V1
             kind: state.open.kind,
             mode: state.open.mode,
             reviewId: state.open.reviewId,
@@ -632,6 +642,9 @@ function paintPane(pane, root, onNavigate) {
         // CASE_DOC_ACTIONS_V1 — в слоте над листом стоят ДЕЙСТВИЯ документа
         // (заготовка, печать, черновик, сохранить), а не панель форматирования.
         h('div', { class: 'a4-toolbar-slot' }, docActionsBar(ed)),
+        // INPATIENT_REQUIRED_V1 — «Не заполнено: …» над листом, а не на нём: это не
+        // часть документа и в раскладку страниц не попадает (печать её не видит).
+        ed.topNote || null,
         ed.noLetterhead
             // FORM_003_V1 — у бланка 003 своя шапка (министерство, учреждение, приказ).
             ? h('div', { class: 'a4-paper f3-paper' },

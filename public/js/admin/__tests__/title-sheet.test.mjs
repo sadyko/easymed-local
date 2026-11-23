@@ -70,6 +70,11 @@ const findBtn = (root, label) => walk(root).find((e) => e.tagName === 'BUTTON' &
 const inputs = (root) => walk(root).filter((e) => e.tagName === 'INPUT' || e.tagName === 'TEXTAREA' || e.tagName === 'SELECT');
 const byPlaceholder = (root, ph) => inputs(root).find((e) => (e.attrs.placeholder || '') === ph);
 const settle = () => new Promise((r) => setTimeout(r, 30));
+// INPATIENT_REQUIRED_V1 — пустой лист спрашивает «Сохранить как есть»; эти проверки — про размещение.
+async function saveAnyway() {
+    const top = BODY.children[BODY.children.length - 1];
+    if (textOf(top).includes('Заполнено не всё')) { findBtn(top, 'Сохранить как есть').click(); await settle(); }
+}
 
 // ─── «сервер» ───────────────────────────────────────────────────────────────
 const VIEW = {
@@ -83,6 +88,10 @@ const VIEW = {
     bmi: 27.0, complete: true, missing: [],
 };
 const rpcCalls = [];
+// INPATIENT_REQUIRED_V1 — правила клиники и список врачей меняет сам тест: null / [] —
+// «сервер не ответил» (правила — умолчания, врачей нет).
+let SETTINGS = null;
+let DOCTORS = [];
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     let body = {}; try { body = JSON.parse(opts.body || '{}'); } catch { /* not ours */ }
@@ -91,6 +100,8 @@ globalThis.fetch = async (url, opts = {}) => {
     if (!u.startsWith('/api/rpc/')) return fail('unexpected ' + u);
     const name = u.slice('/api/rpc/'.length);
     rpcCalls.push({ name, args: body });
+    if (name === 'inpatient_settings_get') return SETTINGS ? ok(SETTINGS) : fail('нет');
+    if (name === 'admission_attending_candidates') return ok({ doctors: DOCTORS });
     if (name === 'admission_title_sheet_get') return ok(Object.assign({}, VIEW, { sheet: null, bmi: null, complete: false, missing: ['height_cm'] }));
     if (name === 'admission_admit') return ok({ admission: { id: body.admission_id, status: 'admitted' }, title_sheet: body.title_sheet ? { height_cm: 172 } : null });
     if (name === 'admission_title_sheet_save') return ok(Object.assign({}, VIEW, { complete: true }));
@@ -186,6 +197,7 @@ test('окно размещения: «Положить» шлёт admission_adm
     height.value = '172';
     findBtn(overlay, 'Положить').click();
     await settle();
+    await saveAnyway();   // INPATIENT_REQUIRED_V1
     const call = rpcCalls.find((c) => c.name === 'admission_admit');
     assert.ok(call, 'admission_admit не вызван');
     assert.equal(call.args.admission_id, 11);
@@ -217,13 +229,206 @@ test('редактор в истории болезни: «Сохранить» 
     for (const f of ed.fields) root.appendChild(f);
     assert.equal(byPlaceholder(root, 'см').value, '', 'листа ещё нет — поле пустое');
     byPlaceholder(root, 'см').value = '170';
-    const ok = await ed.submit();
+    // INPATIENT_REQUIRED_V1 — остальные измерения пусты: «Сохранить» спрашивает.
+    const pending = ed.submit();
+    await settle();
+    await saveAnyway();
+    const ok = await pending;
     assert.equal(ok, true);
     const call = rpcCalls.find((c) => c.name === 'admission_title_sheet_save');
     assert.ok(call);
     assert.equal(call.args.admission_id, 11);
     assert.equal(call.args.sheet.height_cm, '170');
     assert.equal(done, 1);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4а. ОБЯЗАТЕЛЬНЫЕ ПОЛЯ (INPATIENT_REQUIRED_V1)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Владелец: «in the required fields of the title and other user cannot understand
+// which fields he is not filled, cn we add visual cues for that?»
+const topEl = () => BODY.children[BODY.children.length - 1];
+const hasCls = (el, c) => String((el && el.className) || '').split(/\s+/).includes(c);
+
+test('INPATIENT_REQUIRED_V1: форма отдаёт поле, рамку и подпись для КАЖДОГО поля, которое клиника может требовать', async () => {
+    const { titleSheetForm } = await import('../views/title-sheet.js');
+    const { TITLE_FIELD_KEYS } = await import('../../shared/inpatient-required.js');
+    const form = titleSheetForm({ bed: { id: 6, code: 'T-2' } });
+    for (const k of TITLE_FIELD_KEYS) {
+        assert.ok(form.controls[k] && form.controls[k].el && form.controls[k].box, 'нет поля ' + k);
+        assert.ok(form.controls[k].labelEl, 'нет подписи ' + k);
+    }
+    // Радиокнопки — вся группа пересчитывает отметки; АД — у каждой цифры своя рамка.
+    assert.equal(form.controls.sanitation.watch.length, 3);
+    assert.notEqual(form.controls.bp_sys.box, form.controls.bp_dia.box);
+    assert.equal(form.controls.bp_sys.labelEl, form.controls.bp_dia.labelEl, 'у АД одна подпись');
+});
+
+test('INPATIENT_REQUIRED_V1: окно размещения — отметки по списку клиники, «Дописать» не кладёт, «Сохранить как есть» кладёт', async () => {
+    const { openAdmissionTitleSheetModal } = await import('../views/title-sheet.js');
+    SETTINGS = { settings: { admitting_at_placement: 0, title_required_fields: ['height_cm', 'pulse_bpm'] }, docs: [] };
+    DOCTORS = [{ id: 77, full_name: 'Сотрудник doc77' }, { id: 78, full_name: 'Сотрудник doc78' }];
+    rpcCalls.length = 0;
+    openAdmissionTitleSheetModal({ admission: { id: 11, status: 'ordered', patients: { full_name: 'Тестов Пациент' } }, bed: { id: 6, code: 'T-2' } });
+    await settle();
+    const sheet = topEl();
+    assert.ok(textOf(sheet).includes('Не заполнено:'));
+    // Список клиники, а не прежние восемь: веса в строке нет.
+    const summary = walk(sheet).find((e) => e.attrs && 'data-rq-summary' in e.attrs);
+    assert.ok(textOf(summary).includes('Рост') && textOf(summary).includes('Пульс') && !textOf(summary).includes('Вес'));
+    // Переключатель выключен — у приёмного врача нет звезды.
+    const docLabel = walk(sheet).find((e) => e.tagName === 'LABEL' && textOf(e).includes('Приёмный врач'));
+    assert.ok(docLabel && !hasCls(docLabel, 'rq-req'), 'приёмный врач отмечен обязательным при выключенном переключателе');
+    assert.ok(!walk(sheet).some((e) => hasCls(e, 'req')), 'осталась старая звезда поля «Приёмный врач»');
+    findBtn(sheet, 'Положить').click();
+    await settle();
+    let dlg = topEl();
+    assert.ok(textOf(dlg).includes('Заполнено не всё') && textOf(dlg).includes('Рост') && textOf(dlg).includes('Пульс'));
+    findBtn(dlg, 'Дописать').click();
+    await settle();
+    assert.ok(!rpcCalls.some((c) => c.name === 'admission_admit'), '«Дописать» не кладёт');
+    findBtn(sheet, 'Положить').click();
+    await settle();
+    findBtn(topEl(), 'Сохранить как есть').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'admission_admit');
+    assert.ok(call, '«Сохранить как есть» кладёт');
+    assert.equal(call.args.admitting_doctor_id, null, 'переключатель выключен — без приёмного врача можно');
+    SETTINGS = null; DOCTORS = [];
+});
+
+test('INPATIENT_REQUIRED_V1: приёмный врач обязателен (умолчание) — окно без «Сохранить как есть»', async () => {
+    const { openAdmissionTitleSheetModal } = await import('../views/title-sheet.js');
+    DOCTORS = [{ id: 77, full_name: 'Сотрудник doc77' }, { id: 78, full_name: 'Сотрудник doc78' }];
+    rpcCalls.length = 0;
+    openAdmissionTitleSheetModal({ admission: { id: 11, status: 'ordered', patients: {} }, bed: { id: 6, code: 'T-2' } });
+    await settle();
+    const sheet = topEl();
+    const docLabel = walk(sheet).find((e) => e.tagName === 'LABEL' && textOf(e).includes('Приёмный врач'));
+    assert.ok(hasCls(docLabel, 'rq-req'), 'у приёмного врача нет звезды');
+    const docSel = walk(sheet).find((e) => e.tagName === 'SELECT' && hasCls(e, 'ts-doc-sel'));
+    assert.equal(docSel.getAttribute('aria-invalid'), 'true', 'пустой выбор врача не отмечен');
+    findBtn(sheet, 'Положить').click();
+    await settle();
+    const dlg = topEl();
+    assert.ok(textOf(dlg).includes('Приёмный врач'));
+    assert.ok(textOf(dlg).includes('так настроено в клинике'));
+    assert.equal(findBtn(dlg, 'Сохранить как есть'), undefined);
+    findBtn(dlg, 'Дописать').click();
+    await settle();
+    assert.ok(!rpcCalls.some((c) => c.name === 'admission_admit'));
+    // Выбрали врача — отметка ушла сама, и дальше обычный вопрос о пустых полях листа.
+    docSel.value = '78'; docSel.dispatchEvent({ type: 'change' });
+    assert.notEqual(docSel.getAttribute('aria-invalid'), 'true');
+    findBtn(sheet, 'Положить').click();
+    await settle();
+    assert.ok(findBtn(topEl(), 'Сохранить как есть'), 'после выбора врача окно снова мягкое');
+    findBtn(topEl(), 'Сохранить как есть').click();
+    await settle();
+    assert.equal(rpcCalls.find((c) => c.name === 'admission_admit').args.admitting_doctor_id, 78);
+    DOCTORS = [];
+});
+
+test('INPATIENT_REQUIRED_V1: один врач в клинике выбирается сам — жёсткого окна нет', async () => {
+    const { openAdmissionTitleSheetModal } = await import('../views/title-sheet.js');
+    DOCTORS = [{ id: 77, full_name: 'Сотрудник doc77' }];
+    rpcCalls.length = 0;
+    openAdmissionTitleSheetModal({ admission: { id: 11, status: 'ordered', patients: {} }, bed: { id: 6, code: 'T-2' } });
+    await settle();
+    const sheet = topEl();
+    findBtn(sheet, 'Положить').click();
+    await settle();
+    const dlg = topEl();
+    assert.ok(!textOf(dlg).includes('Приёмный врач'), 'врач выбран сам, а окно его называет');
+    findBtn(dlg, 'Сохранить как есть').click();
+    await settle();
+    assert.equal(rpcCalls.find((c) => c.name === 'admission_admit').args.admitting_doctor_id, 77);
+    DOCTORS = [];
+});
+
+test('INPATIENT_REQUIRED_V1: лист клиника не требует — отметок и вопроса нет', async () => {
+    const { openAdmissionTitleSheetModal } = await import('../views/title-sheet.js');
+    SETTINGS = { settings: { title_required: 0, admitting_at_placement: 0 }, docs: [] };
+    rpcCalls.length = 0;
+    const before = BODY.children.length;
+    openAdmissionTitleSheetModal({ admission: { id: 11, status: 'ordered', patients: {} }, bed: { id: 6, code: 'T-2' } });
+    await settle();
+    const sheet = topEl();
+    assert.ok(!walk(sheet).some((e) => hasCls(e, 'rq-req') || hasCls(e, 'rq-empty')), 'отметки при необязательном листе');
+    findBtn(sheet, 'Положить').click();
+    await settle();
+    assert.ok(!BODY.children.slice(before).some((c) => c.attrs && c.attrs['data-dialog'] === 'required-missing'),
+        'открылось окно «Заполнено не всё»');
+    assert.ok(rpcCalls.some((c) => c.name === 'admission_admit'));
+    SETTINGS = null;
+});
+
+test('INPATIENT_REQUIRED_V1: отметки живые — заполнили рост, и он ушёл из строки «Не заполнено»', async () => {
+    const { buildTitleSheetEditor } = await import('../views/title-sheet.js');
+    const ed = buildTitleSheetEditor({ admission: { id: 11 } });
+    await settle();
+    assert.ok(textOf(ed.topNote).includes('Рост'));
+    const root = mkEl('div'); for (const f of ed.fields) root.appendChild(f);
+    const height = byPlaceholder(root, 'см');
+    height.value = '172'; height.dispatchEvent({ type: 'input' });
+    assert.ok(!textOf(ed.topNote).includes('Рост'));
+    // Радиокнопка группы — тоже живая: выбрали «полная» — санобработка ушла из строки.
+    assert.ok(textOf(ed.topNote).includes('Санитарная обработка'));
+    const full = walk(root).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'radio' && e.attrs.value === 'full');
+    full.checked = true; full.dispatchEvent({ type: 'change' });
+    assert.ok(!textOf(ed.topNote).includes('Санитарная обработка'));
+});
+
+test('INPATIENT_REQUIRED_V1: бумага и поле карточки — тоже по списку клиники; отметка бумаги живая', async () => {
+    const { buildTitleSheetEditor } = await import('../views/title-sheet.js');
+    const { rulesFromSettings } = await import('../../shared/inpatient-required.js');
+    const rules = rulesFromSettings({ settings: { title_required_fields: ['consent_signed', 'occupation'] } });
+    const ed = buildTitleSheetEditor({ admission: { id: 11 }, rules });
+    await settle();
+    // Карточка пациента из ответа сервера несёт место работы — его в строке нет.
+    assert.ok(textOf(ed.topNote).includes('Информированное согласие'));
+    assert.ok(!textOf(ed.topNote).includes('Место работы'));
+    const tick = walk(ed.belowSheet[1]).filter((e) => e.tagName === 'INPUT' && e.attrs.type === 'checkbox')[1];
+    tick.checked = true; tick.dispatchEvent({ type: 'change' });
+    assert.equal(ed.topNote.hidden, true, 'отметили согласие — строка «Не заполнено» осталась');
+});
+
+test('INPATIENT_REQUIRED_V1: редактор — «Сохранить» с пустыми полями спрашивает; «Сохранить как есть» сохраняет', async () => {
+    const { buildTitleSheetEditor } = await import('../views/title-sheet.js');
+    rpcCalls.length = 0;
+    const ed = buildTitleSheetEditor({ admission: { id: 11 } });
+    await settle();
+    let p = ed.submit();
+    await settle();
+    findBtn(topEl(), 'Дописать').click();
+    assert.equal(await p, false);
+    assert.ok(!rpcCalls.some((c) => c.name === 'admission_title_sheet_save'), '«Дописать» сохранил лист');
+    p = ed.submit();
+    await settle();
+    findBtn(topEl(), 'Сохранить как есть').click();
+    assert.equal(await p, true);
+    assert.ok(rpcCalls.some((c) => c.name === 'admission_title_sheet_save'));
+});
+
+test('INPATIENT_REQUIRED_V1: строка под листом называет пустые поля словами экрана', async () => {
+    const { buildTitleSheetEditor } = await import('../views/title-sheet.js');
+    const ed = buildTitleSheetEditor({ admission: { id: 11 } });
+    await settle();
+    // Сервер ответил missing: ['height_cm'] — строка говорит «Рост», а не ключ.
+    assert.ok(textOf(ed.belowSheet[0]).includes('Лист заполнен не до конца: Рост.'), textOf(ed.belowSheet[0]));
+});
+
+test('INPATIENT_REQUIRED_V1: отметки — только экран; печать листа их не получает', async () => {
+    const fsx = await import('node:fs');
+    const pathx = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = pathx.dirname(fileURLToPath(import.meta.url));
+    const printSrc = fsx.readFileSync(pathx.join(dir, '..', 'views', 'title-sheet-print.js'), 'utf8');
+    assert.ok(!/required-marks|rq-/.test(printSrc), 'печать листа узнала про отметки');
+    const { titleSheetPrintHtml } = await import('../views/title-sheet-print.js');
+    const html = titleSheetPrintHtml(Object.assign({}, VIEW, { sheet: null, complete: false, missing: ['height_cm'] }), { fontFaceCss: '' });
+    assert.ok(!html.includes('rq-') && !html.includes('Не заполнено'), 'отметки попали на бумагу');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

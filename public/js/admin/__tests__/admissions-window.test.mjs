@@ -91,6 +91,11 @@ const lastToast = () => {
     return t ? t.textContent : '';
 };
 const settle = () => new Promise((r) => setTimeout(r, 30));
+// INPATIENT_REQUIRED_V1 — пустой лист спрашивает «Сохранить как есть»; эти проверки — про размещение.
+async function saveAnyway() {
+    const top = BODY.children[BODY.children.length - 1];
+    if (textOf(top).includes('Заполнено не всё')) { findBtn(top, 'Сохранить как есть').click(); await settle(); }
+}
 
 // ─── данные, которые отдаёт «сервер» ────────────────────────────────────────
 // Три состояния маршрута сразу: заявка регистратуры, направление врача,
@@ -309,6 +314,7 @@ test('«Положить на койку» → выбор койки → admissi
     assert.ok(textOf(sheet).includes('T-2'), 'лист называет выбранную койку');
     findBtn(sheet, 'Положить').click();
     await settle();
+    await saveAnyway();   // INPATIENT_REQUIRED_V1
 
     const call = rpcCalls.find((c) => c.name === 'admission_admit');
     assert.ok(call, 'admission_admit не вызван');
@@ -333,6 +339,7 @@ test('отказ сервера доходит до человека слова�
     const sheet = BODY.children[BODY.children.length - 1];
     findBtn(sheet, 'Положить').click();
     await settle();
+    await saveAnyway();   // INPATIENT_REQUIRED_V1
 
     assert.match(lastToast(), /Койка на уборке/);
     // Кнопка снова активна: человек может поправить лист или вернуться к койкам, а не начинать заново.

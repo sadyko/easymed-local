@@ -29,6 +29,9 @@ import { setupA4Fit } from './a4-paginate.js';   // FORM_003_ONE_PAGE_V1 — б�
 const MOBILITY_RU = { wheelchair: 'на коляске', stretcher: 'на носилках', walks: 'ходит сам' };
 import { titleSheetPrintHtml, papersSummary } from './title-sheet-print.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // INPATIENT_DOCS_V1 — та же печать, что у всех бланков (ONE shared instance: ?v= как у остальных)
+// INPATIENT_REQUIRED_V1 — отметки обязательных полей и «Сохранить как есть»; модули без ?v=.
+import { requiredMarks, askSaveAnyway, loadInpatientRules, titleFieldLabel } from './required-marks.js';
+import { DEFAULT_RULES, titleKeysOf, missingTitleFields } from '../../shared/inpatient-required.js';
 
 export const TITLE_SHEET_KIND = 'title';
 
@@ -129,14 +132,29 @@ export function titleSheetForm({ bed = null, onPrint = printInpatientDoc } = {})
         doctorName: current.admission.attending_name || '',
         date: dateNumeric(new Date()),
     });
+    // INPATIENT_REQUIRED_V1 — у КАЖДОГО поля, которое клиника вправе сделать обязательным
+    // (shared/inpatient-required.js TITLE_FIELDS), есть поле, рамка и подпись: по ним
+    // required-marks.js рисует звезду, красную рамку и «Не заполнено». Отметки — только
+    // экран: печать листа строится из данных (title-sheet-print.js), а не из этой разметки.
+    const controls = {};   // ключ поля → { el, box, labelEl, watch }
+    const lbl = {};        // ключ поля → его русская подсказка на бланке
+    const ctlK = (key, el, cls = '') => { const box = ctl(el, cls); controls[key] = { el, box }; return box; };
+    const ruL = (key, text) => { lbl[key] = ru(text); return lbl[key]; };
+    // АД — две цифры одной строки: у каждой своя рамка (верхнее и нижнее требуют порознь).
+    const bpOne = (el) => h('span', { class: 'ts-bp-one', style: { display: 'inline-flex' } }, el);
+    const bpSysBox = bpOne(bpSys);
+    const bpDiaBox = bpOne(bpDia);
     const paperRow = ({ type, flag, label, tick }) => {
         const cb = h('input', { type: 'checkbox', onchange: (e) => { papers[flag] = !!((e.currentTarget || e.target) || {}).checked; } });
         paperChecks[flag] = cb;
-        return h('div', { class: 'ts-paper' },
-            h('span', { class: 'ts-paper-name' }, tr(label)),
+        const name = h('span', { class: 'ts-paper-name' }, tr(label));
+        const box = h('div', { class: 'ts-paper' },
+            name,
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => onPrint(type, docData()) },
                 Icon('Print', { size: 13 }), ' ', tr('Печать')),
             h('label', { class: 'ts-paper-tick' }, cb, ' ', tr(tick)));
+        controls[flag] = { el: cb, box, labelEl: name, watch: [] };   // INPATIENT_REQUIRED_V1
+        return box;
     };
 
     // TITLE_SHEET_PAPERS_OUT_V1 (2026-09-08) — ТРИ БУМАГИ ЖИВУТ НЕ НА ЛИСТЕ.
@@ -182,31 +200,51 @@ export function titleSheetForm({ bed = null, onPrint = printInpatientDoc } = {})
         row(uz(F.dept), ru('отделение'), ctl(infoEl('department')), uz(F.deptSuffix), ru('палата · койка'), ctl(infoEl('place'))),
         row(ctl(infoEl('transferred'), 'f3-wide'), uz(F.transferred), ru('переведён в')),
         row(ctl(infoEl('days'), 'f3-short'), uz(F.days), ru('дней в стационаре')),
-        row(uz(F.mobility), ru('как доставляют по отделению'), mobilityRadios),
-        row(uz(F.blood), ru('группа крови и резус'), ctl(blood)),
-        row(uz(F.drugs), ru('аллергия на лекарства'), ctl(allergies, 'f3-wide')),
+        // INPATIENT_REQUIRED_V1 — ruL/ctlK вместо ru/ctl: те же элементы, плюс запись
+        // в controls (поле, рамка, подпись) для отметок обязательных полей.
+        row(uz(F.mobility), ruL('mobility', 'как доставляют по отделению'), mobilityRadios),
+        row(uz(F.blood), ruL('blood_type', 'группа крови и резус'), ctlK('blood_type', blood)),
+        row(uz(F.drugs), ruL('allergies', 'аллергия на лекарства'), ctlK('allergies', allergies, 'f3-wide')),
         hint(F.drugsHint),
         row(uz(F.name), ru('ФИО'), ctl(fullName, 'f3-wide'), uz(F.sex), ru('пол'), ctl(gender)),
         row(uz(F.dob), ru('дата рождения'), ctl(dob, 'f3-short')),
-        row(uz(F.body), ru('рост, см'), ctl(height, 'f3-short'), uz(F.weight), ru('вес, кг'), ctl(weight, 'f3-short'),
-            uz(F.temp), ru('температура, °C'), ctl(temp, 'f3-short'), ru('ИМТ'), ctl(bmi, 'f3-short')),
-        row(uz(F.address), ru('постоянный адрес'), ctl(address, 'f3-wide')),
-        row(ru('телефон'), ctl(phone), ru('паспорт / ID'), ctl(nationalId), ru('близкий родственник'), ctl(ecName), ru('его телефон'), ctl(ecPhone)),
+        row(uz(F.body), ruL('height_cm', 'рост, см'), ctlK('height_cm', height, 'f3-short'), uz(F.weight), ruL('weight_kg', 'вес, кг'), ctlK('weight_kg', weight, 'f3-short'),
+            uz(F.temp), ruL('temp_c', 'температура, °C'), ctlK('temp_c', temp, 'f3-short'), ru('ИМТ'), ctl(bmi, 'f3-short')),
+        row(uz(F.address), ruL('address', 'постоянный адрес'), ctlK('address', address, 'f3-wide')),
+        row(ruL('phone', 'телефон'), ctlK('phone', phone), ruL('national_id', 'паспорт / ID'), ctlK('national_id', nationalId),
+            ruL('emergency_contact_name', 'близкий родственник'), ctlK('emergency_contact_name', ecName),
+            ruL('emergency_contact_phone', 'его телефон'), ctlK('emergency_contact_phone', ecPhone)),
         hint(F.addressHint),
-        row(uz(F.work), ru('место работы, профессия, должность'), ctl(occupation, 'f3-wide')),
-        row(uz(F.referred), ru('кем направлен'), ctl(referred, 'f3-wide')),
+        row(uz(F.work), ruL('occupation', 'место работы, профессия, должность'), ctlK('occupation', occupation, 'f3-wide')),
+        row(uz(F.referred), ruL('referred_from', 'кем направлен'), ctlK('referred_from', referred, 'f3-wide')),
         hint(F.referredHint),
         row(uz(F.emergency), ru('доставлен экстренно'), ctl(infoEl('emergency'))),
-        row(uz(F.transport), ru('каким транспортом'), ctl(delivered), uz(F.sinceOnset), ru('сколько прошло от начала болезни'), ctl(sinceOnset)),
+        row(uz(F.transport), ruL('delivered_by', 'каким транспортом'), ctlK('delivered_by', delivered),
+            uz(F.sinceOnset), ruL('since_onset', 'сколько прошло от начала болезни'), ctlK('since_onset', sinceOnset)),
         row(uz(F.refDx), ru('диагноз при направлении'), ctl(infoEl('refdx'), 'f3-wide')),
         row(uz(F.admDx), ru('диагноз приёмного покоя'), ctl(infoEl('admdx'), 'f3-wide')),
         blockT(F.nurse, 'Осмотр медсестры при поступлении'),
-        row(ru('АД, мм рт. ст.'), h('span', { class: 'f3-ctl ts-bp' }, bpSys, h('span', null, '/'), bpDia), ru('пульс, уд/мин'), ctl(pulse, 'f3-short')),
-        row(ru('Осмотр на педикулёз и чесотку'), pedRadios),
-        row(ru('Санитарная обработка'), sanRadios),
+        row(ruL('bp_sys', 'АД, мм рт. ст.'), h('span', { class: 'f3-ctl ts-bp' }, bpSysBox, h('span', null, '/'), bpDiaBox),
+            ruL('pulse_bpm', 'пульс, уд/мин'), ctlK('pulse_bpm', pulse, 'f3-short')),
+        row(ruL('pediculosis', 'Осмотр на педикулёз и чесотку'), pedRadios),
+        row(ruL('sanitation', 'Санитарная обработка'), sanRadios),
         row(ru('Примечание'), ctl(note, 'f3-wide')),
         ),
     ];
+
+    // INPATIENT_REQUIRED_V1 — радиокнопки: поле — первая кнопка группы, рамка — сама
+    // группа, пересчёт — по любой кнопке группы. АД — одна подпись на две цифры.
+    for (const [key, box] of [['pediculosis', pedRadios], ['sanitation', sanRadios], ['mobility', mobilityRadios]]) {
+        const group = radioEls.filter((r) => r._tsKey === key);
+        controls[key] = { el: group[0], box, watch: group };
+    }
+    controls.bp_sys = { el: bpSys, box: bpSysBox };
+    controls.bp_dia = { el: bpDia, box: bpDiaBox };
+    lbl.bp_dia = lbl.bp_sys;
+    for (const k of Object.keys(controls)) {
+        if (!controls[k].labelEl) controls[k].labelEl = lbl[k] || null;
+        if (!controls[k].watch) controls[k].watch = [];
+    }
 
     const timeOf = (iso) => {
         const d = new Date(iso);
@@ -279,7 +317,26 @@ export function titleSheetForm({ bed = null, onPrint = printInpatientDoc } = {})
         };
     }
 
-    return { fields, papersBlock, fill, read, inputs: { height, weight, bmi, temp, bpSys, bpDia, pulse, phone, referred, delivered, sinceOnset } };
+    return { fields, papersBlock, fill, read, controls, inputs: { height, weight, bmi, temp, bpSys, bpDia, pulse, phone, referred, delivered, sinceOnset } };
+}
+
+/**
+ * INPATIENT_REQUIRED_V1 — отметки обязательных полей листа: какие поля — решает клиника
+ * (titleKeysOf(rules)), пусто ли поле — то же правило, что у сервера (missingTitleFields
+ * на том, что форма отправила бы сейчас). Подпись АД общая на две цифры: звезду и
+ * скрытое «обязательно» ей ставит только первая из них.
+ */
+function titleMarkFields(form, keys) {
+    const used = new Set();
+    return (keys || []).filter((k) => form.controls[k]).map((key) => {
+        const c = form.controls[key];
+        const labelEl = c.labelEl && !used.has(c.labelEl) ? c.labelEl : null;
+        if (c.labelEl) used.add(c.labelEl);
+        return {
+            key, label: titleFieldLabel(key), el: c.el, box: c.box, labelEl, watch: c.watch || [],
+            isEmpty: () => missingTitleFields(form.read(), [key]).length > 0,
+        };
+    });
 }
 
 function sheetOnPaper(form) {
@@ -300,9 +357,14 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
     const p = admission.patients || {};
     const form = titleSheetForm({ bed });
     form.fill({ patient: p, admission, sheet: null });
+    // INPATIENT_REQUIRED_V1 — отметки рисуются сразу по сегодняшним правилам и
+    // перерисовываются, когда придут правила клиники; строка «Не заполнено» — над полями.
+    let rules = DEFAULT_RULES;
+    const marks = requiredMarks({ fields: [] });
     (async () => {
         const { data } = await supabase.rpc('admission_title_sheet_get', { admission_id: admission.id });
         if (data) form.fill(Object.assign({}, data, { admission: Object.assign({}, data.admission, { status: admission.status }) }));
+        marks.refresh();   // INPATIENT_REQUIRED_V1 — значения подставлены кодом: input не было
     })();
 
     // ADMITTING_DOCTOR_V1 — медсестра называет ПРИЁМНОГО ВРАЧА: того, кто
@@ -321,27 +383,57 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
         docSel.disabled = false;
         if (doctors.length === 1) docSel.value = String(doctors[0].id);
         if (!doctors.length) docNote.textContent = tr('Список врачей не загрузился — осмотр при поступлении проведёт главный врач.');
+        marks.refresh();   // INPATIENT_REQUIRED_V1 — пусто ли поле врача, зависит от списка
     }).catch(() => { docSel.disabled = false; });
+    // INPATIENT_REQUIRED_V1 — звезду «Приёмный врач» ставят отметки, и только когда
+    // клиника требует его при размещении (переключатель). Выключен — медсестра кладёт
+    // и без врача.
+    const docField = field(tr('Приёмный врач'), docSel);
     const admittingField = h('div', { class: 'ts-admitting' },
-        field(tr('Приёмный врач'), docSel, { required: true }),
+        docField,
         docNote);
+    const markFields = () => [
+        rules.admittingAtPlacement ? {
+            key: 'admitting_doctor', label: tr('Приёмный врач'), el: docSel, box: docField,
+            labelEl: (docField.children && docField.children[0]) || null,
+            isEmpty: () => doctors.length > 0 && !docSel.value,
+        } : null,
+        ...titleMarkFields(form, titleKeysOf(rules)),
+    ].filter(Boolean);
+    const applyMarks = () => marks.setFields(markFields());
+    applyMarks();
+    loadInpatientRules().then((r) => { rules = r || DEFAULT_RULES; applyMarks(); });
 
     let m = null;
     m = inpatientModal(tr('Титульный лист'), 'Doc', [
         patientAnchor(p.full_name || '', [p.mrn, admission.department, bed.code ? trf('койка {code}', { code: bed.code }) : null].filter(Boolean).join(' · ')),
+        marks.summary,   // INPATIENT_REQUIRED_V1 — «Не заполнено: …», каждое имя ведёт к полю
         admittingField,
         sheetOnPaper(form),
         // TITLE_SHEET_PAPERS_OUT_V1 — бумаги ПОД листом, а не в его конце.
         form.papersBlock,
     ], tr('Положить'), async () => {
-        if (doctors.length && !docSel.value) { toast(tr('Выберите приёмного врача — кто осмотрит пациента при поступлении.'), 'fail'); docSel.focus(); return false; }
+        // INPATIENT_REQUIRED_V1 — приёмный врач при включённом переключателе — жёсткий
+        // запрет: окно называет только его и предлагает лишь «Дописать». Остальные пустые
+        // поля листа — вопрос «Сохранить как есть»: пустые измерения дописывают позже.
+        const missing = marks.missing();
+        if (rules.admittingAtPlacement && doctors.length && !docSel.value) {
+            await askSaveAnyway({ missing: [tr('Приёмный врач')], hard: true });
+            marks.focusFirst();   // врач — первым в списке отметок
+            return false;
+        }
+        if (missing.length) {
+            const ans = await askSaveAnyway({ missing: missing.map((x) => x.label) });
+            if (ans !== 'save') { marks.focusFirst(); return false; }
+        }
         const admittingId = docSel.value ? Number(docSel.value) : null;
         const { data, error } = await supabase.rpc('admission_admit', {
             admission_id: admission.id, bed_id: bed.id, title_sheet: form.read(),
             admitting_doctor_id: admittingId,
         });
         if (error) { toast(error.message || tr('Не удалось положить на койку.'), 'fail'); return false; }
-        const complete = !!(data && data.title_sheet && sheetCompleteness(data.title_sheet).complete);
+        // INPATIENT_REQUIRED_V1 — «заполнен» по списку клиники; поля карточки — из формы.
+        const complete = !!(data && data.title_sheet && sheetCompleteness(data.title_sheet, titleKeysOf(rules), form.read().patient).complete);
         toast(complete
             ? tr('Пациент размещён на койке. Титульный лист заполнен.')
             : tr('Пациент размещён на койке. Титульный лист заполнен не до конца — допишите его в истории болезни.'),
@@ -378,16 +470,23 @@ export async function printTitleSheet(view) {
 }
 
 /** Редактор для истории болезни — той же формы, что buildReviewEditor. */
-export function buildTitleSheetEditor({ admission, onDone } = {}) {
+export function buildTitleSheetEditor({ admission, onDone, rules = DEFAULT_RULES } = {}) {
     if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return null; }
     const form = titleSheetForm();
+    // INPATIENT_REQUIRED_V1 — отметки по правилам клиники (их читает рабочий экран
+    // истории болезни); строка «Не заполнено» — topNote, над листом.
+    const marks = requiredMarks({ fields: titleMarkFields(form, titleKeysOf(rules || DEFAULT_RULES)) });
     const status = h('div', { class: 'muted ts-hint' });
     let view = null;
     const showStatus = () => {
         if (!view) { status.textContent = ''; return; }
+        // INPATIENT_REQUIRED_V1 — недописанный лист называет пустые поля словами экрана.
+        const names = (Array.isArray(view.missing) ? view.missing : []).map(titleFieldLabel).filter(Boolean);
         const head = view.complete && view.sheet
             ? trf('Заполнен: {who} · {when}', { who: view.sheet.filled_by_name || '', when: view.sheet.filled_at ? fmtDateTime(view.sheet.filled_at) : '' })
-            : tr('Лист заполнен не до конца — пустые поля можно дописать и сохранить.');
+            : (names.length
+                ? trf('Лист заполнен не до конца: {list}.', { list: names.join(', ') })
+                : tr('Лист заполнен не до конца — пустые поля можно дописать и сохранить.'));
         status.textContent = view.sheet ? head + ' · ' + papersSummary(view.sheet, { withDates: false }) : head;
     };
     const load = async () => {
@@ -395,6 +494,7 @@ export function buildTitleSheetEditor({ admission, onDone } = {}) {
         if (error) { toast(error.message || tr('Титульный лист не загрузился.'), 'fail'); return; }
         view = data;
         form.fill(data);
+        marks.refresh();   // INPATIENT_REQUIRED_V1 — значения подставлены кодом
         showStatus();
     };
     load();
@@ -411,8 +511,15 @@ export function buildTitleSheetEditor({ admission, onDone } = {}) {
         // не содержание бланка (владелец: «we should remove from the bottom of
         // the document this informations»).
         belowSheet: [status, form.papersBlock],
+        topNote: marks.summary,   // INPATIENT_REQUIRED_V1 — рабочий экран ставит её над листом
         submitLabel: tr('Сохранить'),
         submit: async () => {
+            // INPATIENT_REQUIRED_V1 — пустые обязательные поля: «Дописать» или «Сохранить как есть».
+            const missing = marks.missing();
+            if (missing.length) {
+                const ans = await askSaveAnyway({ missing: missing.map((x) => x.label) });
+                if (ans !== 'save') { marks.focusFirst(); return false; }
+            }
             const { data, error } = await supabase.rpc('admission_title_sheet_save', Object.assign({ admission_id: admission.id }, form.read()));
             if (error) { toast(error.message || tr('Не удалось сохранить титульный лист.'), 'fail'); return false; }
             view = data;
