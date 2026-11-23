@@ -5,8 +5,9 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import {
   inpatientSettingsGet, inpatientSettingsSave, loadInpatientSettings, titleRequiredKeys, requiredFlags, DEFAULT_SETTINGS,
+  SETTINGS_WRITE_ROLES,
 } from './inpatient-settings.js';
-import { caseDocTypeSave, caseDocTypesList } from './case-doc-types.js';
+import { caseDocTypeSave, caseDocTypesList, DOC_TYPE_WRITE_ROLES } from './case-doc-types.js';
 import { loadCaseDocSet } from './inpatient-reviews.js';
 import { isReadOnlyRpc } from '../control/gate.js';
 import { RPC } from './index.js';   // реестр RPC (index.js `export const RPC = {`)
@@ -16,11 +17,12 @@ const head  = { id: 4, role: 'doctor', extra_roles: ['head_doctor'] };
 const doc   = { id: 5, role: 'doctor' };
 const nurse = { id: 3, role: 'nurse' };
 const cash  = { id: 7, role: 'cashier' };
+const reg   = { id: 8, role: 'registrar' };
 
 function seed() {
   const db = openDb(':memory:');
   migrate(db);
-  for (const [id, u, role] of [[1, 'adm', 'admin'], [3, 'nur', 'nurse'], [4, 'head', 'doctor'], [5, 'doc5', 'doctor'], [7, 'cash', 'cashier']]) {
+  for (const [id, u, role] of [[1, 'adm', 'admin'], [3, 'nur', 'nurse'], [4, 'head', 'doctor'], [5, 'doc5', 'doctor'], [7, 'cash', 'cashier'], [8, 'reg', 'registrar']]) {
     db.prepare('INSERT INTO users (id, username, password_hash, full_name, role) VALUES (?,?,?,?,?)').run(id, u, 'x', 'Сотрудник ' + u, role);
   }
   return db;
@@ -33,7 +35,7 @@ function dropTo297(db) {
   return db;
 }
 
-test('чтение: умолчания = сегодня; читают все, кто ведёт пациента; касса — нет', () => {
+test('чтение: умолчания = сегодня; читает любой вошедший (данных пациента тут нет), аноним — нет', () => {
   const db = seed();
   const g = inpatientSettingsGet(db, {}, nurse);
   assert.deepEqual(g.settings, {
@@ -46,13 +48,29 @@ test('чтение: умолчания = сегодня; читают все, к
   assert.equal(g.can_edit, false);
   assert.equal(inpatientSettingsGet(db, {}, head).can_edit, true);
   for (const u of [admin, head, doc, nurse]) assert.ok(inpatientSettingsGet(db, {}, u));
-  assert.throws(() => inpatientSettingsGet(db, {}, cash), (e) => e.status === 403);
+  // INPATIENT_REQUIRED_V1 (ревью) — работу с документами стационара клиника выдаёт и
+  // другим ролям (requireGrant 'inpatient.patients' / 'inpatient.reviews'): их экран
+  // должен видеть те же правила, что и сервер. Читать — да, менять — нет.
+  for (const u of [cash, reg]) {
+    const r = inpatientSettingsGet(db, {}, u);
+    assert.equal(r.settings.intake_before_attending, 1);
+    assert.equal(r.can_edit, false);
+  }
+  for (const anon of [null, undefined, {}, { id: 9 }]) {
+    assert.throws(() => inpatientSettingsGet(db, {}, anon), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message), String(JSON.stringify(anon)));
+  }
   db.close();
+});
+
+test('роли записи настроек = роли записи состава (DOC_TYPE_WRITE_ROLES): списки не расходятся', () => {
+  // case-doc-types.js импортирует inpatient-settings.js — обратный импорт замкнул бы
+  // кольцо, поэтому список — копия, а этот тест держит копию равной оригиналу.
+  assert.deepEqual(new Set(SETTINGS_WRITE_ROLES), new Set(DOC_TYPE_WRITE_ROLES));
 });
 
 test('запись: только главный врач и администратор; пишется лишь изменённое, строка журнала на значение', () => {
   const db = seed();
-  for (const u of [doc, nurse, cash]) assert.throws(() => inpatientSettingsSave(db, { intake_before_attending: 0 }, u), (e) => e.status === 403);
+  for (const u of [doc, nurse, cash, reg, null, {}]) assert.throws(() => inpatientSettingsSave(db, { intake_before_attending: 0 }, u), (e) => e.status === 403);
   const out = inpatientSettingsSave(db, {
     intake_before_attending: 0, admitting_at_placement: 1,                         // второе не изменилось
     title_required_fields: ['phone', 'height_cm', 'phone'],
@@ -94,6 +112,12 @@ test('проверка: неизвестный ключ, поле, докуме�
     [{ intake_before_attending: 0, docs: [{ kind: 'round', required: 'может быть' }] }, /да.*нет/],
     [{ docs: [{ kind: 'round', required_sections: 'plan' }] }, /разделы документа — список/],
     [{ docs: 'x' }, /Список документов/],
+    // INPATIENT_REQUIRED_V1 (ревью) — опечатка в ключе документа давала 200 и «изменено 0».
+    [{ intake_before_attending: 0, docs: [{ kind: 'round', requried: false }] }, /Неизвестная настройка стационара: docs\.requried/],
+    [{ docs: [{ kind: 'round', required: false, title: 'Обход' }] }, /Неизвестная настройка стационара: docs\.title/],
+    // Повтор рода сливается, но и перекрытое значение проверяется: «может быть» не «да/нет».
+    [{ intake_before_attending: 0, docs: [{ kind: 'round', required: 'может быть' }, { kind: 'round', required: true }] }, /да.*нет/],
+    [{ intake_before_attending: 0, docs: [{ kind: 'round', required_sections: 'plan' }, { kind: 'round', required_sections: [] }] }, /разделы документа — список/],
   ];
   for (const [args, re] of bad) assert.throws(() => inpatientSettingsSave(db, args, admin), (e) => e.status >= 400 && re.test(e.message), JSON.stringify(args));
   assert.equal(loadInpatientSettings(db).intake_before_attending, 1, 'транзакция откатила частичную запись');
@@ -117,6 +141,93 @@ test('собранные отказы идут шаблоном словаря (
     assert.equal(e.status, 404);
     assert.equal(e.template, 'Такого документа в наборе нет: {kind}.');
   }
+  // INPATIENT_REQUIRED_V1 (ревью) — неизвестный ключ записи документа: тот же шаблон, 400.
+  try {
+    inpatientSettingsSave(db, { docs: [{ kind: 'round', requried: false }] }, admin);
+    assert.fail('должен отказать');
+  } catch (e) {
+    assert.equal(e.status, 400);
+    assert.equal(e.template, 'Неизвестная настройка стационара: {key}.');
+    assert.deepEqual(e.params, { key: 'docs.requried' });
+  }
+  db.close();
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — один род дважды в списке: две противоречащие строки
+// журнала («1→0», потом «0→1») при неизменившемся итоге. Сливаем по роду, позднее поле побеждает.
+test('повтор рода в docs: сливается по роду, позднее поле побеждает, одна строка журнала на изменение', () => {
+  const db = seed();
+  const logN = () => db.prepare('SELECT COUNT(*) n FROM inpatient_settings_log').get().n;
+  // Итог «обязателен» = как было: ничего не изменилось, журнал пуст.
+  let out = inpatientSettingsSave(db, { docs: [{ kind: 'round', required: false }, { kind: 'round', required: true }] }, head);
+  assert.equal(out.changed, 0);
+  assert.equal(logN(), 0);
+  assert.equal(out.docs.find((d) => d.kind === 'round').required, true);
+  // Наоборот — одно изменение и одна строка.
+  out = inpatientSettingsSave(db, { docs: [{ kind: 'round', required: true }, { kind: 'round', required: false }] }, head);
+  assert.equal(out.changed, 1);
+  assert.deepEqual(db.prepare('SELECT field, old_value, new_value FROM inpatient_settings_log').all().map((r) => [r.field, r.old_value, r.new_value]),
+    [['doc:round:required', '1', '0']]);
+  // Разные поля одного рода из разных записей складываются; отсутствующее поле не стирает раннее.
+  out = inpatientSettingsSave(db, { docs: [
+    { kind: 'primary', required: false, required_sections: ['plan'] },
+    { kind: 'primary', required_sections: ['diagnosis'] },
+  ] }, head);
+  assert.equal(out.changed, 2);
+  const p = out.docs.find((d) => d.kind === 'primary');
+  assert.equal(p.required, false);
+  assert.deepEqual(p.required_sections, ['diagnosis']);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM inpatient_settings_log WHERE field LIKE 'doc:primary:%'").get().n, 2);
+  db.close();
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — строки настроек нет (удалили руками, сбой переноса):
+// UPDATE … WHERE id = 1 молча не менял ничего, а ответ говорил «изменено».
+test('строки настроек нет — сохранение ставит её с умолчаниями и записывает изменение', () => {
+  const db = seed();
+  db.prepare('DELETE FROM inpatient_settings').run();
+  const out = inpatientSettingsSave(db, { intake_before_attending: 0 }, head);
+  assert.equal(out.changed, 1);
+  const row = db.prepare('SELECT * FROM inpatient_settings WHERE id = 1').get();
+  assert.ok(row, 'строка настроек не восстановлена');
+  assert.equal(row.intake_before_attending, 0);
+  assert.equal(row.admitting_at_placement, 1, 'остальное — умолчания миграции');
+  assert.equal(row.updated_by, 4);
+  assert.equal(loadInpatientSettings(db).intake_before_attending, 0);
+  db.close();
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — case_doc_type_save писал строки журнала настроек, но
+// «изменено когда и кем» на странице оставалось прежним.
+test('case_doc_type_save с изменением обязательности обновляет «когда и кем»; без изменения — нет', () => {
+  const db = seed();
+  const meta = () => ({ ...db.prepare('SELECT updated_at, updated_by FROM inpatient_settings WHERE id = 1').get() });
+  // Переименование и то же значение обязательности — ничего не изменилось.
+  caseDocTypeSave(db, { kind: 'round', title: 'Обход' }, head);
+  caseDocTypeSave(db, { kind: 'round', required: 1 }, head);
+  assert.deepEqual(meta(), { updated_at: null, updated_by: null });
+  caseDocTypeSave(db, { kind: 'round', required: 0 }, head);
+  const m = meta();
+  assert.equal(m.updated_by, 4);
+  assert.ok(m.updated_at);
+  assert.equal(inpatientSettingsGet(db, {}, nurse).updated_at, m.updated_at);
+  // Новый свой документ с разделами — тоже изменение (администратор).
+  caseDocTypeSave(db, { title: 'Тестовый лист', due_rule: 'none', required_sections: ['body'] }, admin);
+  assert.equal(meta().updated_by, 1);
+  // Строки настроек нет — встаёт с умолчаниями, «когда и кем» записано.
+  db.prepare('DELETE FROM inpatient_settings').run();
+  caseDocTypeSave(db, { kind: 'round', required: 1 }, head);
+  assert.equal(meta().updated_by, 4);
+  assert.equal(loadInpatientSettings(db).intake_before_attending, 1);
+  db.close();
+});
+
+test('таблицы настроек нет, а колонки набора есть — case_doc_type_save пишет обязательность и не падает', () => {
+  const db = seed();
+  db.exec('DROP TABLE inpatient_settings;');
+  const t = caseDocTypeSave(db, { kind: 'round', required: 0 }, head).type;
+  assert.equal(t.required, false);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM inpatient_settings_log').get().n, 1);
   db.close();
 });
 

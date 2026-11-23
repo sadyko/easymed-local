@@ -26,7 +26,7 @@
 import { RpcError } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
 import { loadCaseDocSet } from './inpatient-reviews.js';
-import { applyDocRequired } from './inpatient-settings.js';   // INPATIENT_REQUIRED_V1
+import { applyDocRequired, markSettingsUpdated } from './inpatient-settings.js';   // INPATIENT_REQUIRED_V1 (+ ревью)
 import { parseRequiredSections } from '../../../public/js/shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1
 import { sectionsFor } from '../../../public/js/shared/case-doc-sections.js';   // INPATIENT_REQUIRED_V1
 
@@ -195,6 +195,16 @@ export function caseDocTypeSave(db, args, user) {
   const touchesRequired = (a.required !== undefined && a.required !== null)
     || (a.required_sections !== undefined && a.required_sections !== null);
 
+  // INPATIENT_REQUIRED_V1 (ревью) — изменилась обязательность — двигаем и «изменено
+  // когда и кем» на странице «Стационар»: строки журнала без даты на странице путали.
+  // Ничего не изменилось — строку настроек не трогаем; база старше 298 сюда не доходит
+  // (changed = 0), а markSettingsUpdated и сам молчит, если таблицы настроек нет.
+  const applyRequired = (k) => {
+    if (!touchesRequired) return;
+    const at = nowUtc(db);
+    if (applyDocRequired(db, k, docRequired, user, at)) markSettingsUpdated(db, user && user.id, at);
+  };
+
   const written = db.transaction(() => {
     if (isNew) {
       const own = nextKind(db);
@@ -202,12 +212,12 @@ export function caseDocTypeSave(db, args, user) {
       db.prepare(`INSERT INTO case_doc_types (kind, title, due_rule, due_hours, block, sort_order, builtin, active)
                   VALUES (?, ?, ?, ?, ?, ?, 0, 1)`)
         .run(own, fields.title, fields.due_rule, fields.due_hours, fields.block, Number(last) + 10);
-      if (touchesRequired) applyDocRequired(db, own, docRequired, user, nowUtc(db));
+      applyRequired(own);   // INPATIENT_REQUIRED_V1 (ревью)
       return own;
     }
     db.prepare('UPDATE case_doc_types SET title = ?, due_rule = ?, due_hours = ?, block = ? WHERE kind = ?')
       .run(fields.title, fields.due_rule, fields.due_hours, fields.block, kind);
-    if (touchesRequired) applyDocRequired(db, kind, docRequired, user, nowUtc(db));
+    applyRequired(kind);   // INPATIENT_REQUIRED_V1 (ревью)
     return kind;
   })();
   return { type: caseDocTypesList(db, {}, user).types.find((t) => t.kind === written) || null };
