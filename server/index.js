@@ -43,6 +43,8 @@ import { schedulePublicSync } from './services/api/public-sync.js';   // PUBLIC_
 import { startLanAddress } from './services/lan/index.js';   // LAN_ADDRESS_V1
 import { scheduleLivePull } from './services/telephony/live.js';   // CALL_RING_V1 — длинный опрос живых событий станции, пока панели «Телефон» спрашивают
 import { applyPendingTestDataWipe } from './services/test-data-wipe.js';   // TEST_DATA_WIPE_V1
+import { createSiteController } from './site/controller.js';   // WEBSITE_V1 — публичный сайт на втором порту
+import { pruneWebsiteAnalytics } from './site/analytics.js';    // WEBSITE_V1 — чистка сырых просмотров
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -281,6 +283,11 @@ if (isMain) {
   pruneOpsEvents(db);
   setInterval(() => pruneOpsEvents(db), 3600 * 1000).unref();
 
+  // WEBSITE_V1 — сырые просмотры сайта старше срока хранения; свои try/catch, как соседи.
+  const pruneWebsite = () => { try { pruneWebsiteAnalytics(db); } catch (e) { console.warn('[website-analytics-prune]', e.message); } };
+  pruneWebsite();
+  setInterval(pruneWebsite, 3600 * 1000).unref();
+
   // CRM_UNIFY_V1 — «Не пришёл» ставит сервер: при запуске и раз в час (crm/no-show.js).
   // Таймер unref, проход не бросает; ошибка запуска — предупреждение, не отказ.
   // CRM_UNIFY_V1 (2026-10-10) — тот же запуск и таймер сначала догоняют приход
@@ -412,6 +419,13 @@ if (isMain) {
     }
     throw err;
   });
+
+  // WEBSITE_V1 — сайт поднимается, только если есть модуль лицензии и он включён
+  // в настройках (server/site/controller.js). Раз в минуту — пересчёт: выдача
+  // модуля через check-in и «Сайт включён» действуют без перезапуска.
+  const website = createSiteController(db, { appOptions: { storageDir: path.join(DATA_DIR, 'storage') } });
+  website.refresh();
+  setInterval(() => website.refresh(), 60 * 1000).unref();
 
   // LICENCE_CORE_V1 — the daily call home. Placed after listen() is called,
   // never awaited: scheduleCheckin only arms two unref()'d timers (first
