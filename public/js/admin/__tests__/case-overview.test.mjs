@@ -652,3 +652,23 @@ test('CASE_NAV_TAB_V1: из документов стрелки ведут в д
     assert.deepEqual(navs.pop(), { view: 'case-overview', payload: { admissionId: 10 } },
         'из обзора стрелка ведёт не в обзор');
 });
+
+// ─── INPATIENT_REQUIRED_V1 — обзор называет пустые поля титульного листа ─────
+test('INPATIENT_REQUIRED_V1: «Титульный лист заполнен не до конца» называет поля; лист «по желанию» — без пометки; старый сервер — как сегодня', async () => {
+    const saved = OV.title_sheet;
+    try {
+        OV.title_sheet = { complete: false, bmi: null, sheet: { height_cm: null }, missing: ['height_cm', 'pulse_bpm'], required: true };
+        let root = await render(() => {});
+        assert.ok(textOf(root).includes('Титульный лист заполнен не до конца: Рост, Пульс.'), textOf(root).slice(0, 600));
+
+        OV.title_sheet = { complete: false, bmi: null, sheet: { height_cm: null }, missing: ['height_cm'], required: false };
+        root = await render(() => {});
+        assert.ok(!textOf(root).includes('Титульный лист заполнен не до конца'), 'лист «по желанию» помечен недозаполненным');
+
+        OV.title_sheet = { complete: false, bmi: null, sheet: { height_cm: null } };
+        root = await render(() => {});
+        assert.ok(textOf(root).includes('Титульный лист заполнен не до конца.'), 'без списка — сегодняшняя фраза');
+    } finally {
+        OV.title_sheet = saved;
+    }
+});

@@ -10145,3 +10145,9 @@ select.crm-filter-sel.is-filtered,
 .rq-jump:focus-visible { outline: 2px solid var(--crit-500); outline-offset: 2px; border-radius: 3px; }
 @media print { .rq-summary, .rq-msg, .rq-sr { display: none !important; } .rq-req::after { content: none !important; } .rq-empty, .uisel:has(> select.rq-empty) > .uisel-field { box-shadow: none !important; background: none !important; } }
 /* end INPATIENT_REQUIRED_V1 */
+
+/* INPATIENT_REQUIRED_V1 — строка чек-листа: чего не хватает (жёлтым) и «по желанию» (серым), не красным.
+   12.5px — пол шкалы шрифтов (type-scale.test.mjs), мельче на экране не набираем. */
+.cd-row-gap { display: block; margin-top: 2px; font-size: 12.5px; font-weight: 500; line-height: 1.35; color: var(--warn-700); }
+.cd-row-opt { display: block; margin-top: 2px; font-size: 12.5px; font-weight: 500; line-height: 1.35; color: var(--ink-500); }
+/* end INPATIENT_REQUIRED_V1 */

@@ -38,6 +38,13 @@ export const STRINGS = {
   "Поступление в стационар": {"en":"Admission to hospital","ru":"Поступление в стационар","uz":"Statsionarga yotqizish"},   // INPATIENT_REQUIRED_V1
   // INPATIENT_REQUIRED_V1 — титульный лист в истории болезни называет пустые поля (views/title-sheet.js)
   "Лист заполнен не до конца: {list}.": {"en":"The sheet is not fully filled in: {list}.","ru":"Лист заполнен не до конца: {list}.","uz":"Varaq to‘liq to‘ldirilmagan: {list}."},   // INPATIENT_REQUIRED_V1
+  // INPATIENT_REQUIRED_V1 — чек-лист и обзор называют, чего не хватает (views/case-docs.js, views/case-overview.js)
+  "не заполнено: {list}": {"en":"not filled in: {list}","ru":"не заполнено: {list}","uz":"to‘ldirilmagan: {list}"},   // INPATIENT_REQUIRED_V1
+  "пустые разделы: {list}": {"en":"empty sections: {list}","ru":"пустые разделы: {list}","uz":"bo‘sh bo‘limlar: {list}"},   // INPATIENT_REQUIRED_V1
+  "по желанию": {"en":"optional","ru":"по желанию","uz":"ixtiyoriy"},   // INPATIENT_REQUIRED_V1
+  "не начат": {"en":"not started","ru":"не начат","uz":"boshlanmagan"},   // INPATIENT_REQUIRED_V1
+  "Выписной эпикриз для выписки не обязателен — заявку на выписку примут.": {"en":"A discharge summary is not required for discharge — the discharge request will be accepted.","ru":"Выписной эпикриз для выписки не обязателен — заявку на выписку примут.","uz":"Chiqarish uchun chiqarish epikrizi majburiy emas — chiqarish arizasi qabul qilinadi."},   // INPATIENT_REQUIRED_V1
+  "Титульный лист заполнен не до конца: {list}.": {"en":"The title sheet is incomplete: {list}.","ru":"Титульный лист заполнен не до конца: {list}.","uz":"Titul varag‘i to‘liq emas: {list}."},   // INPATIENT_REQUIRED_V1
   // DOC_HISTORY_V1 — версии документа приёма неизменяемы: отказ триггеров миграции 289
   "История изменений документа не меняется.": {"en":"The document’s change history cannot be modified.","ru":"История изменений документа не меняется.","uz":"Hujjat o‘zgarishlari tarixini o‘zgartirib bo‘lmaydi."},   // DOC_HISTORY_V1
   "История изменений документа не удаляется.": {"en":"The document’s change history cannot be deleted.","ru":"История изменений документа не удаляется.","uz":"Hujjat o‘zgarishlari tarixini o‘chirib bo‘lmaydi."},   // DOC_HISTORY_V1

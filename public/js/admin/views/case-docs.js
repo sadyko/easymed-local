@@ -43,6 +43,8 @@ import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { titleSheetPrintSection, titleSheetPrintCss, papersSummary } from './title-sheet-print.js';   // TITLE_SHEET_V1 / INPATIENT_DOCS_V1
 import { lockSignButton, refuseSignWhileActing } from '../act-as-client.js';   // ADMIN_ACT_AS_V1 (ревью-2) — «Собрать историю» от имени
+import { titleFieldLabel } from './required-marks.js';   // INPATIENT_REQUIRED_V1 — подписи полей титульного листа
+import { sectionLabel } from './case-doc-a4.js';         // INPATIENT_REQUIRED_V1 — подписи разделов, как в самом документе
 
 // ---------------------------------------------------------------------------
 // Словарь названий
@@ -169,6 +171,11 @@ export function caseDoneText(item) {
 export function caseGateText(state) {
     const gate = (state && state.discharge_gate) || { blocking: [], incomplete: [] };
     const blocked = (gate.blocking || [])[0] || null;
+    // INPATIENT_REQUIRED_V1 — переключатель «Выписка — только с выписным эпикризом»
+    // выключен (сервер: epicrisis_required: false): выписку эпикриз не держит, и
+    // «эпикриз оформлен» было бы отчётом о том, чего клиника не требует. Нет поля
+    // (старый сервер) — как сегодня.
+    if (!blocked && gate.epicrisis_required === false) return tr('Выписной эпикриз для выписки не обязателен — заявку на выписку примут.');
     // CASE_DOC_SET_OPEN_V1 — эпикриз отпёрли, и клиника вправе убрать его из
     // набора. Тогда выписку не держит НИЧЕГО, и говорить «эпикриз оформлен»
     // значит отчитываться о документе, которого у клиники нет.
@@ -181,6 +188,30 @@ export function caseGateText(state) {
     return blocked.reason === 'draft'
         ? tr('Заявку на выписку не примут: выписной эпикриз сохранён черновиком — его нужно опубликовать.')
         : tr('Заявку на выписку не примут: выписной эпикриз ещё не написан.');
+}
+
+/**
+ * INPATIENT_REQUIRED_V1 — что под именем строки: чего не хватает и «по желанию».
+ * Владелец просил строку карточки «только имя и кнопка» (CASE_ROW_NAME_ONLY_V1) — но
+ * эта строка отвечает на его же вопрос «какие поля не заполнены», и стоит она только там,
+ * где есть что сказать. Красной она не бывает: пробел — жёлтый, «по желанию» — серый.
+ * Титульный лист, который ещё не начат и пустых полей листа не знает (клиника требует
+ * только поля карточки, и они заполнены), — «не начат», а не пустой список.
+ * Строки «прочих документов» полей optional / missing_sections не несут — молчат.
+ * @returns {{tone:'warn'|'opt', text:string}|null}
+ */
+export function caseRowGapText(item) {
+    if (!item) return null;
+    if (item.kind === TITLE_KIND && item.required !== false && item.state !== 'published') {
+        const missing = Array.isArray(item.missing) ? item.missing : [];
+        if (missing.length) return { tone: 'warn', text: trf('не заполнено: {list}', { list: missing.map(titleFieldLabel).join(', ') }) };
+        if (item.started === false) return { tone: 'warn', text: tr('не начат') };
+    }
+    if (Array.isArray(item.missing_sections) && item.missing_sections.length) {
+        return { tone: 'warn', text: trf('пустые разделы: {list}', { list: item.missing_sections.map((k) => tr(sectionLabel(item.kind, k))).join(', ') }) };
+    }
+    if (item.optional) return { tone: 'opt', text: tr('по желанию') };
+    return null;
 }
 
 /** Названия недооформленных документов — тот же список, что у сервера. */
@@ -436,6 +467,7 @@ function itemRow(item, state, onDoc, activeKind = null, onDrop = null, onRename 
     // нет — там открытый документ и так закрывает собой всё.
     const isOpen = !!activeKind && item.kind === activeKind;
     const meta = item.state === 'published' ? caseDoneText(item) : caseDueText(item, state);
+    const gap = caseRowGapText(item);   // INPATIENT_REQUIRED_V1 — чего не хватает / «по желанию»
 
     const open = h('button', {
         class: 'btn-plain', type: 'button',
@@ -462,13 +494,16 @@ function itemRow(item, state, onDoc, activeKind = null, onDrop = null, onRename 
             color: item.state === 'pending' ? 'var(--ink-500)' : 'var(--ink-800)',
         },
     }, caseDocTitle(item.kind, item.title)),
+    // INPATIENT_REQUIRED_V1 — под именем: пустые поля / разделы (жёлтым) или «по желанию» (серым).
+    gap ? h('span', { class: gap.tone === 'opt' ? 'cd-row-opt' : 'cd-row-gap' }, gap.text) : null,
     );
 
     // CASE_ROW_NAME_ONLY_V1 — владелец: «we dont need information in the card
     // only name and button». В карточке остаётся название и действие; состояние
     // по-прежнему названо цветом рельса, кружком-иконкой и — для читалки и
     // подсказки мыши — словами в aria-label и title строки.
-    const stateLine = [caseDocStateWord(item.state), meta].filter(Boolean).join(' · ');
+    // INPATIENT_REQUIRED_V1 — и тем, чего не хватает (gap.text).
+    const stateLine = [caseDocStateWord(item.state), meta, gap ? gap.text : ''].filter(Boolean).join(' · ');
     open.setAttribute('title', caseDocTitle(item.kind, item.title) + (stateLine ? ' — ' + stateLine : ''));
     open.setAttribute('aria-label', caseDocTitle(item.kind, item.title) + (stateLine ? ': ' + stateLine : ''));
 

@@ -29,6 +29,7 @@ import { genderWord } from './title-sheet-print.js';
 import { news2Score, NEWS_BANDS, VITAL_NORMS, VITAL_RANGES, CONSCIOUSNESS, vitalError } from '../../shared/news2.js';   // VITALS_NEWS_V1 / VITALS_STEPPER_V1
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // VITALS_NEWS_V1 — окно «Добавить измерение»
 import { field } from '../ui.js';
+import { titleFieldLabel } from './required-marks.js';   // INPATIENT_REQUIRED_V1 — подписи полей титульного листа
 
 const state = {
     admissionId: null,
@@ -370,7 +371,14 @@ function paint(root, onNavigate) {
                 vital('Рост · вес', hw),
                 vital('Группа крови', pt.blood_type && pt.blood_type !== 'unknown' ? pt.blood_type : ''))
                 : note(tr('Титульный лист не заполнен — измерений при поступлении нет.'), 'warn'),
-            sh && !ts.complete ? note(tr('Титульный лист заполнен не до конца.'), 'warn') : null,
+            // INPATIENT_REQUIRED_V1 — пометка называет пустые обязательные поля (сервер: missing);
+            // лист «по желанию» (required: false) недозаполненным не помечается. Старый
+            // сервер без списка — сегодняшняя фраза.
+            sh && !ts.complete && ts.required !== false
+                ? note((Array.isArray(ts.missing) && ts.missing.length)
+                    ? trf('Титульный лист заполнен не до конца: {list}.', { list: ts.missing.map(titleFieldLabel).join(', ') })
+                    : tr('Титульный лист заполнен не до конца.'), 'warn')
+                : null,
             dietSlot,
             opSlot,
         ] });
