@@ -28,6 +28,7 @@ import {
   numOrNull, bmiOf, sheetCompleteness,
 } from '../../../public/js/shared/title-sheet-rules.js';
 import { MOBILITY_CODES } from '../../../public/js/shared/form-003.js';   // FORM_003_V1
+import { loadInpatientSettings, titleRequiredKeys } from './inpatient-settings.js';   // INPATIENT_REQUIRED_V1
 
 export const SHEET_READ_ROLES  = ['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
 export const SHEET_WRITE_ROLES = ['nurse', 'senior_nurse', 'admin'];
@@ -84,6 +85,16 @@ function parseMeasure(key, raw) {
   return n;
 }
 
+/**
+ * INPATIENT_REQUIRED_V1 — поля карточки, которые лист показывает и может требовать
+ * (полнота листа по списку клиники спрашивает и карточку пациента).
+ */
+function loadPatientForSheet(db, patientId) {
+  if (!patientId) return null;
+  // Имена колонок — из PATIENT_FIELDS (константа модуля), не из запроса.
+  return db.prepare(`SELECT ${PATIENT_FIELDS.join(', ')} FROM patients WHERE id = ?`).get(patientId) || null;
+}
+
 export function loadSheet(db, admissionId) {
   return db.prepare(`
     SELECT s.*, u.full_name AS filled_by_name
@@ -112,7 +123,11 @@ export function sheetView(db, adm) {
            emergency_contact_name, emergency_contact_phone, blood_type, allergies
       FROM patients WHERE id = ?`).get(adm.patient_id) || null;
   const sheet = loadSheet(db, adm.id);
-  const { complete, missing } = sheetCompleteness(sheet);
+  // INPATIENT_REQUIRED_V1 — полнота по списку клиники: лист, карточка, отметки бумаг.
+  // Лист не обязателен — не обязательно ни одно поле (решение 2 плана).
+  const settings = loadInpatientSettings(db);
+  const keys = titleRequiredKeys(settings);
+  const { complete, missing } = sheetCompleteness(sheet, keys, patient);
   // FORM_003_V1 — строка 10 бланка («Қабулхонада қўйилган ташҳис») — диагноз
   // опубликованного первичного осмотра; «кун ётиб даволанган» — дни на койке.
   const primary = db.prepare(`
@@ -132,6 +147,9 @@ export function sheetView(db, adm) {
     bmi: sheet ? bmiOf(sheet.height_cm, sheet.weight_kg) : null,
     complete, missing,
     due_at: isoOf(Number.isFinite(base) ? base + SHEET_DUE_HOURS * MS_HOUR : null),
+    // INPATIENT_REQUIRED_V1 — экран отмечает ровно эти поля и знает, обязателен ли лист.
+    required_fields: keys,
+    title_required: !!settings.title_required,
   };
 }
 
@@ -185,7 +203,32 @@ export function saveTitleSheet(db, adm, input, user) {
     if (src[flag] === undefined) continue;
     next[col] = truthy(src[flag]) ? (next[col] || now) : null;
   }
-  const { complete } = sheetCompleteness(next);
+
+  // Исправления личных данных — В КАРТОЧКУ, и только разрешённые поля.
+  // INPATIENT_REQUIRED_V1 — этот блок стоит ДО подсчёта полноты (раньше был в конце):
+  // клиника может требовать поле карточки, и «заполнен целиком» считается уже с
+  // исправлением, присланным этим же сохранением. Проверки листа выше — раньше
+  // проверки пола, как и было; всё в одной транзакции вызывающего.
+  const pin = (input && input.patient && typeof input.patient === 'object') ? input.patient : {};
+  const sets = [];
+  const vals = [];
+  for (const f of PATIENT_FIELDS) {
+    if (pin[f] === undefined) continue;
+    const v = str(pin[f], PATIENT_MAX[f]);
+    if (f === 'gender' && !GENDERS.includes(v)) throw new RpcError('Пол: выберите мужской, женский или другое.', 400);
+    sets.push(`${f} = ?`);
+    vals.push(v);
+  }
+  if (sets.length && adm.patient_id) {
+    sets.push('updated_at = ?');
+    vals.push(now, adm.patient_id);
+    db.prepare(`UPDATE patients SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  // INPATIENT_REQUIRED_V1 — «заполнен целиком» — по списку клиники: лист, карточка
+  // (уже с исправлениями выше) и отметки бумаг.
+  const keys = titleRequiredKeys(loadInpatientSettings(db));
+  const { complete } = sheetCompleteness(next, keys, loadPatientForSheet(db, adm.patient_id));
   // Подпись — кто ВПЕРВЫЕ заполнил лист целиком; дальше не переписывается.
   const filledBy = existing && existing.filled_at ? existing.filled_by : (complete ? ((user && user.id) || null) : null);
   const filledAt = existing && existing.filled_at ? existing.filled_at : (complete ? now : null);
@@ -217,23 +260,6 @@ export function saveTitleSheet(db, adm, input, user) {
       next.mobility, next.delivered_by, next.since_onset,
       filledBy, filledAt, now, now);
   }
-
-  // Исправления личных данных — В КАРТОЧКУ, и только разрешённые поля.
-  const pin = (input && input.patient && typeof input.patient === 'object') ? input.patient : {};
-  const sets = [];
-  const vals = [];
-  for (const f of PATIENT_FIELDS) {
-    if (pin[f] === undefined) continue;
-    const v = str(pin[f], PATIENT_MAX[f]);
-    if (f === 'gender' && !GENDERS.includes(v)) throw new RpcError('Пол: выберите мужской, женский или другое.', 400);
-    sets.push(`${f} = ?`);
-    vals.push(v);
-  }
-  if (sets.length && adm.patient_id) {
-    sets.push('updated_at = ?');
-    vals.push(now, adm.patient_id);
-    db.prepare(`UPDATE patients SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
-  }
   return loadSheet(db, adm.id);
 }
 
@@ -259,25 +285,33 @@ export function admissionTitleSheetSave(db, args, user) {
  * полон — published (подпись = filled_at); есть неполная запись — draft;
  * ничего и срок вышел — overdue; иначе pending.
  */
-export function titleSheetCaseItem(db, adm, baseMs, nowMs) {
+export function titleSheetCaseItem(db, adm, baseMs, nowMs, settings = loadInpatientSettings(db)) {
   const row = loadSheet(db, adm.id);
-  const { complete, missing } = sheetCompleteness(row);
+  // INPATIENT_REQUIRED_V1 — обязателен ли лист и какие поля — решает клиника.
+  const required = !!settings.title_required;
+  const keys = titleRequiredKeys(settings);
+  const { complete, missing } = sheetCompleteness(row, keys, loadPatientForSheet(db, adm.patient_id));
   const dueAt = baseMs === null || baseMs === undefined ? null : baseMs + SHEET_DUE_HOURS * MS_HOUR;
   let state;
   if (row && complete) state = 'published';
-  else if (dueAt !== null && nowMs > dueAt) state = 'overdue';
+  else if (required && dueAt !== null && nowMs > dueAt) state = 'overdue';   // «по желанию» не просрочивается
   else if (row) state = 'draft';
   else state = 'pending';
   return {
-    kind: TITLE_KIND, group: 'nurse', order: -1, applies: true, required: true, state,
+    kind: TITLE_KIND, group: 'nurse', order: -1, applies: true, required, state,
+    optional: !required,   // INPATIENT_REQUIRED_V1
     due_rule: 'clock', due_at: isoOf(dueAt), period_hours: null, periods_missing: 0,
     entries: row && complete ? 1 : 0, block: null,
     review_id: null,
-    published_at: row && complete ? row.filled_at : null,
+    // INPATIENT_REQUIRED_V1 — лист, ставший полным оттого, что клиника сократила
+    // список, подписи «заполнил» (filled_at) не имеет: время — последней правки.
+    published_at: row && complete ? (row.filled_at || row.updated_at || row.created_at || null) : null,
     author_name: row && complete ? (row.filled_by_name || '') : '',
     revisions: [], revision_count: 0,
     draft_id: null, has_draft: !!row && !complete,
     missing,
+    required_fields: keys,   // INPATIENT_REQUIRED_V1 — по какому списку считали полноту
+    missing_sections: [],    // INPATIENT_REQUIRED_V1 — у листа разделов нет (форма строки чек-листа одна)
     // INPATIENT_DOCS_V1 — какие бумаги подписаны: строка чек-листа называет их словами.
     papers: {
       contract_signed_at: row ? row.contract_signed_at : null,

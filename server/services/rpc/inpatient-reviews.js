@@ -65,7 +65,7 @@ import { requireGrant } from '../grants.js';
 import { titleSheetCaseItem, sheetView } from './title-sheet.js';   // TITLE_SHEET_V1
 import { sanitizeStoredHtml, htmlToText } from '../../../public/js/shared/rich-text.js';   // CASE_DOC_A4_V1
 import { refuseSignWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3)
-import { parseRequiredSections } from '../../../public/js/shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1
+import { parseRequiredSections, missingSections } from '../../../public/js/shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1
 import { loadInpatientSettings } from './inpatient-settings.js';   // INPATIENT_REQUIRED_V1
 
 export { RpcError };
@@ -1163,6 +1163,7 @@ export function admissionCaseDocs(db, args, user) {
 
   // CASE_DOC_SET_V2 — состав чек-листа берётся у клиники.
   const docSet = loadCaseDocSet(db);
+  const settings = loadInpatientSettings(db);   // INPATIENT_REQUIRED_V1 — один раз на чек-лист
 
   // Хирургический блок — по данным: появился хоть один документ, помеченный
   // блоком, значит оперируют. Какие это документы, решает набор клиники.
@@ -1219,14 +1220,29 @@ export function admissionCaseDocs(db, args, user) {
     // «Без срока» — тем более: клиника завела документ в набор, но часов ему
     // не назначила, и выдумывать их за неё нельзя.
     if ((def.due === 'at_discharge' || def.due === 'none') && state === 'overdue') state = 'pending';
+    // INPATIENT_REQUIRED_V1 — документ «по желанию»: стоит в наборе, но никогда не
+    // просрочен, не «следующий шаг», не в прогрессе и не в «не оформлено».
+    const optional = def.required === false;
+    if (optional) {
+      periodsMissing = 0;
+      if (state === 'overdue') state = 'pending';
+    }
 
     const tail = chain ? chain[chain.length - 1] : null;
+    // INPATIENT_REQUIRED_V1 — пустые обязательные разделы: в действующей редакции,
+    // а нет её — в черновике. Опубликованный с пробелом остаётся оформленным (автор
+    // выбрал «Сохранить как есть»), экран называет пробел.
+    const reqSecs = Array.isArray(def.requiredSections) ? def.requiredSections : [];
+    const secSrc = tail || draft;
+    const missingSecs = reqSecs.length && secSrc ? missingSections(secSrc, reqSecs) : [];
     return {
       kind: def.kind,
       group: 'required',
       order: i,
       applies,
-      required: applies && required,
+      required: applies && required && !optional,
+      optional,                        // INPATIENT_REQUIRED_V1
+      missing_sections: missingSecs,   // INPATIENT_REQUIRED_V1
       state,
       // CASE_DOC_SET_V2 — имя СВОЕГО рода клиника пишет сама, и переводить его
       // некому: экран показывает его как есть. У встроенных пусто — их имена
@@ -1253,7 +1269,7 @@ export function admissionCaseDocs(db, args, user) {
   // TITLE_SHEET_V1 — титульный лист медсестры: ПЕРВОЙ строкой, в прогрессе и в
   // списке «не оформлено», но НЕ в «следующем шаге»: «следующий» — одно
   // заметное действие ВРАЧА, а лист — дело поста.
-  const titleItem = titleSheetCaseItem(db, adm, base, now);
+  const titleItem = titleSheetCaseItem(db, adm, base, now, settings);   // INPATIENT_REQUIRED_V1 — правила клиники
 
   // «Прочие документы» — второй раздел мокапа. Каждая цепочка здесь отдельный
   // документ: это открытый род, и второй такой же — не исправление первого.
@@ -1381,7 +1397,10 @@ export function admissionCaseDocs(db, args, user) {
   // и словом «не оформлено», а не «блокирует». Расширить сам гейт на весь
   // набор — решение владельца и правка в rpc/inpatient.js, не здесь.
   const epicrisis = items.find((it) => it.kind === 'discharge');
-  const blocking = epicrisis && epicrisis.state !== 'published'
+  // INPATIENT_REQUIRED_V1 — «Выписка — только с выписным эпикризом» выключен: гейт
+  // не держит, и чек-лист говорит то же, что сервер (admission_discharge_request).
+  const epicrisisRequired = !!settings.discharge_needs_epicrisis;
+  const blocking = epicrisisRequired && epicrisis && epicrisis.state !== 'published'
     ? [{ kind: 'discharge', reason: epicrisis.has_draft ? 'draft' : 'absent' }]
     : [];
   const incomplete = allItems.filter((it) => it.required && it.state !== 'published').map((it) => it.kind);
@@ -1398,7 +1417,7 @@ export function admissionCaseDocs(db, args, user) {
     other,
     progress,
     next_kind: nextKind,
-    discharge_gate: { blocked: blocking.length > 0, blocking, incomplete },
+    discharge_gate: { blocked: blocking.length > 0, blocking, incomplete, epicrisis_required: epicrisisRequired },   // INPATIENT_REQUIRED_V1
   };
 }
 

@@ -234,7 +234,9 @@ export function admissionOverview(db, args, user) {
     now,
     admission: Object.assign({}, view.admission, { attending_doctor_id: adm.attending_doctor_id || null, days }),
     patient: view.patient,
-    title_sheet: { complete: view.complete, bmi: view.bmi, sheet: view.sheet },
+    // INPATIENT_REQUIRED_V1 — «Титульный лист не заполнен…» называет недостающие поля
+    // (по списку клиники); лист «по желанию» обзор не торопит.
+    title_sheet: { complete: view.complete, bmi: view.bmi, sheet: view.sheet, missing: view.missing, required: view.title_required },
     diagnosis,
     diet: { current: dietRow, meals_today: mealsToday },
     orders,
