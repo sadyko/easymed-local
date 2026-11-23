@@ -6,6 +6,7 @@ import { migrate } from '../db/migrate.js';
 import { seedDoctor, seedService } from './test-seed.js';
 import { publishedDoctors, doctorBySlug, publishedServices, serviceBySlug, departmentDoctors,
   departmentServices, invalidateContentCache } from './content.js';
+import { pickContent } from './i18n.js';
 
 function fresh() { invalidateContentCache(); const db = openDb(':memory:'); migrate(db); return db; }
 const names = (rows, lang = 'ru') => rows.map((r) => JSON.parse(r.content)[lang]?.name);
@@ -30,6 +31,7 @@ test('врач — имя и специальность по языкам из �
   assert.equal(doctorBySlug(db, d.slug).user_id, id);
   assert.equal(doctorBySlug(db, String(id)).user_id, id, 'по одному id тоже находится — слаг переживает смену имени');
   assert.equal(doctorBySlug(db, '999999'), undefined);
+  assert.equal(doctorBySlug(db, '0' + id), undefined, 'ведущие нули — не тот же адрес');
   db.close();
 });
 
@@ -73,5 +75,24 @@ test('врачи и услуги отделения', () => {
   seedService(db, { ru: 'ЭКГ', uz: 'EKG', departmentId: dep });
   assert.deepEqual(names(departmentDoctors(db, dep)), ['В отделении']);
   assert.deepEqual(names(departmentServices(db, dep)), ['ЭКГ']);
+  db.close();
+});
+
+test('пустое поле языка не затирает запасной язык: услуга без name_en', () => {
+  const db = fresh();
+  const a = seedService(db, { ru: 'УЗИ', uz: 'UZI' });
+  db.prepare("INSERT INTO website_services (service_id, content) VALUES (?, ?)").run(a, JSON.stringify({ en: { short_desc: 'Short' } }));
+  invalidateContentCache();
+  const p = pickContent(publishedServices(db)[0].content, 'en');
+  assert.ok(p.name, 'имя берётся из запасного языка');
+  assert.equal(p.short_desc, 'Short');
+  db.close();
+});
+
+test('пустое поле языка не затирает запасной язык: врач без bio_uz', () => {
+  const db = fresh();
+  seedDoctor(db, { ru: 'Иванов', uz: 'Ivanov', bio: { ru: 'Опыт врача' } });
+  const [d] = publishedDoctors(db);
+  assert.equal(pickContent(d.content, 'uz').bio, 'Опыт врача');
   db.close();
 });

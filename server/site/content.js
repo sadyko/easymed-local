@@ -16,7 +16,6 @@ import { publicDoctors, profileEntries } from '../services/api/snapshot.js';
 import { readLanguages, shownPracticeSince, experienceYears } from '../../public/js/shared/doctor-public.js';
 import { servicePublicState, serviceNames } from '../../public/js/shared/service-public.js';
 
-
 const TTL_MS = 30_000;
 let cache = new Map();
 
@@ -28,13 +27,11 @@ function cached(key, fn) {
   const hit = cache.get(key);
   if (hit && hit.exp > Date.now()) return hit.val;
   const val = fn();
-  // undefined (промах по слагу — doctorBySlug/serviceBySlug/departmentBySlug
-  // на несуществующий/неопубликованный слаг) НЕ кладём в кэш: ключи вида
-  // `doctor:${slug}` контролирует атакующий через URL, и при кэшировании
-  // промахов он мог бы бесконечно раздувать Map случайными слагами — это
-  // неограниченный по памяти DoS. Не кэшируя undefined, множество ключей
-  // остаётся ограничено числом реально существующих сущностей (конечное
-  // множество "hit"-ключей), а промахи каждый раз просто перевычисляются.
+  // undefined (промах по слагу — departmentBySlug/postBySlug) НЕ кладём в кэш:
+  // эти ключи контролирует атакующий через URL, и при кэшировании промахов он
+  // мог бы бесконечно раздувать Map случайными слагами — неограниченный по
+  // памяти DoS. Врачи и услуги кэшируются целиком под фиксированными ключами
+  // 'doctors:all' / 'services:all', а слаг ищется уже в этом списке.
   if (val !== undefined) cache.set(key, { exp: Date.now() + TTL_MS, val });
   return val;
 }
@@ -109,6 +106,8 @@ export function defaultLang(db) {
 const text = (v) => String(v == null ? '' : v).trim();
 const jsonObj = (s) => { try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; } };
 
+const nonEmpty = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v));
+
 /** Латинская часть слага: только [a-z0-9-]; пусто — слаг из одного id. */
 export function slugTail(name) {
   return text(name).toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
@@ -116,7 +115,7 @@ export function slugTail(name) {
 }
 const slugOf = (id, latinName) => { const t = slugTail(latinName); return t ? `${id}-${t}` : String(id); };
 /** Слаг → id: решает ведущее число, хвост — для людей и поисковиков. Смена имени ссылку не ломает. */
-const idOfSlug = (slug) => { const m = /^(\d{1,9})(?:-[a-z0-9-]*)?$/.exec(String(slug || '')); return m ? Number(m[1]) : null; };
+const idOfSlug = (slug) => { const m = /^([1-9]\d{0,8})(?:-[a-z0-9-]*)?$/.exec(String(slug || '')); return m ? Number(m[1]) : null; };
 
 function educationText(raw, lang) {
   return profileEntries(raw, { range: true }).map((e) => {
@@ -131,16 +130,18 @@ function toDoctor(u, specs, extra, now) {
   for (const lang of LANGS) {
     const name = text(u['full_name_' + lang]) || (lang === 'ru' ? text(u.full_name) : '');
     if (!name) continue;
+    // для en берётся русское название специальности намеренно: в user_specialties нет name_en
     const sp = specs.map((s) => text(lang === 'uz' ? s.name_uz : s.name_ru) || text(s.name_ru)).find(Boolean) || '';
-    content[lang] = {
+    // только непустые поля: pickContent копирует и пустые строки, затирая запасной язык
+    content[lang] = nonEmpty({
       name, specialty: sp, bio: text(u['bio_' + lang]),
       education: educationText(u.education_entries, lang), focus: text(u['academic_title_' + lang]),
-    };
+    });
   }
   const since = shownPracticeSince(u, now);
   return {
     id: u.id,
-    slug: slugOf(u.id, u.full_name_en || u.full_name_uz),
+    slug: slugOf(u.id, text(u.full_name_en) || text(u.full_name_uz)),
     photo_path: u.photo_url ? `doctor/${u.id}` : '',   // раздаёт media.js только для показанного врача
     experience_years: since == null ? null : experienceYears(since, now),
     langs_spoken: readLanguages(u.languages).join(','),
@@ -190,12 +191,12 @@ function shownServices(db) {
           const name = text(nm[lang]);
           const e = extra[lang] || {};
           if (!name && !e.short_desc && !e.body) continue;
-          content[lang] = { name, short_desc: text(e.short_desc), body: text(e.body), preparation: text(e.preparation) };
+          content[lang] = nonEmpty({ name, short_desc: text(e.short_desc), body: text(e.body), preparation: text(e.preparation) });
         }
         return {
           service_id: s.id,
           row: {
-            id: s.id, slug: slugOf(s.id, nm.en || nm.uz),
+            id: s.id, slug: slugOf(s.id, text(nm.en) || text(nm.uz)),
             featured: x ? Number(x.featured) || 0 : 0, image_path: x ? text(x.image_path) : '',
             sort_order: x ? Number(x.sort_order) || 0 : 0, content: JSON.stringify(content),
             price: s.price, duration_minutes: s.duration_minutes, department_id: s.department_id,
