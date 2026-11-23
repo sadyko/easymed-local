@@ -205,6 +205,29 @@ test('тот же день: окно «со дня» не задано (с 1-г�
   } finally { t.close(); }
 });
 
+// VISIT_TIER_SAME_DAY_V1 (2026-11-23, владелец: «charged full price without showing a discount») — в
+// жизни второй приход того же дня садится в ТОТ ЖЕ визит (визит у стойки один на день), а не в
+// отдельный, как в тесте выше. Выставленная утром строка той же услуги в этом визите — прошлая, если
+// окно пускает день 0; с окном «с 1-го» — по-прежнему обычная цена. Смета называет ту же цену.
+test('тот же день, ТОТ ЖЕ визит: окно с 0-го — вторая строка по цене второго визита (смета и счёт); окно с 1-го — обычная', async () => {
+  const t = await startCrmApp(seed);
+  try {
+    const { vid, vs: morning31 } = visitWithLine(t, 0, { serviceId: 31, hour: 8, bill: true });   // окно 0–6, процедура
+    const noon31 = Number(t.db.prepare(`INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier)
+                                        VALUES (?, 31, 10, 1, ?, ?, 'added', 'primary')`).run(vid, PRICE, PRICE).lastInsertRowid);
+    const q = quoteServicePrices(t.db, { patient_id: 77, service_ids: [31], visit_id: vid, date: localDay(0) }).quotes[31];
+    assert.deepEqual([q.tier, q.price], ['secondary', 50000], 'смета показывает полную цену второго прихода того же дня');
+    createInvoiceForVisit(t.db, { visit_id: vid, visit_service_ids: [noon31] }, KASSA);
+    assert.deepEqual([lineOf(t.db, noon31).price_tier, itemOf(t.db, noon31).unit_price], ['secondary', 50000], 'второй приход того же дня выставлен по полной цене');
+    assert.equal(itemOf(t.db, morning31).unit_price, PRICE, 'утренняя строка изменилась');
+
+    // Услуга 30 (окно с 1-го дня): тот же день и тот же визит — обычная цена, как было.
+    const { vid: v30 } = visitWithLine(t, 0, { serviceId: 30, hour: 9, bill: true });
+    const q30 = quoteServicePrices(t.db, { patient_id: 77, service_ids: [30], visit_id: v30, date: localDay(0) }).quotes[30];
+    assert.deepEqual([q30.tier, q30.price], ['primary', PRICE], 'окно с 1-го дня пустило тот же день');
+  } finally { t.close(); }
+});
+
 // ─── Выставленное не трогается ──────────────────────────────────────────────
 
 test('выставленная строка не меняется: ни новой частью счёта, ни отменой счёта прошлого визита', async () => {

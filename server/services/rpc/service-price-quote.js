@@ -161,6 +161,28 @@ function tierDecider(db) {
        )
      ORDER BY v.visit_date DESC, vs.id DESC
      LIMIT 1`);
+  // VISIT_TIER_SAME_DAY_V1 (2026-11-23, владелец: «second visit price wont working … charged full price
+  // without showing a discount») — ВТОРОЙ ВИЗИТ В ТОТ ЖЕ ДЕНЬ. У пациента один визит на день: пришёл
+  // утром и снова после обеда — вторая строка той же услуги садится в ТОТ ЖЕ визит (ensure_visit у
+  // стойки отдаёт визит дня). prevStmt исключает текущий визит целиком, и «Не раньше чем через 0»
+  // (экран услуги обещает: «второй визит в тот же день тоже считается») не срабатывал никогда —
+  // полная цена и в смете, и в счёте. Теперь уже выставленная (в живом счёте, не возвращённая)
+  // строка той же услуги В ЭТОМ ЖЕ визите тоже прошлая — но берётся, только если окно услуги её
+  // пускает (день 0 в окне, обычно «со дня» 0). С окном «со дня» 1 и больше (по умолчанию) — как
+  // раньше: прошлым остаётся визит другого дня.
+  const sameVisitStmt = db.prepare(`
+    SELECT ${localDate('v.visit_date')} AS day, vs.price_tier AS tier
+      FROM visit_services vs
+      JOIN visits v ON v.id = vs.visit_id
+     WHERE vs.visit_id = ? AND v.patient_id = ? AND vs.service_id = ?
+       AND v.status NOT IN ('cancelled', 'no_show')
+       AND COALESCE(vs.status, '') NOT IN ('cancelled', 'void', 'removed')
+       AND vs.invoice_item_id IS NOT NULL
+       AND EXISTS (SELECT 1 FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
+                    WHERE ii.id = vs.invoice_item_id AND COALESCE(i.status, '') NOT IN ('void', 'refunded'))
+       AND ${notRefundReleasedSql('vs', 'out')}
+     ORDER BY vs.id DESC
+     LIMIT 1`);
 
   return function decide({ patientId, serviceIds, visitId = null, date = null }) {
     const vid = visitId == null ? null : Number(visitId);
@@ -172,6 +194,12 @@ function tierDecider(db) {
       if (!hasTiers(svc)) {
         out.set(id, { svc, q: { tier: 'primary', price: Number(svc.price) || 0, base_price: Number(svc.price) || 0, days_since: null, reason: 'no_tiers', prev_day: null } });
         continue;
+      }
+      // VISIT_TIER_SAME_DAY_V1 — выставленная строка этой же услуги в этом же визите, если окно пускает день 0.
+      const same = vid != null ? sameVisitStmt.get(vid, patientId, id) || null : null;
+      if (same) {
+        const q = tierFor(svc, { day: lineDay, tier: same.tier }, lineDay);
+        if (q.reason === 'in_window') { out.set(id, { svc, q: { ...q, prev_day: lineDay } }); continue; }
       }
       const prev = prevStmt.get(patientId, id, vid, vid, lineDay, clinicToday) || null;
       out.set(id, { svc, q: { ...tierFor(svc, prev, lineDay), prev_day: prev ? prev.day : null } });
