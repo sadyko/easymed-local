@@ -39,8 +39,9 @@ import { watchScreen, dialogOpen as liveDialogOpen } from '../live.js';
 // HEAD_DOCTOR_WARD_VIEW_V1 — главный врач делает свою работу ПРЯМО ИЗ КАБИНЕТА:
 // оба окна те же самые, что в разделе «Стационар», а не их копии.
 import { openAdmissionCard, openAdmissionReviewModal, openAdmissionAttendingModal } from './admission-modal.js?v=inp2';   // INPATIENT_TAB_V1 / ADMISSION_ORDER_V1
-import { loadPatientById } from '../data.js';   // NO_GREETING_V1 — currentUser() went with the greeting band
+import { loadPatientById, currentUser } from '../data.js';   // NO_GREETING_V1 — currentUser() went with the greeting band; INPATIENT_REQUIRED_V1 (ревью) — вернулся для «я приёмный врач»
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
+import { admittingDoctorMayAct } from '../../shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1 (ревью) — «я приёмный врач» — как пускает сервер
 import { isOn } from '../../shared/flags.js';   // ADMIN_DOCTOR_LOCAL_V1 — флаг is_doctor из базы — 1, а не true
 import { REFUNDED_LINE_MARK, REFUNDED_START_REFUSAL } from '../../shared/refunded-line.js';   // REFUND_ANY_V1 (поправка 3) — «Услуга возвращена»; отказ начать — ревью B4
 import { loadRefundedLineIds } from '../refunded-lines.js';   // REFUND_ANY_V1 (ревью B4) — один вопрос refunded_lines на список
@@ -972,6 +973,12 @@ async function loadInpatientCaps() {
 }
 
 async function loadInpatients() {
+    // INPATIENT_REQUIRED_V1 (ревью) — панель кабинета живёт в кэше оболочки, и запомненный
+    // ответ держал переключатели клиники (withoutExam) всю сессию: клиника включала осмотр
+    // обратно, а кабинет предлагал назначать лечащего с койки. Перечитывание списка
+    // («Обновить», возврат после действия, вход на вкладку) спрашивает сервер заново;
+    // счётчик на вкладке (loadInpatientWaiting) обходится запомненным ответом.
+    state.inpt.capsAsked = false;
     await loadInpatientCaps();
     const base = () => supabase.from('admissions')
         .select(`
@@ -1065,8 +1072,11 @@ function inpatientRow(r, onChange) {
     // scopedDoctorId() — null (он видит всех), и названный приёмным врачом он
     // получал осмотр главного врача вместо своего. Сужение данных (loadInpatients,
     // loadInpatientWaiting) по-прежнему решает scopedDoctorId.
-    const meDoc = selfDoctorId();
-    const mine = meDoc != null && r.admitting_doctor_id != null && String(r.admitting_doctor_id) === String(meDoc);
+    // INPATIENT_REQUIRED_V1 (ревью) — номер И роль, как пускает сервер (admittingDoctorMayAct:
+    // по имени — роль doctor, основная или дополнительная, isAdmittingDoctor; по роли —
+    // администратор и главный врач). Медсестра со специальностью (is_doctor), названная
+    // приёмным врачом по ошибке, получала кнопки, на которых сервер ей отказывает.
+    const mine = admittingDoctorMayAct(r, currentUser());
     const toIntake = () => {
         const fn = typeof window !== 'undefined' && window.easymed && window.easymed.navigate;
         if (fn) fn('case-file', { admissionId: r.id, kind: 'intake' });
@@ -1136,10 +1146,12 @@ function inpatientRow(r, onChange) {
  * состояние, и цифра, которая никогда не гаснет, перестаёт читаться.
  */
 export function waitingOf(rows) {
-    const meDoc = selfDoctorId();   // BACKLOG_1011_V1 — «мой» пациент: какой я врач, как у кнопки строки
+    // BACKLOG_1011_V1 — «мой» пациент, как у кнопки строки. INPATIENT_REQUIRED_V1 (ревью) — то
+    // же правило, что пускает сервер (admittingDoctorMayAct): номер и роль.
+    const me = currentUser();
     const can = state.inpt.can || {};
     return (rows || []).filter((r) => {
-        const mine = meDoc != null && r.admitting_doctor_id != null && String(r.admitting_doctor_id) === String(meDoc);
+        const mine = admittingDoctorMayAct(r, me);
         // INPATIENT_REQUIRED_V1 — без обязательного осмотра поступивший ждёт и назначения
         // лечащего: это работа того, кто назначает.
         if (r.status === 'admitted') return mine || !!can.examine || (state.inpt.withoutExam === true && !!can.set_attending);

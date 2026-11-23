@@ -668,6 +668,17 @@ test('INPATIENT_REQUIRED_V1: «Титульный лист заполнен не
         OV.title_sheet = { complete: false, bmi: null, sheet: { height_cm: null } };
         root = await render(() => {});
         assert.ok(textOf(root).includes('Титульный лист заполнен не до конца.'), 'без списка — сегодняшняя фраза');
+
+        // INPATIENT_REQUIRED_V1 (ревью) — лист «по желанию» и не начат: тревоги «не заполнен» нет.
+        OV.title_sheet = { complete: false, bmi: null, sheet: null, missing: [], required: false };
+        root = await render(() => {});
+        assert.ok(!textOf(root).includes('Титульный лист не заполнен'), 'лист «по желанию» назван незаполненным');
+        // Обязательный (или старый сервер без поля) и не начат — как сегодня.
+        for (const ts of [{ complete: false, bmi: null, sheet: null, missing: ['height_cm'], required: true }, { complete: false, bmi: null, sheet: null }]) {
+            OV.title_sheet = ts;
+            root = await render(() => {});
+            assert.ok(textOf(root).includes('Титульный лист не заполнен — измерений при поступлении нет.'), JSON.stringify(ts));
+        }
     } finally {
         OV.title_sheet = saved;
     }

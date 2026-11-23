@@ -1727,8 +1727,10 @@ export function openAdmissionAttendingModal({ admission, onDone } = {}) {
         if (refusal) { toast(refusal, 'fail'); return false; }
         // INPATIENT_REQUIRED_V1 — без врача назначать нечего: окно «Заполнено не всё» с
         // одним «Дописать» (сохранить как есть здесь нельзя), фокус — к полю.
+        // INPATIENT_REQUIRED_V1 (ревью) — причина своя: лечащий врач обязателен всегда, а не
+        // «так настроено в клинике», и действие окна — «Назначить».
         if (!sel.value) {
-            await askSaveAnyway({ missing: [tr('Лечащий врач')], hard: true });
+            await askSaveAnyway({ missing: [tr('Лечащий врач')], hard: true, reason: tr('Без лечащего врача назначить нельзя — выберите врача.') });
             marks.focusFirst();
             return false;
         }

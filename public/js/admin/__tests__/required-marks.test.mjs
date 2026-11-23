@@ -353,13 +353,16 @@ const msgsIn = (n) => walk(n).filter((e) => cls(e).includes('rq-msg'));
 const srsIn = (n) => walk(n).filter((e) => cls(e).includes('rq-sr'));
 const viewsCss = () => fs.readFileSync(new URL('../../../css/admin-views.css', import.meta.url), 'utf8');
 
-test('ревью: список программы вместо <select> — фокус и aria-required/aria-invalid/aria-describedby на видимой кнопке', () => {
+// INPATIENT_REQUIRED_V1 (ревью) — aria-required у кнопки (role=button) ARIA не разрешает: обязательность
+// остаётся на родном <select>, а aria-invalid и aria-describedby — и на видимой кнопке.
+test('ревью: список программы вместо <select> — фокус, aria-invalid и aria-describedby на видимой кнопке, aria-required — только у родного списка', () => {
     const lbl = mkEl('label'); lbl._text = 'Приёмный врач';
     const box = mkEl('div'); const sel = mkEl('select'); box.appendChild(sel);
     const btn = swapSelect(sel);
     btn.setAttribute('aria-describedby', 'own-hint');
     const m = requiredMarks({ fields: [{ key: 'doc', label: 'Приёмный врач', el: sel, box, labelEl: lbl, isEmpty: () => !sel.value }] });
-    assert.equal(btn.getAttribute('aria-required'), 'true', 'обязательность — на кнопке, до которой доходят Tab и читалка');
+    assert.equal(btn.getAttribute('aria-required'), null, 'aria-required на кнопке ARIA не разрешает');
+    assert.equal(sel.getAttribute('aria-required'), 'true', 'обязательность — у родного списка');
     assert.equal(btn.getAttribute('aria-invalid'), 'true');
     const ids = String(btn.getAttribute('aria-describedby')).split(' ');
     assert.ok(ids.includes('own-hint'), 'чужое описание кнопки осталось');
@@ -377,7 +380,8 @@ test('ревью: список программы вместо <select> — фо
     assert.equal(btn.getAttribute('aria-invalid'), null);
     assert.equal(btn.getAttribute('aria-describedby'), 'own-hint');
     m.setFields([]);
-    assert.equal(btn.getAttribute('aria-required'), null, 'своё aria-required снято');
+    assert.equal(sel.getAttribute('aria-required'), null, 'своё aria-required снято');
+    assert.equal(btn.getAttribute('aria-required'), null);
     assert.equal(btn.getAttribute('aria-describedby'), 'own-hint');
 });
 
@@ -405,7 +409,8 @@ test('ревью: подмена списка кадром позже — кно
         m.focusFirst();
         assert.equal(document.activeElement, btn, 'фокус — на кнопку, найденную в момент действия');
         while (q.length) q.shift()();
-        assert.equal(btn.getAttribute('aria-required'), 'true');
+        assert.equal(btn.getAttribute('aria-required'), null, 'aria-required на кнопке ARIA не разрешает');
+        assert.equal(sel.getAttribute('aria-required'), 'true');
         assert.equal(btn.getAttribute('aria-invalid'), 'true');
         assert.ok(String(btn.getAttribute('aria-describedby')).includes(form.children[1].attrs.id));
         m.setFields([]);
@@ -523,4 +528,27 @@ test('ревью: setFields с новыми записями тех же пол�
     assert.equal(srsIn(lbl).length, 0);
     assert.equal(dia.getAttribute('aria-describedby'), null);
     assert.ok(!cls(lbl).includes('rq-req'));
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — жёсткий отказ называет СВОЮ причину: лечащий врач обязателен
+// всегда (не «так настроено в клинике»), и действие окна — «Назначить», а не «сохранить».
+test('ревью: «Заполнено не всё» с причиной — своя строка вместо «так настроено в клинике»; без причины — прежняя', async () => {
+    let p = askSaveAnyway({ missing: ['Лечащий врач'], hard: true, reason: 'Без лечащего врача назначить нельзя — выберите врача.' });
+    let dlg = lastDialog();
+    assert.ok(textOf(dlg).includes('Без лечащего врача назначить нельзя — выберите врача.'));
+    assert.ok(!textOf(dlg).includes('так настроено в клинике'), 'причина клиники вместо своей');
+    const card = walk(dlg).find((e) => e.attrs && e.attrs.role === 'alertdialog');
+    const desc = String(card.getAttribute('aria-describedby')).split(' ').map((id) => byId(dlg, id));
+    assert.ok(desc.every(Boolean) && desc.some((d) => textOf(d).includes('Без лечащего врача')), 'причина — в описании окна');
+    assert.equal(findBtn(dlg, 'Сохранить как есть'), undefined);
+    findBtn(dlg, 'Дописать').click();
+    assert.equal(await p, 'fix');
+    p = askSaveAnyway({ missing: ['Приёмный врач'], hard: true });
+    dlg = lastDialog();
+    assert.ok(textOf(dlg).includes('Без этого сохранить нельзя — так настроено в клинике.'));
+    findBtn(dlg, 'Дописать').click();
+    await p;
+    const e = STRINGS['Без лечащего врача назначить нельзя — выберите врача.'];
+    assert.ok(e && e.ru && e.uz && e.en, 'причины нет в словаре');
+    assert.doesNotMatch(e.uz + e.en, /[А-Яа-яЁё]/);
 });

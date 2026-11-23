@@ -145,3 +145,35 @@ export function waitsForAttending(row, withoutExam) {
   if (!row) return false;
   return row.status === 'examined' || (withoutExam === true && row.status === 'admitted');
 }
+
+/**
+ * INPATIENT_REQUIRED_V1 (ревью) — этот ли человек приёмный врач госпитализации: то же
+ * правило, что isAdmittingDoctor сервера (rpc/inpatient-flow.js) — номер совпал И среди
+ * ролей (основная + extra_roles, как effectiveRoles) есть doctor. is_doctor здесь не в
+ * счёт: это признак для списков врачей, его носит и медсестра со специальностью, а сервер
+ * её по имени не пускает — кнопка по одному номеру вела бы в отказ.
+ * Номера сравниваются строками: экран получает их и числом, и строкой.
+ */
+const rolesOfUser = (user) => [user.role, ...(Array.isArray(user.extra_roles) ? user.extra_roles : [])]
+  .map((r) => String(r == null ? '' : r).trim().toLowerCase());
+const namedAdmitting = (adm, user) => !!adm && !!user && user.id !== null && user.id !== undefined && user.id !== ''
+  && adm.admitting_doctor_id !== null && adm.admitting_doctor_id !== undefined
+  && String(adm.admitting_doctor_id) === String(user.id);
+
+export function isAdmittingDoctorOf(adm, user) {
+  return namedAdmitting(adm, user) && rolesOfUser(user).includes('doctor');
+}
+
+/**
+ * INPATIENT_REQUIRED_V1 (ревью) — «это мой пациент на осмотр при поступлении»: назван
+ * приёмным врачом И сервер этот шаг ему отдаст — по имени (isAdmittingDoctorOf, роль doctor)
+ * или по роли: администратору и главному врачу осмотр приёмного врача и лечащий врач открыты
+ * и так (rpc/inpatient-reviews.js: head_doctor/admin ИЛИ isAdmittingDoctor). Так
+ * администратор-врач, названный приёмным, получает свой «Осмотр приёмного врача»
+ * (BACKLOG_1011_V1), а медсестра со специальностью — ни одной кнопки, которой сервер откажет.
+ */
+export function admittingDoctorMayAct(adm, user) {
+  if (!namedAdmitting(adm, user)) return false;
+  const roles = rolesOfUser(user);
+  return roles.includes('doctor') || roles.includes('admin') || roles.includes('head_doctor');
+}

@@ -946,3 +946,29 @@ test('INPATIENT_REQUIRED_V1: переключатель включён или с
         admissionsRows = savedRows; capsAnswer = savedCaps; requiredAnswer = undefined;
     }
 });
+
+// ─── INPATIENT_REQUIRED_V1 (ревью) — «приёмный врач» по строке И по роли ─────
+// Сервер пускает приёмного врача по имени только с ролью doctor (isAdmittingDoctor).
+// Медсестра со специальностью, по ошибке названная приёмным врачом, кнопок, на которых
+// сервер ей откажет, не получает — ни осмотра, ни назначения лечащего с койки.
+test('INPATIENT_REQUIRED_V1 (ревью): медсестра со специальностью, названная приёмным врачом, — без кнопок приёмного врача', async () => {
+    const savedRows = admissionsRows; const savedCaps = capsAnswer;
+    globalThis.window.easymed = { navigate() {}, state: { user: { id: 77, role: 'nurse', is_doctor: true, specialty: 'Терапия', full_name: 'Сотрудник nurse' } } };
+    try {
+        capsAnswer = { examine: false, set_attending: false, admit: true };
+        admissionsRows = [{ ...IN_BED, admitting_doctor_id: 77, admitting: { full_name: 'Сотрудник nurse' } }];
+        let root = await renderScreen({ only: 'patients' });
+        assert.equal(findBtn(root, 'Осмотр приёмного врача'), undefined, 'медсестре — кнопка осмотра приёмного врача');
+        assert.ok(textOf(root).includes('Ждёт приёмного врача: Сотрудник nurse'), 'на месте кнопки — кого ждут');
+        requiredAnswer = { intake_before_attending: false };
+        root = await renderScreen({ only: 'patients' });
+        assert.equal(findBtn(root, 'Назначить лечащего врача'), undefined, 'медсестре — назначение лечащего с койки');
+        // Та же запись у врача с дополнительной ролью doctor — кнопка есть, как на сервере.
+        globalThis.window.easymed.state.user = { id: 77, role: 'nurse', extra_roles: ['doctor'], full_name: 'Сотрудник nurse' };
+        root = await renderScreen({ only: 'patients' });
+        assert.ok(findBtn(root, 'Назначить лечащего врача'), 'дополнительная роль doctor — приёмный врач');
+    } finally {
+        admissionsRows = savedRows; capsAnswer = savedCaps; requiredAnswer = undefined;
+        delete globalThis.window.easymed;
+    }
+});

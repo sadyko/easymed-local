@@ -21,6 +21,7 @@ export const STRINGS = {
   "Заполнено не всё": {"en":"Not everything is filled in","ru":"Заполнено не всё","uz":"Hammasi ham to‘ldirilmagan"},   // INPATIENT_REQUIRED_V1
   "Сохранить как есть": {"en":"Save as is","ru":"Сохранить как есть","uz":"Shu holicha saqlash"},   // INPATIENT_REQUIRED_V1
   "Без этого сохранить нельзя — так настроено в клинике.": {"en":"This cannot be saved without it — the clinic has set it up this way.","ru":"Без этого сохранить нельзя — так настроено в клинике.","uz":"Busiz saqlab bo‘lmaydi — klinikada shunday sozlangan."},   // INPATIENT_REQUIRED_V1
+  "Без лечащего врача назначить нельзя — выберите врача.": {"en":"An attending physician is required — choose a doctor.","ru":"Без лечащего врача назначить нельзя — выберите врача.","uz":"Davolovchi shifokorsiz tayinlab bo‘lmaydi — shifokorni tanlang."},   // INPATIENT_REQUIRED_V1
   // INPATIENT_REQUIRED_V1 — подписи полей и групп титульного листа (TITLE_FIELD_LABEL / TITLE_GROUP_LABEL)
   "Постоянный адрес": {"en":"Permanent address","ru":"Постоянный адрес","uz":"Doimiy manzil"},   // INPATIENT_REQUIRED_V1
   "Место работы, профессия, должность": {"en":"Workplace, profession, position","ru":"Место работы, профессия, должность","uz":"Ish joyi, kasbi, lavozimi"},   // INPATIENT_REQUIRED_V1

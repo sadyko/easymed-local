@@ -370,7 +370,10 @@ function paint(root, onNavigate) {
                 vital('ИМТ', ts.bmi !== null && ts.bmi !== undefined ? String(ts.bmi) : ''),
                 vital('Рост · вес', hw),
                 vital('Группа крови', pt.blood_type && pt.blood_type !== 'unknown' ? pt.blood_type : ''))
-                : note(tr('Титульный лист не заполнен — измерений при поступлении нет.'), 'warn'),
+                // INPATIENT_REQUIRED_V1 (ревью) — лист «по желанию» (required: false), которого
+                // нет, — не тревога: клиника его не требует. Обязательный или старый сервер без
+                // поля — сегодняшняя пометка.
+                : (ts.required === false ? null : note(tr('Титульный лист не заполнен — измерений при поступлении нет.'), 'warn')),
             // INPATIENT_REQUIRED_V1 — пометка называет пустые обязательные поля (сервер: missing);
             // лист «по желанию» (required: false) недозаполненным не помечается. Старый
             // сервер без списка — сегодняшняя фраза.

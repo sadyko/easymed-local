@@ -61,7 +61,7 @@ import { renderWardBeds, admissionsHistoryCard } from './ward-beds.js?v=board5';
 // вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
 import { animateIn } from '../motion.js?v=mo1';   // TAB_NO_SCROLL_V1 — прокрутки к вкладкам больше нет
 import { pastelFor } from '../pastel.js';   // PASTEL_IDENTITY_V1 — один человек, один оттенок
-import { waitsForAttending } from '../../shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1 — кто ждёт лечащего врача
+import { waitsForAttending, admittingDoctorMayAct } from '../../shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1 — кто ждёт лечащего врача; (ревью) «мой пациент на осмотр»
 
 // Раздел живёт под ключом `beds` («Стационар и палаты»): окно медсестры и доска
 // коек — две стороны одной работы, и раздавать их порознь значило бы выдать
@@ -423,8 +423,12 @@ function wardTable({ rows, can, withoutExam = false, reload, onNavigate }) {
     // назвала при размещении) пишет осмотр при поступлении и назначает
     // лечащего — сервер пускает его по имени, а не по роли (isAdmittingDoctor),
     // поэтому и кнопка здесь решается по строке, а не по `can`.
+    // INPATIENT_REQUIRED_V1 (ревью) — по строке И по роли, как пускает сервер
+    // (admittingDoctorMayAct: по имени — роль doctor, основная или дополнительная; по роли —
+    // администратор и главный врач). Медсестра со специальностью, названная приёмным
+    // врачом по ошибке, кнопок, на которых сервер ей откажет, не получает.
     const me = currentUser();
-    const isAdmitting = (a) => me && me.id != null && a.admitting_doctor_id != null && String(a.admitting_doctor_id) === String(me.id);
+    const isAdmitting = (a) => admittingDoctorMayAct(a, me);
     const goToIntake = (a) => {
         const fn = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
         if (fn) fn('case-file', { admissionId: a.id, kind: 'intake' });

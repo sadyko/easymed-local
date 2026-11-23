@@ -5,8 +5,9 @@ import {
   TITLE_FIELDS, TITLE_GROUPS, TITLE_FIELD_KEYS, DEFAULT_TITLE_REQUIRED, SWITCH_KEYS,
   missingTitleFields, cleanTitleRequired, cleanRequiredSections, parseRequiredSections,
   missingSections, rulesFromSettings, DEFAULT_RULES, requiredSectionsOf, waitsForAttending,
-  titleKeysOf,
+  titleKeysOf, isAdmittingDoctorOf, admittingDoctorMayAct,
 } from './inpatient-required.js';
+import { isAdmittingDoctor } from '../../../server/services/rpc/inpatient-flow.js';   // INPATIENT_REQUIRED_V1 (ревью) — правило сервера
 import { REQUIRED_KEYS, PATIENT_FIELDS } from './title-sheet-rules.js';
 
 test('поля листа: группы, где живут, без ФИО, даты рождения, ИМТ и примечания', () => {
@@ -91,4 +92,39 @@ test('waitsForAttending: «осмотрен» ждёт всегда; «на ко
   assert.equal(waitsForAttending({ status: 'admitted' }, true), true);
   assert.equal(waitsForAttending({ status: 'active' }, true), false);
   assert.equal(waitsForAttending(null, true), false);
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — экран решает «я приёмный врач» так же, как сервер:
+// номер совпал и роль doctor (основная или дополнительная); is_doctor не в счёт.
+test('isAdmittingDoctorOf = isAdmittingDoctor сервера: номер и роль doctor; медсестра со специальностью — нет', () => {
+  const adm = { admitting_doctor_id: 5 };
+  const cases = [
+    [{ id: 5, role: 'doctor' }, true],
+    [{ id: 5, role: 'nurse', is_doctor: true, specialty: 'Терапия' }, false],
+    [{ id: 5, role: 'nurse', extra_roles: ['doctor'] }, true],
+    [{ id: 5, role: 'admin', extra_roles: ['head_doctor'] }, false],
+    [{ id: 6, role: 'doctor' }, false],
+    [{ id: null, role: 'doctor' }, false],
+    [null, false],
+  ];
+  for (const [user, want] of cases) {
+    assert.equal(isAdmittingDoctorOf(adm, user), want, JSON.stringify(user));
+    assert.equal(isAdmittingDoctor(adm, user), want, 'сервер: ' + JSON.stringify(user));
+  }
+  assert.equal(isAdmittingDoctorOf({ admitting_doctor_id: null }, { id: 5, role: 'doctor' }), false);
+  assert.equal(isAdmittingDoctorOf(null, { id: 5, role: 'doctor' }), false);
+  // Экран получает номера и строкой.
+  assert.equal(isAdmittingDoctorOf({ admitting_doctor_id: '5' }, { id: 5, role: 'doctor' }), true);
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — кнопка «мой пациент на осмотр» — тому, кого сервер пустит:
+// по имени (роль doctor) или по роли (администратор, главный врач). Медсестре — нет.
+test('admittingDoctorMayAct: врач по имени, администратор-врач по роли; медсестра со специальностью и чужой — нет', () => {
+  const adm = { admitting_doctor_id: 20 };
+  assert.equal(admittingDoctorMayAct(adm, { id: 20, role: 'doctor' }), true);
+  assert.equal(admittingDoctorMayAct(adm, { id: 20, role: 'admin', is_doctor: 1 }), true, 'администратор-врач (BACKLOG_1011_V1)');
+  assert.equal(admittingDoctorMayAct(adm, { id: 20, role: 'registrar', extra_roles: ['head_doctor'] }), true);
+  assert.equal(admittingDoctorMayAct(adm, { id: 20, role: 'nurse', is_doctor: true, specialty: 'Терапия' }), false);
+  assert.equal(admittingDoctorMayAct(adm, { id: 21, role: 'admin' }), false, 'не назван — не его пациент');
+  assert.equal(admittingDoctorMayAct({ admitting_doctor_id: null }, { id: 20, role: 'doctor' }), false);
 });

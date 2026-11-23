@@ -198,19 +198,40 @@ export function caseGateText(state) {
  * Титульный лист, который ещё не начат и пустых полей листа не знает (клиника требует
  * только поля карточки, и они заполнены), — «не начат», а не пустой список.
  * Строки «прочих документов» полей optional / missing_sections не несут — молчат.
- * @returns {{tone:'warn'|'opt', text:string}|null}
+ *
+ * INPATIENT_REQUIRED_V1 (ревью):
+ *   • не начатый лист — «не начат» ПЕРВЫМ: список всех полей листа под именем документа,
+ *     к которому ещё не прикасались, ничего не говорит и растягивает строку;
+ *   • под именем — не больше трёх имён и «ещё N» (text); весь список — в full, он уходит в
+ *     title и aria-label строки: узкая колонка не превращается в абзац, а читалка и
+ *     подсказка мыши называют всё;
+ *   • документ «по желанию» с пустыми обязательными разделами — «по желанию · пустые
+ *     разделы: …» (жёлтым): «по желанию» не пропадает, а пробел виден.
+ * @returns {{tone:'warn'|'opt', text:string, full:string}|null}
  */
+const GAP_NAMES_SHOWN = 3;
+function gapList(names) {
+    const all = names.join(', ');
+    if (names.length <= GAP_NAMES_SHOWN) return { shown: all, all };
+    return { shown: names.slice(0, GAP_NAMES_SHOWN).join(', ') + ', ' + trf('ещё {n}', { n: names.length - GAP_NAMES_SHOWN }), all };
+}
 export function caseRowGapText(item) {
     if (!item) return null;
+    const gap = (tone, text, full = text) => ({ tone, text, full });
     if (item.kind === TITLE_KIND && item.required !== false && item.state !== 'published') {
+        if (item.started === false) return gap('warn', tr('не начат'));
         const missing = Array.isArray(item.missing) ? item.missing : [];
-        if (missing.length) return { tone: 'warn', text: trf('не заполнено: {list}', { list: missing.map(titleFieldLabel).join(', ') }) };
-        if (item.started === false) return { tone: 'warn', text: tr('не начат') };
+        if (missing.length) {
+            const l = gapList(missing.map(titleFieldLabel));
+            return gap('warn', trf('не заполнено: {list}', { list: l.shown }), trf('не заполнено: {list}', { list: l.all }));
+        }
     }
     if (Array.isArray(item.missing_sections) && item.missing_sections.length) {
-        return { tone: 'warn', text: trf('пустые разделы: {list}', { list: item.missing_sections.map((k) => tr(sectionLabel(item.kind, k))).join(', ') }) };
+        const l = gapList(item.missing_sections.map((k) => tr(sectionLabel(item.kind, k))));
+        const opt = item.optional ? tr('по желанию') + ' · ' : '';
+        return gap('warn', opt + trf('пустые разделы: {list}', { list: l.shown }), opt + trf('пустые разделы: {list}', { list: l.all }));
     }
-    if (item.optional) return { tone: 'opt', text: tr('по желанию') };
+    if (item.optional) return gap('opt', tr('по желанию'));
     return null;
 }
 
@@ -502,8 +523,9 @@ function itemRow(item, state, onDoc, activeKind = null, onDrop = null, onRename 
     // only name and button». В карточке остаётся название и действие; состояние
     // по-прежнему названо цветом рельса, кружком-иконкой и — для читалки и
     // подсказки мыши — словами в aria-label и title строки.
-    // INPATIENT_REQUIRED_V1 — и тем, чего не хватает (gap.text).
-    const stateLine = [caseDocStateWord(item.state), meta, gap ? gap.text : ''].filter(Boolean).join(' · ');
+    // INPATIENT_REQUIRED_V1 — и тем, чего не хватает. (ревью) — весь список (gap.full):
+    // под именем видны три имени и «ещё N», а читалка и подсказка называют все.
+    const stateLine = [caseDocStateWord(item.state), meta, gap ? (gap.full || gap.text) : ''].filter(Boolean).join(' · ');
     open.setAttribute('title', caseDocTitle(item.kind, item.title) + (stateLine ? ' — ' + stateLine : ''));
     open.setAttribute('aria-label', caseDocTitle(item.kind, item.title) + (stateLine ? ': ' + stateLine : ''));
 

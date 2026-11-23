@@ -787,25 +787,28 @@ const byCls = (root, c) => walk(root).filter((e) => String(e.className || '').sp
 
 test('INPATIENT_REQUIRED_V1: титульный лист называет пустые поля, документ — пустые разделы, «по желанию» — словами и не красным', () => {
     const { caseRowGapText } = view;
+    // INPATIENT_REQUIRED_V1 (ревью) — text — что видно под именем, full — весь список (title / aria-label).
+    const g = (text, tone = 'warn', full = text) => ({ tone, text, full });
     assert.deepEqual(caseRowGapText({ kind: 'title', required: true, state: 'draft', missing: ['height_cm', 'pulse_bpm'] }),
-        { tone: 'warn', text: 'не заполнено: Рост, Пульс' });
+        g('не заполнено: Рост, Пульс'));
     assert.deepEqual(caseRowGapText({ kind: 'primary', state: 'published', missing_sections: ['diagnosis'] }),
-        { tone: 'warn', text: 'пустые разделы: Диагноз' });
+        g('пустые разделы: Диагноз'));
     assert.deepEqual(caseRowGapText({ kind: 'operation', state: 'draft', missing_sections: ['diagnosis', 'body'] }),
-        { tone: 'warn', text: 'пустые разделы: Диагноз, Протокол операции' }, 'подпись раздела — как в самом документе');
-    assert.deepEqual(caseRowGapText({ kind: 'round', optional: true, state: 'pending', missing_sections: [] }), { tone: 'opt', text: 'по желанию' });
+        g('пустые разделы: Диагноз, Протокол операции'), 'подпись раздела — как в самом документе');
+    assert.deepEqual(caseRowGapText({ kind: 'round', optional: true, state: 'pending', missing_sections: [] }), g('по желанию', 'opt'));
     assert.equal(caseRowGapText({ kind: 'round', state: 'pending', missing_sections: [] }), null);
     // Строка «прочих документов» — без optional и missing_sections: молчит.
     assert.equal(caseRowGapText({ kind: 'other', group: 'other', state: 'published' }), null);
     assert.equal(caseRowGapText(null), null);
     // Лист не начат и пустых полей листа нет (клиника требует только заполненные поля карточки) — «не начат», а не пустой список.
-    assert.deepEqual(caseRowGapText({ kind: 'title', required: true, state: 'overdue', started: false, missing: [] }), { tone: 'warn', text: 'не начат' });
-    assert.deepEqual(caseRowGapText({ kind: 'title', required: true, state: 'pending', started: false, missing: ['weight_kg'] }),
-        { tone: 'warn', text: 'не заполнено: Вес' });
+    assert.deepEqual(caseRowGapText({ kind: 'title', required: true, state: 'overdue', started: false, missing: [] }), g('не начат'));
+    // INPATIENT_REQUIRED_V1 (ревью) — не начатый лист — «не начат» первым: список всех полей
+    // листа под именем не начатого документа ничего не говорит.
+    assert.deepEqual(caseRowGapText({ kind: 'title', required: true, state: 'pending', started: false, missing: ['weight_kg'] }), g('не начат'));
     // Полный лист и лист «по желанию» о пустых полях не говорят.
     assert.equal(caseRowGapText({ kind: 'title', required: true, state: 'published', started: true, missing: [] }), null);
     assert.deepEqual(caseRowGapText({ kind: 'title', required: false, optional: true, state: 'draft', started: true, missing: ['height_cm'] }),
-        { tone: 'opt', text: 'по желанию' });
+        g('по желанию', 'opt'));
 
     // В списке строка «по желанию» видна и не красная.
     const el = render({ items: [{ kind: 'round', group: 'required', order: 1, applies: true, required: false, optional: true, state: 'pending', due_rule: 'period', missing_sections: [] }] });
@@ -847,4 +850,52 @@ test('INPATIENT_REQUIRED_V1: эпикриз не обязателен — гей
     assert.equal(view.caseGateText({ items: [{ kind: 'discharge' }], discharge_gate: { blocked: false, blocking: [], incomplete: [], epicrisis_required: true } }),
         'Выписной эпикриз оформлен — заявку на выписку примут.');
     assert.match(view.caseGateText({ items: [{ kind: 'discharge' }], discharge_gate: { blocked: true, blocking: [{ kind: 'discharge', reason: 'absent' }], incomplete: ['discharge'], epicrisis_required: true } }), /не написан/);
+});
+
+// ─── INPATIENT_REQUIRED_V1 (ревью) — строка пробела коротка, «по желанию» не теряется ─────
+test('INPATIENT_REQUIRED_V1 (ревью): документ «по желанию» с пустыми обязательными разделами — «по желанию · пустые разделы: …» жёлтым', () => {
+    const { caseRowGapText } = view;
+    const t = 'по желанию · пустые разделы: Диагноз';
+    assert.deepEqual(caseRowGapText({ kind: 'round', optional: true, required: false, state: 'published', missing_sections: ['diagnosis'] }),
+        { tone: 'warn', text: t, full: t });
+    // В списке: жёлтая строка (cd-row-gap), и читалка слышит «по желанию».
+    const el = render({ items: [D('round', { optional: true, required: false, state: 'published', review_id: 3, published_at: '2026-06-09T08:20:00Z', author_name: 'Сотрудник doc5', missing_sections: ['diagnosis'] })] });
+    assert.deepEqual(byCls(el, 'cd-row-gap').map((x) => textOfAll(x).trim()), [t]);
+    assert.equal(byCls(el, 'cd-row-opt').length, 0);
+    const open = walk(el).find((e) => e.tagName === 'BUTTON' && String(e.className).includes('btn-plain'));
+    assert.match(open.getAttribute('aria-label'), /по желанию · пустые разделы: Диагноз/);
+});
+
+test('INPATIENT_REQUIRED_V1 (ревью): под именем — не больше трёх имён и «ещё N»; весь список — в title и aria-label', () => {
+    const { caseRowGapText } = view;
+    const fields = ['height_cm', 'weight_kg', 'temp_c', 'bp_sys', 'pulse_bpm'];
+    assert.deepEqual(caseRowGapText({ kind: 'title', required: true, state: 'draft', started: true, missing: fields }), {
+        tone: 'warn',
+        text: 'не заполнено: Рост, Вес, Температура, ещё 2',
+        full: 'не заполнено: Рост, Вес, Температура, АД верхнее, Пульс',
+    });
+    // Ровно три — без «ещё».
+    assert.equal(caseRowGapText({ kind: 'title', required: true, state: 'draft', started: true, missing: fields.slice(0, 3) }).text,
+        'не заполнено: Рост, Вес, Температура');
+    // Разделы — то же правило.
+    const sec = caseRowGapText({ kind: 'primary', state: 'draft', missing_sections: ['complaints', 'objective', 'diagnosis', 'plan'] });
+    assert.match(sec.text, /, ещё 1$/);
+    assert.equal(sec.full.split(', ').length, 4, sec.full);
+    const el = render({ items: [
+        { kind: TITLE_KIND, group: 'nurse', applies: true, required: true, optional: false, state: 'draft', due_rule: 'clock', due_at: null,
+          started: true, missing: fields, missing_sections: [], revisions: [], revision_count: 0 },
+    ] });
+    assert.deepEqual(byCls(el, 'cd-row-gap').map((x) => textOfAll(x).trim()), ['не заполнено: Рост, Вес, Температура, ещё 2']);
+    const open = walk(el).find((e) => e.tagName === 'BUTTON' && String(e.className).includes('btn-plain'));
+    assert.match(open.getAttribute('aria-label'), /не заполнено: Рост, Вес, Температура, АД верхнее, Пульс/);
+    assert.match(open.getAttribute('title'), /АД верхнее, Пульс/);
+});
+
+test('INPATIENT_REQUIRED_V1 (ревью): строка пробела — тёмно-жёлтая (--warn-800, контраст AA) и переносится в любом месте', async () => {
+    const fs = await import('node:fs');
+    const css = fs.readFileSync(new URL('../../../css/admin-views.css', import.meta.url), 'utf8');
+    const rule = (css.match(/\.cd-row-gap\s*\{[^}]*\}/) || [''])[0];
+    assert.match(rule, /color:\s*var\(--warn-800\)/);
+    assert.match(rule, /overflow-wrap:\s*anywhere/);
+    assert.match(fs.readFileSync(new URL('../../../css/admin.css', import.meta.url), 'utf8'), /--warn-800:\s*#/, 'переменной --warn-800 нет в палитре');
 });

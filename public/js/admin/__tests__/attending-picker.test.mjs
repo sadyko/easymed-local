@@ -411,6 +411,10 @@ test('INPATIENT_REQUIRED_V1: «Лечащий врач» отмечен; «На�
     assert.match(textOf(ask), /Заполнено не всё/);
     assert.match(textOf(ask), /Лечащий врач/);
     assert.equal(findBtn(ask, 'Сохранить как есть'), undefined, 'без лечащего врача сохранить нельзя');
+    // INPATIENT_REQUIRED_V1 (ревью) — причина своя: лечащий врач обязателен всегда, а не
+    // «так настроено в клинике», и действие окна — «Назначить», а не «сохранить».
+    assert.match(textOf(ask), /Без лечащего врача назначить нельзя — выберите врача\./);
+    assert.doesNotMatch(textOf(ask), /так настроено в клинике/);
     assert.equal(setAttendingCalls, 0, 'запрос ушёл без врача');
     findBtn(ask, 'Дописать').click();
     await settle();

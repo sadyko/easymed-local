@@ -432,3 +432,48 @@ test('INPATIENT_REQUIRED_V1: полоса главного врача — пос
     assert.strictEqual(st.attending, attending, 'ждут лечащего врача: ' + JSON.stringify(required));
   }
 });
+
+// ===========================================================================
+// INPATIENT_REQUIRED_V1 (ревью) — переключатель живёт не дольше перечитывания
+// ===========================================================================
+// Панель кабинета живёт в кэше оболочки: открыли один раз — и «лечащий врач только
+// после осмотра» оставался тем, каким был при входе, хоть клиника его уже поменяла.
+// Каждое перечитывание списка («Обновить», возврат после действия) спрашивает
+// inpatient_capabilities заново.
+test('INPATIENT_REQUIRED_V1 (ревью): «Обновить» перечитывает переключатель — кэш панели не держит старое положение', async () => {
+  const host = await openWard(HEAD, { ...HEAD_CAPS, required: OFF });
+  assert.strictEqual(allButtons(host).filter((b) => /Назначить лечащего врача/.test(textOf(b))).length, 2);
+  // Клиника включила осмотр обратно, пока кабинет был открыт.
+  CAPS = { ...HEAD_CAPS, required: { intake_before_attending: true } };
+  const asked = rpcCalls.filter((n) => n === 'inpatient_capabilities').length;
+  buttonByText(host, /Обновить/).click();
+  await tick(80);
+  assert.ok(rpcCalls.filter((n) => n === 'inpatient_capabilities').length > asked, 'перечитывание не спросило сервер о переключателе');
+  assert.ok(buttonByText(host, /Провести первичный осмотр/), 'после «Обновить» поступившему — снова осмотр');
+  assert.strictEqual(allButtons(host).filter((b) => /Назначить лечащего врача/.test(textOf(b))).length, 1,
+    'лечащего — только осмотренному, как при включённом переключателе');
+});
+
+// ===========================================================================
+// INPATIENT_REQUIRED_V1 (ревью) — «я приёмный врач» = правило сервера isAdmittingDoctor
+// ===========================================================================
+// Сервер пускает приёмного врача по имени ТОЛЬКО с ролью doctor (основной или
+// дополнительной). Медсестра со специальностью (is_doctor — признак для списков) по
+// ошибке названа приёмным врачом — кнопок «Осмотр приёмного врача» / «Назначить
+// лечащего врача» у неё нет: сервер ей откажет.
+test('INPATIENT_REQUIRED_V1 (ревью): медсестра со специальностью, названная приёмным врачом, своих кнопок не получает', async () => {
+  const NURSE = { id: 'u-nurse', full_name: 'Сотрудник nurse', specialty: 'Терапия', is_doctor: true, active: true, role: 'nurse',
+    salary_type: 'percentage', service_rates: [], kpi_links: [], rooms: null };
+  const rows = ADM.map((r) => (r.id === 'a-1' ? { ...r, admitting_doctor_id: 'u-nurse' } : r));
+  const caps = { roles: ['nurse'], scope: 'all', can: {} };
+  let host = await openWard(NURSE, caps, rows);
+  assert.strictEqual(buttonByText(host, /Осмотр приёмного врача/), undefined, 'медсестре — кнопка осмотра приёмного врача');
+  host = await openWard(NURSE, { ...caps, required: OFF }, rows);
+  assert.strictEqual(buttonByText(host, /Назначить лечащего врача/), undefined, 'медсестре — назначение лечащего');
+  const { waitingOf } = await import('../views/consultation.js');
+  assert.strictEqual(waitingOf([{ status: 'admitted', admitting_doctor_id: 'u-nurse' }]), 0, 'счётчик «ждут меня» считает медсестру приёмным врачом');
+  // Врач с той же записью (роль doctor дополнительной ролью) — получает.
+  const DOC_EXTRA = { ...NURSE, role: 'nurse', extra_roles: ['doctor'] };
+  host = await openWard(DOC_EXTRA, caps, rows);
+  assert.ok(buttonByText(host, /Осмотр приёмного врача/), 'дополнительная роль doctor — приёмный врач, как на сервере');
+});

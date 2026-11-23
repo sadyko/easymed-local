@@ -10157,6 +10157,8 @@ select.crm-filter-sel.is-filtered,
 
 /* INPATIENT_REQUIRED_V1 — строка чек-листа: чего не хватает (жёлтым) и «по желанию» (серым), не красным.
    12.5px — пол шкалы шрифтов (type-scale.test.mjs), мельче на экране не набираем. */
-.cd-row-gap { display: block; margin-top: 2px; font-size: 12.5px; font-weight: 500; line-height: 1.35; color: var(--warn-700); }
+/* INPATIENT_REQUIRED_V1 (ревью) — --warn-800: жёлтый 700 на белом мелким кеглем не дотягивал до AA;
+   overflow-wrap: anywhere — длинное имя поля или раздела клиники не распирает узкую колонку. */
+.cd-row-gap { display: block; margin-top: 2px; font-size: 12.5px; font-weight: 500; line-height: 1.35; color: var(--warn-800); overflow-wrap: anywhere; }
 .cd-row-opt { display: block; margin-top: 2px; font-size: 12.5px; font-weight: 500; line-height: 1.35; color: var(--ink-500); }
 /* end INPATIENT_REQUIRED_V1 */

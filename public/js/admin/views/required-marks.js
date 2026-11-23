@@ -186,6 +186,9 @@ export function requiredMarks({ fields = [] } = {}) {
         if (!hasChild(labelEl, sr)) labelEl.appendChild(sr);
     }
     // aria-required ставим и в refresh: кнопка списка программы появляется после setFields.
+    // INPATIENT_REQUIRED_V1 (ревью) — только самому полю: видимой кнопке списка программы
+    // (.uisel-field, role=button) ARIA aria-required не разрешает. Обязательность остаётся у
+    // родного <select>, а aria-invalid / aria-describedby кнопка получает (ariaOf).
     function markRequired(t) {
         if (typeof t.getAttribute !== 'function' || t.getAttribute('aria-required') !== 'true') ownReq.add(t);
         t.setAttribute('aria-required', 'true');
@@ -226,7 +229,7 @@ export function requiredMarks({ fields = [] } = {}) {
             const empty = emptyOf.get(f);
             const msg = msgs.get(frameOf(f));
             for (const t of ariaOf(f)) {
-                markRequired(t);
+                if (t === f.el) markRequired(t);   // INPATIENT_REQUIRED_V1 (ревью) — не на кнопку списка
                 if (empty) t.setAttribute('aria-invalid', 'true');
                 else dropAttr(t, 'aria-invalid', 'false');
                 if (msg) setDescribed(t, msg.getAttribute('id'), empty);
@@ -347,10 +350,14 @@ function restoreFocus(back, openerCard) {
  * «Заполнено не всё». Мягкий случай — «Дописать» / «Сохранить как есть»;
  * жёсткий (переключатель клиники включён) — только «Дописать».
  * Escape, крестик и щелчок мимо окна — «Дописать». Первый фокус — на «Дописать».
- * @param {{missing?: string[], hard?: boolean}} opts  missing — подписи пустых полей на языке экрана
+ * INPATIENT_REQUIRED_V1 (ревью) — reason: своя причина жёсткого отказа. «Так настроено в
+ * клинике» верно для переключателей клиники, но не для лечащего врача: он обязателен
+ * всегда, и действие окна там — «Назначить», а не «сохранить». Без reason — прежняя строка.
+ * @param {{missing?: string[], hard?: boolean, reason?: string}} opts  missing — подписи пустых
+ *   полей на языке экрана; reason — причина жёсткого отказа (ключ словаря или уже переведённая)
  * @returns {Promise<'save'|'fix'>}
  */
-export function askSaveAnyway({ missing = [], hard = false } = {}) {
+export function askSaveAnyway({ missing = [], hard = false, reason = '' } = {}) {
     return new Promise((resolve) => {
         const id = 'rq-dlg-' + (++_seq);
         const back = typeof document !== 'undefined' ? document.activeElement : null;   // куда вернуть фокус
@@ -399,7 +406,8 @@ export function askSaveAnyway({ missing = [], hard = false } = {}) {
                 closeBtn),
             h('div', { class: 'modal-body' },
                 h('p', { id: id + '-list', style: { margin: 0 } }, trf('Не заполнено: {list}', { list: names.join(', ') })),
-                hard ? h('p', { id: id + '-hard', class: 'muted', style: { margin: '8px 0 0' } }, 'Без этого сохранить нельзя — так настроено в клинике.') : null),
+                hard ? h('p', { id: id + '-hard', class: 'muted', style: { margin: '8px 0 0' } },
+                    reason || 'Без этого сохранить нельзя — так настроено в клинике.') : null),   // INPATIENT_REQUIRED_V1 (ревью) — своя причина
             h('footer', { class: 'modal-foot' },
                 h('span', { class: 'grow' }),
                 saveBtn,
