@@ -62,7 +62,7 @@ export function openAiCostMicroUsd(u = {}) {
  */
 export async function callOpenAiChat(payload, { apiKey, model, fetchImpl = fetch, timeoutMs = TIMEOUT_MS } = {}) {
   const key = String(apiKey || '').trim();
-  if (!key) { const e = new Error('OpenAI key is not set'); e.status = 0; e.error = { type: 'no_key' }; throw e; }
+  if (!key) { const e = new Error('Ключ OpenAI не задан.'); e.status = 0; e.error = { type: 'no_key' }; throw e; }
   const res = await fetchImpl(OPENAI_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key },
@@ -72,7 +72,7 @@ export async function callOpenAiChat(payload, { apiKey, model, fetchImpl = fetch
   let body = null;
   try { body = await res.json(); } catch { body = null; }
   if (!res.ok) {
-    const e = new Error('OpenAI request failed');
+    const e = new Error('Запрос к OpenAI не выполнен.');
     e.status = res.status;
     e.error = { type: (body && body.error && (body.error.code || body.error.type)) || 'http_error' };
     throw e;

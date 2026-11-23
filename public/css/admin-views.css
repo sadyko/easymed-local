@@ -5230,9 +5230,9 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    вторую строку, подзаголовок переносится. */
 .view-inline-head .page-head { align-items: center; gap: 20px; margin: 4px 0 14px; }
 .view-inline-head .page-head > div:first-child { flex: 1 1 auto; min-width: 0; }
-.view-inline-head .page-title { font-size: 19px; margin: 0; line-height: 1.25; }
+.view-inline-head .page-title { font-size: 20px; margin: 0; line-height: 1.25; }
 .view-inline-head .page-subtitle {
-    margin-top: 2px; font-size: 13px;
+    margin-top: 2px; font-size: 13.5px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .view-inline-head .page-head > :not(:first-child) { flex: 0 0 auto; }
@@ -10044,7 +10044,7 @@ table.tbl.cash-tbl thead th { padding: 8px 12px; }
     position: relative; }
 .nav-subs::before { content: ""; position: absolute; top: 2px; bottom: 2px;
     left: calc(var(--nav-gutter) + 20px); width: 1px; background: var(--ink-100); }
-.sidebar .nav-item.nav-sub { margin-left: calc(var(--nav-gutter) + 28px); font-size: 13px;
+.sidebar .nav-item.nav-sub { margin-left: calc(var(--nav-gutter) + 28px); font-size: 13.5px;
     padding-top: 5px; padding-bottom: 5px; }
 .sidebar .nav-item.nav-sub .nav-icon { width: 16px; height: 16px; flex-basis: 16px; }
 .sidebar .nav-item.nav-parent-on { font-weight: 700; color: var(--ink-900); }

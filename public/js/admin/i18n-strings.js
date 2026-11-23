@@ -11800,6 +11800,9 @@ export const STRINGS = {
   "Число строк или сдвиг указаны неверно: нужно целое число.": {"en":"The number of rows or the offset is invalid: a whole number is required.","ru":"Число строк или сдвиг указаны неверно: нужно целое число.","uz":"Qatorlar soni yoki siljish noto'g'ri ko'rsatilgan: butun son kerak."},
   "Строка поиска слишком длинная — не больше 200 символов.": {"en":"The search text is too long — no more than 200 characters.","ru":"Строка поиска слишком длинная — не больше 200 символов.","uz":"Qidiruv matni juda uzun — 200 belgidan oshmasin."},
   "Строка поиска указана неверно: нужен текст.": {"en":"The search text is invalid: text is required.","ru":"Строка поиска указана неверно: нужен текст.","uz":"Qidiruv matni noto'g'ri ko'rsatilgan: matn kerak."},
+  // AI_OWN_KEY_V1 / AI_CALLS_V1 (ревью слияния 2026-11-23) — отказы OpenAI по-русски
+  "Запрос к OpenAI не выполнен.": {"en":"The OpenAI request failed.","ru":"Запрос к OpenAI не выполнен.","uz":"OpenAI so‘rovi bajarilmadi."},
+  "Ключ OpenAI не задан.": {"en":"The OpenAI key is not set.","ru":"Ключ OpenAI не задан.","uz":"OpenAI kaliti kiritilmagan."},
   // V3120_I18N — сообщения сервера — END
   // TEST_DATA_WIPE_V1 — сообщения сервера (services/test-data-wipe.js)
   "Удаление тестовых данных нельзя начинать внутри другой транзакции — только отдельно, при запуске.": {"en":"Test data deletion cannot start inside another transaction — only on its own, at startup.","ru":"Удаление тестовых данных нельзя начинать внутри другой транзакции — только отдельно, при запуске.","uz":"Test ma’lumotlarini o‘chirishni boshqa tranzaksiya ichida boshlab bo‘lmaydi — faqat alohida, ishga tushishda."},   // TEST_DATA_WIPE_V1

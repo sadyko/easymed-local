@@ -103,7 +103,7 @@ function retryOrFail(db, job, reason, now) {
 // ---------------------------------------------------------------------------
 // OpenAI: расшифровка и разбор
 // ---------------------------------------------------------------------------
-const httpError = (status, type) => { const e = new Error('OpenAI request failed'); e.status = status; e.error = { type }; return e; };
+const httpError = (status, type) => { const e = new Error('Запрос к OpenAI не выполнен.'); e.status = status; e.error = { type }; return e; };
 
 async function readError(res) {
   let body = null;

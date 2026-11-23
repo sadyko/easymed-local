@@ -112,11 +112,11 @@ export async function renderReferralsBot(host) {
         const bubble = h('div', { 'data-bot-sample': '', style: {
             padding: '12px 14px', borderRadius: '14px 14px 14px 4px',
             background: 'var(--primary-50)', border: '1px solid var(--ink-100)',
-            fontSize: '14px', lineHeight: '1.5', color: 'var(--ink-900)' } });
-        const problemEl = h('div', { 'data-bot-template-problem': '', style: { color: 'var(--danger-600, #b42318)', fontSize: '13px', minHeight: '18px', marginTop: '6px' } });
+            fontSize: '13.5px', lineHeight: '1.5', color: 'var(--ink-900)' } });
+        const problemEl = h('div', { 'data-bot-template-problem': '', style: { color: 'var(--danger-600, #b42318)', fontSize: '12.5px', minHeight: '18px', marginTop: '6px' } });
         const today = dmy(new Date().toISOString());
         const area = h('textarea', { 'data-bot-template': '', rows: '11', spellcheck: 'false',
-            style: { width: '100%', fontFamily: 'inherit', fontSize: '14px', lineHeight: '1.5', resize: 'vertical' },
+            style: { width: '100%', fontFamily: 'inherit', fontSize: '13.5px', lineHeight: '1.5', resize: 'vertical' },
             oninput: () => { state.draft = area.value; paintPreview(); } });
         area.value = state.draft;
         const saved = () => effectiveTemplate(state.s.message_template);
@@ -133,7 +133,7 @@ export async function renderReferralsBot(host) {
             } }, Icon('Check', { size: 13 }), ' ', tr('Сохранить текст'));
         const resetBtn = h('button', { class: 'btn btn-outline', type: 'button', 'data-bot-template-reset': '',
             onclick: () => { area.value = DEFAULT_TEMPLATE; state.draft = area.value; paintPreview(); } }, tr('Вернуть стандартный'));
-        const statusEl = h('span', { class: 'muted', style: { fontSize: '13px', alignSelf: 'center' } });
+        const statusEl = h('span', { class: 'muted', style: { fontSize: '12.5px', alignSelf: 'center' } });
         function paintPreview() {
             clear(bubble);
             const text = renderDoctorMessage(area.value, { patient: SAMPLE.patient, day: today, services: SAMPLE.services });
