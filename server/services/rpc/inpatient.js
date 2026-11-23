@@ -37,6 +37,7 @@ import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodati
 import { billAccommodationCore, accommodationGapOf, computeAccommodation } from './accommodation.js';
 import { walletBalance } from '../domain/wallet.js';
 import { notRefundReleasedSql } from '../domain/pay-releases.js';   // V3120_FINAL — возвращённое не «к оплате»
+import { loadInpatientSettings } from './inpatient-settings.js';   // INPATIENT_REQUIRED_V1
 
 // INPATIENT_MONEY_FIX_V1 (D-minor) — что внесено за проживание: СУММА всех строк
 // проживания (посуточная выставка даёт их несколько), а не первая попавшаяся.
@@ -1243,7 +1244,11 @@ export function admissionDischargeRequest(db, args, user) {
     // вести выписку иначе. Требовать документ, которого она у себя убрала, —
     // значит отказывать в выписке, не показывая, чего ждём: в чек-листе такого
     // пункта уже нет.
-    const wantsEpicrisis = db.prepare(
+    //
+    // INPATIENT_REQUIRED_V1 — «Выписка — только с выписным эпикризом» выключен:
+    // заявку принимают без эпикриза, даже если он остаётся в наборе документов.
+    // Чек-лист (admission_case_docs → discharge_gate) говорит то же самое.
+    const wantsEpicrisis = loadInpatientSettings(db).discharge_needs_epicrisis && db.prepare(
       "SELECT 1 FROM case_doc_types WHERE kind = 'discharge' AND active = 1").get();
     const epicrisis = !wantsEpicrisis ? { id: null } : db.prepare(`
       SELECT id, published_at FROM admission_reviews

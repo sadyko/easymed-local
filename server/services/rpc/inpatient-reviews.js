@@ -66,6 +66,7 @@ import { titleSheetCaseItem, sheetView } from './title-sheet.js';   // TITLE_SHE
 import { sanitizeStoredHtml, htmlToText } from '../../../public/js/shared/rich-text.js';   // CASE_DOC_A4_V1
 import { refuseSignWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3)
 import { parseRequiredSections } from '../../../public/js/shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1
+import { loadInpatientSettings } from './inpatient-settings.js';   // INPATIENT_REQUIRED_V1
 
 export { RpcError };
 
@@ -513,7 +514,10 @@ export function admissionReviewSave(db, args, user) {
         assertMayTransition('admitted', 'examined', user);
         // 2. Состояние: осматривают ЛЕЖАЩЕГО и ещё не осмотренного. 'examined'
         //    тоже пускаем — это исправление уже опубликованного осмотра.
-        if (adm.status !== 'admitted' && adm.status !== 'examined') {
+        // INPATIENT_REQUIRED_V1 — лечащего назначили без осмотра (переключатель
+        // выключен): первичный осмотр во время лечения — документ, маршрут не двигает.
+        const asDocument = adm.status === 'active' && !loadInpatientSettings(db).intake_before_attending;
+        if (adm.status !== 'admitted' && adm.status !== 'examined' && !asDocument) {
           throw new RpcError(primaryStateRefusal(db, adm), 400);
         }
         authorRole = usedRole(user, ['head_doctor', 'admin']);
@@ -619,6 +623,17 @@ export function admissionReviewSave(db, args, user) {
       if (kind === 'intake' && adm.status === 'admitted') {
         admissionTransition(db, { admission_id: adm.id, to: 'examined', at }, user, { admittingDoctorOk: true });
       }
+      // INPATIENT_REQUIRED_V1 — осмотр, опубликованный уже во время лечения (лечащего
+      // назначили без осмотра, переключатель выключен), маршрут не двигает, но КТО И
+      // КОГДА осмотрел — записывается: карточка госпитализации иначе писала бы «ещё не
+      // проведён» рядом с опубликованным осмотром. COALESCE — первую подпись не
+      // переписываем. 'discharging' — тот же пациент после заявки на выписку: осмотр
+      // приёмного врача в открытую историю подшивают и тогда (первичный там отказан выше).
+      if ((kind === 'primary' || kind === 'intake') && (adm.status === 'active' || adm.status === 'discharging')
+          && !loadInpatientSettings(db).intake_before_attending) {
+        db.prepare('UPDATE admissions SET examined_at = COALESCE(examined_at, ?), examined_by = COALESCE(examined_by, ?) WHERE id = ?')
+          .run(at, (user && user.id) || null, adm.id);
+      }
     }
 
     return {
@@ -667,10 +682,16 @@ export function admissionSetAttending(db, args, user) {
     const asAdmitting = isAdmittingDoctor(adm, user);
     if (!asAdmitting) assertMayTransition('examined', 'active', user);
 
+    // INPATIENT_REQUIRED_V1 — переключатель «лечащий врач только после осмотра»
+    // выключен: лечащего назначают сразу после койки. Кто вправе — как и раньше
+    // (проверено строкой выше): главный врач, администратор, приёмный врач этого
+    // пациента. Осмотр при этом никем не записывается (examined_at/by пусты).
+    const withoutExam = adm.status === 'admitted' && !loadInpatientSettings(db).intake_before_attending;
+
     // 2. Состояние: назначать лечащего можно только ОСМОТРЕННОМУ. До осмотра
     //    отказ называет недостающий шаг сам (assertAdmissionAtLeast).
-    assertAdmissionAtLeast(db, adm.id, 'examined');
-    if (adm.status !== 'examined') {
+    if (!withoutExam) assertAdmissionAtLeast(db, adm.id, 'examined');
+    if (!withoutExam && adm.status !== 'examined') {
       // Текст обещает отдельное действие — и оно есть: admissionChangeAttending
       // ниже (RPC `admission_change_attending`). До этой правки обещание было
       // пустым: смены лечащего врача не существовало нигде, и госпитализация,
@@ -703,7 +724,7 @@ export function admissionSetAttending(db, args, user) {
     db.prepare(
       'UPDATE admissions SET attending_doctor_id = ?, doctor_id = COALESCE(doctor_id, ?) WHERE id = ?',
     ).run(doctorId, doctorId, adm.id);
-    const res = admissionTransition(db, { admission_id: adm.id, to: 'active' }, user, { admittingDoctorOk: asAdmitting });
+    const res = admissionTransition(db, { admission_id: adm.id, to: 'active' }, user, { admittingDoctorOk: asAdmitting, withoutExam });   // INPATIENT_REQUIRED_V1
 
     return { admission: res.admission, attending: { id: u.id, full_name: u.full_name, specialty: u.specialty || '' } };
   });

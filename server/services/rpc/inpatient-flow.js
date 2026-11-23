@@ -44,6 +44,9 @@ import { rpcT } from '../server-message.js';   // V3120_I18N
 import {
   ADMISSION_FLOW, IN_BED_STATUSES, OPEN_STATUSES, CLOSED_STATUSES,
 } from '../../../public/js/shared/admission-status.js';
+// INPATIENT_REQUIRED_V1 — переключатели «что обязательно» (миграция 298). Модуль
+// настроек этот файл не импортирует — кольца нет.
+import { loadInpatientSettings, requiredFlags } from './inpatient-settings.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -301,7 +304,11 @@ export function assertCanPrescribe(db, admissionId, user) {
   const have = RANK.get(adm.status);
   if (have === undefined || have < RANK.get('active')) {
     // Тот самый текст из решения владельца: экран обязан сказать, КОГО ждут.
-    throw new RpcError(have !== undefined && have >= RANK.get('examined')
+    // INPATIENT_REQUIRED_V1 — осмотр перед лечащим врачом выключен: лежащий на
+    // койке ждёт лечащего врача, а не осмотра (назначить его можно уже сейчас).
+    const waitsAttending = have !== undefined && (have >= RANK.get('examined')
+      || (adm.status === 'admitted' && !loadInpatientSettings(db).intake_before_attending));
+    throw new RpcError(waitsAttending
       ? 'Лечащий врач ещё не назначен — назначения недоступны.'
       : 'Пациент ещё не осмотрен главным врачом — назначения недоступны.', 400);
   }
@@ -378,11 +385,25 @@ export function admissionTransition(db, args, user, opts = {}) {
   const from = adm.status;
 
   // 1. Возможен ли такой шаг вообще.
-  try {
-    assertTransition('admission', from, to);
-  } catch (e) {
-    if (e instanceof TransitionError) throw new RpcError(explainRefusal(from, to), 400);
-    throw e;
+  //
+  // INPATIENT_REQUIRED_V1 — «Лечащий врач — только после осмотра приёмного врача»
+  // ВЫКЛЮЧЕН: лечащего назначают прямо с койки, и маршрут идёт admitted → active.
+  // Это НЕ стрелка таблицы (domain/lifecycle.js её не знает, и обычный вызов
+  // машины по-прежнему отвечает «нельзя пропустить шаг»): пройти её может только
+  // admission_set_attending, который сам проверил право и передаёт
+  // opts.withoutExam, — и только пока переключатель выключен. examined_at/by
+  // этот шаг не ставит (их ставит только переход в 'examined' ниже): осмотра не
+  // было, и записывать его никому нельзя.
+  const withoutExam = !!(opts && opts.withoutExam) && from === 'admitted' && to === 'active';
+  if (withoutExam) {
+    if (loadInpatientSettings(db).intake_before_attending) throw new RpcError(explainRefusal(from, to), 400);
+  } else {
+    try {
+      assertTransition('admission', from, to);
+    } catch (e) {
+      if (e instanceof TransitionError) throw new RpcError(explainRefusal(from, to), 400);
+      throw e;
+    }
   }
   // V3120_FIX (M1) — идемпотентный повтор — ТОЖЕ за проверкой роли. Раньше
   // повтор возвращался раньше неё, и повторную «отмену» проводил кто угодно (а
@@ -412,7 +433,9 @@ export function admissionTransition(db, args, user, opts = {}) {
   // opts не передаёт — для него матрица как была.
   const asAdmitting = !!(opts && opts.admittingDoctorOk)
     && isAdmittingDoctor(adm, user) && (to === 'examined' || to === 'active');
-  if (!asAdmitting) assertMayTransition(from, to, user);
+  // INPATIENT_REQUIRED_V1 — шаг «с койки сразу к лечению» вправе сделать те же,
+  // кто назначает лечащего врача после осмотра ('examined→active').
+  if (!asAdmitting) assertMayTransition(withoutExam ? 'examined' : from, to, user);
 
   const at = typeof (args && args.at) === 'string' && args.at
     ? args.at
@@ -509,6 +532,12 @@ export function admissionFlowState(db, args, user) {
     if (from !== adm.status) continue;
     can[to] = roles.some((r) => allowed.includes(r));
   }
+  // INPATIENT_REQUIRED_V1 — осмотр перед лечащим врачом выключен: «Назначить
+  // лечащего врача» доступен прямо с койки тем же, кто назначает его после осмотра.
+  const settings = loadInpatientSettings(db);
+  if (adm.status === 'admitted' && !settings.intake_before_attending) {
+    can.active = roles.some((r) => TRANSITION_ROLES['examined→active'].includes(r));
+  }
   return {
     admission_id: adm.id,
     status: adm.status,
@@ -517,6 +546,7 @@ export function admissionFlowState(db, args, user) {
     attending_doctor_id: adm.attending_doctor_id,
     examined_at: adm.examined_at,
     can,
+    required: requiredFlags(settings),   // INPATIENT_REQUIRED_V1 — положение переключателей для экрана
   };
 }
 
@@ -552,7 +582,7 @@ export const CAPABILITY_TRANSITION = Object.freeze({
  *
  * @returns {{roles:string[], can:Object<string,boolean>}}
  */
-export function inpatientCapabilities(_db, _args, user) {
+export function inpatientCapabilities(db, _args, user) {
   const roles = effectiveRoles(user);
   const can = {};
   for (const [action, key] of Object.entries(CAPABILITY_TRANSITION)) {
@@ -563,5 +593,8 @@ export function inpatientCapabilities(_db, _args, user) {
   // по роли сам: вторая копия правила разошлась бы с первой, и главный врач
   // снова остался бы с пустой вкладкой — или, наоборот, палатный врач увидел бы
   // чужих пациентов, на которых сервер ему всё равно откажет.
-  return { roles, scope: inpatientScope(user), can };
+  // INPATIENT_REQUIRED_V1 — положение переключателей: списки пациентов решают по
+  // ним, кого считать «ждут лечащего врача». Без базы (старый вызов с null) и на
+  // базе старше 298 — умолчания, то есть как сегодня.
+  return { roles, scope: inpatientScope(user), can, required: requiredFlags(loadInpatientSettings(db)) };
 }
