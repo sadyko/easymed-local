@@ -3,8 +3,10 @@
 //
 // Что проверяется здесь (экран; правило — patient-duplicates.test.js, сервер —
 // rpc/patient-duplicates.test.js):
-//   * ЧИП в шапке остаётся один: «Дубликаты · N» считает уверенные, как прежде, а
-//     рядом — «возможные · M»; без возможных хвоста нет;
+//   * КНОПКА «Дубликаты» одна: число — уверенные, как прежде, а рядом — второе число «возможные»;
+//     без возможных второго нет. DUP_TO_RAIL_V1 (ветка партнёра, слияние 2026-11-23) — кнопка
+//     переехала из шапки списка в левую колонку раздела; тест берёт её у модуля списка
+//     (duplicatesRailButton — её же ставит patients-hub.js);
 //   * РЕЖИМ «Дубликаты» показывает ГРУППЫ: сначала уверенные, потом возможные,
 //     каждая группа — шапка с причиной («тот же телефон и дата рождения» / «то же
 //     ФИО и дата рождения») и её карты подряд, строками списка;
@@ -155,12 +157,16 @@ async function paint({ lang = 'ru', role = 'admin', dismiss = true, data = FULL_
   else setEffectiveFromRole({ name: role, permissions: { sections: ['patients', 'registration'], levels: { patients: 'editor', registration: 'editor' } } });
   setLang(lang);
   const box = mk('div');
-  const { renderPatients } = await coldView();
-  await renderPatients(box, { onNavigate: () => {}, embedded: true });
+  const mod = await coldView();
+  await mod.renderPatients(box, { onNavigate: () => {}, embedded: true });
+  box.__dupBtn = mod.duplicatesRailButton();   // DUP_TO_RAIL_V1 — кнопка колонки
   await tick();
   return box;
 }
-const chipOf = (box) => buttons(box).find((b) => b.attrs['data-act'] === 'dup-chip');
+const chipOf = (box) => box.__dupBtn;
+// Числа кнопки колонки: уверенные — первый .nav-badge, возможные — .dup-chip-possible.
+const sureOf = (chip) => labelOf(byClass(chip, 'nav-badge').find((n) => !hasClass(n, 'dup-chip-possible')));
+const possibleOf = (chip) => byClass(chip, 'dup-chip-possible')[0];
 async function openDupMode(box) {
   chipOf(box).click();
   await tick();
@@ -170,19 +176,21 @@ async function openDupMode(box) {
 test('чип: «Дубликаты · 2» считает уверенные, «возможные · 4» — карты возможных групп; без возможных хвоста нет', async () => {
   const box = await paint();
   const chip = chipOf(box);
-  assert.ok(chip, 'чипа «Дубликаты» нет в шапке');
+  assert.ok(chip, 'кнопки «Дубликаты» нет в колонке');
   assert.ok(rpcCalls.some((c) => c.name === 'patient_duplicates_scan'), 'скан дубликатов не спрошен у сервера');
   assert.ok(!dbCalls.some((b) => b && b.table === 'patients' && b.limit === 1000), 'остался прежний скан первой тысячи карт в браузере');
-  const label = labelOf(chip).replace(/\s+/g, ' ');
-  assert.match(label, /Дубликаты · 2/, 'уверенные посчитаны не так: ' + label);
-  assert.match(label, /возможные · 4/, 'возможные не видны на чипе: ' + label);
+  assert.match(labelOf(chip), /Дубликаты/);
+  assert.equal(sureOf(chip), '2', 'уверенные посчитаны не так');
+  assert.equal(labelOf(possibleOf(chip)), '4', 'возможные не видны на кнопке');
+  assert.notEqual(possibleOf(chip).style.display, 'none', 'число возможных спрятано при четырёх');
+  assert.match(String(possibleOf(chip).attrs.title || ''), /возможные/, 'второе число не подписано');
   assert.match(String(chip.attrs.title || ''), /Возможные/, 'подсказка чипа не объясняет второй список');
 
   const none = await paint({ data: { sure: [[201, 202]], possible: [] } });
-  const wrap = byClass(chipOf(none), 'dup-chip-possible')[0];
+  const wrap = possibleOf(chipOf(none));
   assert.ok(wrap, 'у чипа нет места для «возможных»');
-  assert.equal(wrap.style.display, 'none', 'при нуле возможных хвост «возможные · 0» виден');
-  assert.match(labelOf(chipOf(none)), /Дубликаты · 2/);
+  assert.equal(wrap.style.display, 'none', 'при нуле возможных число «0» видно');
+  assert.equal(sureOf(chipOf(none)), '2');
 });
 
 test('режим «Дубликаты»: сначала уверенные, потом возможные; у группы — причина и её карты подряд', async () => {
@@ -236,7 +244,7 @@ test('«Не дубликат» — только у возможных груп�
   const after = byClass(box, 'dup-group-head');
   assert.equal(after.length, 2, 'отмеченная группа осталась в списке');
   assert.ok(!rowsOf(box).some((r) => textOf(r).includes('Sardor Alimov')), 'карта отмеченной группы осталась на экране');
-  assert.match(labelOf(chipOf(box)).replace(/\s+/g, ' '), /возможные · 2/, 'чип не пересчитал возможные');
+  assert.equal(labelOf(possibleOf(chipOf(box))), '2', 'кнопка не пересчитала возможные');
 });
 
 test('отказ в подтверждении — ничего не уходит на сервер', async () => {
@@ -269,7 +277,8 @@ test('«Объединить» у группы открывает окно об�
 
 test('регистратор видит обе группы и числа, но без «Не дубликат» и «Объединить»', async () => {
   const box = await paint({ role: 'registrar', dismiss: false });
-  assert.match(labelOf(chipOf(box)).replace(/\s+/g, ' '), /Дубликаты · 2 · возможные · 4/);
+  assert.equal(sureOf(chipOf(box)), '2');
+  assert.equal(labelOf(possibleOf(chipOf(box))), '4');
   await openDupMode(box);
   assert.equal(byClass(box, 'dup-group-head').length, 3, 'регистратор не видит групп');
   assert.equal(byAct(box, 'dup-dismiss').length, 0, 'регистратору показана «Не дубликат», которую сервер отвергнет');
