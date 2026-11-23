@@ -14,6 +14,28 @@ export const STRINGS = {
   "У этого документа нет раздела: {section}.": {"en":"This document has no such section: {section}.","ru":"У этого документа нет раздела: {section}.","uz":"Bu hujjatda bunday bo‘lim yo‘q: {section}."},   // INPATIENT_REQUIRED_V1
   "Обязательные разделы документа — список.": {"en":"Required document sections must be sent as a list.","ru":"Обязательные разделы документа — список.","uz":"Hujjatning majburiy bo‘limlari ro‘yxat sifatida yuborilishi kerak."},   // INPATIENT_REQUIRED_V1
   "Настройка {key}: нужно «да» или «нет».": {"en":"Setting {key}: the value must be «yes» or «no».","ru":"Настройка {key}: нужно «да» или «нет».","uz":"{key} sozlamasi: «ha» yoki «yo‘q» bo‘lishi kerak."},   // INPATIENT_REQUIRED_V1
+  // INPATIENT_REQUIRED_V1 — отметки обязательных полей и окно «Заполнено не всё» (views/required-marks.js)
+  "Не заполнено": {"en":"Not filled in","ru":"Не заполнено","uz":"To‘ldirilmagan"},   // INPATIENT_REQUIRED_V1
+  "Не заполнено:": {"en":"Not filled in:","ru":"Не заполнено:","uz":"To‘ldirilmagan:"},   // INPATIENT_REQUIRED_V1
+  "обязательно": {"en":"required","ru":"обязательно","uz":"majburiy"},   // INPATIENT_REQUIRED_V1
+  "Заполнено не всё": {"en":"Not everything is filled in","ru":"Заполнено не всё","uz":"Hammasi ham to‘ldirilmagan"},   // INPATIENT_REQUIRED_V1
+  "Сохранить как есть": {"en":"Save as is","ru":"Сохранить как есть","uz":"Shu holicha saqlash"},   // INPATIENT_REQUIRED_V1
+  "Без этого сохранить нельзя — так настроено в клинике.": {"en":"This cannot be saved without it — the clinic has set it up this way.","ru":"Без этого сохранить нельзя — так настроено в клинике.","uz":"Busiz saqlab bo‘lmaydi — klinikada shunday sozlangan."},   // INPATIENT_REQUIRED_V1
+  // INPATIENT_REQUIRED_V1 — подписи полей и групп титульного листа (TITLE_FIELD_LABEL / TITLE_GROUP_LABEL)
+  "Постоянный адрес": {"en":"Permanent address","ru":"Постоянный адрес","uz":"Doimiy manzil"},   // INPATIENT_REQUIRED_V1
+  "Место работы, профессия, должность": {"en":"Workplace, profession, position","ru":"Место работы, профессия, должность","uz":"Ish joyi, kasbi, lavozimi"},   // INPATIENT_REQUIRED_V1
+  "Близкий родственник": {"en":"Next of kin","ru":"Близкий родственник","uz":"Yaqin qarindosh"},   // INPATIENT_REQUIRED_V1
+  "Телефон родственника": {"en":"Next of kin’s phone","ru":"Телефон родственника","uz":"Yaqin qarindosh telefoni"},   // INPATIENT_REQUIRED_V1
+  "Аллергия на лекарства": {"en":"Drug allergy","ru":"Аллергия на лекарства","uz":"Dori allergiyasi"},   // INPATIENT_REQUIRED_V1
+  "Каким транспортом": {"en":"By what transport","ru":"Каким транспортом","uz":"Qanday transportda"},   // INPATIENT_REQUIRED_V1
+  "Как доставляют по отделению": {"en":"How the patient is moved","ru":"Как доставляют по отделению","uz":"Bo‘limda qanday olib yuriladi"},   // INPATIENT_REQUIRED_V1
+  "Сколько прошло от начала болезни": {"en":"Time since illness onset","ru":"Сколько прошло от начала болезни","uz":"Kasallik boshlanganidan o‘tgan vaqt"},   // INPATIENT_REQUIRED_V1
+  "Рост": {"en":"Height","ru":"Рост","uz":"Bo‘y"},   // INPATIENT_REQUIRED_V1
+  "Вес": {"en":"Weight","ru":"Вес","uz":"Vazn"},   // INPATIENT_REQUIRED_V1
+  "АД верхнее": {"en":"Systolic BP","ru":"АД верхнее","uz":"Sistolik AQB"},   // INPATIENT_REQUIRED_V1
+  "АД нижнее": {"en":"Diastolic BP","ru":"АД нижнее","uz":"Diastolik AQB"},   // INPATIENT_REQUIRED_V1
+  "Осмотр медсестры": {"en":"Nurse’s examination","ru":"Осмотр медсестры","uz":"Hamshira ko‘rigi"},   // INPATIENT_REQUIRED_V1
+  "Поступление в стационар": {"en":"Admission to hospital","ru":"Поступление в стационар","uz":"Statsionarga yotqizish"},   // INPATIENT_REQUIRED_V1
   // DOC_HISTORY_V1 — версии документа приёма неизменяемы: отказ триггеров миграции 289
   "История изменений документа не меняется.": {"en":"The document’s change history cannot be modified.","ru":"История изменений документа не меняется.","uz":"Hujjat o‘zgarishlari tarixini o‘zgartirib bo‘lmaydi."},   // DOC_HISTORY_V1
   "История изменений документа не удаляется.": {"en":"The document’s change history cannot be deleted.","ru":"История изменений документа не удаляется.","uz":"Hujjat o‘zgarishlari tarixini o‘chirib bo‘lmaydi."},   // DOC_HISTORY_V1

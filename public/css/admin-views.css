@@ -10121,3 +10121,24 @@ select.crm-filter-sel.is-filtered,
     font-size: 13.5px; line-height: 1.5;
 }
 .ref-preview-note svg { flex: 0 0 auto; margin-top: 2px; }
+
+/* INPATIENT_REQUIRED_V1 — отметки обязательных полей (views/required-marks.js). Только экран.
+   Цвета — переменные палитры (--crit-*), своих нет. Звезда — из CSS с пустым текстом для
+   читалки (content: … / ""): читалке говорит скрытое «обязательно» (.rq-sr). */
+.rq-req::after { content: " *"; content: " *" / ""; color: var(--crit-500); font-weight: 700; }
+.rq-sr { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.rq-empty { box-shadow: 0 0 0 2px var(--crit-500); background: var(--crit-50); border-radius: 6px; }
+.rq-msg { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 600; color: var(--crit-700); }
+.rq-msg[hidden] { display: none; }   /* у блока атрибут hidden проигрывает display: block */
+.f3 .rq-empty { position: relative; }
+.f3 .rq-msg { position: absolute; left: 0; top: 100%; margin-top: 1px; font-size: 10px; white-space: nowrap; }   /* бланк 003 держится одной страницы — подпись не добавляет высоты */
+.rq-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 8px 12px; margin: 0 0 10px; border-radius: 10px; background: var(--crit-50); color: var(--crit-700); font-size: 13px; line-height: 1.45; }
+.rq-summary[hidden] { display: none; }
+.rq-summary-t { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
+.rq-summary-t svg { flex: 0 0 auto; align-self: center; }
+.rq-list { min-width: 0; }
+.rq-jump { border: 0; background: none; padding: 0; font: inherit; color: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.rq-jump:hover { text-decoration-thickness: 2px; }
+.rq-jump:focus-visible { outline: 2px solid var(--crit-500); outline-offset: 2px; border-radius: 3px; }
+@media print { .rq-summary, .rq-msg, .rq-sr { display: none !important; } .rq-req::after { content: none !important; } .rq-empty { box-shadow: none !important; background: none !important; } }
+/* end INPATIENT_REQUIRED_V1 */
