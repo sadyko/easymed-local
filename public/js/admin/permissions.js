@@ -1269,6 +1269,8 @@ export function isRouteAllowed(view) {
     // CLINIC_API_STEP7_V1 — «API и подключения»: открывает окно «API» в «Ролях» (SETTINGS_ROUTE_TILE выше) или администратор; ненастроенной роли — нет.
     if (view === 'api-settings') return false;
     if (view === 'visibility-settings') return false;   // NAV_VISIBILITY_V1 — что есть в клинике, решает администратор; полный доступ прошёл выше
+    // INPATIENT_REQUIRED_V1 — «что обязательно в стационаре» решают главный врач и администратор (сервер — SETTINGS_WRITE_ROLES в rpc/inpatient-settings.js).
+    if (view === 'inpatient-settings') return isModuleAllowed('settings') && hasActorRole(['admin', 'head_doctor']);
     // TELEGRAM_BOT_V1 — раздел админский целиком, включая чтение: токен бота
     // это полный доступ к переписке с пациентами, и даже его хвост регистратору
     // видеть незачем. Полный доступ (_effective === null) отсекается выше, так

@@ -111,6 +111,7 @@ import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
 import { renderReferrals, TABS as REFERRAL_TABS } from './admin/views/referrals.js?v=ref1';   // REFERRALS_RAIL_SUB_V2 — вкладки подпунктами в колонке   // REFERRALS_CRM_V1 — «Реферирование» под CRM
 import { renderNavVisibility } from './admin/views/nav-visibility.js?v=navvis1';   // NAV_VISIBILITY_V1 — «Настройки → Видимость разделов»
+import { renderInpatientSettings } from './admin/views/inpatient-settings.js';   // INPATIENT_REQUIRED_V1 — «Настройки → Стационар»: что обязательно в стационаре
 import { isHiddenView, normalizeHidden } from './admin/nav-visibility-logic.js?v=navvis1';   // NAV_VISIBILITY_V1
 import { renderMetaSettings }      from './admin/views/meta-settings.js?v=meta1';   // META_LEADS_V1 — Meta Lead Ads -> CRM
 import { renderTelegramDeeplinks } from './admin/views/telegram-deeplinks.js?v=tgdl1';   // TG_DEEPLINK_V1 — ссылки для рекламы в Telegram
@@ -415,6 +416,7 @@ const CRUMBS = {
     'crm-settings': ['Insights', 'Settings', 'CRM-канбан'],   // CRM_CONFIG_V1
     referrals:      ['Insights', 'Settings', 'Реферирование'],   // REFERRALS_NAV_V1; REFERRALS_TO_COMMERCE_V1 — инструмент витрины
     'visibility-settings': ['Insights', 'Settings', 'Видимость разделов'],   // NAV_VISIBILITY_V1
+    'inpatient-settings': ['Insights', 'Settings', 'Стационар'],   // INPATIENT_REQUIRED_V1
     'telegram-chat': ['Insights', 'Settings', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1; CHATS_TO_COMMERCE_V1 — как прочие инструменты витрины
     'meta-chat':     ['Insights', 'Settings', 'Чат Facebook и Instagram'],   // META_INBOX_V1; CHATS_TO_COMMERCE_V1
     'consultation-types': ['Insights', 'Settings', 'Консультации врачей'],   // CONSULTATION_TYPES_RESTORE
@@ -897,6 +899,7 @@ const PARENT_OF = {
     'clinic-news': 'commerce',   // CLINIC_NEWS_V1
     'crm-settings': 'settings', 'doctor-pay': 'settings',
     'visibility-settings': 'settings',   // NAV_VISIBILITY_V1 — плитка «Основного»
+    'inpatient-settings': 'settings',   // INPATIENT_REQUIRED_V1 — плитка «Помещений»
     'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
     'departments': 'settings',   // DEPARTMENTS_V1
     'subscription': 'settings', 'clinic-data': 'settings',
@@ -1506,6 +1509,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'crm':           return void await renderCrm(viewRoot, ctx);   // CRM_V1
             case 'referrals':     return void await renderReferrals(viewRoot, ctx);   // REFERRALS_NAV_V1 — «Реферирование», пункт группы «Операции»
             case 'visibility-settings': return void await renderNavVisibility(viewRoot, ctx);   // NAV_VISIBILITY_V1 — только полный доступ (isRouteAllowed)
+            case 'inpatient-settings': return void await renderInpatientSettings(viewRoot, ctx);   // INPATIENT_REQUIRED_V1 — главный врач и администратор (isRouteAllowed)
             case 'docs-archive':  return void await renderDocsArchive(viewRoot, ctx);   // CLINICAL_DOCS_ARCHIVE_V1
             case 'admissions':    return void await renderInpatient(viewRoot, ctx);   // INPATIENT_ONE_SECTION_V1 — заявки · койки · госпитализации одним разделом
             case 'case-file':     return void await renderCaseWorkspace(viewRoot, ctx);   // CASE_WORKSPACE_V1

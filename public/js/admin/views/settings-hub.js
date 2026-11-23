@@ -408,6 +408,7 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
         key: 'rooms', title: 'Помещения', icon: 'Building', color: { bg: '#e8f6ed', fg: '#2e8b52' },
         items: [
             { label: 'Помещения', desc: 'Этажи, кабинеты и палаты в одном месте: койки, цены, врачи', icon: 'Building', live: true, action: nav('rooms-setup'), route: 'rooms-setup' },
+            { label: 'Стационар', desc: 'Что обязательно: документы истории болезни, поля титульного листа, порядок шагов', icon: 'Bed', live: true, action: nav('inpatient-settings'), route: 'inpatient-settings' },   // INPATIENT_REQUIRED_V1
             // ROOMS_ONE_ENTRANCE_V1 (2026-09-11) — четыре старых редактора (Этажи,
             // Кабинеты, Палаты, Кровати) из меню убраны: «Помещения» делает всё то же
             // в одном окне и на плане, а два входа в одно и то же читались как два

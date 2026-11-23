@@ -89,6 +89,8 @@ const RPC_LABELS = {
     lan_address_status: 'Адрес в сети',
     crm_config_get: 'Настройки CRM',
     inpatient_capabilities: 'Права в стационаре',
+    inpatient_settings_get: 'Настройки стационара',             // INPATIENT_REQUIRED_V1
+    inpatient_settings_save: 'Изменение настроек стационара',   // INPATIENT_REQUIRED_V1
     deposit_balance: 'Баланс аванса',
     patient_base_aggregates: 'Сводка по пациентам',
     disk_usage: 'Место на диске',   // DISK_GUARD_V1 — колокол администратора спрашивает каждую минуту
