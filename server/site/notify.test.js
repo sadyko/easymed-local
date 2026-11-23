@@ -11,7 +11,7 @@ import { invalidateContentCache } from './content.js';
 import { notifyNewRequest, _setSender } from './notify.js';
 import { encryptToken, loadOrCreateKey } from '../services/telegram/crypto.js';
 
-const ENC_TOKEN = encryptToken('5125777202:AAFeAwoH0y0S_cWGETLD1S_8qcXRxq7elf8', loadOrCreateKey());
+const ENC_TOKEN = encryptToken('1000000001:TESTONLYtestonlyTESTONLYtestonly123', loadOrCreateKey());
 
 function seed() {
   const db = openDb(':memory:');

@@ -27,7 +27,7 @@ export function rateLimit({ windowMs, max }) {
       // Тот же конверт, что siteError() в app.js — сюда его импортировать не
       // стоит: app.js импортирует rateLimit() же, а замыкать модули друг на
       // друга ради одной JSON-обёртки — риск ради экономии четырёх строк.
-      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests. Try again later.' } });
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Слишком много запросов. Попробуйте позже.' } });
     }
     next();
   };

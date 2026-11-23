@@ -12,14 +12,14 @@ const err = (status, code, message) => Object.assign(new Error(message), { statu
 
 export function handleRequest(db, body, meta) {
   const type = ['appointment', 'contact', 'callback'].includes(body.type) ? body.type : null;
-  if (!type) throw err(400, 'bad_request', 'Unknown request type.');
+  if (!type) throw err(400, 'bad_request', 'Неизвестный тип заявки.');
   // Формы без JS (static-pages.js, задача 9) шлют поле "name" — единого имени
   // с JSON-контрактом задачи 10 (full_name) у них никогда не было и трогать
   // их разметку эта задача не должна; поэтому full_name принимает оба имени.
   const fullName = String(body.full_name || body.name || '').trim().slice(0, 200);
   if (!fullName) throw err(400, 'bad_request', 'Name is required.');
   const phoneRaw = String(body.phone || '').trim().slice(0, 32);
-  if (phoneKey(phoneRaw).length < 7) throw err(400, 'bad_request', 'Phone is invalid.');
+  if (phoneKey(phoneRaw).length < 7) throw err(400, 'bad_request', 'Номер телефона указан неверно.');
   const message = String(body.message || '').trim().slice(0, 2000);
   const email = String(body.email || '').trim().slice(0, 200);
   const day = new Date().toISOString().slice(0, 10);

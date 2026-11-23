@@ -27,7 +27,7 @@ const META = { ip: '1.2.3.4', ua: 't' };
 // как тест проверит, сколько раз позвал стаб-отправитель.
 const tick = () => new Promise((r) => setTimeout(r, 30));
 
-const TG_TOKEN = encryptToken('5125777202:AAFeAwoH0y0S_cWGETLD1S_8qcXRxq7elf8', loadOrCreateKey());
+const TG_TOKEN = encryptToken('1000000001:TESTONLYtestonlyTESTONLYtestonly123', loadOrCreateKey());
 function enableNotify(db, chatId = '-1001234567890') {
   db.prepare('UPDATE telegram_settings SET enabled = 1, bot_token_enc = ? WHERE id = 1').run(TG_TOKEN);
   const row = db.prepare('SELECT settings FROM website_settings WHERE id = 1').get();

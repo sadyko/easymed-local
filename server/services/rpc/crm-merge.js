@@ -343,6 +343,10 @@ export function crmMergeLeads(db, args, user) {
     // держало бы врача до истечения. Страж — crm-merge-coverage.test.js.
     try { db.prepare(`UPDATE api_requests SET crm_request_id = ? WHERE crm_request_id IN (${lh})`).run(keepId, ...mergeIds); }
     catch { /* база до мигр. 245 */ }
+    // WEBSITE_V1 (мигр. 298) — заявки с публичного сайта идут за карточкой: иначе удаление
+    // проигравшей оторвало бы заявку от обращения. Страж — crm-merge-coverage.test.js.
+    try { db.prepare(`UPDATE website_requests SET crm_request_id = ? WHERE crm_request_id IN (${lh})`).run(keepId, ...mergeIds); }
+    catch { /* база до мигр. 298 */ }
     // META_LEADS_V1 — журнал заявок из рекламы Meta (мигр. 246) идёт за
     // карточкой по той же причине: ON DELETE SET NULL отвязал бы запись, и
     // таблица «Последние заявки» потеряла бы ссылку на карточку. Повтор заявки

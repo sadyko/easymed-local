@@ -11803,6 +11803,10 @@ export const STRINGS = {
   // AI_OWN_KEY_V1 / AI_CALLS_V1 (ревью слияния 2026-11-23) — отказы OpenAI по-русски
   "Запрос к OpenAI не выполнен.": {"en":"The OpenAI request failed.","ru":"Запрос к OpenAI не выполнен.","uz":"OpenAI so‘rovi bajarilmadi."},
   "Ключ OpenAI не задан.": {"en":"The OpenAI key is not set.","ru":"Ключ OpenAI не задан.","uz":"OpenAI kaliti kiritilmagan."},
+  // WEBSITE_V1 — ответы публичного сайта посетителям
+  "Слишком много запросов. Попробуйте позже.": {"en":"Too many requests. Try again later.","ru":"Слишком много запросов. Попробуйте позже.","uz":"Juda ko‘p so‘rov yuborildi. Keyinroq urinib ko‘ring."},
+  "Неизвестный тип заявки.": {"en":"Unknown request type.","ru":"Неизвестный тип заявки.","uz":"Noma’lum ariza turi."},
+  "Номер телефона указан неверно.": {"en":"The phone number is invalid.","ru":"Номер телефона указан неверно.","uz":"Telefon raqami noto‘g‘ri kiritilgan."},
   // V3120_I18N — сообщения сервера — END
   // TEST_DATA_WIPE_V1 — сообщения сервера (services/test-data-wipe.js)
   "Удаление тестовых данных нельзя начинать внутри другой транзакции — только отдельно, при запуске.": {"en":"Test data deletion cannot start inside another transaction — only on its own, at startup.","ru":"Удаление тестовых данных нельзя начинать внутри другой транзакции — только отдельно, при запуске.","uz":"Test ma’lumotlarini o‘chirishni boshqa tranzaksiya ichida boshlab bo‘lmaydi — faqat alohida, ishga tushishda."},   // TEST_DATA_WIPE_V1
