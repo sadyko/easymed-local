@@ -45,6 +45,7 @@ import { CATEGORY_LABEL } from './inventory-shared.js';
 import { METHOD_RU as PAY_METHOD_RU } from '../../shared/payment-methods.js';
 // ROLE_REPORTS_SETTINGS_V1 — плитка видна, если её группа отчётов выдана роли.
 import { reportKindAllowed } from '../permissions.js';
+import { setRailTools } from '../rail-tools.js';   // REPORTS_RAIL_V1 — виды отчётов в боковой колонке
 // JOURNALS_V1_SERVICE — окно выбора услуг журнала и запомненный выбор.
 import { openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText, currentUserId } from './report-service-picker.js?v=jrn4';   // JOURNALS_V1 — jrn2 поиск во всю ширину; JOURNALS_V1_RJ2C — jrn3 предел у галочки и «Готово», выбор у каждого сотрудника свой; JOURNALS_V1_ALL — jrn4 «Все услуги» / «Выбрано услуг: N»
 import { reportPrintHtml } from './report-print.js?v=jrn4';
@@ -261,6 +262,8 @@ export const REPORT_DEFS = [
         title: 'Telegram-бот',
         desc:  'Сколько пациентов подключилось к боту, какой это охват и как он рос по неделям.',
         open:  () => import('./telegram-report.js?v=tgr6').then(m => m.openTelegramReport()),
+        // REPORTS_INLINE_V1 — в оболочке открывается в области содержимого, как все.
+        renderInto: (el) => import('./telegram-report.js?v=tgr6').then(m => m.openTelegramReport(el)),
     },
 ];
 
@@ -331,11 +334,53 @@ function loadServiceCatalog() {
         });
 }
 
+// REPORTS_RAIL_V1 (2026-11-21, владелец со снимком «Отчётов»: «put all report
+// types to the side bar») — каждый вид отчёта — функцией раздела в боковой
+// колонке, тем же реестром, что у CRM и «Настроек» (RAIL_TOOLS_V1): колонка
+// рисует их вместо единственного пункта «Отчёты», пока он открыт. Нажатие —
+// то же, что карточка: окно отчёта на весь экран. Карточки на странице
+// остались — описания читаются только там. Регистрация при загрузке модуля
+// (admin.js импортирует его при старте); список считается при каждой
+// отрисовке колонки — по правам этой минуты (reportVisible).
+function reportsRailGroups() {
+    const shell = (typeof window !== 'undefined' && window.easymed) || null;
+    const st = (shell && shell.state) || {};
+    const current = st.view === 'reports-hub' && st.payload && typeof st.payload.sub === 'string' ? st.payload.sub : null;
+    return [REPORT_DEFS.filter(reportVisible).map((rep) => {
+        const label = tr(rep.title);
+        const on = (!rep.open || !!rep.renderInto) && rep.kind === current;
+        return h('button', {
+            class: 'nav-item' + (on ? ' active' : ''), type: 'button', title: label,
+            'data-report-rail': rep.kind,
+            ...(on ? { 'aria-current': 'page' } : {}),
+            onclick: () => openReport(rep),
+        }, h('span', { class: 'nav-icon' }, Icon(rep.icon || 'Download', { size: 18 })), h('span', null, label));
+    })];
+}
+// REPORTS_INLINE_V1 (2026-11-21, владелец: «reports should not be as a pop up,
+// when you press them it should open in main block») — отчёт открывается
+// экраном #reports-hub/<kind> в области содержимого, а не окном поверх всего:
+// F5, ссылка и «Назад» ведут на тот же отчёт. Вне оболочки (стенды) — прежнее
+// окно. «Telegram-бот» — не конструктор периода и строк: он рисует себя сам
+// (renderInto → telegram-report.js), но тоже в области содержимого.
+function openReport(rep) {
+    if (rep.open && !rep.renderInto) return rep.open();
+    const shell = (typeof window !== 'undefined' && window.easymed) || null;
+    if (shell && typeof shell.navigate === 'function') return shell.navigate('reports-hub', { sub: rep.kind });
+    return rep.open ? rep.open() : openReportBuilder(rep);
+}
+setRailTools('reports-hub', reportsRailGroups);
+
 // ---------------------------------------------------------------------------
 // Entry point — the hub page is only the cards.
 // ---------------------------------------------------------------------------
-export async function renderReportsHub(container) {
+export async function renderReportsHub(container, ctx = {}) {
     clear(container);
+    // REPORTS_INLINE_V1 — #reports-hub/<kind>: отчёт в области содержимого.
+    const sub = ctx && ctx.payload && typeof ctx.payload.sub === 'string' ? ctx.payload.sub : null;
+    const inlineRep = sub ? REPORT_DEFS.find((r) => r.kind === sub && (!r.open || r.renderInto) && reportVisible(r)) : null;
+    if (inlineRep && inlineRep.renderInto) { await inlineRep.renderInto(container); return; }
+    if (inlineRep) { await openReportBuilder(inlineRep, container); return; }
     // BUILDING_FRESHNESS_V1 — полоса заполняется ПОСЛЕ отрисовки карточек:
     // «Отчёты» не должны ждать сети, чтобы открыться, а у клиники в одном
     // здании полоса не появится вовсе.
@@ -482,7 +527,7 @@ async function paintFreshness(target) {
 function reportCard(rep) {
     return h('button', {
         type: 'button',
-        onclick: () => (rep.open ? rep.open() : openReportBuilder(rep)),
+        onclick: () => openReport(rep),   // REPORTS_INLINE_V1
         style: {
             display: 'flex', alignItems: 'flex-start', gap: '14px', textAlign: 'left',
             padding: '18px 20px', background: 'var(--white, #fff)',
@@ -540,7 +585,7 @@ export function presetRange(preset, now = new Date()) {
 // ---------------------------------------------------------------------------
 // Full-screen builder
 // ---------------------------------------------------------------------------
-async function openReportBuilder(rep) {
+async function openReportBuilder(rep, mount = null) {   // REPORTS_INLINE_V1 — mount: область содержимого вместо окна
     const st = {
         preset: 'month',
         from: '', to: '',
@@ -559,8 +604,19 @@ async function openReportBuilder(rep) {
     // JOURNALS_V1_SERVICE — выбор услуг журнала помнится в этом браузере (удобство, не данные).
     for (const o of rep.options || []) if (o.type === 'services') st.opts[o.arg] = loadRememberedServices(browserStorage(), rep.kind, currentUserId());   // JOURNALS_V1_RJ2C — у каждого сотрудника свой
 
+    // REPORTS_INLINE_V1 — в области содержимого та же вёрстка лежит в потоке:
+    // без position: fixed, без Esc и без «Закрыть» — уходят боковой колонкой.
     const overlay = h('div', {
-        style: {
+        'data-report-builder': rep.kind,
+        // REPORTS_FLAT_V1 (2026-11-21, владелец со снимком отчёта: «in all place
+        // in reports, block inside the block so remove it and use space
+        // smartly») — в области содержимого отчёт НЕ рисует собственную
+        // карточку: ни рамки, ни скругления, ни белой подложки — область уже
+        // карточка. Ряды выравниваются по её краю (поля 0 по бокам), а
+        // отделяет настройки от данных одна черта под последним рядом.
+        style: mount ? {
+            display: 'flex', flexDirection: 'column', minWidth: 0,
+        } : {
             position: 'fixed', inset: '0', zIndex: '150',
             background: 'var(--ink-25, #f6f8f9)',
             display: 'flex', flexDirection: 'column',
@@ -568,10 +624,14 @@ async function openReportBuilder(rep) {
     });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
     const onKey = (e) => { if (e.key === 'Escape') close(); };
-    document.addEventListener('keydown', onKey);
+    if (!mount) document.addEventListener('keydown', onKey);
 
     // ---- header ----
-    overlay.appendChild(h('header', {
+    // REPORTS_NO_NAME_V1 (2026-11-21, владелец: «remove everywhere where it is
+    // repeating block name and taking space») — в области содержимого шапки с
+    // именем отчёта нет: имя стоит выделенным пунктом в колонке, а закрывать
+    // нечего. В окне (стенды, вне оболочки) шапка прежняя — с «Закрыть».
+    if (!mount) overlay.appendChild(h('header', {
         style: {
             display: 'flex', alignItems: 'center', gap: '14px',
             padding: '14px 22px', background: 'var(--white, #fff)',
@@ -587,18 +647,8 @@ async function openReportBuilder(rep) {
         ),
         h('span', { style: { flex: 1 } }),
         // REPORT_CLOSE_RED_V1 — the close control must be unmissable
-        h('button', {
-            class: 'btn',
-            style: {
-                fontSize: '13.5px', fontWeight: '700',
-                background: '#dc2626', borderColor: '#dc2626', color: 'white',
-                padding: '9px 18px', borderRadius: '10px',
-                boxShadow: '0 2px 8px rgba(220,38,38,0.35)',
-            },
-            onmouseenter: (e) => { e.currentTarget.style.background = '#b91c1c'; },
-            onmouseleave: (e) => { e.currentTarget.style.background = '#dc2626'; },
-            onclick: close,
-        }, '✕ Закрыть'),
+        // REPORTS_INLINE_V1 — в области содержимого закрывать нечего: уходят колонкой.
+        mount ? null : h('button', { class: 'modal-close', type: 'button', onclick: close }, '×')   // CLOSE_COMPACT_V1 — общая компактная «Закрыть» (admin.css)
     ));
 
     // ---- controls: presets + dates (custom only) + branches + actions ----
@@ -906,7 +956,10 @@ async function openReportBuilder(rep) {
     }
 
     overlay.appendChild(h('div', {
-        style: {
+        style: mount ? {   // REPORTS_FLAT_V1
+            padding: '0 0 10px', flex: '0 0 auto',
+            display: 'flex', flexWrap: 'wrap', gap: '10px 16px', alignItems: 'center',
+        } : {
             padding: '10px 22px', background: 'var(--white, #fff)',
             borderBottom: '1px solid var(--ink-100)', flex: '0 0 auto',
             display: 'flex', flexWrap: 'wrap', gap: '10px 16px', alignItems: 'center',
@@ -944,7 +997,10 @@ async function openReportBuilder(rep) {
         onclick,
     }, text);
     const choiceRow = h('div', {
-        style: {
+        style: mount ? {   // REPORTS_FLAT_V1
+            padding: '0 0 12px', flex: '0 0 auto',
+            display: 'flex', flexWrap: 'wrap', gap: '8px 16px', alignItems: 'center',
+        } : {
             padding: '8px 22px', background: 'var(--white, #fff)',
             borderBottom: '1px solid var(--ink-100)', flex: '0 0 auto',
             display: 'flex', flexWrap: 'wrap', gap: '8px 16px', alignItems: 'center',
@@ -1038,7 +1094,9 @@ async function openReportBuilder(rep) {
     }
 
     // ---- preview ("mirror") ----
-    const previewEl = h('div', { style: { flex: '1 1 auto', overflow: 'auto', padding: '16px 22px' } });
+    const previewEl = h('div', { style: mount
+        ? { flex: '1 1 auto', overflow: 'auto', padding: '14px 0 0', borderTop: '1px solid var(--ink-100)' }   // REPORTS_FLAT_V1 — одна черта между настройками и данными
+        : { flex: '1 1 auto', overflow: 'auto', padding: '16px 22px' } });
     overlay.appendChild(previewEl);
 
     function paintPreviewEmpty(msg) {
@@ -1291,7 +1349,7 @@ async function openReportBuilder(rep) {
     }
     paintPreviewEmpty();
 
-    document.body.appendChild(overlay);
+    (mount || document.body).appendChild(overlay);
 }
 
 // ---------------------------------------------------------------------------

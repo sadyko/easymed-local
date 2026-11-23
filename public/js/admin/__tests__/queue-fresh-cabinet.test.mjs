@@ -77,7 +77,11 @@ globalThis.history = { state: null, replaceState(st) { this.state = st; }, pushS
 
 const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
 const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
-const buttonByText = (root, re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
+// HERO_TABS_TO_RAIL_V1 — вкладки раздела стоят в левой колонке оболочки: стенд
+// достаёт их из того же реестра (admin/rail-tools.js), что и колонка.
+const { railToolsFor } = await import('../rail-tools.js');
+const railNodes = (owner) => { const b = railToolsFor(owner); return b ? b().flat().filter(Boolean).flatMap((n) => walk(n)) : []; };
+const buttonByText = (root, re) => [...walk(root), ...railNodes('consultation')].find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
 const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
 const byClass = (root, c) => walk(root).filter((n) => hasClass(n, c));
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));

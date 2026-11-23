@@ -697,37 +697,23 @@ test('релизный архив везёт вендоренный набор �
     // якорят конец строки, а этой — мешает).
     const listing = tarList(tarPath).map((l) => l.trim());
 
-    // ВСЕ 442, ХОТЯ В РАНТАЙМЕ НЕ ЧИТАЕТСЯ НИ ОДИН — это решение, а не недосмотр
-    // (пересмотрено 2026-09-05, ревизия «мёртвый груз в архиве»).
-    //
-    // Факт верен: icons.js рисует из icon-paths.js, куда контуры ВКОМПИЛИРОВАНЫ
-    // (44 КБ, 82 рисунка), и ни одна строка кода не делает fetch за .svg. То
-    // есть 442 файла — 312 КБ несжатого текста, из которых в интерфейсе
-    // участвуют 68. Оставляем, и вот почему:
-    //
-    // 1. Это ИСХОДНИК генератора, а не ассет. scripts/build-icon-paths.mjs
-    //    читает именно эту папку. Обрезав её до 68 использованных, мы делаем
-    //    «добавить иконку» задачей «найти и скачать авторскую поставку заново»
-    //    вместо одной строки в icon-map.js — а тест свежести icon-paths.js
-    //    ловит расхождение как раз потому, что набор лежит целиком.
-    // 2. Цена мала и неверно оценивается по числу файлов: 312 КБ SVG — это
-    //    ~50 КБ внутри .tar.gz, рядом с бандлом Node в том же обновлении.
-    //    По сети клинике не уезжает ни байта: браузер грузит icon-paths.js.
-    // 3. Лицензия. CC BY 4.0 соблюдается чище, когда набор едет как получен,
-    //    вместе со своим ATTRIBUTION.md (в котором с 2026-09-05 сказано и о
-    //    внесённых изменениях), а не выборочной нарезкой.
-    //
-    // Что действительно было мусором и удалено — .DS_Store в корне набора: 8 КБ
-    // чужой ОС, которые build-bundle.mjs копировал в архив, а express.static
-    // потом отдавал по HTTP. Проверка ниже не даёт ему вернуться; вторая, по
-    // рабочему дереву, живёт в public/js/admin/__tests__/icons.test.mjs.
-    const svgs = listing.filter((l) => /^public\/assets\/icons\/coolicons\/.+\.svg$/.test(l));
-    assert.equal(svgs.length, 442, 'в архиве должны быть все 442 иконки набора');
+    // ICONS_LUCIDE_V1 (2026-11-22) — набор Lucide едет ровно теми файлами, что
+    // лежат в public/assets/icons/lucide/: это исходник генератора
+    // (scripts/build-icon-paths.mjs) и носитель лицензии. ISC разрешает
+    // распространять набор при одном условии — уведомление об авторском праве
+    // (LICENSE) едет вместе с ним; ATTRIBUTION.md говорит, что рисунки изменены.
+    // Прежний coolicons (442 файла CC BY 4.0) удалён вместе с заменой иконок.
+    const lucideDir = path.join(REPO_ROOT, 'public', 'assets', 'icons', 'lucide');
+    const expected = fs.readdirSync(lucideDir).filter((n) => n.endsWith('.svg')).length;
+    const svgs = listing.filter((l) => /^public\/assets\/icons\/lucide\/.+\.svg$/.test(l));
+    assert.equal(svgs.length, expected, 'в архиве должны быть все иконки набора из рабочего дерева');
+    assert.equal(listing.filter((l) => /^public\/assets\/icons\/coolicons\//.test(l)).length, 0, 'прежний набор вернулся в архив');
     const junk = listing.filter((l) => /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini|\._[^/]*)$/i.test(l));
     assert.deepEqual(junk, [], 'служебные файлы файловой системы уехали в архив клиники');
     for (const must of [
-      'public/assets/icons/coolicons/ATTRIBUTION.md',   // CC BY 4.0 — условие использования
-      'public/assets/icons/coolicons/Interface/Check.svg',
+      'public/assets/icons/lucide/LICENSE',          // ISC — условие использования
+      'public/assets/icons/lucide/ATTRIBUTION.md',
+      'public/assets/icons/lucide/check.svg',
       'public/js/admin/icon-paths.js',
       'public/js/admin/icon-map.js',
       'public/js/admin/icons.js',
@@ -737,7 +723,7 @@ test('релизный архив везёт вендоренный набор �
 
     // И это настоящие файлы, а не пустые записи: распаковываем и читаем.
     tarExtract(tarPath, dest);
-    const check = fs.readFileSync(path.join(dest, 'public', 'assets', 'icons', 'coolicons', 'Interface', 'Check.svg'), 'utf8');
+    const check = fs.readFileSync(path.join(dest, 'public', 'assets', 'icons', 'lucide', 'check.svg'), 'utf8');
     assert.match(check, /<svg/);
     const paths = fs.readFileSync(path.join(dest, 'public', 'js', 'admin', 'icon-paths.js'), 'utf8');
     assert.match(paths, /export const ICON_BODIES/);
@@ -748,7 +734,7 @@ test('релизный архив везёт вендоренный набор �
 
 test('иконки едут потому, что public/ в ALLOWLIST — если это изменится, тест выше врёт', () => {
   assert.ok(ALLOWLIST.includes('public'));
-  assert.ok(fs.existsSync(path.join(REPO_ROOT, 'public', 'assets', 'icons', 'coolicons', 'ATTRIBUTION.md')));
+  assert.ok(fs.existsSync(path.join(REPO_ROOT, 'public', 'assets', 'icons', 'lucide', 'LICENSE')));
 });
 
 // V3120_FIX — what the release must NOT carry from inside the allow-listed

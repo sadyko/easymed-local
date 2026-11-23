@@ -32,24 +32,25 @@ import { allowedSurvivors, suggestSurvivor, patientConflict, namesDiffer } from 
  * Окно «Дубликаты». onMerged() — после каждого удачного слияния (доска
  * перерисовывается, окно остаётся открытым: групп обычно несколько).
  */
-export function openCrmDuplicates({ onMerged } = {}) {
-    const overlay = h('div', { class: 'modal', 'data-crm-duplicates': '' });
+// CRM_PANELS_INLINE_V1 — { mount }: та же карточка видом раздела CRM, а не окном.
+export function openCrmDuplicates({ onMerged, mount = null } = {}) {
+    const overlay = h('div', { class: mount ? 'crm-panel-host' : 'modal', 'data-crm-duplicates': '' });
     const close = () => overlay.remove();
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
+    if (!mount) overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
     const bodyEl = h('div', { class: 'modal-body', style: { overflowY: 'auto' } },
         h('div', { class: 'muted' }, 'Загрузка…'));
 
-    overlay.appendChild(h('div', { class: 'modal-card', style: { width: '780px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
+    overlay.appendChild(h('div', { class: 'modal-card' + (mount ? ' crm-panel-card' : ''), style: mount ? {} : { width: '780px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
         h('header', { class: 'modal-head' },
             h('h2', null, Icon('Copy', { size: 16 }), ' ', 'Дубликаты'),
-            h('button', { class: 'modal-close', type: 'button', 'aria-label': 'Закрыть', onclick: close }, '×')),
+            mount ? null : h('button', { class: 'modal-close', type: 'button', 'aria-label': 'Закрыть', onclick: close }, '×')),
         bodyEl,
         h('footer', { class: 'modal-foot' },
             h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                 'Отметьте карточки одного человека и выберите, какая останется, — остальные отмеченные вольются в неё.'),
             h('span', { class: 'grow' }),
-            h('button', { class: 'btn', type: 'button', onclick: close }, 'Закрыть'))));
-    document.body.appendChild(overlay);
+            mount ? null : h('button', { class: 'btn', type: 'button', onclick: close }, 'Закрыть'))));
+    (mount || document.body).appendChild(overlay);
 
     let left = 0;   // сколько групп ещё на экране
     async function load() {

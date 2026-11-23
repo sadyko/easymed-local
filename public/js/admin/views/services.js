@@ -27,6 +27,7 @@
 // sidebar closed, on a small screen, with three columns or eleven.
 
 import { supabase } from '../../supabase.js';
+import { getScrollTop, setScrollTop } from '../scroll-root.js';   // SCROLL_IN_CONTENT_V1
 import { h, Icon, clear, toast, Tag } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { importExportButtons, exportSectionRows } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1 + SERVICES_BULK_V1
@@ -351,10 +352,7 @@ let lastFetchToken = 0;
 // behavior:'instant' — из-за html{scroll-behavior:smooth} (см. admin.js
 // snapshotActiveScroll).
 function restoreWindowScroll(y) {
-    const go = () => {
-        try { window.scrollTo({ top: y, behavior: 'instant' }); }
-        catch (_) { window.scrollTo(0, y); }   // браузер без значения 'instant'
-    };
+    const go = () => setScrollTop(y);   // SCROLL_IN_CONTENT_V1 — область содержимого, мгновенно
     // После перерисовки: высота документа должна вернуться раньше, чем мы
     // просим прокрутку, иначе просить некуда.
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(go); else go();
@@ -366,7 +364,7 @@ function restoreWindowScroll(y) {
 // короткой и прокрутка обнуляется) и возвращает прокрутку на место.
 async function fetchAndPaint({ quiet = false } = {}) {
     const token = ++lastFetchToken;
-    const keepY = (typeof window !== 'undefined' && Number(window.scrollY)) || 0;
+    const keepY = getScrollTop();   // SCROLL_IN_CONTENT_V1
     if (!quiet || !allServices.length) setLoadingRow();
     try {
         // SVC_COL_FILTERS_V1 — the list used to stop at 500 rows. Filtering a

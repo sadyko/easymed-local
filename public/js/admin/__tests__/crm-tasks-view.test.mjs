@@ -6,7 +6,7 @@
 // то, что отрисовалось, и то, что ушло на сервер.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, mk, walk, textOf, byAttr, byClass, tick } from './crm-harness.mjs';
+import { S, CALLS, mk, walk, textOf, byAttr, byClass, tick, railNodes } from './crm-harness.mjs';
 import { taskQuery, TASK_LIST_SELECT } from '../views/crm-tasks.js';
 
 const { groupTasks, renderTasksView } = await import('../views/crm-tasks-view.js');
@@ -119,7 +119,7 @@ test('доска: третий вид «Задачи» — фильтры дос
   const root = mk('div');
   await renderCrm(root, { onNavigate() {} });
   await tick();
-  const btn = walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'tasks');
+  const btn = railNodes().find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'tasks');
   assert.ok(btn, 'нет переключателя «Задачи»');
   CALLS.length = 0;
   btn.click();
@@ -145,7 +145,7 @@ test('доска: карточку не из загруженных вид до�
   const root = mk('div');
   await renderCrm(root, { onNavigate() {} });
   await tick();
-  walk(root).find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'tasks').click();
+  railNodes().find((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs['data-crm-view'] === 'tasks').click();
   await tick(60);
   assert.ok(byAttr(root, 'data-task-who-filter').length === 1, 'администратору нет выбора оператора');
   CALLS.length = 0;

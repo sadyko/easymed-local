@@ -257,16 +257,11 @@ function openCreatePatient() {
 // тот же видимый отказ), поэтому второй двери мимо гейта здесь не завелось —
 // patients-hub.test.mjs сторожит именно это.
 //
-// Импорт динамический: окно тянет каталог услуг, справочники и печатный бланк,
-// и грузить их при каждом входе в список пациентов незачем (а статический
-// импорт завёл бы кольцо — NO_IMPORT_CYCLES_V1).
-async function openFastRegistration() {
-    const { openFastRegistrationDialog } = await import('./fast-registration.js?v=fastreg1');
-    return openFastRegistrationDialog({
-        onNavigate: refs.onNavigate,
-        onSaved: () => { state.page = 1; fetchAndPaint(); },
-    });
-}
+// FAST_REG_MERGED_V1 (2026-11-21, владелец: «rename create a patient button to
+// fast registration and remove fast registration button, as the function is the
+// same») — отдельной кнопки и этого входа больше нет: «Быстрая регистрация» — это
+// прежняя «Создать пациента» (окно заведения с «Добавить услугу»). Окно
+// views/fast-registration.js не удалено, но со списка в него больше не попасть.
 
 // MOTION_SCROLL_V1 — смена страницы списка: сначала везём к началу карточки,
 // потом читаем. Прокрутка плавная в браузере и мгновенная, если пользователь
@@ -291,8 +286,10 @@ function mount() {
     // замок, а не единственный.
     const mayCreate = canCreatePatient();
     refs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
-        'Пациент не найден. ',
-        mayCreate ? h('button', { class: 'link-btn', type: 'button', onclick: () => openCreatePatient() }, 'Создать нового пациента?') : null,
+        refs.emptyListEl = h('span', null, 'Пациент не найден. ',
+            mayCreate ? h('button', { class: 'link-btn', type: 'button', onclick: () => openCreatePatient() }, 'Создать нового пациента?') : null),
+        // DUP_OWN_VIEW_V1 — в «Дубликатах» пустой список значит «дублей нет», а не «заведите пациента».
+        refs.emptyDupEl = h('span', { style: { display: 'none' } }, 'Дубликатов не найдено.'),
     );
     refs.pagerLabel = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     refs.totalEl = h('span', { class: 'cell-strong' }, '0');
@@ -343,11 +340,8 @@ function mount() {
     // views/fast-registration.js). Пульс — по домашнему правилу
     // (admin-views.css): движение тенью, и ровно одна пульсирующая вещь на
     // экран; других на списке пациентов нет.
-    const fastRegBtn = !mayCreate ? null : h('button', {
-        class: 'btn btn-primary btn-sm btn-pulse', type: 'button', 'data-onb': 'fast-registration',
-        title: 'Быстрая регистрация: пациент → услуги и врач → счёт → печать',
-        onclick: () => openFastRegistration(),
-    }, Icon('Rocket', { size: 14 }), ' Быстрая регистрация');
+    // FAST_REG_MERGED_V1 — пульсирующей «Быстрой регистрации» здесь больше нет:
+    // это имя теперь у кнопки заведения пациента (createBtn ниже).
 
     refs.prevBtn = h('button', {
         class: 'icon-btn btn-sm',
@@ -379,18 +373,9 @@ function mount() {
     sortSegmented.value = state.sort;
     refs.sortSelect = sortSegmented;
 
-    // REGISTRATURA_CLEANUP_V1 — table-header actions: duplicates chip + calculator + create.
-    const dupCountSpan = h('span', { class: 'num', style: { fontWeight: '700' } }, '—');
-    refs.dupChipCount = dupCountSpan;
-    // PATIENT_DUP_RULE_V3 — «· возможные · M» тем же чипом (почему не второй — шапка V3).
-    refs.dupPossibleCount = h('span', { class: 'num', style: { fontWeight: '700' } }, '0');
-    refs.dupPossibleWrap = h('span', { class: 'dup-chip-possible', style: { display: 'none', color: 'var(--ink-500)' } },
-        ' · ', tr('возможные'), ' · ', refs.dupPossibleCount);
-    const dupChip = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-act': 'dup-chip',
-        title: tr('Дубликаты — тот же ПИНФЛ или то же имя на том же телефоне. Возможные — тот же телефон или то же ФИО при той же дате рождения: проверьте и объедините карты или отметьте «Не дубликат». Родственники на общем номере дубликатами не считаются'),
-        onclick: () => { state.filter = state.filter === 'duplicates' ? 'all' : 'duplicates'; state.page = 1; if (state.filter !== 'duplicates') selectedDup.clear(); paintDupChip(); fetchAndPaint(); } },
-        Icon('Warning', { size: 13 }), ' Дубликаты · ', dupCountSpan, refs.dupPossibleWrap);
-    refs.dupChip = dupChip;
+    // REGISTRATURA_CLEANUP_V1 — table-header actions: calculator + create.
+    // DUP_TO_RAIL_V1 — «Дубликаты» ушли из шапки в левую колонку
+    // (duplicatesRailButton ниже, ставит patients-hub.js).
     const calcBtn = h('button', { class: 'btn btn-amber btn-sm', title: 'Калькулятор услуг — расчёт без выбора пациента',
         onclick: () => openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', titleIcon: 'Coins', onPick: () => {}, onCreatePatient: () => openCreatePatient() }) },
         Icon('Coins', { size: 14 }), ' Калькулятор');
@@ -410,7 +395,7 @@ function mount() {
     // общий с десятками других, и селектор по нему нашёл бы не ту.
     const createBtn = !mayCreate ? null : h('button', { class: 'btn btn-primary btn-sm', 'data-onb': 'create-patient',
         onclick: () => openCreatePatient() },
-        Icon('Plus', { size: 14 }), ' Создать пациента');
+        Icon('Plus', { size: 14 }), ' Быстрая регистрация');   // FAST_REG_MERGED_V1 — было «Создать пациента»
 
     // PATIENT_LIST_LAST_VISIT_V1 · PATIENT_LIST_COLUMNS_V1 — «Фильтр» и «Колонки»
     // справа под «Создать пациента» (владелец: «put filter button on the right side
@@ -481,18 +466,26 @@ function mount() {
             //           синхронизация, справа — «Создать пациента»;
             //   ряд 2 — поиск по ФИО / ID / телефону и рядом поиск по дате
             //           рождения (PATIENT_SEARCH_DOB_V2), под тонкой чертой.
-            h('div', { class: 'card-header reg-base-head' },
+            refs.headEl = h('div', { class: 'card-header reg-base-head' },
+                // REG_HEAD_ORDER_V1 (2026-11-21, владелец: «put the total number of
+                // patients to the end right and first button should be fast
+                // registration, next to it calculator») — главное действие первым,
+                // за ним калькулятор, «Всего» — справа в конце ряда.
+                // REG_SORT_RIGHT_V1 (2026-11-21, владелец: «put filter and total patient
+                // to the right end side as there is space») — слева действия
+                // (регистрация, калькулятор, госпитализация, синхронизация), справа в
+                // конце ряда — сортировка и «Всего».
                 h('div', { class: 'reg-base-tools' },
-                    h('span', { class: 'muted reg-base-total' }, 'Всего ', refs.totalEl),
-                    fastRegBtn,
-                    sortSegmented,
-                    dupChip, calcBtn, admitBtn,
+                    createBtn, calcBtn,
+                    admitBtn,
                     // BRANCH_SYNC_HOURLY_V1 — сама покажется, только если это
                     // подключённый филиал. onDone перечитывает список: карта,
                     // заведённая в соседнем здании, уже в базе, но на экране
                     // её ещё нет.
                     branchSyncButton({ onDone: () => fetchAndPaint() }),
-                    h('div', { class: 'reg-base-main' }, createBtn),
+                    h('div', { class: 'reg-base-end' },
+                        sortSegmented,
+                        h('span', { class: 'muted reg-base-total' }, 'Всего ', refs.totalEl)),
                 ),
                 h('div', { class: 'reg-base-acts reg-base-find' },
                     h('div', { class: 'reg-base-search', style: { position: 'relative' } },
@@ -554,9 +547,13 @@ function headRow() {
                     // взгляд начинал с любой. Теперь ведёт имя, а всё, чем
                     // человека опознают, стоит одним блоком рядом с ним.
                     h('th', null, 'Пациент'),
+                    // PATIENT_ROW_ONE_LINE_V1 (2026-11-21, владелец: «make the row one
+                    // line, make ID separate, add the age next to birth info in
+                    // brackets, remove kartochka place and telegram share should be
+                    // small button») — номер карты своей колонкой; возраст — в
+                    // скобках у даты рождения, своей колонки у него больше нет.
+                    h('th', null, 'ID'),
                     h('th', null, 'Дата рождения'),
-                    // REG_LIST_AGE_COL_V1 — возраст своей колонкой, а не строкой под датой.
-                    h('th', null, 'Возраст'),
                     h('th', null, 'Телефон'),
                     // REG_TBL_FIT_V2 — «Телеграм» и «Есть ДМС?» убраны: обе
                     // колонки занимали ширину, но ничего не сообщали. Телеграм
@@ -567,10 +564,12 @@ function headRow() {
                     // вернулась НЕ колонкой, а значком у имени, и берётся из
                     // настоящей связки чата; теперь — последней колонкой (loadBotStatus).
                     h('th', null, 'Последний визит'),
-                    h('th', { style: { textAlign: 'right' } }, 'Баланс'),
+                    // BALANCE_COL_REMOVED_V1 (2026-11-21, владелец: «remove the
+                    // balance place») — колонки «Баланс» нет. Долг остаётся
+                    // виден красной меткой у имени (DEBT_FLOW_V1), депозит — в
+                    // карточке пациента.
                     h('th', null, 'Регистратор'),
                     ...shownExtraCols().map((c) => h('th', { 'data-extra-col': c.key }, c.label)),   // PATIENT_LIST_COLUMNS_V1
-                    h('th', { style: { width: '104px' } }),
                     // PATIENT_BOT_INVITE_V1 — Telegram-бот пациента: значок или «Ссылка на бот».
                     h('th', { class: 'pt-bot-col' }),
     );
@@ -684,12 +683,61 @@ function paintDuplicateCount() {
     if (refs.dupPossibleCount) refs.dupPossibleCount.textContent = String(possibleIdSet.size);
     if (refs.dupPossibleWrap) refs.dupPossibleWrap.style.display = possibleIdSet.size ? '' : 'none';
 }
+// DUP_TO_RAIL_V1 (2026-11-21, владелец: «can you bring duplicate button to left
+// navigation bar») — фильтр «Дубликаты» — пункт левой колонки раздела
+// «Регистрация» (patients-hub.js кладёт его отдельной группой под вкладками).
+// Логика фильтра прежняя и живёт здесь; колонка получает только кнопку.
+// Включённый фильтр — янтарная подсветка (.rail-dup.is-on), а не выделение
+// пункта: «Пациенты» остаются выбранной вкладкой, дубликаты — отбор в ней.
+//
+// DUP_OWN_VIEW_V1 (2026-11-21, владелец: «dublicate should be separate from
+// patients, it should only show dublicates, no registration or other buttons
+// needed there») — «Дубликаты» теперь свой пункт, а не отбор внутри «Пациентов»:
+// выбранным в колонке стоит он один (patients-hub.js), адрес #patients/duplicates,
+// а шапка списка (регистрация, калькулятор, сортировка, госпитализация, поиск,
+// «Фильтр», «Колонки») на нём не показывается — только таблица дублей и полоса
+// «Объединить». Логика отбора прежняя; экран тот же список, потому что
+// состояние списка — одно на модуль.
+export function duplicatesOn() { return state.filter === 'duplicates'; }
+export function setDuplicatesMode(on) {
+    on = !!on;
+    if (on === duplicatesOn()) { paintDupMode(); return; }
+    state.filter = on ? 'duplicates' : 'all';
+    state.page = 1;
+    if (!on) selectedDup.clear();
+    paintDupChip();
+    paintDupMode();
+    if (refs.tbody) fetchAndPaint();
+}
+function paintDupMode() {
+    const on = duplicatesOn();
+    if (refs.headEl) refs.headEl.style.display = on ? 'none' : '';
+    if (on && openPanel) togglePanel(openPanel);   // открытые «Фильтр»/«Колонки» закрыть
+    if (refs.emptyListEl) refs.emptyListEl.style.display = on ? 'none' : '';
+    if (refs.emptyDupEl) refs.emptyDupEl.style.display = on ? '' : 'none';
+    if (typeof refs.onDupChange === 'function') refs.onDupChange(on);
+}
+export function duplicatesRailButton({ beforeToggle, onChange } = {}) {
+    refs.onDupChange = onChange || null;
+    const count = h('span', { class: 'nav-badge' }, duplicateIdSet.size ? String(duplicateIdSet.size) : '—');
+    refs.dupChipCount = count;
+    // PATIENT_DUP_RULE_V3 — подсказка и второй счётчик «возможных» (тот же телефон или то же ФИО при той же
+    // дате рождения) переехали с чипа шапки на пункт колонки вместе с кнопкой (DUP_TO_RAIL_V1).
+    const title = tr('Дубликаты — тот же ПИНФЛ или то же имя на том же телефоне. Возможные — тот же телефон или то же ФИО при той же дате рождения: проверьте и объедините карты или отметьте «Не дубликат». Родственники на общем номере дубликатами не считаются');
+    refs.dupPossibleCount = h('span', null, String(possibleIdSet.size));
+    refs.dupPossibleWrap = h('span', { class: 'nav-badge dup-chip-possible', title: tr('возможные'), style: { display: possibleIdSet.size ? '' : 'none' } }, refs.dupPossibleCount);
+    refs.dupChip = h('button', { type: 'button', class: 'nav-item rail-dup', title, 'data-rail-dup': '',
+        onclick: () => { if (typeof beforeToggle === 'function') beforeToggle(); setDuplicatesMode(true); } },
+        h('span', { class: 'nav-icon' }, Icon('Warning', { size: 18 })), h('span', null, 'Дубликаты'), count, refs.dupPossibleWrap);
+    paintDupChip();
+    return refs.dupChip;
+}
 function paintDupChip() {
     const b = refs.dupChip; if (!b) return;
     const on = state.filter === 'duplicates';
-    b.style.borderColor = on ? 'var(--warn-500, #d97706)' : '';
-    b.style.background  = on ? 'var(--warn-50, #fff7ed)'  : '';
-    b.style.color       = on ? 'var(--warn-700)'          : '';
+    // DUP_OWN_VIEW_V1 — выбранный пункт колонки, как соседи: .active + aria-current.
+    b.className = 'nav-item rail-dup' + (on ? ' active' : '');
+    if (on) b.setAttribute('aria-current', 'page'); else if (b.removeAttribute) b.removeAttribute('aria-current');
 }
 
 function paintFilterCardChrome() {
@@ -844,9 +892,10 @@ function fillBotCell(td, p, linked, botReady = true) {
     // Сначала колонка в этом случае оставалась пустой, и владелец её не нашёл
     // («I don't see the button»): пустая колонка читается как поломка.
     if (!botReady) {
-        td.appendChild(h('button', { class: 'pt-bot-invite', type: 'button', disabled: true,
-            title: tr('Telegram-бот клиники не подключён — его включают в «Настройки → Telegram-бот».') },
-            Icon('Send', { size: 13 }), h('span', { class: 'pt-act-lbl' }, tr('Ссылка на бот'))));
+        // PATIENT_ROW_ONE_LINE_V1 — маленькая кнопка-значок; что она делает — в title.
+        const why = tr('Telegram-бот клиники не подключён — его включают в «Настройки → Telegram-бот».');
+        td.appendChild(h('button', { class: 'pt-bot-invite', type: 'button', disabled: true, title: why, 'aria-label': why },
+            Icon('Send', { size: 14 })));
         return;
     }
     if (linked) {
@@ -858,6 +907,7 @@ function fillBotCell(td, p, linked, botReady = true) {
     const btn = h('button', {
         class: 'pt-bot-invite', type: 'button', disabled: !hasPhone,
         title: hasPhone ? tr('Отправить пациенту ссылку на Telegram-бот клиники') : tr('У пациента нет номера телефона'),
+        'aria-label': tr('Ссылка на бот'),
         onclick: async () => {
             btn.disabled = true;
             try {
@@ -881,7 +931,7 @@ function fillBotCell(td, p, linked, botReady = true) {
                 btn.disabled = false;
             }
         },
-    }, Icon('Send', { size: 13 }), h('span', { class: 'pt-act-lbl' }, tr('Ссылка на бот')));
+    }, Icon('Send', { size: 14 }));   // PATIENT_ROW_ONE_LINE_V1 — только значок
     td.appendChild(btn);
 }
 
@@ -1307,23 +1357,24 @@ function patientRow(p) {
                         // фильтруется — подписывается. Метка только на чужих: подпись на
                         // каждой строке перестала бы что-либо значить.
                         branchTag(p),
-                    ),
-                    h('div', { class: 'pt-meta' },
-                        h('span', { class: 'num pt-mrn' }, p.mrn || '—'),
-                        sex ? h('span', { class: 'pt-dot' }, '·') : null,
-                        sex ? h('span', null, sex) : null,
-                        p.city ? h('span', { class: 'pt-dot' }, '·') : null,
+                        // PATIENT_ROW_ONE_LINE_V1 — пол и город остались у имени, в той же
+                        // строке (приглушённо), а не второй строкой под ним.
+                        sex ? h('span', { class: 'pt-sex' }, sex) : null,
                         p.city ? h('span', { class: 'pt-city' }, p.city) : null,
                     ),
                 ),
             ),
         ),
+        // PATIENT_ROW_ONE_LINE_V1 — номер карты своей колонкой.
+        h('td', null, p.mrn ? h('span', { class: 'num pt-mrn' }, p.mrn) : noneCell('—')),
         // 2 — Дата рождения «2 мая 2019».
         // REG_LIST_AGE_COL_V1 (2026-10-31, владелец: «put age separte from year
         // of birth») — возраст ушёл из-под даты в соседнюю колонку: у стойки
         // его ищут глазами отдельно от даты, по которой сверяют паспорт.
-        h('td', null, dob ? h('div', { class: 'pt-when-main' }, dob) : noneCell('—')),
-        h('td', null, p.age != null ? h('div', { class: 'pt-when-main' }, trf('{n} лет', { n: p.age })) : noneCell('—')),
+        // PATIENT_ROW_ONE_LINE_V1 — возраст снова у даты, но в той же строке и в
+        // скобках: «15 ноября 1994 (32 лет)». Без даты — прочерк и без возраста.
+        h('td', null, dob ? h('div', { class: 'pt-when-main' }, dob,
+            p.age != null ? h('span', { class: 'pt-age' }, ' (' + trf('{n} лет', { n: p.age }) + ')') : null) : noneCell('—')),
         // 3 — Телефон: тот же вид, что на карточке CRM (formatPhone), и его
         // можно ВЫДЕЛИТЬ мышью — номер из реестра диктуют и копируют. Клик по
         // номеру поэтому не открывает карту: выделение заканчивается кликом, и
@@ -1335,15 +1386,16 @@ function patientRow(p) {
         ),
         // 4 — Последний визит, под ним счёт визитов: число относится к этой же
         // дате, и стоять им врозь незачем.
+        // PATIENT_ROW_ONE_LINE_V1 — одной строкой: дата · визитов · запись.
         h('td', null,
-            last ? h('div', { class: 'pt-when-main' }, last) : noneCell('—'),
-            // LAST_VISIT_TRUE_V1 — будущая запись — не «последний визит»: она
-            // стоит своей строкой под датой.
-            next ? h('div', { class: 'pt-when-sub pt-when-next' }, trf('запись: {d}', { d: next })) : null,
-            h('div', { class: 'pt-when-sub' }, visits > 0 ? trf('визитов: {n}', { n: visits }) : 'визитов не было'),
+            h('div', { class: 'pt-when-line' },
+                last ? h('span', { class: 'pt-when-main' }, last) : noneCell('—'),
+                h('span', { class: 'pt-when-sub' }, ' · ', visits > 0 ? trf('визитов: {n}', { n: visits }) : 'визитов не было'),
+                // LAST_VISIT_TRUE_V1 — будущая запись — не «последний визит».
+                next ? h('span', { class: 'pt-when-sub pt-when-next' }, ' · ', trf('запись: {d}', { d: next })) : null,
+            ),
         ),
-        // 5 — Баланс: депозит пациента, под ним — долг (V3120_FIX).
-        h('td', { style: { textAlign: 'right' } }, balanceCell(p)),
+        // BALANCE_COL_REMOVED_V1 — ячейки «Баланс» нет (заголовок выше).
         // 6 — Регистратор: настоящее имя того, кто завёл карту, а если его в
         // карте нет — так и сказано словом, а не прочерком, который на каждой
         // строке читается как «экран сломан».
@@ -1356,38 +1408,13 @@ function patientRow(p) {
             const v = extraValue(c, p);
             return h('td', { 'data-extra-col': c.key }, v ? h('span', { title: v }, v) : noneCell('—'));
         }),
-        // 7 — action «Карточка»
-        h('td', { onclick: (e) => e.stopPropagation() },
-            // REG_LIST_ADAPT_V1 — подпись в своём span: на узкой карточке
-            // остаётся одна иконка (admin-views.css), а имя кнопки — в title.
-            h('button', { class: 'start-btn done', type: 'button', title: 'Карточка', 'aria-label': 'Карточка', onclick: () => refs.onNavigate('patient-card', p) },
-                Icon('ID', { size: 14 }), h('span', { class: 'pt-act-lbl' }, 'Карточка')),
-        ),
+        // PATIENT_ROW_ONE_LINE_V1 — кнопки «Карточка» больше нет: карту открывает
+        // щелчок по строке (как и раньше), кнопка повторяла его в каждой строке.
         // 8 — PATIENT_BOT_INVITE_V1: Telegram-бот пациента. Ячейка пустая, пока
         // не ответил patient_bot_status (loadBotStatus) — чтобы строка не
         // мигала «Ссылкой» у уже подключённого пациента.
         botCell(p),
     );
-}
-
-// Balance cell — Aurora BalanceCell port. v>0 green +, v<0 red −, v===0 «0 сум».
-//
-// V3120_FIX — ДВА ЧИСЛА, А НЕ ОДНО. patient_base_aggregates отдаёт `balance`
-// (депозит — деньги пациента на счету клиники) и `debt` (неоплаченные счета
-// без страховой). Одно знаковое число прятало долг: пациент с депозитом
-// 500 000 и долгом 375 000 выглядел «+125 000», и регистратура не знала, что
-// за ним долг. Сверху — депозит, под ним красным — долг, если он есть.
-export function balanceCell(p) {
-    const wallet = Number(p && p.balance) || 0;
-    const debt = Number(p && p.debt) || 0;
-    const rfmt = (x) => Math.abs(x).toLocaleString('ru-RU');
-    const main = wallet > 0 ? h('span', { class: 'bal pos num', title: tr('Депозит пациента') }, `+${rfmt(wallet)}`)
-        : wallet < 0 ? h('span', { class: 'bal neg num' }, `−${rfmt(wallet)}`)
-        : h('span', { class: 'bal zero num' }, '0 ', h('small', null, 'сум'));
-    if (!(debt > 0)) return main;
-    return h('div', null, main,
-        h('div', { class: 'bal neg num pt-bal-debt', title: tr('Неоплаченные счета пациента (без страховой)') },
-            trf('долг {sum}', { sum: rfmt(debt) })));
 }
 
 function displayStatus(p) {

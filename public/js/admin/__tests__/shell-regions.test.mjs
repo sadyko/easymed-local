@@ -413,7 +413,7 @@ test('верхняя строка принадлежит области СОДЕ
         'порядок строк в шапке колонки перевёрнут обратно: имя клиники обязано идти первым');
 });
 
-test('в верхней строке имя раздела слева и все пять органов управления справа', () => {
+test('в строке экрана — имя раздела; все пять органов управления — справа в полосе разделов', () => {
     const inBar = tree(BAR_NODE);
     const title = inBar.find((n) => n.attrs.id === 'section-title');
     assert.ok(title, 'из верхней строки пропало имя раздела');
@@ -438,10 +438,21 @@ test('в верхней строке имя раздела слева и все 
     assert.equal(BAR_NODE.children[1], title,
         'имя раздела обязано идти сразу за кнопкой возврата и до всего остального');
 
-    const controls = BAR_NODE.children[2];
-    assert.ok(controls && clsOf(controls).includes('appbar-controls'), 'органы управления выпали из верхней строки');
+    // CONTROLS_IN_DEPTBAR_V1 (2026-11-21, владелец: «put all of this to top
+    // place as there is enough space») — органы управления живут в полосе
+    // разделов, справа от вкладок; в строке экрана — только «назад» и имя.
+    assert.equal(BAR_NODE.children.length, 2,
+        'в строке экрана снова что-то кроме «назад» и имени: ' + BAR_NODE.children.map(nameOf).join(', '));
+    const controlsAll = nodesWithClass('appbar-controls');
+    assert.equal(controlsAll.length, 1, 'групп органов управления в разметке ' + controlsAll.length);
+    const controls = controlsAll[0];
+    assert.ok(clsOf(controls.parent).includes('deptbar'),
+        'органы управления висят в ' + nameOf(controls.parent) + ', а обязаны лежать в полосе разделов');
+    const deptKids = controls.parent.children;
+    assert.ok(deptKids.indexOf(controls) > deptKids.findIndex((n) => n.attrs.id === 'dept-nav'),
+        'органы управления обязаны стоять ПОСЛЕ вкладок разделов — справа');
     for (const id of ['topbar-reload', 'topbar-bell', 'branch-picker', 'topbar-lang', 'user-card-btn'])
-        assert.ok(tree(controls).some((n) => n.attrs.id === id), 'орган управления ' + id + ' уехал из верхней строки');
+        assert.ok(tree(controls).some((n) => n.attrs.id === id), 'орган управления ' + id + ' уехал из полосы разделов');
 });
 
 test('двойник оболочки в этом файле не разошёлся с admin.html', () => {
@@ -837,7 +848,14 @@ test('ОБХОД NAV: на каждом маршруте это ОДНА И ТА
         // И ни одной ВТОРОЙ полосы хрома внутри экрана.
         const inView = descendants(VIEW_ROOT);
         if (inView.some((n) => hasCls2(n, 'appbar'))) extraBars.push(view);
-        const dup = inView.filter((n) => n.tagName === 'H1' && hasCls2(n, 'page-title'));
+        // INLINE_HEAD_V1 — считаем только видимый экран: кэшированная панель
+        // инструмента «Коммерции» (display: none) держит своё имя у себя.
+        const shown = (n) => { for (let p = n._parent; p && p !== VIEW_ROOT; p = p._parent) if (p.style && p.style.display === 'none') return false; return true; };
+        const dup = inView.filter((n) => n.tagName === 'H1' && hasCls2(n, 'page-title') && shown(n));
+        // INLINE_HEAD_V1 — строка экрана сложена (инструменты «Коммерции»): имя
+        // стоит ОДИН раз — в шапке самого экрана. Два — по-прежнему дубль.
+        const folded = hasCls2(VIEW_ROOT, 'view-inline-head');   // фальшивый DOM не знает parentElement — смотрим метку экрана
+        if (folded && dup.length === 1) continue;
         if (dup.length) doubled.push(view + ' → «' + dup.map((d) => d.textContent).join('», «') + '»');
     }
     assert.deepEqual(moved, [], 'на этих маршрутах верхняя строка уехала из области содержимого:\n  ' + moved.join('\n  '));

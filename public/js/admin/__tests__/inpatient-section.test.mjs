@@ -248,14 +248,16 @@ globalThis.fetch = async (url, opts = {}) => {
 const settle = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------
-const { renderInpatient, renderAdmissions } = await import('../views/admissions.js');
+const { renderInpatient, renderAdmissions, visibleTabs, selectInpatientTab, currentInpatientTab } = await import('../views/admissions.js');
 const wardBeds = await import('../views/ward-beds.js?v=board5');
 const perms = await import('../permissions.js');
 
 const walk = (e, out = []) => { if (!e || typeof e !== 'object') return out; out.push(e); for (const c of e.children || []) walk(c, out); return out; };
 const textOf = (e) => walk(e).map((x) => x._text || '').join(' ');
 const hasClass = (n, c) => String((n && n.className) || '').split(/\s+/).includes(c);
-const tabButtons = (root) => walk(root).filter((n) => n.tagName === 'BUTTON' && n.attrs.role === 'tab');
+// INPATIENT_SUBNAV_V1 — вкладки «Стационара» — подпункты левой колонки (admin.js),
+// на экране их нет; состав вкладок — visibleTabs() (тот же отбор по ролям).
+const tabLabels = () => visibleTabs().map((t) => t.label);
 // Подпись вкладки — БЕЗ значка: Icon() приезжает разобранной <svg>, и её
 // разметка попала бы в текст кнопки.
 const tabLabel = (b) => walk(b).filter((n) => n.tagName !== 'SVG').map((n) => n._text || '').join('').trim();
@@ -296,7 +298,8 @@ test('в меню один «Стационар», а не два пункта �
 test('старые адреса резолвятся: #admissions — раздел, #beds — его вкладка «Койки»', () => {
     assert.ok(/case 'admissions':\s*return void await renderInpatient\(/.test(SHELL),
         'маршрут #admissions больше не открывает раздел');
-    assert.ok(/renderInpatient\s*\}\s*from '\.\/admin\/views\/admissions\.js/.test(SHELL),
+    // INPATIENT_SUBNAV_V1 — из того же модуля оболочка берёт и вкладки для колонки.
+    assert.ok(/import\s*\{[^}]*\brenderInpatient\b[^}]*\}\s*from '\.\/admin\/views\/admissions\.js/.test(SHELL),
         'хост раздела не импортирован оболочкой');
     // '#beds' отвечает тот же раздел, открытый на вкладке коек.
     const legacy = SHELL.slice(SHELL.indexOf('const LEGACY_ROUTES = {'), SHELL.indexOf('function navigate('));
@@ -340,7 +343,7 @@ test('раздел монтируется четырьмя вкладками, �
     // «Заявки» видны и открыты по умолчанию; у врача иначе — см. тест ниже.
     resetWorld();
     const { container, api } = await mountSection();
-    assert.deepEqual(tabButtons(container).map(tabLabel),
+    assert.deepEqual(tabLabels(),
         ['Заявки', 'Пациенты', 'Койки', 'Госпитализации'], 'состав вкладок раздела изменился');
     assert.equal(api.activeTab(), 'orders');
     assert.deepEqual(visiblePanels(container).map((p) => p.attrs['data-tab-panel']), ['orders'],
@@ -398,9 +401,11 @@ test('раздел не называет себя дважды: заголовк
     for (const el of h1s) assert.ok(hasClass(el, 'page-title'), 'заголовок вкладки написан мимо page-title: оболочка его не снимет');
 
     // Сам хост своего заголовка не пишет — иначе снятие одного оставило бы второй.
-    const strip = walk(container).find((n) => n.attrs.role === 'tablist');
-    assert.ok(strip, 'у раздела нет полосы вкладок');
-    assert.equal(walk(strip).filter((n) => n.tagName === 'H1').length, 0, 'полоса вкладок обзавелась собственным заголовком');
+    // INPATIENT_SUBNAV_V1 — полосы вкладок на экране нет (вкладки — подпункты колонки),
+    // и вне панелей вкладок заголовков нет вовсе.
+    const panels = walk(container).filter((n) => n.attrs && n.attrs['data-tab-panel']);
+    const inPanels = new Set(panels.flatMap((p) => walk(p)));
+    assert.equal(h1s.filter((el) => !inPanels.has(el)).length, 0, 'хост раздела пишет собственный заголовок');
 });
 
 // ===========================================================================
@@ -561,25 +566,19 @@ test('заявка без палаты: сначала выбирают ПАЛА
     assert.equal(call.args.bed_id, 8);
 });
 
-test('полоса вкладок доступна с клавиатуры: стрелки, Home и End', async () => {
+// INPATIENT_SUBNAV_V1 (2026-11-21) — полосы вкладок и баннера на экране нет; вкладку
+// переключает колонка через selectInpatientTab, а читает — через currentInpatientTab.
+test('вкладки — подпункты колонки: на экране нет полосы и баннера, колонка переключает вкладку', async () => {
     resetWorld();
     const { container, api } = await mountSection();
-    const [orders, patients, beds, history] = tabButtons(container);
-
-    // В tablist из порядка обхода Tab вынуты все кнопки, кроме активной.
-    assert.deepEqual([orders, patients, beds, history].map((b) => b.getAttribute('tabindex')), ['0', '-1', '-1', '-1']);
-
-    const key = (btn, k) => btn.dispatchEvent({ type: 'keydown', key: k, currentTarget: btn, preventDefault() {}, stopPropagation() {} });
-    key(orders, 'ArrowRight');
+    assert.equal(walk(container).filter((n) => n.attrs && n.attrs.role === 'tab').length, 0, 'на экране снова полоса вкладок');
+    assert.ok(!/Добр(ый|ое)/.test(textOf(container)), 'на экране снова баннер с приветствием');
+    assert.equal(currentInpatientTab(), 'orders');
+    assert.equal(selectInpatientTab('beds'), true, 'живой экран не принял переключение из колонки');
     await settle(60);
-    assert.equal(api.activeTab(), 'patients');   // INPATIENT_FOUR_TABS_V1 — вторая вкладка теперь «Пациенты»
-    key(patients, 'End');
-    await settle(60);
-    assert.equal(api.activeTab(), 'history');
-    key(history, 'Home');
-    await settle(60);
-    assert.equal(api.activeTab(), 'orders');
-    assert.deepEqual(tabButtons(container).map((b) => b.getAttribute('aria-selected')), ['true', 'false', 'false', 'false']);
+    assert.equal(api.activeTab(), 'beds');
+    assert.equal(currentInpatientTab(), 'beds');
+    assert.deepEqual(visiblePanels(container).map((p) => p.attrs['data-tab-panel']), ['beds']);
 });
 
 test('отказ сервера доходит словами, окно не закрывается, койку можно выбрать другую', async () => {
@@ -699,7 +698,7 @@ test('врач: вкладки без «Заявок», раздел откры�
         const api = await renderInpatient(container, { onNavigate: () => {}, payload: null, tabId: 'admissions' });
         await settle(60);
 
-        assert.deepEqual(tabButtons(container).map(tabLabel),
+        assert.deepEqual(tabLabels(),
             ['Пациенты', 'Койки', 'Госпитализации'], 'врачу показали не те вкладки');
         assert.equal(api.activeTab(), 'patients', 'врачу открыли не «Пациентов»');
 

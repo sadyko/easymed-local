@@ -14,7 +14,7 @@
 
 import { supabase } from '../../supabase.js';
 // INTERNAL_REFERRAL_V1 — правило «какая ставка применяется» общее с отчётом.
-import { h, Icon, Tag, PageHead, toast, clear, avColor, initials, fmtDateTime, field } from '../ui.js';
+import { h, Icon, Tag, toast, clear, avColor, initials, fmtDateTime } from '../ui.js';
 import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 // CABINET_REDESIGN_V1 — плитка и график те же, что на сводке клиники.
 import { kpiTile, fitViewport } from './dash-kpi.js';
@@ -836,7 +836,7 @@ let cabinetHero = null;
 
 function paint() {
     clear(containerRef);
-    if (!cabinetHero) cabinetHero = sectionHero({ section: 'consultation', title: 'Кабинет врача' });
+    if (!cabinetHero) cabinetHero = sectionHero({ section: 'consultation', title: 'Кабинет врача', rail: 'consultation', banner: false });   // CLINIC_NO_BANNER_V1 — без баннера   // HERO_TABS_TO_RAIL_V1 — вкладки в колонке
     containerRef.appendChild(h('div', { class: 'fade-in' },
         cabinetHero.el,
         // CABINET_TABS_SYSTEM_V1 (2026-09-09) — владелец: «this buttons dont
@@ -2544,19 +2544,21 @@ function dashboardView() {
     const uniquePatients = new Set(state.dash.services.map(s => s.patientName + '|' + s.patientMrn)).size;
 
     const root = h('div', { class: 'pay-page dash-fit' },
-        PageHead({
-            // DOCTOR_DASHBOARD_V1 — вкладка называется «Зарплата», и шапка обязана
-            // говорить то же самое: два разных имени у одного экрана — это два
-            // экрана в голове у врача.
-            // DOCTOR_PAY_I18N_V1 — вся вкладка была написана английскими
-            // литералами мимо tr(); исходная строка теперь русская, так экран
-            // попадает под общий страж i18n-coverage.
-            title: tr('Зарплата'),
-            subtitle: doc
+        // PAY_FILTERS_LEFT_V1 (2026-11-21, владелец: «make it accurate and use the
+        // space smartly, put the filters to the left side on top») — одна плотная
+        // строка: СЛЕВА фильтры («Врач» подписью в строке, а не над полем, и
+        // период), за ними — кого и за что считает экран, мелко. Заголовок
+        // «Зарплата» снимала оболочка (ONE_NAME_PER_SCREEN_V1) — его больше нет
+        // в разметке вовсе; класс page-head остаётся: шапку вкладки ищут по нему.
+        h('div', { class: 'page-head pay-head' },
+            h('div', { class: 'pay-filters' },
+                state.dash.doctors.length > 1
+                    ? h('label', { class: 'pay-filter' }, h('span', { class: 'pay-filter-l' }, tr('Врач')), docSelect)
+                    : null,
+                periodSeg),
+            h('div', { class: 'muted pay-head-sub' }, doc
                 ? trf('Зарплата, вознаграждения за направления и работа врача: {name}.', { name: doc.full_name })
-                : tr('Врач не выбран.'),
-            right: [state.dash.doctors.length > 1 ? field('Врач', docSelect) : null, periodSeg].filter(Boolean),
-        }),
+                : tr('Врач не выбран.'))),
         // Плитки — те же, что на сводке клиники (dash-kpi.js): одна плитка на
         // весь продукт, и врач в своём кабинете видит ту же программу.
         // Ревью M2 — ступени не пришли: говорим почему и не показываем

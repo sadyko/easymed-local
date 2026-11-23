@@ -65,7 +65,9 @@ function bounds() {
     return { from: ymd(d), to };
 }
 
-export async function openCustDev() {
+// CRM_PANELS_INLINE_V1 — { mount }: та же карточка видом раздела CRM, а не окном.
+// Вложенные окна (оценка карточки, сводка) остаются окнами — это диалоги.
+export async function openCustDev({ mount = null } = {}) {
     if (state.period === 'custom' && !state.from && !state.to) {
         const now = new Date();
         state.from = ymd(new Date(now.getFullYear(), now.getMonth(), 1));
@@ -73,16 +75,16 @@ export async function openCustDev() {
     }
     state.editable = canEdit('custdev');
 
-    const overlay = h('div', { class: 'modal' });
+    const overlay = h('div', { class: mount ? 'crm-panel-host' : 'modal' });
     const close = () => overlay.remove();
-    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+    if (!mount) overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
 
     const body = h('div', { class: 'modal-body', style: { minHeight: '300px' } });
     const filters = h('div', { style: { display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' } });
 
     overlay.appendChild(h('div', {
-        class: 'modal-card',
-        style: { width: 'calc(100vw - 48px)', maxWidth: '1600px', height: 'calc(100vh - 48px)', display: 'flex', flexDirection: 'column' },
+        class: 'modal-card' + (mount ? ' crm-panel-card' : ''),
+        style: mount ? {} : { width: 'calc(100vw - 48px)', maxWidth: '1600px', height: 'calc(100vh - 48px)', display: 'flex', flexDirection: 'column' },
     },
         h('header', { class: 'modal-head' },
             h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
@@ -94,11 +96,11 @@ export async function openCustDev() {
                         state.editable
                             ? 'Пришли и оплатили: спросите про регистратуру, кассу и врача'
                             : 'Доступ «Только просмотр»: оценивать карточки нельзя'))),
-            h('button', { class: 'modal-close', onclick: close }, '×')),
+            mount ? null : h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { style: { padding: '12px 20px 0' } }, filters),
         body));
 
-    document.body.appendChild(overlay);
+    (mount || document.body).appendChild(overlay);
     paintFilters();
     await reload();
 

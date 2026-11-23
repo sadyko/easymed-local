@@ -16,7 +16,11 @@ const exec = (src) => src.split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join
 const fnBody = (src, name) => { const i = src.indexOf(name); assert.ok(i >= 0, name + ' не найдена'); return exec(src.slice(i, i + 6000)); };
 
 test('меню и домашний экран пропускают скрытые пункты', () => {
-    assert.match(fnBody(SHELL, 'function renderSidebar()'), /if \(navHidden\.has\(item\.id\)\) continue;/, 'renderSidebar не пропускает скрытые');
+    // DEPT_TOPNAV_V1 — проверки пункта вынесены в navItemVisible(): её зовут и
+    // колонка функций, и полоса разделов (раздел без видимых функций не рисуется).
+    assert.match(fnBody(SHELL, 'function navItemVisible(item)'), /if \(navHidden\.has\(item\.id\)\) return false;/, 'navItemVisible не пропускает скрытые');
+    assert.match(fnBody(SHELL, 'function renderSidebar()'), /if \(!navItemVisible\(item\)\) continue;/, 'renderSidebar не спрашивает navItemVisible');
+    assert.match(fnBody(SHELL, 'function visibleDepartments()'), /d\.items\.some\(navItemVisible\)/, 'раздел без видимых функций остаётся вкладкой');
     assert.match(fnBody(SHELL, 'function firstAllowedView()'), /if \(navHidden\.has\(item\.id\)\) continue;/, 'firstAllowedView не пропускает скрытые');
 });
 

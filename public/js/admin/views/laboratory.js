@@ -462,7 +462,7 @@ function mount() {
         // SECTION_HERO_V1 — баннер раздела; вкладки режимов — в нём, слева под
         // названием (владелец: «button … inside of it but in the left side»).
         // Шапка ниже держит подзаголовок режима и его действия.
-        sectionHero({ section: 'labs', title: 'Лаборатория', tabs: modeSwitch() }).el,
+        sectionHero({ section: 'labs', title: 'Лаборатория', tabs: modeSwitch(), rail: 'labs', banner: false }).el,   // CLINIC_NO_BANNER_V1 — без баннера   // HERO_TABS_TO_RAIL_V1 — режимы в колонке
         pageHead(SUBTITLES[mode], ACTIONS[mode]),
         // LIS_INGEST_V1 — «Анализаторы» рисуются в тот же контейнер, что и
         // «Панели» (paintMode монтирует их в refs.panelsHost): без этой ветки

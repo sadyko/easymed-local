@@ -21,6 +21,7 @@ import { hasAnyRole } from '../services/roles.js';
 // OWN_SHELF_ONLY_V1 — «кто видит склад» живёт у журнала движений (область
 // «вся клиника»); здесь на него только ссылается реестр, второго правила нет.
 import { canSeeAllMovements } from '../services/rpc/stock-log.js';
+import { isRepresentative } from '../services/representative.js';   // REP_OWN_DOCTORS_V1
 
 export function seesDoctorPay(db, user) {
   if (!user) return false;
@@ -69,7 +70,15 @@ export function seesWarehouseStock(db, user) {
 }
 
 /** Именованные правила «кто видит всё», на которые ссылается реестр (`lift`). */
-export const LIFTS = Object.freeze({ doctor_pay: seesDoctorPay, employee_pay: seesEmployeePay, warehouse_stock: seesWarehouseStock });
+// REP_OWN_DOCTORS_V1 — у врачей-источников ограничение по представителю действует
+// ТОЛЬКО на медпредставителя: регистратура, врачи и все остальные видят список
+// целиком, как прежде (иначе регистратура не смогла бы выбрать, кто направил).
+export function notRepresentative(db, user) {
+  try { return !isRepresentative(db, user); } catch { return false; }   // не прочиталось — самый узкий доступ
+}
+
+export const LIFTS = Object.freeze({ doctor_pay: seesDoctorPay, employee_pay: seesEmployeePay, warehouse_stock: seesWarehouseStock,
+  not_representative: notRepresentative });   // REP_OWN_DOCTORS_V1
 
 export function liftAllows(name, db, user) {
   const fn = name ? LIFTS[name] : null;

@@ -24,7 +24,6 @@
 
 import { supabase } from '../../supabase.js';
 import { h, clear, toast, Icon, field, fmtDate } from '../ui.js';   // DATE_FMT_V1 — дата словом, а не ISO
-import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 // PASTEL_IDENTITY_V1 — стол это ЛИЧНОСТЬ («пятый» всегда одного цвета), а не
 // состояние: пастель здесь законна тем же правом, что оттенок врача на
 // календаре. Состояние на этом экране одно — «стол не назначен», и оно взято
@@ -298,8 +297,11 @@ export async function renderKitchenSheet(root, ctx = {}) {
   // Заголовок раздела снимает оболочка (ONE_NAME_PER_SCREEN_V1) — второго
   // механизма здесь нет; подзаголовок остаётся, он объясняет документ.
   // SECTION_HERO_V1 — шапка раздела — тёмный баннер клинических разделов.
-  wrap.appendChild(sectionHero({ section: 'kitchen-sheet', title: 'Порционник',
-    sub: 'Заказ на кухню: палата, койка, пациент и лечебный стол на выбранную дату.' }).el);
+  // INPATIENT_NO_SUBTITLE_V1 (2026-11-21, владелец: «remove such text and use space smartly») — без подзаголовка.
+  // CLINIC_NO_BANNER_V1 (2026-11-21, владелец со снимком баннера «Порционника»:
+  // «remove such place from порционник and выписки») — баннера с приветствием,
+  // датой и часами больше нет: имя экрана — выбранный пункт левой колонки,
+  // как у «Лаборатории» и «Процедур». Экран начинается сразу с работы.
 
   const dateInput = h('input', { type: 'date', value: state.date });
   const wardSelect = h('select', null, h('option', { value: '' }, 'Все отделения'));

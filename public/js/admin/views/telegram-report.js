@@ -35,7 +35,17 @@ async function rpc(name, args = {}) {
     return data;
 }
 
-export function openTelegramReport() {
+// REPORTS_INLINE_V1 (2026-11-21, владелец: «why telegram bot statistic is pop
+// up, make it just appear in main block») — с mount отчёт рисуется в области
+// содержимого (#reports-hub/telegram): без окна, без шапки с именем (оно —
+// выделенный пункт колонки) и без «Закрыть». Без mount — прежнее окно.
+export function openTelegramReport(mount = null) {
+    if (mount) {
+        const body = h('div', { 'data-report-builder': 'telegram' });
+        mount.appendChild(body);
+        paint(body);
+        return body;
+    }
     const overlay = h('div', { style: {
         position: 'fixed', inset: '0', zIndex: '150',
         background: 'var(--ink-25, #f6f8f9)', display: 'flex', flexDirection: 'column',
@@ -56,7 +66,7 @@ export function openTelegramReport() {
             h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)' } },
                 'Кто подключился к боту и что он им выдал')),
         h('span', { class: 'grow', style: { flex: '1' } }),
-        h('button', { class: 'btn', type: 'button', onclick: close }, 'Закрыть')));
+        h('button', { class: 'modal-close', type: 'button', onclick: close }, '×')));   // CLOSE_COMPACT_V1
 
     const body = h('div', { style: { flex: '1', overflow: 'auto', padding: '20px 22px' } });
     overlay.appendChild(body);

@@ -19,6 +19,7 @@
 // (rpc/deposits.js), выручкой депозит не становится.
 
 import { supabase } from '../../supabase.js';
+import { getScrollTop, setScrollTop } from '../scroll-root.js';   // SCROLL_IN_CONTENT_V1
 import { h, Icon, clear, toast, Tag, StatusTag, Avatar, field, fmtDate, fmtDateTime, initials, avColor } from '../ui.js';   // V3120_FIX — fmtDate: «История» падала на ReferenceError
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printableSheet } from './doc-settings.js?v=noqr1';
@@ -337,7 +338,7 @@ function swapQuiet(root, parts, seq, card) {
     const typed = ui && oldInp && oldInp !== ui.inp && typeof oldInp.value === 'string' && oldInp.value !== state.search ? oldInp.value : null;
     const oldScroll = tableScroll(root);
     const left = oldScroll ? Number(oldScroll.scrollLeft) || 0 : 0;   // ревью L4
-    const y = typeof window !== 'undefined' && typeof window.scrollY === 'number' ? window.scrollY : null;
+    const y = getScrollTop();   // SCROLL_IN_CONTENT_V1
     clear(root);
     for (const p of parts) root.appendChild(p);
     if (ui) {
@@ -351,9 +352,7 @@ function swapQuiet(root, parts, seq, card) {
         if (built.search !== state.search || built.filter !== state.filter) ui.onChange();
     }
     if (left) { const sc = tableScroll(root); if (sc) sc.scrollLeft = left; }
-    if (y != null && window.scrollY !== y && typeof window.scrollTo === 'function') {
-        try { window.scrollTo(0, y); } catch (_) { /* прокрутка — не повод упасть */ }
-    }
+    if (y && getScrollTop() !== y) setScrollTop(y);   // SCROLL_IN_CONTENT_V1
     return true;
 }
 
@@ -434,10 +433,10 @@ function shiftBanner(root, summary) {
 
     return h('div', {
         style: {
-            background: 'linear-gradient(120deg, var(--primary-800, #0b5d52), var(--primary-600, #128577))',
+            background: 'var(--brand-gradient)',   // BRAND_GRADIENT_V1 — синий верхней полосы
             borderRadius: '16px', padding: '16px 20px', marginBottom: '16px',
             display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap',
-            boxShadow: '0 4px 14px rgba(11,93,82,0.25)',
+            boxShadow: '0 4px 14px rgba(36,66,111,0.18)',
         },
     },
         h('div', {
@@ -476,40 +475,33 @@ function kpiTiles(summary) {
     const { shift, totals } = summary;
     const cashIn = (totals.cash || 0) + (summary.cash_in || 0);
 
-    const tile = (icon, iconColor, tint, label, value, sub) => h('div', {
-        style: {
-            background: tint || 'var(--white, #fff)', border: '1px solid var(--ink-100)',
-            borderRadius: '14px', padding: '14px 16px', minWidth: 0,
-        },
+    // CASHIER_KPI_STRIP_V1 (2026-11-21, владелец: «make the design different …
+    // more premium and accurate»). Сводка смены — ОДНА панель, а не семь
+    // цветных коробок: показатели разделены волосяными линиями (сетка с
+    // зазором 1px на подложке линии — перенос строки не рвёт разделители),
+    // смысл цвета — точка у подписи. «Остаток наличных» — итог смены, ради
+    // которого кассир смотрит сюда, — единственная залитая ячейка.
+    // Стили — admin-views.css (.cash-kpi*). Аргумент icon прежних вызовов не
+    // используется.
+    const tile = (icon, dot, key, label, value, sub) => h('div', {
+        class: 'cash-kpi' + (key ? ' cash-kpi--key' : ''), 'data-cash-tile': '',
     },
-        h('div', {
-            style: {
-                width: '30px', height: '30px', borderRadius: '9px', marginBottom: '10px',
-                background: 'var(--white, #fff)', color: iconColor,
-                display: 'grid', placeItems: 'center', border: '1px solid var(--ink-100)',
-            },
-        }, Icon(icon, { size: 15 })),
-        h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' } }, label),
-        h('div', { style: { marginTop: '4px', display: 'flex', alignItems: 'baseline', gap: '5px' } },
-            h('span', { class: 'num', style: { fontSize: '20px', fontWeight: 800, color: 'var(--ink-900)', fontVariantNumeric: 'tabular-nums' } }, value),
-            h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, 'сум'),   // V3120_FIX — было «UZS»
+        h('div', { class: 'cash-kpi-l' }, h('span', { class: 'cash-kpi-dot', style: { background: dot } }), label),
+        h('div', { class: 'cash-kpi-v' },
+            h('span', { class: 'cash-kpi-n' }, value),
+            h('span', { class: 'cash-kpi-c' }, 'сум'),   // V3120_FIX — было «UZS»
+            sub ? h('span', { class: 'cash-kpi-sub' }, sub) : null,
         ),
-        sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, sub) : null,
     );
 
-    return h('div', {
-        style: {
-            display: 'grid', gap: '12px', marginBottom: '16px',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-        },
-    },
-        tile('Doc',      'var(--ink-600)',  '',        'Старт смены',      fmtPrice(shift.opening_float)),
-        tile('Check',    'var(--ok-600, #16a34a)',  'var(--ok-50, #ecfdf5)',  'Оплачено счетов',  fmtPrice(totals.total), trf('{n} платеж.', { n: totals.count })),
-        tile('Plus',     'var(--ok-600, #16a34a)',  'var(--ok-50, #ecfdf5)',  'Приход наличных',  fmtPrice(cashIn)),
-        tile('ID',       '#4f46e5',         '#eef2ff', 'Оплата картой',    fmtPrice(totals.card)),
-        tile('Activity', '#2563eb',         '#eff6ff', 'Эквайринг',        fmtPrice(totals.acquiring || 0)),
-        tile('ArrowUp',  '#dc2626',         '#fef2f2', 'Расход наличных',  fmtPrice(summary.cash_out)),
-        tile('Wallet',   '#2563eb',         '#eff6ff', 'Остаток наличных', fmtPrice(summary.expected_drawer)),
+    return h('div', { class: 'cash-kpis' },
+        tile('Doc',      'var(--ink-400)',           false, 'Старт смены',      fmtPrice(shift.opening_float)),
+        tile('Check',    'var(--ok-600, #16a34a)',   false, 'Оплачено счетов',  fmtPrice(totals.total), trf('{n} платеж.', { n: totals.count })),
+        tile('Plus',     'var(--ok-600, #16a34a)',   false, 'Приход наличных',  fmtPrice(cashIn)),
+        tile('ID',       '#4f46e5',                  false, 'Оплата картой',    fmtPrice(totals.card)),
+        tile('Activity', '#2563eb',                  false, 'Эквайринг',        fmtPrice(totals.acquiring || 0)),
+        tile('ArrowUp',  'var(--crit-600, #dc2626)', false, 'Расход наличных',  fmtPrice(summary.cash_out)),
+        tile('Wallet',   '#fff',                     true,  'Остаток наличных', fmtPrice(summary.expected_drawer)),
     );
 }
 
@@ -1112,12 +1104,10 @@ const CHIPS = [
 function paintChips(el, onChange) {
     clear(el);
     const c = state.counts || {};
-    el.appendChild(h('div', {
-        style: {
-            display: 'grid', gap: '10px', marginBottom: '12px',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-        },
-    },
+    // CASHIER_KPI_STRIP_V1 — фильтр счетов — сегментный переключатель: светлая
+    // дорожка, выбранный статус — приподнятый белый сегмент. Цвет статуса —
+    // точка у подписи; число окрашено только у ненулевых тревожных статусов.
+    el.appendChild(h('div', { class: 'cash-seg', role: 'tablist' },
         ...CHIPS.map((chip) => {
             const pendingDeps = (state.deposits || []).filter((d) => d.status === 'pending');
             const liveCards = (state.cards || []).filter((x) => x.active && Number(x.remaining) > 0);
@@ -1131,21 +1121,18 @@ function paintChips(el, onChange) {
                             ? { n: (state.unbilled.totals && state.unbilled.totals.n) || 0, sum: (state.unbilled.totals && state.unbilled.totals.sum) || 0 }
                             : (c[chip.key] || { n: 0, sum: 0 });
             const active = state.filter === chip.key;
+            const alert = agg.n > 0 && ['unpaid', 'unbilled', 'debt', 'partial', 'refunds'].includes(chip.key);
             return h('button', {
-                type: 'button',
+                type: 'button', title: chip.label, role: 'tab',
+                class: 'cash-seg-btn' + (active ? ' is-on' : ''),
+                'aria-selected': active ? 'true' : 'false',
                 onclick: () => { state.filter = chip.key; onChange(); },
-                style: {
-                    textAlign: 'left', padding: '12px 14px', borderRadius: '12px', cursor: 'pointer',
-                    fontFamily: 'inherit', background: 'var(--white, #fff)',
-                    border: active ? '2px solid var(--primary-500)' : '1px solid var(--ink-100)',
-                    boxShadow: active ? '0 0 0 3px var(--primary-50)' : 'none',
-                },
             },
-                h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', color: chip.color, fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em' } },
-                    Icon(chip.icon, { size: 13 }), chip.label),
-                h('div', { class: 'num', style: { fontSize: '20px', fontWeight: 800, color: 'var(--ink-900)', marginTop: '4px' } }, String(agg.n)),
-                h('div', { class: 'muted num', style: { fontSize: '12.5px', marginTop: '1px' } },
-                    trf('{sum} сум', { sum: fmtPrice(agg.sum) })),   // V3120_FIX — было «UZS»
+                h('div', { class: 'cash-seg-l' }, h('span', { class: 'cash-seg-dot', style: { background: chip.color } }), chip.label),
+                h('div', { class: 'cash-seg-v' },
+                    h('span', { class: 'cash-seg-n', style: alert ? { color: chip.color } : null }, String(agg.n)),
+                    h('span', { class: 'cash-seg-sum' }, trf('{sum} сум', { sum: fmtPrice(agg.sum) })),   // V3120_FIX — было «UZS»
+                ),
             );
         }),
     ));
@@ -1757,7 +1744,7 @@ function paintTable(el, root, onChange) {   // REFUND_ANY_V1 — onChange: «П�
         const tbody = h('tbody');
         for (const inv of rows) tbody.appendChild(invoiceRow(inv, root));
         el.appendChild(h('div', { 'data-cashier-scroll': '1', style: { overflowX: 'auto' } },   // data-cashier-scroll — ревью L4 (3.22.0)
-            h('table', { class: 'tbl' },
+            h('table', { class: 'tbl cash-tbl' },   // CASHIER_ROW_COMPACT_V1 — низкие строки (admin-views.css .cash-tbl)
                 h('thead', null, h('tr', null,
                     th('Пациент'), th('Услуга'), th('Врач'), th('Создан'),
                     th('Сумма', true), th('Оплачено', true), th('Долг', true),
@@ -1849,7 +1836,7 @@ function invoiceRow(inv, root) {
             type: 'button', title: 'Возврат оплаты',
             onclick: () => openInvoiceRefund(inv, root),
             style: {
-                width: '30px', height: '30px', borderRadius: '8px', cursor: 'pointer',
+                width: '26px', height: '26px', borderRadius: '7px', cursor: 'pointer',
                 border: '1px solid var(--warn-200, #fde68a)', background: 'var(--white, #fff)',
                 color: 'var(--warn-700, #b45309)', display: 'inline-grid', placeItems: 'center',
             },
@@ -1860,7 +1847,7 @@ function invoiceRow(inv, root) {
             type: 'button', title: 'Отменить счёт',
             onclick: () => voidModal(root, inv),
             style: {
-                width: '30px', height: '30px', borderRadius: '8px', cursor: 'pointer',
+                width: '26px', height: '26px', borderRadius: '7px', cursor: 'pointer',
                 border: '1px solid var(--crit-200, #fecaca)', background: 'var(--white, #fff)',
                 color: 'var(--crit-600, #dc2626)', display: 'inline-grid', placeItems: 'center',
             },
@@ -1876,7 +1863,7 @@ function invoiceRow(inv, root) {
     const iconBtn = (title, icon, onclick, color, border) => h('button', {
         type: 'button', title, onclick,
         style: {
-            width: '30px', height: '30px', borderRadius: '8px', cursor: 'pointer',
+            width: '26px', height: '26px', borderRadius: '7px', cursor: 'pointer',
             border: '1px solid ' + border, background: 'var(--white, #fff)',
             color, display: 'inline-grid', placeItems: 'center',
         },
@@ -1936,17 +1923,21 @@ function invoiceRow(inv, root) {
         // six-line stack one word wide. Truncating with an ellipsis (and the
         // full value in the tooltip) keeps the row one line tall no matter how
         // long the name or how narrow the window.
-        h('td', { style: { minWidth: '210px' } }, h('div', { class: 'row', style: { gap: '10px', flexWrap: 'nowrap' } },
+        // CASHIER_ROW_COMPACT_V1 (2026-11-21, владелец со снимком строки кассы:
+        // «each patient in cashier takes more space … change the highness»).
+        // Имя и «МРН · телефон» — ОДНОЙ строкой (было две), кружок с буквами
+        // меньше, поля ячеек и кнопки ниже (.cash-tbl): строка ~38px вместо ~62.
+        h('td', { style: { minWidth: '210px' } }, h('div', { class: 'row', style: { gap: '8px', flexWrap: 'nowrap' } },
             Avatar({ initials: initials(inv.patient_name || '?'), color: avColor(inv.id) }),
-            h('div', { style: { minWidth: 0 } },
-                h('div', { class: 'cell-strong', style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, title: inv.patient_name || '' }, inv.patient_name || '—'),
-                h('div', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
+            h('div', { class: 'cash-pt', title: [inv.patient_name, inv.mrn, inv.phone].filter(Boolean).join(' · ') },
+                h('span', { class: 'cell-strong cash-pt-nm' }, inv.patient_name || '—'),
+                h('span', { class: 'muted cash-pt-meta' },
                     [inv.mrn, inv.phone].filter(Boolean).join(' · ')),
                 // COVERAGE_SPLIT_V1 — платит не пациент: видно ещё в списке, до
                 // открытия окна оплаты, иначе кассир потянется взять эти деньги.
                 inv.payer_id ? h('span', {
                     style: {
-                        display: 'inline-block', marginTop: '3px', padding: '1px 8px', borderRadius: '999px',
+                        display: 'inline-block', padding: '1px 8px', borderRadius: '999px', flex: '0 0 auto',
                         fontSize: '12.5px', fontWeight: 700, whiteSpace: 'nowrap',
                         background: 'var(--warn-50, #fffbeb)', color: 'var(--warn-700, #b45309)',
                     },

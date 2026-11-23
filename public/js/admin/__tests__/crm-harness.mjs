@@ -2,6 +2,7 @@
 // доски заявок (дубли, поиск, задачи). Тот же приём, что в crm-card.test.mjs:
 // доска монтируется целиком, а проверяется то, что отрисовалось и что ушло на
 // сервер. Это НЕ тестовый файл (нет «.test.» в имени) — его импортируют.
+import { railToolsFor } from '../rail-tools.js';   // RAIL_TOOLS_V1 — без зависимостей от глобалов стенда
 
 class F {
   constructor(t) { this.tagName = String(t).toUpperCase(); this.style = {}; this.children = []; this.attrs = {}; this.className = ''; this._t = ''; this._l = {}; this.dataset = {}; this.value = ''; }
@@ -61,11 +62,26 @@ globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
 export const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
+// RAIL_TOOLS_V1 — кнопки раздела (Доска, Мои задачи, Дубликаты…) живут в левой
+// колонке оболочки, а не в корне экрана: стенд достаёт их из того же реестра.
+// CRM_REPORT_LAST_V1 — «Отчёт» CRM регистрируется отдельно ('crm-end', последним
+// в колонке); для стенда это та же колонка CRM.
+export function railNodes(owner = 'crm') {
+  const out = [];
+  for (const o of (owner === 'crm' ? ['crm', 'crm-end'] : [owner])) {
+    const build = railToolsFor(o);
+    for (const g of (build ? build() : [])) for (const n of g || []) if (n) walk(n, out);
+  }
+  return out;
+}
 // CRM_HERO_V1 — вид доски выбирается списком «Вид» в ряду фильтров (Канбан /
-// Список); «Мои задачи» и «Доска» — кнопки баннера раздела. Из «Задач» назад —
+// Список); «Мои задачи» и «Доска» — кнопки левой колонки (RAIL_TOOLS_V1). Из «Задач» назад —
 // «Доска»: она возвращает запомненный вид доски (по умолчанию Канбан).
+// CRM_PANELS_INLINE_V1 — «Мой KPI», «Cust Dev», «Дубликаты», «Отчёт» — виды
+// раздела: карточка рисуется в корне экрана, а не окном в document.body.
+export const crmPanel = (root) => walk(root).find((n) => n.attrs && 'data-crm-panel' in n.attrs) || null;
 export function crmView(root, v) {
-  const all = walk(root);
+  const all = [...walk(root), ...railNodes()];
   if (v === 'tasks') { all.find((n) => n.attrs && n.attrs['data-crm-view'] === 'tasks').click(); return; }
   const sel = all.find((n) => n.attrs && 'data-crm-view-select' in n.attrs);
   if (!sel) { all.find((n) => n.attrs && n.attrs['data-crm-view'] === 'board').click(); return; }
@@ -150,6 +166,8 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     RPC.push({ name, body });
+    // REP_BOT_TAB_FIX_V1 — готовые ответы по имени RPC для экранов вне CRM.
+    if (S.rpcAnswers && Object.prototype.hasOwnProperty.call(S.rpcAnswers, name)) return jsonOk(S.rpcAnswers[name]);
     if (name === 'crm_config_get') return jsonOk(S.config);
     if (name === 'crm_leads_by_phone') return jsonOk(S.dups);
     if (name === 'crm_search') return jsonOk(typeof S.search === 'function' ? S.search(body) : S.search);

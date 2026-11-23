@@ -211,12 +211,11 @@ export async function renderUpdates(root, ctx = {}) {
     // siblings: it existed to separate four cards from one another, and one
     // section does not need a heading repeating the page it is on.
     wrap.appendChild(body);
-    // ICON_CREDIT_V1 (2026-09-05) — CC BY 4.0 grants the right to use the icon
-    // set on ONE condition: the attribution travels with the work. Until now
-    // it lived only in public/assets/icons/coolicons/ATTRIBUTION.md — a file
-    // inside the release archive that no screen has ever linked to, i.e. the
-    // condition was met for whoever unpacks the archive and for nobody who
-    // uses the program. One line, on the screen that already exists to say
+    // ICON_CREDIT_V1 (2026-09-05) — the icon set's licence notice travels with
+    // the work; until then it lived only in a file inside the release archive
+    // that no screen linked to (today public/assets/icons/lucide/ATTRIBUTION.md
+    // and LICENSE — ICONS_LUCIDE_V1), i.e. it reached whoever unpacks the
+    // archive and nobody who uses the program. One line, on the screen that already exists to say
     // what this program IS (version, what's new), outside `body` so paint()'s
     // clear() never takes it away.
     wrap.appendChild(paintIconCredit());
@@ -369,20 +368,19 @@ function watchForNewVersion(bootVersion, body) {
     // A timer must never hold the page open or outlive the view.
     if (_watchTimer && typeof _watchTimer.unref === 'function') _watchTimer.unref();
 }
-// ICON_CREDIT_V1 — the CC BY 4.0 notice itself: author, set, licence, and the
-// fact that the drawings were CHANGED (build-icon-paths.mjs strips ids and the
-// baked-in stroke/fill so the paths can take their colour and weight from the
-// theme — a modification in the licence's sense, and one the licence says must
-// be stated). Same four facts as ATTRIBUTION.md, which this links to in spirit
-// by naming the same sources; the links are a bonus for a clinic that is
-// online, the sentence itself is the attribution and it reads fine offline.
+// ICON_CREDIT_V1 — who drew the interface icons, under which licence, and that
+// the drawings were CHANGED (build-icon-paths.mjs turns shapes into paths and
+// strips the baked-in stroke/fill so icons take their colour and weight from the
+// theme). Same facts as public/assets/icons/lucide/ATTRIBUTION.md; the links are
+// a bonus for a clinic that is online, the sentence reads fine offline.
+// ICONS_LUCIDE_V1 (2026-11-22) — the set is now Lucide (ISC), not coolicons.
 function paintIconCredit() {
     const link = (href, text) => h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, text);
     return h('p', { class: 'upd-credit' },
         tr('Иконки интерфейса:'), ' ',
-        link('https://coolicons.cool/', 'coolicons'),
-        ' — Kryston Schwarze, ',
-        link('https://creativecommons.org/licenses/by/4.0/', 'CC BY 4.0'),
+        link('https://lucide.dev/', 'Lucide'),
+        ' — Lucide Icons and Contributors, ',
+        link('https://lucide.dev/license', 'ISC'),
         ', ', tr('с изменениями'), '.');
 }
 

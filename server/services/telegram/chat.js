@@ -189,8 +189,11 @@ export async function sendChatMessage(db, token, chatId, text, user, deps = {}) 
 
   const signature = signatureOf(user);
   const res = await sendMessage(token, chatId, escapeHtml(body) + escapeHtml(signature), {}, deps);
+  // AI_CHAT_V1 — ответ ИИ-помощника: без подписи сотрудника (её нет), в ленте
+  // by_ai = 1, чтобы операторы видели, что ответил ИИ, и чтобы guards.js не
+  // считал его оператором (у ответа ИИ нет sent_by).
   logMessage(db, chatId, 'out', body + signature, {
-    kind: 'text', sentBy: (user && user.id) || null, tgMessageId: res && res.message_id,
+    kind: 'text', sentBy: (user && user.id) || null, tgMessageId: res && res.message_id, byAi: !!(user && user.ai),
   });
   return { ok: true, message_id: res && res.message_id };
 }

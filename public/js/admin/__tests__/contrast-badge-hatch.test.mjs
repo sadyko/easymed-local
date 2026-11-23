@@ -279,7 +279,9 @@ test('колонка меню больше не отдельная поверх�
         `рамка окна на грунте ${ratio(frame[0], ground)}:1 — окна снова не видно`);
     // Внутренние линейки — тоже часть «панели»: шапка колонки отделялась от
     // меню чертой ровно того же цвета, что и правая граница.
-    const brand = rule(MAIN, '.sidebar-brand');
+    // DEPT_TOPNAV_V1 — знак и имя клиники переехали в верхнюю полосу разделов
+    // (.deptbar-brand); черты под ними нет и там.
+    const brand = rule(MAIN, '.deptbar-brand');
     assert.ok(!brand['border-bottom'], 'под знаком бренда снова линейка — колонка опять с собственной шапкой');
 });
 
@@ -501,26 +503,13 @@ test('у рабочего окна есть видимая рамка и тен�
 
     assert.ok(/var\(--shadow-window\)/.test(card['box-shadow'] || ''),
         `тень окна снова задана мимо токена: ${card['box-shadow']}`);
-    // Тень не должна быть косметической: --shadow-xs (4% на 2px) не читается.
+    // WINDOW_CLEAR_LINE_V1 (2026-11-21) — владелец: «make all such places
+    // accurate as clear line without shadow». Прежнее требование кольца и ореола
+    // (WHITE_GROUND_GLOW_V1) снято: окно держит ОДНА чёткая рамка (контраст
+    // проверен выше), тени нет вовсе.
     const shadow = MAIN.match(/--shadow-window:\s*([^;]+);/);
     assert.ok(shadow, 'токен --shadow-window пропал из :root');
-    const alphas = [...shadow[1].matchAll(/rgba\([^)]*?,\s*([0-9.]+)\)/g)].map((m) => parseFloat(m[1]));
-    // Первое слагаемое тени пишется как `0 1px 2px` — без «px» у нуля, поэтому
-    // разбор обязан принимать и голый 0, иначе размытие «не находится» и тест
-    // проходит на пустом списке.
-    const blurs = [...shadow[1].matchAll(/(?:0|\d+px)\s+\d+px\s+(\d+)px/g)].map((m) => parseInt(m[1], 10));
-    assert.ok(Math.max(...alphas) >= 0.06, `тень окна прозрачнее 6% (${Math.max(...alphas)}) — её не будет видно`);
-    // WHITE_GROUND_GLOW_V1 — форма тени сменилась: раньше это была ОДНА мягкая
-    // тень (размытие 24px), она и приподнимала белое окно над серым полем.
-    // На белом поле приподнимать не над чем, и работу делает контур: плотное
-    // кольцо без размытия плюс короткий мягкий ореол. Поэтому требование
-    // «размытие ≥12px» заменено на «кольцо есть И ореол мягкий»: без кольца
-    // граница пропадёт, без ореола станет резкой чертой.
-    const ring = /0\s+0\s+0\s+(\d+)px/.exec(shadow[1]);
-    assert.ok(ring && Number(ring[1]) >= 2,
-        `у окна нет плотного кольца (${shadow[1]}) — на белом поле границу держать нечем`);
-    assert.ok(Math.max(...blurs) >= 8,
-        `ореол окна размыт на ${Math.max(...blurs)}px — граница читается резкой чертой`);
+    assert.equal(shadow[1].trim(), 'none', `у окна снова тень (${shadow[1]}) — владелец просил чистую линию`);
 });
 
 test('окна внутри окна нет: вложенная карточка не рисует вторую тень', () => {
@@ -785,10 +774,12 @@ test('карточка заявки читается на КАЖДОЙ паст�
 
 const HTML = fs.readFileSync(path.join(path.resolve(CSS_DIR, '..'), 'admin.html'), 'utf8')
     .replace(/\r\n/g, '\n');
-/** Разметка шапки — от .sidebar-brand до начала списка пунктов. */
+/** Разметка шапки — от знака клиники до начала списка пунктов.
+ *  DEPT_TOPNAV_V1 — знак живёт в верхней полосе (.deptbar-brand), стрелка
+ *  сворачивания — в шапке колонки (.rail-head); срез берёт обе. */
 const BRAND_HTML = (() => {
-    const i = HTML.indexOf('class="sidebar-brand"');
-    assert.ok(i > -1, 'в admin.html пропала шапка колонки меню (.sidebar-brand)');
+    const i = HTML.indexOf('class="deptbar-brand"');
+    assert.ok(i > -1, 'в admin.html пропала шапка с именем клиники (.deptbar-brand)');
     const j = HTML.indexOf('id="sidebar-body"', i);
     return HTML.slice(i, j > -1 ? j : i + 3000);
 })();
@@ -908,28 +899,25 @@ test('длинное имя клиники переносится, а не об�
         'пустая строка имени клиники держит место — до загрузки клиники в шапке зияет пустая полоса');
 });
 
-test('на свёрнутой рейке остаётся ЗНАК — и он в неё помещается', () => {
-    // Стрелку на рейке прячут, значит знак — единственный способ раскрыть
-    // меню обратно. Спрятать заодно и его — сложить колонку навсегда.
-    const hidden = rule(MAIN, '.sidebar-collapsed .sidebar-brand > div:not(.brand-mark)');
-    assert.strictEqual(hidden.display, 'none', 'на рейке снова видны строки шапки — 68px на них не хватит');
-    assert.strictEqual(rule(MAIN, '.sidebar-collapsed .sidebar-toggle').display, 'none',
-        'на рейке снова стрелка — она там не помещается, и её работу делает сам знак');
-
-    // Ни одно правило свёрнутой колонки не имеет права спрятать сам знак.
+test('на свёрнутой рейке остаётся СТРЕЛКА — и она в неё помещается', () => {
+    // DEPT_TOPNAV_V1 — знак клиники ушёл в верхнюю полосу, и раскрыть рейку
+    // теперь может только стрелка в шапке колонки. Спрятать её на рейке —
+    // сложить колонку навсегда.
     for (const m of MAIN.matchAll(/\.sidebar-collapsed[^{}]*\{([^}]*)\}/g)) {
-        if (!/\.brand-mark/.test(m[0])) continue;
-        if (/:not\(\.brand-mark\)/.test(m[0])) continue;
+        if (!/\.sidebar-toggle/.test(m[0])) continue;
         assert.ok(!/display\s*:\s*none/.test(m[1]),
-            'правило свёрнутой колонки прячет знак: ' + m[0].split('{')[0].trim());
+            'правило свёрнутой колонки прячет стрелку: ' + m[0].split('{')[0].trim());
     }
+    // Имя раздела на 68px не помещается — прячется, стрелка встаёт по центру.
+    assert.strictEqual(rule(MAIN, '.sidebar-collapsed .rail-title').display, 'none',
+        'на рейке снова видно имя раздела — 68px на него не хватит');
 
-    const mark = rule(MAIN, '.brand-mark');
+    const toggle = rule(MAIN, '.sidebar-toggle');
     const railW = px(rule(MAIN, '.sidebar-collapsed')['--sidebar-w']);
-    const w = px(mark.width);
-    assert.ok(w > 0 && w <= railW - 16, `знак ${w}px на рейке ${railW}px — упирается в края`);
-    // И он не съёживается, когда рядом длинное имя.
-    assert.match(String(mark.flex), /^0 0 auto$/, 'знак сжимаем — длинное имя клиники его расплющит');
+    const w = px(toggle.width);
+    assert.ok(w > 0 && w <= railW - 16, `стрелка ${w}px на рейке ${railW}px — упирается в края`);
+    // Знак в верхней полосе не съёживается, когда рядом длинное имя.
+    assert.match(String(rule(MAIN, '.brand-mark').flex), /^0 0 auto$/, 'знак сжимаем — длинное имя клиники его расплющит');
 });
 
 test('стрелка сворачивания осталась кнопкой и остаётся видимой с клавиатуры', () => {
@@ -939,10 +927,13 @@ test('стрелка сворачивания осталась кнопкой и
         'стрелка сворачивания перестала быть <button> — с клавиатуры до неё не добраться');
     assert.match(BRAND_HTML, /id="sidebar-toggle"[^>]*aria-label="/,
         'у стрелки нет подписи для читалки — иконка молчит');
-    // Знак тоже управляется с клавиатуры: на рейке он единственный орган
-    // управления, оставшийся в шапке.
-    assert.match(BRAND_HTML, /id="sidebar-logo"[^>]*tabindex="0"/,
-        'до знака не добраться с клавиатуры — на свёрнутой рейке меню было бы не раскрыть');
+    // DEPT_TOPNAV_V1 — знак больше ничего не делает (колонку сворачивает
+    // стрелка), значит и притворяться кнопкой ему нельзя: ни role="button",
+    // ни места в порядке Tab, где он ловил бы фокус впустую.
+    const logo = BRAND_HTML.match(/<div[^>]*id="sidebar-logo"[^>]*>/);
+    assert.ok(logo, 'в разметке пропал знак клиники');
+    assert.ok(!/role="button"|tabindex=/.test(logo[0]),
+        'знак снова выдаёт себя за кнопку, хотя ничего не делает: ' + logo[0]);
 
     // Контур фокуса общий (:focus-visible ниже по файлу) и виден на грунте.
     const focus = rule(MAIN, '.btn:focus-visible,\n.nav-item:focus-visible,\na:focus-visible,\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible,\n[role="button"]:focus-visible');
@@ -953,12 +944,13 @@ test('стрелка сворачивания осталась кнопкой и
 });
 
 test('шапку от меню отделяет воздух, а не линейка — и его больше, чем между пунктами', () => {
-    const brand = rule(MAIN, '.sidebar-brand');
-    const pads = brand.padding.split(/\s+/).map(px);
-    const bottom = pads.length === 4 ? pads[2] : pads[0];
+    // DEPT_TOPNAV_V1 — шапка колонки теперь .rail-head (имя раздела и
+    // стрелка); воздух её — собственная высота строки.
+    const brand = rule(MAIN, '.rail-head');
+    const bottom = px(brand['min-height'].replace('var(--topbar-h)', rule(MAIN, ':root')['--topbar-h']));
     const gap = parseFloat(rule(MAIN, '.sidebar-body .nav').gap);
     assert.ok(bottom >= gap * 4,
-        `под шапкой ${bottom}px при зазоре между пунктами ${gap}px — шапка читается первым пунктом меню`);
+        `шапка колонки ${bottom}px при зазоре между пунктами ${gap}px — шапка читается первым пунктом меню`);
     // Линейки по-прежнему нет (её проверяет и тест раздела 3 — здесь названо
     // вслух, потому что воздух её ЗАМЕНЯЕТ, а не дополняет).
     assert.ok(!brand['border-bottom'], 'под шапкой снова линейка — воздух её не заменил, а получил в довесок');

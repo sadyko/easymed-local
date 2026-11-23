@@ -4,6 +4,7 @@
 // желанию до сохранения). Внутри — «Отчёт» (период, конверсия, источники)
 // и выгрузка Excel. Таблица crm_requests (mig 044).
 import { supabase } from '../../supabase.js';
+import { getScrollTop, setScrollTop } from '../scroll-root.js';   // SCROLL_IN_CONTENT_V1
 import { consultPrice, consultOffered, consultMinutes } from '../../shared/consultation-price.js';   // DOCTOR_PROFILE_V1 — флаги 0/1 (isOn) и цена консультации — одно правило с кассой
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
@@ -27,7 +28,7 @@ import { filterServicePool, serviceGroupCounts } from './service-search.js';   /
 import { openQuickPatientModal } from './quick-patient-modal.js?v=qp1';
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
 import { openOperatorKpi } from './crm-operator-kpi.js';   // OPERATOR_KPI_V1 — «Мой KPI» оператора
-import { sectionHero } from './section-hero.js';   // CRM_HERO_V1 — тёмный баннер раздела, как у «Пациентов»
+import { setRailTools } from '../rail-tools.js';   // RAIL_TOOLS_V1 — кнопки раздела в левой колонке
 import { registerCrmPhoneHooks } from './crm-phone.js';   // CRM_PHONE_V1 — панель «Телефон» (кнопка в верхней панели) берёт у доски заявки и окно карточки
 import { canView, canEdit, isRouteAllowed } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev» · LIVE_AUDIT_FIX_V1 — isRouteAllowed
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
@@ -62,6 +63,7 @@ import { readEnsureVisit } from '../ensure-visit-answer.js';
 // CRM_DEDUP_SEARCH_TASKS_V1 — задачи на карточке заявки (миграция 148): блок в
 // окне заявки, метка «задача: …» на карточке доски.
 import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso, taskQuery } from './crm-tasks.js';
+import { lineChart, barChart, barList, SERIES, groupNum } from './crm-report-charts.js';   // CRM_SALES_CHARTS_V1
 // CRM_UNIFY_V1 — вид «Задачи»: третий вид раздела (Канбан / Список / Задачи).
 import { renderTasksView } from './crm-tasks-view.js';
 // CRM_UNIFY_V1 — загрузка доски: все открытые, закрытые за период, настоящие числа.
@@ -179,6 +181,17 @@ export function boardStaff(users) {
     return (Array.isArray(users) ? users : []).filter((u) => u && (BOARD_ROLES.includes(u.role)
         || extraRolesOf(u).some((r) => BOARD_ROLES.includes(r))));
 }
+
+// CRM_PANELS_INLINE_V1 (2026-11-21, владелец: «remove pop up view and make it
+// open like in my task — pop ups, like my KPI, Cust Dev and so on») — «Мой KPI»,
+// «Cust Dev», «Дубликаты» и «Отчёт» больше не окна поверх доски, а виды раздела,
+// как «Мои задачи»: открываются кнопкой в левой колонке на месте доски, без
+// затемнения и без «Закрыть»; назад — «Доска». Окна-функции те же
+// (openOperatorKpi, openCustDev, openCrmDuplicates, reportModal) — с { mount }
+// они рисуют ту же карточку в тело раздела. Доску эти виды не грузят, ряд
+// фильтров доски не показывают — как «Задачи».
+const PANEL_VIEWS = new Set(['kpi', 'custdev', 'duplicates', 'report']);
+const boardShown = (v) => v !== 'tasks' && !PANEL_VIEWS.has(v);
 
 // CRM_FILTERS_V1 — источник и период сужают доску. Живут в state, потому что
 // paintBody() перерисовывает только тело, без повторного запроса к базе.
@@ -371,44 +384,25 @@ function columnsTotal(rows, clientFiltered) {
 // же фильтр «Оператор» в нём), здесь — с тем же источником и меткой, только
 // видимые колонки (скрытую доска не показывает и при «Всё время»).
 // «Показать все» — «Всё время».
-const dotsDate = (ymd) => String(ymd || '').split('-').reverse().join('.');
-function periodSentence() {
-    if (state.period === 'today') return tr('Период «Сегодня»: показаны заявки, поступившие сегодня.');
-    if (state.period === 'week') return tr('Период «Эта неделя»: показаны заявки, поступившие на этой неделе.');
-    if (state.period === '30') return tr('Период «30 дней»: показаны заявки, поступившие за последние 30 дней.');
-    const from = state.customFrom ? dotsDate(state.customFrom) : '';
-    const to = state.customTo ? dotsDate(state.customTo) : '';
-    if (from && to) return trf('Период «{from} – {to}»: показаны заявки, поступившие с {from} по {to}.', { from, to });
-    if (from) return trf('Период «с {from}»: показаны заявки, поступившие с {from}.', { from });
-    return trf('Период «по {to}»: показаны заявки, поступившие по {to}.', { to });
-}
+// CRM_NO_PERIOD_LINE_V1 (2026-11-21, владелец со снимком строки «Период «Сегодня»:
+// показаны заявки, поступившие сегодня. Открытых за другие дни: N — Показать все»:
+// «can you remove from crm») — строки о периоде и давних открытых над доской больше
+// нет: выбранный период теперь виден самим списком «Период» — он подсвечен, пока
+// стоит не «Всё время» (CRM_FILTER_LIT_V1). Давние открытые больше не спрашиваются
+// (loadBoard без outside). Осталась только подсказка при поиске: поиск идёт по
+// всем датам и тогда период не действует — об этом сказать надо.
 function periodLine() {
     if (!periodActive()) return null;
-    // Ревью 3.23.0 — при поиске период не действует (inPeriod): вместо строки о
-    // давних открытых — что поиск идёт по всем датам.
     if (isSearching()) {
         return h('div', { class: 'muted crm-period-line', 'data-crm-search-all': '' }, Icon('Search', { size: 13 }), ' ', 'Поиск — по всем датам');
     }
-    // CRM_PERIOD_BOOKED_V1 — выбрана «Запись»: период записанные карточки не сужает — так и
-    // сказано вместо «показаны заявки, поступившие сегодня».
+    // CRM_PERIOD_BOOKED_V1 — выбрана «Запись»: период записанные карточки не сужает — так и сказано.
+    // Та же причина, что у подсказки поиска (период не действует), поэтому и она пережила
+    // CRM_NO_PERIOD_LINE_V1 (слияние с веткой local/ai-on-main, 2026-11-23).
     if (bookedActive()) {
         return h('div', { class: 'muted crm-period-line', 'data-crm-booked-all': '' }, Icon('Calendar', { size: 13 }), ' ', 'Запись — по всем датам поступления');
     }
-    // Ревью 3.23.0 (решение координатора, Q2) — строка только когда давних
-    // открытых больше нуля; сервер не ответил (null) — строки нет, доска на месте.
-    const n = Array.isArray(state.outside)
-        ? state.outside.filter((r) => inVisibleColumn(r) && inSource(r) && inTag(r)).length
-        : 0;
-    if (!(n > 0)) return null;
-    return h('div', { class: 'muted crm-period-line', 'data-crm-period-line': '' },
-        h('span', null, periodSentence()),
-        ' ',
-        h('span', { 'data-crm-period-outside': String(n) }, trf('Открытых за другие дни: {n}', { n })),
-        ' — ',
-        h('button', {
-            class: 'btn btn-ghost btn-sm crm-period-all', type: 'button', 'data-crm-period-all': '',
-            onclick: () => { state.period = 'all'; paint(); },
-        }, 'Показать все'));
+    return null;
 }
 
 // CRM_PERIOD_ALL_COLUMNS_V1 — пока доска перезагружается (смена периода,
@@ -535,7 +529,7 @@ function sizeBoardColumns() {
         const scrollbar = Math.max(0, board.offsetHeight - board.clientHeight - px(board, 'borderTopWidth') - px(board, 'borderBottomWidth'));
         const chromeBelow = px(col, 'paddingBottom') + px(col, 'borderBottomWidth') + px(board, 'paddingBottom') + scrollbar
             + px(win, 'paddingBottom') + px(win, 'borderBottomWidth');
-        const scrollY = window.scrollY || 0;
+        const scrollY = getScrollTop();   // SCROLL_IN_CONTENT_V1 — прокручивается область содержимого
         const listTop = list.getBoundingClientRect().top + scrollY;
         const windowTop = win.getBoundingClientRect().top + scrollY;
         const viewportH = window.innerHeight;
@@ -631,30 +625,9 @@ function leadBotLine(phoneInp, lead) {
 // доску». Счётчик объявлений дозаполняется, когда ответит сервер; сбой — просто
 // кнопка без счётчика, доска заявок от этого не страдает.
 //
-// CRM_HEAD_NEWS_V1 (2026-10-31, владелец: «remove the text and put information
-// button on left side visible and with animation if there is an information»).
-// Кнопка стоит слева под заголовком, на месте прежней подписи, и крупнее
-// остальных. Есть объявления — .has-news: синяя, с пульсирующим кольцом и
-// покачиванием значка; есть хоть одно «Важно» (CLINIC_NEWS_IMPORTANT_V1) —
-// .has-important: светло-красная (CLINIC_NEWS_IMPORTANT_RED_V1). Пусто — тихая
-// обводка, без анимации: мигать нечем.
-function newsBoardButton() {
-    const count = h('span', { class: 'crm-news-count', hidden: true });
-    const btn = h('button', { class: 'btn crm-news-btn', type: 'button', 'data-crm-news': '',
-        title: 'Информационная доска: новости клиники для сотрудников',
-        onclick: () => { if (refs.onNavigate) refs.onNavigate('clinic-news'); } },
-        h('span', { class: 'crm-news-ic' }, Icon('Info', { size: 15 })), h('span', null, 'Информация'), count);
-    supabase.rpc('clinic_news_list', {}).then(({ data, error }) => {
-        const items = !error && data && Array.isArray(data.items) ? data.items : [];
-        const n = items.length;
-        if (n > 0) {
-            count.textContent = n > 99 ? '99+' : String(n); count.hidden = false;
-            btn.classList.add('has-news');
-            if (items.some((it) => it && it.important)) btn.classList.add('has-important');
-        }
-    }).catch(() => {});
-    return btn;
-}
+// CRM_HEAD_NEWS_V1 — кнопка «Информация» (число объявлений, подсветка .has-news /
+// .has-important) переехала пунктом «Информационная доска» в колонку раздела CRM:
+// admin.js crmMessagesRail (MESSAGES_TO_CRM_V1).
 
 // CRM_TASKS_COUNT_V1 (2026-11-14, владелец: «Information and task should show
 // the amount») — счётчик на кнопке «Мои задачи»: сколько открытых задач
@@ -686,18 +659,15 @@ function tasksCountBadge() {
     return badge;
 }
 
-// CRM_HERO_V1 — баннер раздела создаётся ОДИН раз на вход в CRM и
-// переставляется при каждой перерисовке: paint() зовут на каждое сохранение,
-// перетаскивание и фильтр, и баннер, собранный заново, перезапускал бы часы.
-let crmHero = null;
-
 export async function renderCrm(container, { onNavigate } = {}) {
     clear(container);
     refs.onNavigate = onNavigate;
-    if (crmHero) crmHero.stop();
-    crmHero = null;
     refs.root = h('div', { class: 'fade-in' });
     container.appendChild(refs.root);
+    // CRM_PANELS_INLINE_V1 — новый вход в раздел открывается доской, а не
+    // панелью, оставленной в прошлый раз (возврат в кэшированную панель
+    // renderCrm не зовёт и вид сохраняет).
+    if (PANEL_VIEWS.has(state.view)) state.view = state.boardView || 'kanban';
     // CRM_CONFIG_V1 — воронка читается ДО первой отрисовки: иначе доска
     // моргнула бы запасными колонками и тут же перерисовалась настроенными.
     await loadBoardConfig();
@@ -750,7 +720,7 @@ async function load() {
             closedKeys: closedKeys(),
             bounds,
             operator: state.operator, me: selfUserId(),   // CRM_UNIFY_V1 — «Оператор» до любого предела
-            outside: true,   // CRM_PERIOD_ALL_COLUMNS_V1 — открытые вне периода для строки над доской
+            // CRM_NO_PERIOD_LINE_V1 — открытые вне периода больше не спрашиваются: строки нет.
         }),
         // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
         // права на задачи) — доска без меток, а не без заявок.
@@ -984,7 +954,12 @@ async function paint() {
     }
     // CRM_UNIFY_V1 (итоговое ревью) — вид «Задачи» доску не показывает и не грузит;
     // устаревшая загрузка (пришла новее) не рисует ничего.
-    if (state.view !== 'tasks' && !(await load())) return;
+    // CRM_PANELS_INLINE_V1 — вид-панель без права на неё (Cust Dev — своё право,
+    // Дубликаты — тому, кто видит всю доску) не рисуется: назад на доску.
+    if ((state.view === 'custdev' && !canView('custdev')) || (state.view === 'duplicates' && !canSeeAllLeads())) {
+        state.view = state.boardView || 'kanban';
+    }
+    if (boardShown(state.view) && !(await load())) return;   // CRM_PANELS_INLINE_V1 — виды-панели доску не грузят
     const root = refs.root;
     clear(root);
 
@@ -1069,34 +1044,55 @@ async function paint() {
     // CRM_HERO_V2 — владелец: «remove right side text and date, instead put buttons
     // there». Справа вместо приветствия и часов — кнопки-действия раздела; слева
     // остались виды раздела (Доска, Мои задачи) и «Мой KPI».
-    if (!crmHero) crmHero = sectionHero({ section: 'crm', title: 'CRM · Заявки', sub: 'Заявки и обращения в клинику', greeting: false, clock: false });
-    const onBoard = state.view !== 'tasks';
-    const heroBtn = (label, icon, attrs, onclick, on = null) => h('button', {
-        class: 'reg-tab' + (on ? ' on' : ''), type: 'button', ...attrs,
-        ...(on === null ? {} : { role: 'tab', 'aria-selected': on ? 'true' : 'false' }),
+    // CRM_HERO_REMOVED_V1 (2026-11-21, владелец со снимком баннера: «can you
+    // remove it from all crm sections and block») — тёмного баннера раздела
+    // больше нет: его кнопки ушли в колонку (RAIL_TOOLS_V1), а имя «CRM» —
+    // вкладка сверху, заголовок колонки и выбранный в ней пункт. Строка экрана
+    // в CRM сложена (admin.js OWN_BANNER_VIEWS), и доска начинается сверху.
+    const onBoard = boardShown(state.view);
+    // RAIL_TOOLS_V1 (2026-11-21, владелец: «on a left side no need to put CRM
+    // again better put this all to the left side bar, and remove it from here
+    // and we save space») — те же кнопки, с теми же подписями, правами и
+    // data-атрибутами, переехали из баннера в левую колонку (admin/rail-tools.js
+    // → admin.js renderSidebar): там они стоят вместо пункта «CRM · Заявки».
+    // Баннер остался с названием раздела. Виды раздела (Доска, Мои задачи) —
+    // залитые, как выбранный пункт меню; остальные открывают свои окна.
+    const railBtn = (label, icon, attrs, onclick, on = null) => h('button', {
+        class: 'nav-item' + (on ? ' active' : ''), type: 'button', title: label, ...attrs,
+        ...(on ? { 'aria-current': 'page' } : {}),
         onclick,
-    }, Icon(icon, { size: 14 }), h('span', null, label));
-    const news = newsBoardButton();
-    news.className = 'reg-tab crm-news-btn';
-    crmHero.setTabs(h('div', { class: 'reg-tabs crm-hero-tabs', role: 'toolbar', 'aria-label': 'CRM' },
-        heroBtn('Доска', 'Grid', { 'data-crm-view': 'board' },
-            () => { if (state.view === 'tasks') { state.view = state.boardView || 'kanban'; paint(); } }, onBoard),
-        // CRM_UNIFY_V1 — «Задачи» открываются на «Мои» (Р18).
-        (() => {   // CRM_TASKS_COUNT_V1 — со счётчиком моих открытых задач
-            const b = heroBtn('Мои задачи', 'Clock', { 'data-crm-view': 'tasks' },
-                () => { state.view = 'tasks'; state.taskWho = 'me'; paint(); }, !onBoard);
-            b.appendChild(tasksCountBadge());
-            return b;
-        })(),
-        heroBtn('Мой KPI', 'Target', { 'data-operator-kpi-open': '' }, () => openOperatorKpi())));   // OPERATOR_KPI_V1
-    crmHero.setActions(h('div', { class: 'reg-tabs crm-hero-actions', role: 'toolbar', 'aria-label': 'CRM' },
-        canView('custdev') ? heroBtn('Cust Dev', 'PhoneOut', {}, () => openCustDev()) : null,
-        canSeeAllLeads() ? heroBtn('Дубликаты', 'Copy', { 'data-crm-duplicates-open': '' },
-            () => openCrmDuplicates({ onMerged: () => paint() })) : null,
-        heroBtn('Отчёт', 'Chart', {}, () => reportModal()),
-        heroBtn('Excel', 'Download', {}, () => exportExcel()),
-        news));
-    root.appendChild(crmHero.el);
+    }, h('span', { class: 'nav-icon' }, Icon(icon, { size: 18 })), h('span', null, label));
+    const tasksBtn = railBtn('Мои задачи', 'Clock', { 'data-crm-view': 'tasks' },
+        () => { state.view = 'tasks'; state.taskWho = 'me'; paint(); }, state.view === 'tasks');
+    // CRM_PANELS_INLINE_V1 — кнопка вида-панели: открывает вид на месте доски.
+    const panelBtn = (view, label, icon, attrs = {}) => railBtn(label, icon, { 'data-crm-view': view, ...attrs },
+        () => { if (state.view !== view) { state.view = view; paint(); } }, state.view === view);   // CRM_UNIFY_V1 — «Задачи» открываются на «Мои» (Р18)
+    tasksBtn.appendChild(tasksCountBadge());   // CRM_TASKS_COUNT_V1
+    const railGroups = [
+        [
+            railBtn('Доска', 'Grid', { 'data-crm-view': 'board' },
+                () => { if (!boardShown(state.view)) { state.view = state.boardView || 'kanban'; paint(); } }, onBoard),
+            tasksBtn,
+            panelBtn('kpi', 'Мой KPI', 'Target', { 'data-operator-kpi-open': '' }),   // OPERATOR_KPI_V1
+        ],
+        [
+            canView('custdev') ? panelBtn('custdev', 'Cust Dev', 'PhoneOut') : null,
+            canSeeAllLeads() ? panelBtn('duplicates', 'Дубликаты', 'Copy', { 'data-crm-duplicates-open': '' }) : null,
+            // MESSAGES_TO_CRM_V1 — «Информация» (newsBoardButton) снята: доска
+            // стоит в колонке CRM своим пунктом «Информационная доска» (admin.js
+            // crmMessagesRail), второй вход в неё же был бы дублем.
+        ],
+    ];
+    // CRM_REPORT_LAST_V1 (2026-11-21, владелец: «can you put report, to the end
+    // separately») — «Отчёт» отдельной группой В САМОМ КОНЦЕ колонки CRM, под
+    // «Сообщениями» и доской, которые дорисовывает оболочка (admin.js
+    // crmMessagesRail). Поэтому он регистрируется своим владельцем 'crm-end', и
+    // колонка ставит его последним.
+    const reportBtn = panelBtn('report', 'Отчёт', 'Chart');
+    setRailTools('crm-end', () => [[reportBtn]]);
+    // Порядок важен: регистрация 'crm' перерисовывает колонку, и 'crm-end' к этому
+    // моменту уже должен быть известен — иначе при первом открытии отчёта не будет.
+    setRailTools('crm', () => railGroups);
     // V3120_FIX — просмотру «Новую заявку» не предлагаем.
     const newLeadBtn = crmReadOnly() ? null : h('button', { class: 'btn btn-primary', type: 'button', 'data-crm-new-lead': '',
         onclick: () => requestModal(null) }, Icon('Plus', { size: 14 }), ' Новая заявка');
@@ -1122,12 +1118,19 @@ async function paint() {
     // начиналась ниже сгиба экрана.
     // CRM_UNIFY_V1 — в виде «Задачи» ряда фильтров доски нет: поиск, источник,
     // период и метки сужают карточки, а не задачи.
-    if (state.view !== 'tasks') {
+    if (boardShown(state.view)) {   // CRM_PANELS_INLINE_V1 — и у видов-панелей ряда фильтров нет
         root.appendChild(h('div', { style: {
             display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px',
         // CRM_NEW_LEAD_LEFT_V1 (владелец: «On a left side and search on a right
         // side, just change the places») — «Новая заявка» первой, поиск за ней.
-        } }, newLeadBtn, searchBox, viewBox, filtersEl));   // CRM_HERO_V1
+        } }, newLeadBtn, searchBox, viewBox, filtersEl,
+            // CRM_EXCEL_IN_BOARD_V1 (2026-11-21, владелец: «why excel is here, it should
+            // be in each block of crm not here») — выгрузка доски стоит в ряду фильтров
+            // доски, справа: она выгружает именно то, что отобрано этими фильтрами.
+            // «Cust Dev» выгружает своё своей кнопкой Excel в своём ряду фильтров.
+            h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-crm-excel': '', style: { marginLeft: 'auto' },
+                title: 'Выгрузить заявки по текущим фильтрам в Excel', onclick: () => exportExcel() },
+                Icon('Download', { size: 13 }), ' Excel')));   // CRM_HERO_V1
     }
     // CRM_TASKS_COMPACT_V1 — у «Задач» ряда фильтров нет; «Новая заявка» там
     // стоит в строке отбора «Мои» (paintTasks → headExtra), а не своей строкой.
@@ -1229,11 +1232,19 @@ async function paint() {
         // теперь выбирается по одному (в CRM_MULTI_SOURCE_V1 отмечали по
         // несколько); state.sources остался массивом — пустым или из одного
         // ключа, — чтобы inSource, «Отчёт» и Excel не трогать.
+        // CRM_FILTER_LIT_V1 (2026-11-21, владелец: «filtered place should be light
+        // orange to attract») — список, в котором выбрано НЕ «Все» / «Всё время»,
+        // светло-оранжевый (.is-filtered, admin-views.css): по доске сразу видно, что
+        // она сужена и чем. «Вид» (Канбан / Список) — не фильтр, его это не касается.
+        const isFiltered = (v) => !isAllValue(v) && v !== 'all';
         const dropdown = (attrs, options, value, onChange) => {
-            const sel = h('select', { class: 'crm-op-sel crm-filter-sel', ...attrs },
+            const sel = h('select', { class: 'crm-op-sel crm-filter-sel' + (isFiltered(value) ? ' is-filtered' : ''), ...attrs },
                 ...options.map(([v, label]) => h('option', { value: v }, label)));
             sel.value = value;
-            sel.addEventListener('change', () => onChange(sel.value));
+            sel.addEventListener('change', () => {
+                if (sel.classList) sel.classList.toggle('is-filtered', isFiltered(sel.value));
+                onChange(sel.value);
+            });
             return sel;
         };
 
@@ -1392,6 +1403,7 @@ async function paint() {
         if (!wrap) return;
         clear(wrap);
         if (state.view === 'tasks') { paintTasks(wrap); return; }   // CRM_UNIFY_V1
+        if (PANEL_VIEWS.has(state.view)) { paintPanel(wrap); return; }   // CRM_PANELS_INLINE_V1
         // CRM_UNIFY_V1 — номер из поиска есть у карточки другого оператора.
         if (state.search.trim() && state.searchForeign) {
             wrap.appendChild(h('div', { class: 'muted crm-foreign-hint', 'data-crm-foreign-hint': '' },
@@ -1404,6 +1416,18 @@ async function paint() {
             // CRM_UNIFY_V1 (итоговое ревью) — высота колонок по месту под доской.
             if (typeof requestAnimationFrame === 'function') requestAnimationFrame(sizeBoardColumns); else sizeBoardColumns();
         } else wrap.appendChild(listTable());
+    }
+
+    // CRM_PANELS_INLINE_V1 — вид-панель рисуется в тело раздела. «Дубликаты»
+    // после слияния доску не перерисовывают (иначе панель собралась бы заново и
+    // потеряла бы отмеченное): доска перезагрузится при возврате на «Доску».
+    function paintPanel(wrap) {
+        const box = h('div', { class: 'crm-panel', 'data-crm-panel': state.view });
+        wrap.appendChild(box);
+        if (state.view === 'kpi') openOperatorKpi({ mount: box });
+        else if (state.view === 'custdev') openCustDev({ mount: box });
+        else if (state.view === 'duplicates') openCrmDuplicates({ mount: box });
+        else if (state.view === 'report') reportModal(box);
     }
 
     // CRM_UNIFY_V1 — ВИД «ЗАДАЧИ» (views/crm-tasks-view.js). По умолчанию —
@@ -4094,10 +4118,73 @@ async function paint() {
     }
 
     // ---------------- ОТЧЁТ ----------------
-    function reportModal() {
-        const overlay = h('div', { class: 'modal' });
+    // CRM_SALES_CHARTS_V1 — пять графиков отчёта: динамика заявок, деньги CRM,
+    // воронка, менеджеры, источники. data — ответ crm_sales_team_report, rows —
+    // заявки периода, по которым отчёт уже считает источники.
+    function salesCharts(data, rows) {
+        const t = data.totals || {};
+        const series = Array.isArray(data.series) ? data.series : [];
+        const keys = series.map((x) => x.key);
+        const card = (title, sub, body) => h('div', { class: 'card crc-card' },
+            h('div', { class: 'card-header crc-head' }, h('h3', null, tr(title)), sub ? h('span', { class: 'muted crc-sub' }, sub) : null),
+            h('div', { class: 'crc-body' }, body));
+        const empty = () => h('div', { class: 'muted crc-empty' }, tr('Нет данных за период.'));
+        const pctOf = (part, whole) => (whole ? Math.round((part / whole) * 1000) / 10 : 0);
+        const pctText = (v) => String(v).replace('.', ',') + '%';
+        const stepWord = data.step === 'month' ? tr('по месяцам') : tr('по дням');
+
+        // 1. Динамика: заявки и «пришли» — один масштаб (оба — количество).
+        const trend = series.length > 1 && t.total
+            ? lineChart({ keys, series: [
+                { name: tr('Заявки'), color: SERIES.one, values: series.map((x) => x.leads) },
+                { name: tr('Пришли'), color: SERIES.two, values: series.map((x) => x.came) },
+            ] })
+            : empty();
+        // 2. Деньги — отдельный график: у денег своя шкала, вторая ось на графике
+        //    количества вводила бы в заблуждение.
+        const money = series.length && t.revenue
+            ? barChart({ keys, values: series.map((x) => x.revenue), name: tr('Принесли, сум'), fmt: (v) => groupNum(v) + ' ' + tr('сум') })
+            : empty();
+        // 3. Воронка: доля от всех заявок на каждой ступени.
+        const reachedBooking = (t.scheduled || 0) + (t.no_show || 0) + (t.came || 0);
+        const funnel = t.total ? barList({ rows: [
+            { label: tr('Заявок'), value: t.total, valueText: groupNum(t.total), note: '100%' },
+            { label: tr('Дошли до записи'), value: reachedBooking, valueText: groupNum(reachedBooking), note: pctText(pctOf(reachedBooking, t.total)) },
+            { label: tr('Пришли'), value: t.came || 0, valueText: groupNum(t.came), note: pctText(pctOf(t.came || 0, t.total)) },
+            { label: tr('Не пришли'), value: t.no_show || 0, valueText: groupNum(t.no_show), note: pctText(pctOf(t.no_show || 0, t.total)) },
+            { label: tr('Потеряно'), value: t.lost || 0, valueText: groupNum(t.lost), note: pctText(pctOf(t.lost || 0, t.total)) },
+        ] }) : empty();
+        // 4. Менеджеры: кто приносит деньги; конверсия — подписью рядом.
+        const named = (data.managers || []).filter((m) => m.user_id != null && (m.total || m.revenue));
+        const managers = named.length ? barList({ rows: named.map((m) => ({
+            label: m.name || trf('Сотрудник №{id}', { id: m.user_id }),
+            value: m.revenue, valueText: groupNum(m.revenue) + ' ' + tr('сум'),
+            note: trf('конверсия {pct}', { pct: pctText(m.conversion) }),
+            title: trf('Заявок: {n}, пришли: {came}', { n: m.total, came: m.came }),
+        })) }) : empty();
+        // 5. Источники: заявки и «пришли» внутри них — видно, какой окупается.
+        const bySrc = [...sourceTally(rows, (r) => r.status === CONVERT_STATUS).entries()].sort((a, b) => b[1].total - a[1].total);
+        const sources = bySrc.length ? barList({
+            legend: [[tr('Заявки'), SERIES.one + '55'], [tr('Пришли'), SERIES.two]],
+            rows: bySrc.map(([src, s]) => ({
+                label: sourceLabel(src), value: s.total, part: s.won,
+                valueText: groupNum(s.total), note: pctText(pctOf(s.won, s.total)),
+            })),
+        }) : empty();
+
+        return h('div', { class: 'crc-grid', 'data-crm-sales-charts': '' },
+            card('Динамика заявок', stepWord, trend),
+            card('Деньги от пациентов CRM', stepWord, money),
+            card('Воронка', tr('доля от всех заявок'), funnel),
+            card('Менеджеры: кто приносит деньги', tr('сумма и конверсия'), managers),
+            h('div', { class: 'crc-wide' }, card('Источники: что окупается', tr('заявки и пришедшие из них'), sources)));
+    }
+
+    // CRM_PANELS_INLINE_V1 — mount: рисовать карточку в тело раздела, а не окном.
+    function reportModal(mount = null) {
+        const overlay = h('div', { class: mount ? 'crm-panel-host' : 'modal' });
         const close = () => overlay.remove();
-        overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
+        if (!mount) overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
         let period = 30;   // дней; 0 = всё время
         const bodyEl = h('div', { class: 'modal-body', style: { overflowY: 'auto' } });
@@ -4169,6 +4256,66 @@ async function paint() {
                 kpi('Пришло', conv, 'var(--ok-600, #16a34a)'),
                 kpi('Конверсия', rate + '%', 'var(--primary-700)'),
                 kpi('Потеряно', lost, 'var(--crit-600, #dc2626)')));
+
+            // CRM_SALES_TEAM_V1 (2026-11-22, владелец: «make head of sales department
+            // report more detailed, statistic should show money brought from each
+            // sales manager too») — отдел продаж по менеджерам за тот же период:
+            // судьба заявок по ступеням и ДЕНЬГИ, которые принесли пациенты
+            // менеджера (rpc/operator-kpi.js salesTeamReport — то же правило, что
+            // «Оплаты ваших пациентов» в «Мой KPI»). Сервер отдаёт таблицу только
+            // тому, кому открыта вся доска; оператору — отказ, и блока просто нет.
+            const teamBox = h('div', { 'data-crm-sales-team': '', style: { marginBottom: '14px' } });
+            bodyEl.appendChild(teamBox);
+            const teamSeq = reportSeq;
+            (async () => {
+                const { data, error } = await supabase.rpc('crm_sales_team_report', { days: period });
+                if (teamSeq !== reportSeq) return;   // пока считали, выбрали другой период
+                clear(teamBox);
+                if (error || !data || !Array.isArray(data.managers)) return;
+                const sum = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+                const t = data.totals || {};
+                const cell = (v, extra = {}) => h('td', { class: 'num', ...extra }, String(v));
+                const tb = h('tbody');
+                for (const m of data.managers) {
+                    tb.appendChild(h('tr', { 'data-sales-manager': m.user_id == null ? 'none' : String(m.user_id) },
+                        h('td', { class: m.user_id == null ? 'muted' : 'cell-strong' },
+                            m.user_id == null ? tr('Без ответственного') : (m.name || trf('Сотрудник №{id}', { id: m.user_id }))),
+                        cell(m.total), cell(m.scheduled), cell(m.came, { style: { color: 'var(--ok-700)', fontWeight: 700 } }),
+                        cell(m.no_show), cell(m.lost), cell(String(m.conversion).replace('.', ',') + '%'),
+                        cell(m.paying_patients),
+                        cell(sum(m.revenue), { style: { fontWeight: 700 } }),
+                        cell(m.paying_patients ? sum(m.avg_check) : '—')));
+                }
+                if (!data.managers.length) {
+                    tb.appendChild(h('tr', null, h('td', { colspan: '10', class: 'muted', style: { textAlign: 'center' } }, tr('За период заявок нет.'))));
+                } else {
+                    tb.appendChild(h('tr', { 'data-sales-total': '', style: { borderTop: '2px solid var(--ink-200)' } },
+                        h('td', { class: 'cell-strong' }, tr('Итого')),
+                        cell(t.total, { style: { fontWeight: 700 } }), cell(t.scheduled, { style: { fontWeight: 700 } }),
+                        cell(t.came, { style: { fontWeight: 700 } }), cell(t.no_show, { style: { fontWeight: 700 } }),
+                        cell(t.lost, { style: { fontWeight: 700 } }),
+                        cell(String(t.conversion).replace('.', ',') + '%', { style: { fontWeight: 700 } }),
+                        cell(t.paying_patients, { style: { fontWeight: 700 } }),
+                        cell(sum(t.revenue), { style: { fontWeight: 800 } }), cell('')));
+                }
+                // CRM_SALES_CHARTS_V1 (2026-11-22, владелец: «can you make it more detailed
+                // with chart, I could make decision based on this report») — графики над
+                // таблицей, по вопросам руководителя (views/crm-report-charts.js).
+                teamBox.appendChild(salesCharts(data, rows));
+                const th = (label, right = true) => h('th', right ? { style: { textAlign: 'right' } } : null, label);
+                teamBox.appendChild(h('div', { class: 'card' },
+                    h('div', { class: 'card-header', style: { display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap' } },
+                        h('h3', null, Icon('Patients', { size: 15 }), ' ', tr('Отдел продаж — по менеджерам')),
+                        h('span', { class: 'muted', 'data-sales-revenue': '', style: { marginLeft: 'auto', fontSize: '13.5px' } },
+                            trf('Принесли пациенты CRM: {sum} сум', { sum: sum(t.revenue) }))),
+                    h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
+                        h('thead', null, h('tr', null,
+                            th('Менеджер', false), th('Заявок'), th('Записано'), th('Пришло'), th('Не пришёл'),
+                            th('Потеряно'), th('Конверсия'), th('Оплатили'), th('Принесли, сум'), th('Средний чек'))),
+                        tb)),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 14px 12px' } },
+                        tr('«Принесли» — оплаты в кассу за период от пациентов, чья заявка у менеджера дошла до «Пришёл» раньше оплаты. Пациент у двух менеджеров засчитан обоим, «Итого» — без повторов.'))));
+            })();
 
             // CALLCENTER_SHIFT_V1 — ЗВОНКИ ПО ОПЕРАТОРАМ за тот же период.
             // Владелец: «breakdown by call-center users». Стоит в отчёте, а не
@@ -4246,15 +4393,15 @@ async function paint() {
         }
         refresh();   // CRM_UNIFY_V1 — первый показ: «Загружаем…», затем числа базы
 
-        overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '640px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
+        overlay.appendChild(h('div', { class: 'modal-card modal-compact' + (mount ? ' crm-panel-card' : ''), style: mount ? {} : { width: '640px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
             h('header', { class: 'modal-head' },
                 h('h2', null, Icon('Chart', { size: 16 }), ' Отчёт по заявкам'),
-                h('button', { class: 'modal-close', onclick: close }, '×')),
+                mount ? null : h('button', { class: 'modal-close', onclick: close }, '×')),
             bodyEl,
-            h('footer', { class: 'modal-foot' },
+            mount ? null : h('footer', { class: 'modal-foot' },
                 h('button', { class: 'btn', type: 'button', onclick: close }, 'Закрыть')),
         ));
-        document.body.appendChild(overlay);
+        (mount || document.body).appendChild(overlay);
     }
 
     // ---------------- EXCEL ----------------

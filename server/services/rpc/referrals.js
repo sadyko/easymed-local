@@ -21,6 +21,7 @@
 import { isAdminUser } from '../grants.js';
 import { tableWriteAllowed } from '../../db/write-grant.js';   // закрепление врача — по праву записи в referral_sources, ровно как /api/db
 import { canViewSection } from '../roles.js';
+import { representativeCodes, isRepresentative } from '../representative.js';   // REP_OWN_DOCTORS_V1
 import { canSeeReportKey } from '../report-access.js';   // деньги — по группе отчётов reports.referrals (REPORT_GROUP), как у дашборда
 import { referralReportLines, resolveRange, adjustmentLabelTemplate } from './reports.js';   // adjustmentLabelTemplate: REFERRAL_ADJ_LABEL_I18N_V1
 import { buildingContext } from '../domain/buildings.js';   // FIX_318_V1 (L5) — строкам отчёта — контекст зданий, как у run_report
@@ -32,25 +33,35 @@ export class RpcError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
 }
 
-export const REPRESENTATIVE_ROLE = 'medrep';   // custom_roles.code, заведён миграцией 252
-// FIX_318_V1 (L4) — у клиники, заведшей свою роль «Медпредставитель» до 252,
-// роль живёт под своим кодом (мигр. 258 убирает дубль medrep, который никто не
-// носит): её сотрудники — тоже представители. Имя роли — как его пишет клиника.
-const REPRESENTATIVE_ROLE_NAMES = ['Медпредставитель', 'медпредставитель', 'МЕДПРЕДСТАВИТЕЛЬ'];
-export function representativeCodes(db) {
-  const codes = new Set([REPRESENTATIVE_ROLE]);
-  try {
-    for (const r of db.prepare(`SELECT code FROM custom_roles WHERE trim(name) IN (${REPRESENTATIVE_ROLE_NAMES.map(() => '?').join(',')})`)
-      .all(...REPRESENTATIVE_ROLE_NAMES)) codes.add(String(r.code));
-  } catch { /* база без custom_roles — только medrep */ }
-  return [...codes];
-}
+// REP_OWN_DOCTORS_V1 — кто представитель, решает services/representative.js (одно
+// определение и для компилятора запросов); здесь — прежние имена для импортёров.
+export { REPRESENTATIVE_ROLE, representativeCodes } from '../representative.js';
 const holes = (list) => list.map(() => '?').join(',');
 
 function requireCrm(db, user) {   // имя историческое: раздел был подэкраном CRM полдня
   if (isAdminUser(user) || canViewSection(db, user, 'referrals')) return;
   throw new RpcError('Раздел «Реферирование» недоступен вашей роли. Права выдаёт администратор в «Настройки → Роли».', 403);
 }
+// REP_OWN_DOCTORS_V1 (2026-11-18) — владелец: «Med rep should not see internal doctors and
+// they only have to see only their own doctors on their name, and even they shouldn't see
+// other med rep's doctors». Номер представителя, чьими врачами ограничен этот человек, или
+// null — ограничения нет. Тот же предикат снимает/накладывает ограничение строк
+// referral_sources в /api/db (реестр, scope с lift 'not_representative'), так что вкладка
+// «Врачи-источники», карточки и выпадающие списки ведут себя так же, как эти RPC.
+function ownRepresentative(db, user) {
+  return isRepresentative(db, user) ? Number(user.id) : null;
+}
+function refuseRepresentative(db, user) {
+  if (ownRepresentative(db, user) != null) {
+    throw new RpcError('Медпредставителю видны только закреплённые за ним внешние врачи.', 403);
+  }
+}
+/** Ограничен ли экран своими врачами: вкладки спрашивают это до того, как рисоваться. */
+export function referralsScope(db, _args, user) {
+  requireCrm(db, user);
+  return { own_only: ownRepresentative(db, user) != null };
+}
+
 export function canSeeReferralMoney(db, user) {
   // Та же проверка, что открывает отчёт «Рефералы»: группа отчётов, пока ключ не настроен —
   // «Отчёты» или администратор (report-access.js). Не grantAllowsAdminOr: у строки нет adminDefault.
@@ -207,12 +218,13 @@ export function referralsRepresentatives(db, args, user) {
   requireCrm(db, user);
   const { from, to } = resolveRange(db, args);
   const money = canSeeReferralMoney(db, user);
-  const representatives = listRepresentatives(db);
+  const mine = ownRepresentative(db, user);   // REP_OWN_DOCTORS_V1
+  const representatives = listRepresentatives(db).filter((r) => mine == null || r.id === mine);
   const repIds = new Set(representatives.map((r) => r.id));
   const agg = visitAggregates(db, from, to);
   const cash = money ? moneyBy(db, { from, to }, user, 'external') : null;
 
-  const sources = externalSources(db).map((s) => {
+  const sources = externalSources(db).filter((s) => mine == null || s.representative_id === mine).map((s) => {
     const a = agg.get(s.id);
     const m = cash ? cash.get(s.id) : null;
     const row = {
@@ -234,7 +246,8 @@ export function referralsRepresentatives(db, args, user) {
       FROM (${sourceVisitsSql(w.sql)}) sv
       JOIN visits v ON v.id = sv.visit_id
       JOIN referral_sources rs ON rs.id = sv.source_id
-     WHERE rs.doctor_id IS NULL AND ${VISIT_LIVE}`).get(...w.params, ...w.params).n;   // REFERRAL_LINE_V1
+     WHERE rs.doctor_id IS NULL AND ${VISIT_LIVE}
+       AND (? IS NULL OR rs.representative_id = ?)`).get(...w.params, ...w.params, mine, mine).n;   // REFERRAL_LINE_V1 · REP_OWN_DOCTORS_V1
   const assigned = sources.filter((s) => s.representative_id != null).length;
   const totals = {
     representatives: representatives.length,
@@ -243,7 +256,7 @@ export function referralsRepresentatives(db, args, user) {
     patients: num(patients),
   };
   if (money) totals.received = round2(sources.reduce((acc, s) => acc + num(s.received), 0));
-  return { from, to, money, representatives, sources, totals };
+  return { from, to, money, representatives, sources, totals, own_only: mine != null };
 }
 
 export function referralsAssignRepresentative(db, args, user) {
@@ -269,6 +282,10 @@ export function referralsAssignRepresentative(db, args, user) {
   if (!Number.isInteger(sourceId) || sourceId <= 0) throw new RpcError('Врач не выбран.', 400);
   const src = db.prepare('SELECT id, doctor_id, representative_id FROM referral_sources WHERE id = ?').get(sourceId);
   if (!src) throw new RpcError('Врач-источник не найден.', 404);
+  // REP_OWN_DOCTORS_V1 — представитель чужого врача не видит, значит и не трогает (тот же
+  // ответ, что у несуществующего); своего — только за собой, ни другому, ни «никому».
+  const mine = ownRepresentative(db, user);
+  if (mine != null && src.representative_id != null && src.representative_id !== mine) throw new RpcError('Врач-источник не найден.', 404);
   if (!canUpdate && src.representative_id != null) {
     throw new RpcError('Закреплять врача за представителем может роль с правом «Список источников: Изменение».', 403);
   }
@@ -283,6 +300,9 @@ export function referralsAssignRepresentative(db, args, user) {
         .get(repId, ...representativeCodes(db))   // FIX_318_V1 (L4)
       : null;
     if (!rep) throw new RpcError('Этот сотрудник не медпредставитель: роль «Медпредставитель» выдаётся в «Настройки → Сотрудники».', 400);
+  }
+  if (mine != null && repId !== mine) {
+    throw new RpcError('Медпредставитель закрепляет врача только за собой.', 403);
   }
   if (!canUpdate && repId == null) {
     throw new RpcError('Закреплять врача за представителем может роль с правом «Список источников: Изменение».', 403);
@@ -304,7 +324,8 @@ export function referralsRepresentativeOptions(db, _args, user) {
   if (!tableWriteAllowed('referral_sources', 'insert', user, db) && !tableWriteAllowed('referral_sources', 'update', user, db)) {
     throw new RpcError('Список медпредставителей открыт тому, кто заводит врачей-источников.', 403);
   }
-  return { representatives: listRepresentatives(db) };
+  const mine = ownRepresentative(db, user);   // REP_OWN_DOCTORS_V1 — выбрать можно только себя
+  return { representatives: listRepresentatives(db).filter((r) => mine == null || r.id === mine) };
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +333,7 @@ export function referralsRepresentativeOptions(db, _args, user) {
 // ---------------------------------------------------------------------------
 export function referralsInternal(db, args, user) {
   requireCrm(db, user);
+  refuseRepresentative(db, user);   // REP_OWN_DOCTORS_V1 — врачи клиники представителю не показываются
   const { from, to } = resolveRange(db, args);
   const money = canSeeReferralMoney(db, user);
   const w = localRangeWhere('r.created_at', from, to);
@@ -381,7 +403,8 @@ export function referralsActivity(db, args, user) {
   const days = normalizeWindow(args && args.days);
   const t = today(db);
   const repFilter = args && args.representative_id;
-  const representatives = listRepresentatives(db);
+  const mine = ownRepresentative(db, user);   // REP_OWN_DOCTORS_V1
+  const representatives = listRepresentatives(db).filter((r) => mine == null || r.id === mine);
   const repIds = new Set(representatives.map((r) => r.id));
   const linked = botLinkedSourceIds(db);
 
@@ -394,7 +417,7 @@ export function referralsActivity(db, args, user) {
     byDay.get(r.source_id).push(r.day);
   }
 
-  let sources = externalSources(db).map((s) => {
+  let sources = externalSources(db).filter((s) => mine == null || s.representative_id === mine).map((s) => {
     const c = activityCounters(byDay.get(s.id) || [], t, days);
     return {
       id: s.id, code: s.code || '', name: s.name, specialty: s.specialty || '', workplace: s.workplace || '',
@@ -410,7 +433,7 @@ export function referralsActivity(db, args, user) {
   }
   const totals = { active: 0, fading: 0, passive: 0, never: 0 };
   for (const s of sources) totals[s.status] += 1;
-  return { days, today: t, representatives, sources, totals };
+  return { days, today: t, representatives, sources, totals, own_only: mine != null };
 }
 
 // ---------------------------------------------------------------------------
@@ -420,10 +443,14 @@ export function referralsSourceDetail(db, args, user) {
   requireCrm(db, user);
   const sourceId = Number(args && args.source_id);
   if (!Number.isInteger(sourceId) || sourceId <= 0) throw new RpcError('Врач не выбран.', 400);
-  const source = db.prepare(`SELECT rs.id, rs.code, rs.name, rs.phone, rs.workplace, rs.specialty, rc.name AS category
+  const source = db.prepare(`SELECT rs.id, rs.code, rs.name, rs.phone, rs.workplace, rs.specialty, rc.name AS category,
+                                    rs.representative_id
                                FROM referral_sources rs LEFT JOIN referral_source_categories rc ON rc.id = rs.category_id
                               WHERE rs.id = ?`).get(sourceId);
-  if (!source) throw new RpcError('Врач-источник не найден.', 404);
+  // REP_OWN_DOCTORS_V1 — чужой, ничей и врач клиники для представителя — как несуществующий.
+  const mine = ownRepresentative(db, user);
+  if (!source || (mine != null && source.representative_id !== mine)) throw new RpcError('Врач-источник не найден.', 404);
+  delete source.representative_id;
   const { from, to } = resolveRange(db, args);
   const money = canSeeReferralMoney(db, user);
   const w = localRangeWhere('v.visit_date', from, to);
@@ -522,6 +549,7 @@ function sourceDetailLines(db, sourceId, w, money, cash) {
 
 export function referralsDoctorDetail(db, args, user) {
   requireCrm(db, user);
+  refuseRepresentative(db, user);   // REP_OWN_DOCTORS_V1
   const doctorId = Number(args && args.doctor_id);
   if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('Врач не выбран.', 400);
   const doctor = db.prepare('SELECT id, full_name, specialty FROM users WHERE id = ?').get(doctorId);

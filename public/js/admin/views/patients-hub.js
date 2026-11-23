@@ -42,11 +42,11 @@ import { h, Icon, clear } from '../ui.js';
 // I18N_COVERAGE_V1 — причина сбоя подставляется В ПЕРЕВЕДЁННЫЙ шаблон, а не
 // склеивается из кусков: склейка непереводима целиком ни на один язык.
 import { tr, trf } from '../i18n.js';
-import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — общий баннер клинических разделов
+import { setRailTools } from '../rail-tools.js';   // PATIENTS_RAIL_V1 — вкладки раздела в левой колонке
 import { grantAllows, isRouteAllowed, hasActorRole, actorRoleCodes } from '../permissions.js';   // GRANTS_V1 — окна раздела по матрице прав; V3120_FIX — isRouteAllowed; WAIT_REG_V1 — hasActorRole, actorRoleCodes
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
 // модуля. Разошедшийся ?v= развёл бы состояние экрана на две копии.
-import { renderPatients } from './patients.js?v=regfit2';
+import { renderPatients, duplicatesRailButton, duplicatesOn, setDuplicatesMode } from './patients.js?v=regfit2';   // DUP_TO_RAIL_V1
 import { renderQueue } from './queue.js?v=q7';
 import { renderBookingDay } from './booking-day.js';   // BOOKING_DAY_V1 — «Бронирование»: день одного врача
 import { renderRegistrarWaiting, loadRegistrarWaiting, WAITING_ROLES, BADGE_ARGS } from './registrar-waiting.js';   // WAIT_REG_V1 — «Ждут регистрации»; CRM_BOOKINGS_TAB_V1 — «Записи CRM», счётчик по фильтру по умолчанию
@@ -56,7 +56,9 @@ import { watchScreen, shownOnScreen } from '../live.js';   // WAIT_REG_V1 — с
 import { animateIn, smoothScrollTo } from '../motion.js?v=mo1';
 
 const TABS = [
-    { id: 'list',     sub: null,       label: 'Список',  icon: 'Patients' },
+    // PATIENTS_RAIL_V1 — в колонке «Регистрации» первая кнопка зовётся «Пациенты»:
+    // баннера с именем раздела больше нет, и «Список» перестал говорить, чей он.
+    { id: 'list',     sub: null,       label: 'Пациенты', icon: 'Patients' },
     { id: 'queue',    sub: 'queue',    label: 'Очередь', icon: 'Clock'    },
     { id: 'calendar', sub: 'calendar', label: 'Записи',  icon: 'Calendar' },
     // BOOKING_DAY_V1 (2026-11-13, владелец: «add Бронирование section also») —
@@ -73,7 +75,7 @@ const TABS = [
     // (фильтр вкладки по умолчанию, BADGE_ARGS), а не то, что открыто в фильтрах сейчас.
     { id: 'waiting',  sub: 'waiting',  label: 'Записи CRM', icon: 'Headset' },
 ];
-const SUB_TO_TAB = { list: 'list', queue: 'queue', calendar: 'calendar', booking: 'booking', waiting: 'waiting' };   // list: WAIT_REG_V1 (ревью) — у регистратуры «Список» не первый
+const SUB_TO_TAB = { list: 'list', queue: 'queue', calendar: 'calendar', booking: 'booking', waiting: 'waiting', duplicates: 'list' };   // list: WAIT_REG_V1 (ревью) — у регистратуры «Список» не первый; duplicates: DUP_OWN_VIEW_V1
 // WAIT_REG_V1 — вкладку видит стойка (администратор, регистратура): сервер отдаёт список только
 // ей (rpc/registrar-waiting.js WAITING_ROLES) — вкладка, за которой сервер откажет, не рисуется
 // (V3120_FIX). Своего ключа прав нет: стойка — роль, а не окно матрицы.
@@ -112,18 +114,18 @@ function navHidden(id) {
 //   * всё через tr()/trf() и monthName() — на узбекском и английском баннер
 //     говорит на своём языке, а не по-русски.
 // ---------------------------------------------------------------------------
-const HERO_SUB = { list: 'База пациентов', queue: 'Очередь', calendar: 'Календарь записи', booking: 'Бронирование', waiting: 'Записи CRM' };   // CRM_BOOKINGS_TAB_V1
-
-// SECTION_HERO_V1 — баннер стал общим для клинических разделов
-// (views/section-hero.js); здесь только то, что знает «Пациенты»: подзаголовок
-// по вкладке. Помощники даты и приветствия — оттуда же, отсюда — для тех,
-// кто импортировал их у «Пациентов».
+//
+// PATIENTS_RAIL_V1 (2026-11-21, владелец со снимком баннера: «put all the
+// buttons on the left side bar and you can remove this big blue place to use
+// space smartly») — БАННЕРА БОЛЬШЕ НЕТ. Вкладки раздела стоят кнопками в левой
+// колонке (admin/rail-tools.js → admin.js renderSidebar), как у «Закупок» и CRM;
+// имя раздела — заголовок колонки («Регистрация», REGISTRATION_DEPT_V1).
+// Приветствие, дата и часы ушли вместе с баннером; часы и так есть внизу колонки.
+// Экран начинается сразу с содержимого вкладки.
+//
+// SECTION_HERO_V1 — помощники даты и приветствия живут в общем баннере;
+// отсюда — для тех, кто импортировал их у «Пациентов».
 export { heroDateLabel, heroTimeLabel, heroGreeting } from './section-hero.js';
-
-function patientsHero(strip) {
-    const hero = sectionHero({ section: 'patients', title: 'Пациенты', sub: HERO_SUB.list, tabs: strip });
-    return { el: hero.el, stop: hero.stop, setTab: (id) => hero.setSub(HERO_SUB[id] || HERO_SUB.list) };
-}
 
 // Календарь приезжает ДИНАМИЧЕСКИМ импортом, и это тоже решение. Статический
 // импорт связал бы жизнь всего раздела с одним файлом: пока календарь
@@ -204,10 +206,9 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     const root = h('div', { class: 'fade-in' });
     container.appendChild(root);
 
-    // Полоса вкладок — те же .reg-tabs/.reg-tab, что у полосы регистратуры:
-    // залитая активная кнопка, один язык выделения на всю оболочку, а не свой
-    // на каждую полосу (admin-views.css, NO_GREETING_V1).
-    const strip = h('div', { class: 'reg-tabs', role: 'tablist', 'aria-label': 'Разделы «Пациенты»' });
+    // PATIENTS_RAIL_V1 — кнопки вкладок — пункты колонки (.nav-item), а не полоса
+    // в баннере. Узлы создаются один раз и переезжают в колонку целиком:
+    // переключение только перекрашивает их, колонку не перерисовывает.
     const buttons = {};
     const hosts = {};
     // GRANTS_V1 — «Очередь» и «Записи» можно закрыть роли в «Настройки → Роли».
@@ -254,23 +255,42 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     }
     for (const t of visibleTabs) {
         hosts[t.id] = h('div', {
-            id: 'phub-panel-' + t.id, role: 'tabpanel',
+            id: 'phub-panel-' + t.id, role: 'region',
             'aria-labelledby': 'phub-tab-' + t.id, 'data-tab-panel': t.id,
             style: { display: 'none' },
         });
         buttons[t.id] = h('button', {
-            class: 'reg-tab', type: 'button', role: 'tab',
+            class: 'nav-item', type: 'button', title: t.label,
             id: 'phub-tab-' + t.id, 'aria-controls': 'phub-panel-' + t.id,
-            'aria-selected': 'false', tabindex: '-1', 'data-tab': t.id,
-            onclick: () => { select(t.id); },
-            onkeydown: (ev) => moveByKey(ev, t.id),
-        }, Icon(t.icon, { size: 14 }), h('span', null, t.label), t.id === 'waiting' ? waitBadge : null);
-        strip.appendChild(buttons[t.id]);
+            'data-tab': t.id,
+            // SUBVIEW_KEEPS_RAIL_V1 — кнопки стоят в колонке и на подэкранах раздела
+            // (карта пациента). Оттуда кнопка сначала ВОЗВРАЩАЕТ в «Пациентов»
+            // (панель из кэша, как была), потом переключает вкладку — в этом порядке:
+            // select() пишет адрес вкладки replaceState, и до возврата он затёр бы
+            // в истории запись карты пациента.
+            // DUP_OWN_VIEW_V1 — любой пункт из «Дубликатов» выходит из дублей:
+            // «Пациенты» — снова полный список, остальные — своя вкладка.
+            onclick: () => { returnToHub(); if (dupView) setDuplicatesMode(false); select(t.id); },
+        }, h('span', { class: 'nav-icon' }, Icon(t.icon, { size: 18 })), h('span', null, t.label), t.id === 'waiting' ? waitBadge : null);   // WAIT_REG_V1 — счётчик на пункте колонки
     }
-    // PATIENTS_HERO_V1 — полоса вкладок живёт внутри тёмного баннера.
-    const hero = patientsHero(strip);
-    root.appendChild(hero.el);
     for (const t of visibleTabs) root.appendChild(hosts[t.id]);
+    // DUP_TO_RAIL_V1 — «Дубликаты» отдельной группой под вкладками (черта между
+    // группами — admin.js fillRailTools). Кнопку отдаёт список (patients.js),
+    // когда смонтирован, — до этого её нет.
+    let dupBtn = null;
+    // DUP_OWN_VIEW_V1 — «Дубликаты» — свой пункт колонки: пока он открыт,
+    // «Пациенты» НЕ выделены, адрес — #patients/duplicates (F5 и ссылка его
+    // держат). Экран — тот же смонтированный список в режиме дублей (patients.js).
+    let dupView = sub === 'duplicates';
+    const paintRail = () => setRailTools('patients', () => [visibleTabs.map((t) => buttons[t.id]), dupBtn ? [dupBtn] : []]);
+    paintRail();
+
+    // Кнопка колонки нажата не из «Пациентов» (с карты пациента): сначала
+    // вернуться в раздел (панель из кэша), потом действовать.
+    function returnToHub() {
+        const here = typeof window !== 'undefined' && window.easymed && window.easymed.state ? window.easymed.state.view : 'patients';
+        if (here !== 'patients' && typeof ctx.onNavigate === 'function') ctx.onNavigate('patients');
+    }
 
     // Вкладка монтируется при первом показе и дальше ЖИВЁТ: прокрутка списка,
     // страница пагинации и наполовину введённый поиск переживают уход на
@@ -282,41 +302,25 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     // GRANTS_V1 — адрес просит закрытую вкладку: открываем список, а не пустой экран.
     if (!visibleTabs.some((t) => t.id === active)) active = 'list';
 
-    // Полоса объявлена как tablist, а в tablist по стрелкам ходят: из порядка
-    // обхода Tab вынуты все кнопки, кроме активной (это и есть роль tablist),
-    // и без этого обработчика до двух вкладок из трёх нельзя было бы добраться
-    // с клавиатуры вовсе.
-    function moveByKey(ev, id) {
-        const key = ev && ev.key;
-        const step = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0;
-        let next = null;
-        if (step) {
-            const i = visibleTabs.findIndex((t) => t.id === id);
-            next = visibleTabs[(i + step + visibleTabs.length) % visibleTabs.length];
-        } else if (key === 'Home') next = visibleTabs[0];
-        else if (key === 'End') next = visibleTabs[visibleTabs.length - 1];
-        if (!next) return;
-        if (typeof ev.preventDefault === 'function') ev.preventDefault();
-        select(next.id);
-        buttons[next.id].focus();
-    }
+    // PATIENTS_RAIL_V1 — в колонке кнопки — обычные пункты меню: каждая в порядке
+    // обхода Tab, выбранная помечена aria-current (как у «Закупок» и CRM), а не
+    // tablist со стрелками — роли tab вне полосы вкладок не место.
 
     function paintStrip({ animate = false } = {}) {
         for (const t of visibleTabs) {
-            const on = t.id === active;
+            const shown = t.id === active;
+            const on = shown && !(t.id === 'list' && dupView);   // DUP_OWN_VIEW_V1
             const b = buttons[t.id];
-            b.className = 'reg-tab' + (on ? ' on' : '');
-            b.setAttribute('aria-selected', on ? 'true' : 'false');
-            b.setAttribute('tabindex', on ? '0' : '-1');
-            hosts[t.id].style.display = on ? '' : 'none';
+            b.className = 'nav-item' + (on ? ' active' : '');
+            if (on) b.setAttribute('aria-current', 'page'); else if (b.removeAttribute) b.removeAttribute('aria-current');
+            hosts[t.id].style.display = shown ? '' : 'none';
             // Проявление, а не переезд: панели лежат друг на друге в одном
             // месте, и любой сдвиг соседей на переключении вкладки читался бы
             // как перерисовка всего раздела. Появление играется только по
             // ДЕЙСТВИЮ пользователя — первое открытие раздела уже приезжает
             // со своей .fade-in.
-            if (on && animate) animateIn(hosts[t.id]);
+            if (shown && animate) animateIn(hosts[t.id]);
         }
-        hero.setTab(active);   // PATIENTS_HERO_V1 — подзаголовок баннера называет вкладку
     }
 
     // URL отражает состояние: вкладка лежит в адресе, поэтому F5 её сохраняет,
@@ -328,7 +332,8 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             const tab = TABS.find((t) => t.id === active);
             // WAIT_REG_V1 (ревью) — у регистратуры без подмаршрута открывается «Ждут регистрации»: «Список»
             // пишется явно (#patients/list), иначе F5 уводил бы со списка.
-            const nextSub = (tab && tab.sub) || (deskFirst && active === 'list' ? 'list' : null);
+            const nextSub = (active === 'list' && dupView) ? 'duplicates'   // DUP_OWN_VIEW_V1
+                : ((tab && tab.sub) || (deskFirst && active === 'list' ? 'list' : null));
             if (typeof history !== 'undefined' && history.replaceState) {
                 history.replaceState({ view: 'patients', payload: nextSub ? { sub: nextSub } : null },
                     '', '#patients' + (nextSub ? '/' + nextSub : ''));
@@ -352,6 +357,15 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             if (mounted.list) return;
             mounted.list = true;
             await renderPatients(hosts.list, { onNavigate: ctx.onNavigate, embedded: true });
+            // DUP_TO_RAIL_V1 — фильтр дубликатов живёт в списке: нажали с другой
+            // вкладки — сначала открыть «Пациентов».
+            dupBtn = duplicatesRailButton({
+                beforeToggle: () => { returnToHub(); if (active !== 'list') select('list'); },
+                // DUP_OWN_VIEW_V1 — режим сменился (кнопкой или адресом): колонка и адрес вслед.
+                onChange: (on) => { const was = dupView; dupView = on; paintStrip(); if (was !== on) syncSubUrl(); },
+            });
+            if (dupView) setDuplicatesMode(true);   // пришли по #patients/duplicates
+            paintRail();
             return;
         }
         if (id === 'queue') {
@@ -398,7 +412,7 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         // Вкладку переключили из середины длинного списка — полоса вкладок
         // обязана снова оказаться на глазах, иначе новая вкладка открывается
         // «где-то выше». Плавно, а при просьбе «меньше движения» — мгновенно.
-        if (!initial) smoothScrollTo(strip, { block: 'start' });
+        if (!initial) smoothScrollTo(root, { block: 'start' });   // PATIENTS_RAIL_V1 — полосы нет, к началу экрана
         // Опрос очереди живёт РОВНО столько, сколько её видно. Спрятанная доска,
         // которая продолжает каждые десять секунд ходить в базу, — это нагрузка
         // без единого читателя, и на смене таких вкладок накапливается.
@@ -446,7 +460,7 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         // Оболочка панель не размонтирует, пока та в кэше; когда размонтирует —
         // доска снимет свой таймер сама (views/queue.js следит за isConnected).
         destroy() {
-            hero.stop(); if (queue) queue.destroy();   // PATIENTS_HERO_V1 — и часы баннера
+            if (queue) queue.destroy();   // PATIENTS_RAIL_V1 — часов баннера больше нет
             if (waitingTimer) { clearInterval(waitingTimer); waitingTimer = null; }   // WAIT_REG_V1
             liveStop();
         },

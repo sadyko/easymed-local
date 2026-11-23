@@ -12,7 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, TOASTS, mk, walk, textOf, byAttr, byClass, tick, button, periodChip, crmView } from './crm-harness.mjs';
+import { S, CALLS, TOASTS, mk, walk, textOf, byAttr, byClass, tick, button, periodChip, crmView, railNodes, crmPanel } from './crm-harness.mjs';
 
 const { renderCrm, crmExcelRows, CRM_FILTER_ALL } = await import('../views/crm.js');
 
@@ -200,10 +200,10 @@ test('новая заявка начинает с источника по умо
 test('«Отчёт»: заявка с двумя источниками — в обоих; «Всего» — по заявкам, не сумма строк', async () => {
   const root = await board();
   document.body.children.length = 0;
-  button(root, /Отчёт/).click();
+  railNodes().find((n) => n.tagName === 'BUTTON' && /Отчёт/.test(textOf(n))).click();   // RAIL_TOOLS_V1
   await tick();
-  const modal = document.body.children.find((n) => String(n.className).includes('modal'));
-  assert.ok(modal, 'окно отчёта не открылось');
+  const modal = crmPanel(root);   // CRM_PANELS_INLINE_V1
+  assert.ok(modal, 'отчёт не открылся');
   const rows = Object.fromEntries(byAttr(modal, 'data-src-row').map((tr) => [tr.getAttribute('data-src-row'),
     tr.children.map(textOf)]));
   assert.deepEqual(rows.instagram, ['Instagram', '2', '0', '0%']);
@@ -222,13 +222,13 @@ test('CRM_UNIFY_V1: «Отчёт» спрашивает базу за свой �
   const root = await board();
   document.body.children.length = 0;
   CALLS.length = 0;
-  button(root, /Отчёт/).click();
+  railNodes().find((n) => n.tagName === 'BUTTON' && /Отчёт/.test(textOf(n))).click();   // RAIL_TOOLS_V1
   await tick(60);
   const isReport = (c) => c.table === 'crm_requests' && c.op === 'select' && c.columns === 'id, status, source, sources, created_at, assigned_to';
   const q = CALLS.find(isReport);
   assert.ok(q, 'отчёт считает загруженное на доску, а не базу');
   assert.ok((q.filters || []).some((f) => f.col === 'created_at' && f.op === 'gte'), 'период отчёта (30 дней) не ушёл в запрос');
-  const modal = document.body.children.find((n) => String(n.className).includes('modal'));
+  const modal = crmPanel(root);   // CRM_PANELS_INLINE_V1
   CALLS.length = 0;
   walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n) === 'Всё время').click();
   await tick(60);

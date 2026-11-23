@@ -104,6 +104,15 @@ registry is separate: 4 migrations in `control-plane/server/db/migrations/`.
   (systemd unit `easymed-cp` on the vendor server, `/opt/easymed-cp`, its own private Node 24
   runtime at `/opt/node24`, port 8095 bound to 127.0.0.1 behind nginx). Vendor login is the
   control plane's own session auth — **no Supabase anywhere in this product**.
+- **AI assistant (AI_CHAT_V1) — an extra vendor-server step.** The Anthropic SDK lives only in
+  `control-plane/package.json`, never in the root (the root ships to every clinic). On the vendor
+  server: `cd /opt/easymed-cp && npm i --no-save @anthropic-ai/sdk@<version in
+  control-plane/package-lock.json>` (1.6.0 now), check with
+  `node -e "import('@anthropic-ai/sdk').then(()=>console.log('ok'))"`, and put
+  `ANTHROPIC_API_KEY=...` in the `easymed-cp` unit's EnvironmentFile (mode 600, root-owned).
+  Missing either: the control plane still starts, warns loudly at boot, and every AI request
+  answers 503. Patient messages pass through to Anthropic and are never stored; `ai_usage` holds
+  numbers only. Details: `control-plane/README.md`, "AI assistant".
 
 ## 4. How a clinic receives updates from this repo
 

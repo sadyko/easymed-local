@@ -481,22 +481,19 @@ test('заголовок раздела называет экран и пере�
 // пунктами (не внутри #sidebar-body), только тому, кому можно заводить карту,
 // и тем же окном, что «Создать пациента» в «Пациентах». Прежний .sidebar-cta
 // по-прежнему мёртв.
-test('«+ Новый пациент» в шапке меню — то же окно, тот же гейт; прежний .sidebar-cta мёртв', async () => {
+// SIDEBAR_NEW_PATIENT_REMOVED_V1 (2026-11-21, владелец: «remove new patient
+// button from here») — кнопка снова снята из колонки функций.
+test('«+ Новый пациент» в колонке функций снят; прежний .sidebar-cta тоже мёртв', async () => {
     const js = read('public/js/admin.js');
+    const cssCode = read('public/css/admin.css').replace(/\/\*[\s\S]*?\*\//g, '');
     assert.ok(!js.includes('sidebar-cta'), 'вернулся прежний класс призывной кнопки');
-    assert.ok(!read('public/css/admin.css').replace(/\/\*[\s\S]*?\*\//g, '').includes('.sidebar-cta'),
-        'правила .sidebar-cta остались в admin.css');
-    assert.ok(/function renderSidebarNewPatient\(\)[\s\S]{0,400}canCreatePatient\(\)/.test(js),
-        'кнопка рисуется мимо гейта canCreatePatient — роль без права увидит дверь в отказ');
-    assert.ok(/onclick: \(\) => openPatientCreateModal\(/.test(js), 'кнопка открывает не окно заведения пациента');
-    assert.ok(js.includes("patient-create-modal.js?v=onewin1'") && read('public/js/admin/views/patients.js').includes("patient-create-modal.js?v=onewin1'"),
-        'адрес окна разошёлся с «Пациентами» — два экземпляра модуля');
-    assert.ok(/sidebarEl\.parentNode\.insertBefore\(btn, sidebarEl\)/.test(js),
-        'кнопка не между шапкой и пунктами — замер окна (fitSidebar) посчитает её пунктом');
-    assert.ok(read('public/css/admin.css').includes('.sidebar-new {'), 'у кнопки нет правил');
+    assert.ok(!cssCode.includes('.sidebar-cta'), 'правила .sidebar-cta остались в admin.css');
+    assert.ok(!/renderSidebarNewPatient\s*\(/.test(js), 'кнопка «Новый пациент» в колонке функций вернулась');
+    assert.ok(!cssCode.includes('.sidebar-new'), 'правила .sidebar-new остались в admin.css');
 
     // ПУТЬ СОЗДАНИЯ ПАЦИЕНТА В САМОМ РАЗДЕЛЕ ТОЖЕ ЖИВ.
-    assert.ok(read('public/js/admin/views/patients.js').includes('Создать пациента'),
+    // FAST_REG_MERGED_V1 — кнопка зовётся «Быстрая регистрация», метка прежняя.
+    assert.ok(read('public/js/admin/views/patients.js').includes("'data-onb': 'create-patient'"),
         'в «Пациентах» нет кнопки создания — продукт остался без способа завести пациента');
     // И сам маршрут никуда не делся: закладка и любой onNavigate его откроют.
     assert.ok(/case 'registration':\s*return void renderRegistration\(/.test(js), 'маршрут регистрации пропал');
@@ -555,16 +552,23 @@ test('активный пункт действительно помечаетс�
     assert.ok(item, 'в меню нет пункта «Пациенты»');
     assert.ok(String(item.className).split(/\s+/).includes('active'), 'пункт не отмечен активным');
     await go('labs');
-    assert.ok(!String(navItemFor('Пациенты').className).split(/\s+/).includes('active'), 'активными остались два пункта');
+    // REGISTRATION_DEPT_V1 — «Пациенты» в «Регистрации», «Лаборатория» в «Клинике»: после
+    // перехода колонка показывает другой отдел, и пункта «Пациенты» в ней может не быть вовсе.
+    const after = navItemFor('Пациенты');
+    assert.ok(!after || !String(after.className).split(/\s+/).includes('active'), 'активными остались два пункта');
 });
 
 // CLINIC_PROFILE_V1 / REFERENCE_LISTS_V1 (полировка по макету, 2026-10-10) —
 // пока открыт подэкран «Настроек» (Компания, Справочники, Сотрудники, CRM-канбан
 // и всё, что открывают плитки хаба), в меню выделены «Настройки» — и только они.
 // Раньше выделение гасло: «Настройки» узнавали только #settings… и #documents.
-test('подэкраны «Настроек» — плитки хаба — держат выделенным пункт «Настройки», и только его', async () => {
+// SETTINGS_SUBNAV_V1 (2026-11-21) — в разделе «Настройки» колонка показывает
+// группы хаба вместо одного пункта «Настройки». Подэкран, открытый плиткой,
+// выделяет СВОЮ группу; подэкран без плитки (PARENT_OF → settings) — группу,
+// из которой пришли. В любом случае выделено ровно одно.
+test('подэкраны «Настроек» выделяют свою группу в колонке — ровно одну', async () => {
     await perms_setFull();
-    const { GROUPS } = await import('../views/settings-hub.js?v=reflist1');
+    const { GROUPS } = await import('../views/settings-hub.js?v=fold1');   // тот же экземпляр, что у оболочки
     const src = read('public/js/admin.js');
     const navAt = src.indexOf('const NAV = [');
     const navIds = new Set([...src.slice(navAt, src.indexOf('\n];', navAt)).matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]));
@@ -574,20 +578,21 @@ test('подэкраны «Настроек» — плитки хаба — де
         assert.ok(routes.includes(must), 'плитки «' + must + '» нет в хабе — тест смотрит не туда');
     }
     const activeLabels = () => navItems().filter((n) => String(n.className).split(/\s+/).includes('active')).map(labelOf);
-    const settingsOnly = () => [labelOf(navItemFor('Настройки'))];
     let checked = 0;
     for (const route of routes) {
         await go(route);
         const view = shell().state.view;
         if (navIds.has(view)) continue;   // свой пункт меню («Товары и препараты» → «Закупки») выделяет себя сам
-        assert.deepEqual(activeLabels(), settingsOnly(), '#' + route + ' (' + view + '): выделено не «Настройки»');
+        const owner = GROUPS.find((g) => g.items.some((i) => i.route === route));
+        assert.deepEqual(activeLabels(), [owner.title], '#' + route + ' (' + view + '): выделена не своя группа');
         checked++;
     }
     assert.ok(checked >= 10, 'проверено подэкранов: ' + checked);
-    // Подэкраны, открытые не плиткой, а изнутри разделов настроек (PARENT_OF → settings), — тоже.
+    // Подэкран без своей плитки держит группу, из которой пришли.
+    await go('settings', { sub: 'services' });
     for (const route of ['consultation-types', 'discounts-settings']) {
         await go(route);
-        assert.deepEqual(activeLabels(), settingsOnly(), '#' + route + ': выделено не «Настройки»');
+        assert.deepEqual(activeLabels(), ['Настройки услуг'], '#' + route + ': выделена не группа, из которой пришли');
     }
     await go('patients');
     assert.deepEqual(activeLabels(), [labelOf(navItemFor('Пациенты'))], 'ушли в другой раздел — выделение ушло с «Настроек»');
@@ -676,7 +681,9 @@ test('ни одной приветственной строки в исходн�
     assert.ok(!/let\s+_\w*[Tt]imer\s*=\s*null;\s*$/m.test(heroSrc.split('export function sectionHero')[0]), 'таймер часов снова модульный');
     assert.ok(heroSrc.includes('if (!el.isConnected) { stop(); return; }'), 'часы не гаснут без баннера');
     assert.ok(heroSrc.includes('timer.unref()'), 'часы держат процесс');
-    assert.ok(/destroy\(\)\s*\{\s*hero\.stop\(\)/.test(hub), 'destroy() не снимает часы');
+    // PATIENTS_RAIL_V1 (2026-11-21) — у «Пациентов» баннера больше нет: вкладки в
+    // левой колонке, часов на экране нет, и снимать в destroy() нечего.
+    assert.ok(!/sectionHero\(/.test(hub), '«Пациенты» снова рисуют баннер');
 });
 
 test('три вкладки регистратуры пережили баннер — их наследует раздел «Пациенты»', async () => {
@@ -854,10 +861,17 @@ test('вернулись в раздел — адрес показывает О�
 // ===========================================================================
 // 9. «ОЧЕРЕДЬ» ОДНА
 // ===========================================================================
+// PATIENTS_RAIL_V1 (2026-11-21) — вкладки «Пациентов» стоят в колонке кнопками
+// (rail-tools), и среди них есть «Очередь» с data-tab="queue": это ВКЛАДКА раздела,
+// а не второй пункт меню. Дубликат — пункт «Очередь» из NAV, то есть без data-tab.
+function queueMenuDuplicate() {
+    const n = navItemFor('Очередь');
+    return n && !(n.attrs && n.attrs['data-tab'] === 'queue') ? n : undefined;
+}
 test('«Очередь» — вкладка «Пациентов», а не второй пункт меню; адрес #queue цел', async () => {
     await perms_setFull();
     await go('patients');
-    assert.equal(navItemFor('Очередь'), undefined,
+    assert.equal(queueMenuDuplicate(), undefined,
         'в меню остался второй вход в тот же экран — открытые оба держат два опроса базы каждые 10 секунд');
 
     // Маршрут не тронут: закладка и глубокая ссылка открывают доску.
@@ -876,7 +890,7 @@ test('«Очередь» — вкладка «Пациентов», а не вт
 
     perms.setFullAccess('Admin');
     await go('patients');
-    assert.equal(navItemFor('Очередь'), undefined, 'дубликат вернулся');
+    assert.equal(queueMenuDuplicate(), undefined, 'дубликат вернулся');
 });
 
 // ===========================================================================
@@ -1142,7 +1156,9 @@ test('FIX_318_V1: «Пациенты» скрыты — «Очередь» ос�
     try {
         shell().setNavHidden(['patients']);
         await settle(60);
-        await go('labs');
+        // DEPT_DROPDOWN_RAIL_V1 — колонка «Клиники» показывает только открытую
+        // функцию (остальные — в выпадающем списке вкладки): открываем «Очередь».
+        await go('queue');
         assert.equal(navItemFor('Пациенты'), undefined);
         assert.ok(navItemFor('Очередь'), '«Очередь» пропала из меню вместе со скрытыми «Пациентами»');
         await go('queue');
@@ -1153,7 +1169,7 @@ test('FIX_318_V1: «Пациенты» скрыты — «Очередь» ос�
         await settle(40);
     }
     await go('patients');
-    assert.equal(navItemFor('Очередь'), undefined, 'вернули «Пациентов» — дубль «Очереди» в меню');
+    assert.equal(queueMenuDuplicate(), undefined, 'вернули «Пациентов» — дубль «Очереди» в меню');
 });
 
 // FIX_318_V1 (B5) — хаб «Настроек» из кэша панелей тоже узнаёт о новом списке:
@@ -1217,13 +1233,13 @@ test('FIX_318_V1: короткое окно — группы без открыт
         assert.equal(typeof shell().refreshNav, 'function', 'экраны зовут window.easymed.refreshNav после действий — оболочка его потеряла');
         await go('labs'); await settle(80);
         await go('patients'); await settle(80);
-        assert.equal(folded('Операции'), true, 'меню не входит в окно — «Операции» без открытого экрана должны быть свёрнуты');
+        assert.equal(folded('Касса'), true, 'меню не входит в окно — «Операции» без открытого экрана должны быть свёрнуты');
         assert.equal(folded('Настройки'), true);
-        assert.equal(folded('Аналитика'), true);
+        assert.equal(folded('Отчёты'), true);
         assert.ok(height() <= client, 'свернули, а меню всё равно не входит: ' + height() + ' > ' + client);
 
         // B6 — сумма счётчиков на заголовке свёрнутой группы.
-        const ops = badgeOf('Операции');
+        const ops = badgeOf('Касса');
         assert.ok(ops, 'у свёрнутых «Операций» нет бейджа — красные счётчики спрятаны');
         // CHATS_TO_COMMERCE_V1 — чат ушёл из «Операций» на «Коммерческие
         // инструменты» (группа «Настройки»): здесь остаётся касса.
@@ -1232,29 +1248,29 @@ test('FIX_318_V1: короткое окно — группы без открыт
         const upd = badgeOf('Настройки');
         assert.ok(upd && hasCls(upd, 'alert'), 'бейдж обновления ушёл в свёрнутые «Настройки»');
         assert.equal(labelOf(upd), '4', 'обновление 1 + непрочитанные чаты 3 на «Коммерческих инструментах»');
-        assert.equal(badgeOf('Аналитика'), null, 'у группы без счётчиков бейджа нет');
+        assert.equal(badgeOf('Отчёты'), null, 'у группы без счётчиков бейджа нет');
 
         // Группа открытого экрана раскрыта.
         await go('cashier-shifts');
-        assert.equal(folded('Операции'), false, 'экран кассы открыт, а его группа свёрнута');
-        assert.equal(folded('Аналитика'), true);
+        assert.equal(folded('Касса'), false, 'экран кассы открыт, а его группа свёрнута');
+        assert.equal(folded('Отчёты'), true);
 
         // Щелчок человека сильнее умолчания — и переживает переходы.
-        head('Аналитика').click();
-        assert.equal(folded('Аналитика'), false);
+        head('Отчёты').click();
+        assert.equal(folded('Отчёты'), false);
         await go('patients');
-        assert.equal(folded('Аналитика'), false, 'раскрытая щелчком группа свернулась сама при переходе');
-        assert.equal(folded('Операции'), true);
+        assert.equal(folded('Отчёты'), false, 'раскрытая щелчком группа свернулась сама при переходе');
+        assert.equal(folded('Касса'), true);
 
         // Окно выросло — всё раскрыто, кроме свёрнутого щелчком.
-        head('Аналитика').click();
+        head('Отчёты').click();
         client = 2000;
         await go('labs');
-        assert.equal(folded('Операции'), false, 'меню входит в окно — группы раскрыты (NAV_UNFOLDED_V1)');
+        assert.equal(folded('Касса'), false, 'меню входит в окно — группы раскрыты (NAV_UNFOLDED_V1)');
         assert.equal(folded('Настройки'), false);
-        assert.equal(folded('Аналитика'), true, 'свёрнутая щелчком группа раскрылась сама');
-        head('Аналитика').click();
-        assert.equal(folded('Аналитика'), false);
+        assert.equal(folded('Отчёты'), true, 'свёрнутая щелчком группа раскрылась сама');
+        head('Отчёты').click();
+        assert.equal(folded('Отчёты'), false);
     } finally {
         globalThis.fetch = prevFetch;
         delete SIDEBAR.clientHeight;

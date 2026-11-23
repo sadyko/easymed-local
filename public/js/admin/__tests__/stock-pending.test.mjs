@@ -200,13 +200,16 @@ test('placeLine и sourceLabel — без null и NaN', () => {
 
 test('«Закупки»: чип «Не списано со склада» со счётом — складу и администратору; медсестре его нет, и счёт у сервера не спрашивается', async () => {
     const { renderInventory } = await import('../views/inventory.js');
+    // PROCUREMENT_RAIL_V1 — чипы «Закупок» стоят в левой колонке: достаём их из реестра.
+    const { railToolsFor } = await import('../rail-tools.js');
+    const rail = () => { const b = railToolsFor('inventory'); return (b ? b() : []).flat().filter(Boolean).flatMap((n) => walk(n)); };
     LIST = { status: 'pending', count: 2, rows: [ROW, { ...ROW, id: 8 }] };
     FAIL = null;
     rpcCalls.length = 0;
     const root = mkEl('div');
     await renderInventory(root, {});
     await settle();
-    const chip = walk(root).find((e) => e.tagName === 'BUTTON' && labelOf(e).startsWith('Не списано со склада'));
+    const chip = rail().find((e) => e.tagName === 'BUTTON' && labelOf(e).startsWith('Не списано со склада'));
     assert.ok(chip, 'чипа нет');
     assert.equal(byAttr(chip, 'data-pending-count', '2').length, 1, 'счёт на чипе: ' + labelOf(chip));
     assert.ok(rpcCalls.some((c) => c.name === 'stock_pending_count'));
@@ -218,7 +221,7 @@ test('«Закупки»: чип «Не списано со склада» со 
         const r2 = mkEl('div');
         await renderInventory(r2, {});
         await settle();
-        assert.equal(walk(r2).filter((e) => e.tagName === 'BUTTON' && labelOf(e).startsWith('Не списано со склада')).length, 0);
+        assert.equal(rail().filter((e) => e.tagName === 'BUTTON' && labelOf(e).startsWith('Не списано со склада')).length, 0);
         assert.ok(!rpcCalls.some((c) => c.name === 'stock_pending_count'), 'медсестре сервер ответил бы 403');
     } finally { globalThis.window.easymed.state.user = keep; }
 });

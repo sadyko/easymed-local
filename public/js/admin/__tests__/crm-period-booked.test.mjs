@@ -101,12 +101,11 @@ test('CRM_PERIOD_BOOKED_V1: доска по умолчанию — «Сегод�
     await pick(root, 'data-booked-select', 'week');
     assert.deepEqual(shown(root), ['Давняя Завтра', 'Давняя Позже', 'Давняя Строка', 'Новая Завтра']);
 
-    // «Запись: Все» — доска снова за «Сегодня», и строка о давних открытых на месте.
+    // «Запись: Все» — доска снова за «Сегодня». CRM_NO_PERIOD_LINE_V1 (ветка local/ai-on-main,
+    // владелец 2026-11-21) — строки о давних открытых над доской больше нет, и подсказка «Записи» ушла.
     await pick(root, 'data-booked-select', CRM_FILTER_ALL);
     assert.deepEqual(shown(root), ['Новая Без записи', 'Новая Завтра'], 'после снятия «Записи» доска не вернулась к «Сегодня»');
-    const line = sel(root, 'data-crm-period-line');
-    assert.ok(line, 'строки о давних открытых нет');
-    assert.match(textOf(line), /Открытых за другие дни: 4 — /);
+    assert.equal(byAttr(root, 'data-crm-period-line').length, 0, 'строка о давних открытых вернулась');
     assert.equal(byAttr(root, 'data-crm-booked-all').length, 0);
   } finally {
     await pick(root, 'data-booked-select', CRM_FILTER_ALL);

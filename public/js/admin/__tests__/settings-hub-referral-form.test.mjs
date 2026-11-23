@@ -289,3 +289,56 @@ test('REFERRAL_SPECIALTY_SELECT_V1: «Специальность» — выпа�
   assert.ok(vals({ specialty: 'Иглорефлексотерапевт-самоучка' }).includes('Иглорефлексотерапевт-самоучка'), 'старое значение не из списка остаётся пунктом');
   assert.strictEqual(f.canon('ЛОР'), 'Отоларинголог (ЛОР)', 'прежнее написание выбирает пункт списка');
 });
+
+// REFERRAL_SOURCES_REP_COLUMN_V1 + LOOKUP_EXTRA_COLUMNS_V1 (владелец, 2026-11-20: «add here
+// filter at the end to see other information about doctor and add here who is med rep of
+// doctor») — в «Списке источников» колонка «Медпредставитель» (embed representative по
+// representative_id) и кнопка «Колонки» в конце шапки: отмеченная колонка появляется в
+// шапке, в строке отбора и в строках, и выбор помнится.
+test('Список источников: колонка «Медпредставитель» и «Колонки» в конце шапки', async () => {
+  const sent = [];
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    sent.push({ url: String(url), body });
+    if (String(url).startsWith('/api/db') && body && body.table === 'referral_sources') {
+      return { ok: true, json: async () => ({ data: [
+        { id: 7, code: '0039', name: 'Dilshod Dilshod', phone: '+998990870004', doctor_id: null, active: 1,
+          payment_type: 'card', card_number: '8600 1234', reward_mode: 'own', own_percent: 12,
+          referral_source_categories: { name: 'Внешний врач' }, representative: { full_name: 'Каримова Нигора' } },
+      ] }) };
+    }
+    return { ok: true, json: async () => ({ data: [] }) };
+  };
+  try {
+    localStorage.removeItem('lookup.extraCols.referral_sources');
+    const { renderLookupEditor } = await import('../views/settings-hub.js');
+    const root = mk('div');
+    await renderLookupEditor(root, 'referral_sources');
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+
+    const req = sent.find((x) => x.body && x.body.table === 'referral_sources');
+    assert.ok(req && /representative\(full_name\)/.test(JSON.stringify(req.body)), 'список не просит имя медпредставителя');
+    const heads = () => walk(root).filter((n) => n.tagName === 'TH').map(textOf);
+    assert.ok(heads().includes('Медпредставитель'), 'нет колонки «Медпредставитель»: ' + heads().join(' | '));
+    assert.match(textOf(root), /Каримова Нигора/, 'имя медпредставителя не показано в строке');
+    assert.ok(!heads().includes('Тип оплаты'), 'дополнительные колонки по умолчанию скрыты');
+
+    const btn = walk(root).find((n) => n.attrs && n.attrs['data-act'] === 'lookup-columns');
+    assert.ok(btn, 'нет кнопки «Колонки»');
+    const lastTh = walk(root).filter((n) => n.tagName === 'TH').pop();
+    assert.ok(walk(lastTh).includes(btn), 'кнопка «Колонки» — не в конце шапки');
+
+    const box = walk(root).find((n) => n.attrs && n.attrs['data-lookup-col'] === 'payment_type');
+    assert.ok(box, 'нет галочки «Тип оплаты»');
+    box.checked = true;
+    box.dispatchEvent({ type: 'change', currentTarget: box });
+    assert.ok(heads().includes('Тип оплаты'), 'отмеченная колонка не появилась в шапке');
+    assert.match(textOf(root), /На карту/, 'тип оплаты показан не подписью');
+    assert.deepStrictEqual(JSON.parse(localStorage.getItem('lookup.extraCols.referral_sources')), ['payment_type'], 'выбор не запомнился');
+    const filters = walk(root).filter((n) => n.className === 'tbl-filter');
+    assert.strictEqual(filters.length, heads().length, 'строка отбора не совпадает с шапкой по числу колонок');
+  } finally {
+    globalThis.fetch = prevFetch;
+  }
+});

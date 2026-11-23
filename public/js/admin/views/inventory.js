@@ -39,8 +39,10 @@ import { renderOwnShelfTab } from './inventory-own-shelf.js';
 // OWN_SHELF_ONLY_V1 (ревью F6) — «Не списано со склада»: очередь склада со
 // счётом на чипе (тот же счёт — бейдж «Закупок» в меню).
 import { renderPendingTab, loadPendingCount, canSettlePending } from './inventory-pending.js';
+// PROCUREMENT_RAIL_V1 — кнопки раздела в левой колонке (как у CRM, RAIL_TOOLS_V1).
+import { setRailTools } from '../rail-tools.js';
 
-const refs = { container: null, onNavigate: null, chipsEl: null, tabBarEl: null, contentEl: null };
+const refs = { container: null, onNavigate: null, mounted: false, tabBarEl: null, contentEl: null };
 const state = { pane: 'sklad', pendingCount: null };   // pendingCount — ревью F6
 
 const TABS = [
@@ -52,7 +54,9 @@ const TABS = [
 ];
 const CHIPS = [
     { id: 'dashboard',   label: 'Дашборд',        icon: 'Chart' },
-    { id: 'departments', label: 'Отделения',      icon: 'Building' },
+    // PROC_RAIL_NO_DEPT_V1 (2026-11-21, владелец: «remove department from left
+    // navigation bar») — «Отделения» сняты из колонки «Закупок»: экран отделов
+    // открывается из «Настроек» (settings:departments), второй вход здесь лишний.
     { id: 'expiry',      label: 'Сроки годности', icon: 'Clock' },
     { id: 'stockcount',  label: 'Инвентаризация', icon: 'Grid' },
     { id: 'audit',       label: 'Журнал',         icon: 'Activity' },
@@ -75,27 +79,34 @@ async function refreshPendingCount() {
     const n = await loadPendingCount();
     if (n === null) return;
     state.pendingCount = n;
-    if (refs.chipsEl) paintChips();
+    if (refs.mounted) paintChips();
     try { if (window.easymed && typeof window.easymed.refreshNav === 'function') window.easymed.refreshNav(); } catch { /* подсказка, не операция */ }
 }
 
+// PROCUREMENT_RAIL_V1 (2026-11-21, владелец со снимком шапки «Закупок»: «put
+// all the buttons on photo correctly to the navigation bar») — чипы шапки
+// (Дашборд, Отделения, Сроки годности, Инвентаризация, Журнал, Только со своих
+// полок, Не списано со склада) стоят в левой колонке вместо пункта «Закупки»
+// (admin/rail-tools.js → admin.js renderSidebar). Первым — «Закупки»: основной
+// вид с вкладками Склад · Заявки · Заказы · Товары · Поставщики. В шапке экрана
+// осталась одна кнопка — «Обновить».
+const isTabPane = (id) => TABS.some((t) => t.id === id);
+
 function mount() {
     clear(refs.container);
-    refs.chipsEl = h('div', { class: 'page-head-actions', style: { flexWrap: 'wrap' } });
+    refs.mounted = true;
     refs.tabBarEl = h('div', { class: 'proc-tabs' });
     refs.contentEl = h('div', { class: 'proc-tab-content' });
     paintChips();
     paintTabBar();
 
+    // PROCUREMENT_NO_HEAD_V1 (2026-11-21, владелец: «remove texts on top and
+    // remove reload button too, use space smartly») — шапки экрана нет: имя
+    // раздела стоит заголовком колонки и выбранным пунктом в ней, строка экрана
+    // сложена (admin.js RAIL_NAMED_VIEWS), подзаголовок и «Обновить» сняты —
+    // данные перечитываются при каждом переключении вкладки и пункта колонки.
+    // Экран начинается сразу с вкладок.
     refs.container.appendChild(h('div', { class: 'fade-in' },
-        h('div', { class: 'page-head' },
-            h('div', null,
-                h('h1', { class: 'page-title' }, 'Закупки'),
-                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
-                    'Остатки, поставщики и заказы на закупку — по всем филиалам клиники.'),
-            ),
-            refs.chipsEl,
-        ),
         refs.tabBarEl,
         refs.contentEl,
     ));
@@ -111,25 +122,24 @@ function setPane(id) {
 }
 
 function paintChips() {
-    clear(refs.chipsEl);
+    const railBtn = (label, icon, active, onclick, extra = null) => h('button', {
+        class: 'nav-item' + (active ? ' active' : ''), type: 'button', title: label,
+        ...(active ? { 'aria-current': 'page' } : {}),
+        onclick,
+    }, h('span', { class: 'nav-icon' }, Icon(icon, { size: 18 })), h('span', null, label), extra);
+    const chips = [];
     for (const c of CHIPS) {
         if (c.id === 'pending' && !canSettlePending()) continue;   // ревью F6 — очередь склада
-        const active = state.pane === c.id;
         const count = c.id === 'pending' && state.pendingCount > 0
-            ? h('span', { 'data-pending-count': String(state.pendingCount), style: { marginLeft: '6px' } }, Tag(String(state.pendingCount), { kind: 'warn' }))
+            ? h('span', { class: 'nav-badge alert', 'data-pending-count': String(state.pendingCount) }, String(state.pendingCount))
             : null;
-        refs.chipsEl.appendChild(h('button', {
-            class: 'btn btn-sm ' + (active ? 'btn-primary' : 'btn-outline'),
-            type: 'button',
-            // DEPARTMENTS_V1 — «Отделения» больше не заглушка: это экран отделов
-            // (руководитель, команда, помещения, что выдано и на руках).
-            onclick: () => (c.id === 'departments' && refs.onNavigate ? refs.onNavigate('departments') : setPane(c.id)),
-        }, Icon(c.icon, { size: 14 }), ' ' + c.label, count));
+        // DEPARTMENTS_V1 — «Отделения» больше не заглушка: это экран отделов
+        // (руководитель, команда, помещения, что выдано и на руках).
+        chips.push(railBtn(c.label, c.icon, state.pane === c.id,
+            () => (c.id === 'departments' && refs.onNavigate ? refs.onNavigate('departments') : setPane(c.id)), count));
     }
-    refs.chipsEl.appendChild(h('button', {
-        class: 'btn btn-sm btn-outline', type: 'button', title: 'Обновить данные',
-        onclick: () => repaint(),
-    }, Icon('Refresh', { size: 14 }), ' Обновить'));
+    const groups = [[railBtn('Закупки', 'Pill', isTabPane(state.pane), () => { if (!isTabPane(state.pane)) setPane('sklad'); })], chips];
+    setRailTools('inventory', () => groups);
 }
 
 function paintTabBar() {

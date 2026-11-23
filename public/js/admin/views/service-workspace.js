@@ -6365,9 +6365,9 @@ function _wireBlankEditing(ctx, frame) {
         '[data-ws-actions] button{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid #d3d9de;border-radius:8px;background:#fff;color:#1f2d34;font:600 12.5px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
         '[data-ws-actions] button svg{width:15px;height:15px;flex:0 0 auto;color:#55636d;}' +
         '[data-ws-actions] button:hover{border-color:#6087a9;background:#f0f4f8;}' +
-        '[data-ws-actions] button.ws-primary{background:#355c7d;border-color:#355c7d;color:#fff;}' +
+        '[data-ws-actions] button.ws-primary{background:var(--brand-gradient);background-origin:border-box;border-color:transparent;color:#fff;}' +
         '[data-ws-actions] button.ws-primary svg{color:#fff;}' +
-        '[data-ws-actions] button.ws-primary:hover{background:#2a4a65;border-color:#2a4a65;}' +
+        '[data-ws-actions] button.ws-primary:hover{background:var(--brand-gradient-hover);background-origin:border-box;border-color:transparent;}' +
         '[data-ws-actions] button.ws-toggle::before{content:"";width:12px;height:12px;border-radius:4px;border:1.5px solid #aab4bc;background:#fff;flex:0 0 auto;}' +
         '[data-ws-actions] button.ws-toggle[aria-pressed="true"]{background:#f0f4f8;border-color:#6087a9;color:#2a4a65;}' +
         '[data-ws-actions] button.ws-toggle[aria-pressed="true"]::before{background:#355c7d;border-color:#355c7d;box-shadow:inset 0 0 0 2px #fff;}' +

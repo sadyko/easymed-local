@@ -121,7 +121,11 @@ const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
 // would pass for the wrong control.
 // LAB_TABS_SYSTEM_V1 — переключатель режима это системные вкладки (.tabs), а
 // не пилюля; узнаётся по имени, как и раньше.
-const modeSwitch = (root) => walk(root).find((n) => hasClass(n, 'tabs') && n.attrs['aria-label'] === 'Режим раздела');
+// HERO_TABS_TO_RAIL_V1 — вкладки раздела стоят в левой колонке оболочки: стенд
+// достаёт их из того же реестра (admin/rail-tools.js), что и колонка.
+const { railToolsFor } = await import('../rail-tools.js');
+const railNodes = (owner) => { const b = railToolsFor(owner); return b ? b().flat().filter(Boolean).flatMap((n) => walk(n)) : []; };
+const modeSwitch = (root) => [...walk(root), ...railNodes('labs')].find((n) => hasClass(n, 'tabs') && n.attrs['aria-label'] === 'Режим раздела');
 const labelOf = (b) => textOf(b).replace(/<svg[\s\S]*?<\/svg>/g, '').trim();
 const modeButtons = (root) => { const sw = modeSwitch(root); return sw ? findAllButtons(sw) : []; };
 
@@ -394,11 +398,12 @@ test('одна шапка на все режимы: заголовок, рядо
     // баннере клинических разделов, слева («inside of it but in the left
     // side»). Вкладки стоят в баннере, а шапка с подзаголовком и действиями —
     // под ним.
+    // CLINIC_NO_BANNER_V1 (2026-11-21) — баннера у «Лаборатории» больше нет;
+    // HERO_TABS_TO_RAIL_V1 — вкладки в левой колонке.
     const hero = walk(root).find((n) => n.attrs && n.attrs['data-section-hero'] === 'labs');
-    assert.ok(hero, name + ': баннер раздела есть');
-    assert.ok(walk(hero).includes(sw), name + ': вкладки — в баннере');
+    assert.equal(hero, undefined, name + ': баннер раздела вернулся');
+    assert.ok(railNodes('labs').includes(sw), name + ': вкладки — в колонке');
     const head = walk(root).find((n) => hasClass(n, 'page-head'));
-    assert.ok(!walk(hero).includes(head), name + ': шапка с действиями — под баннером, не в нём');
     const actions = walk(root).find((n) => hasClass(n, 'page-head-actions'));
     assert.ok(!actions || !walk(actions).includes(sw), name + ': и НЕ в блоке действий справа');
 

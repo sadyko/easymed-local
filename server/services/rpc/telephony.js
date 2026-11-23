@@ -474,9 +474,19 @@ function callEndedAt(call) {
   return start + ((Number(call.waitsec) || 0) + (Number(call.billsec) || 0)) * 1000;
 }
 
-export async function telephonyCallRecording(db, args, user, { pbxRecordingUrlImpl = pbxRecordingUrl, sleep = waitMs, now = Date.now } = {}) {
+export async function telephonyCallRecording(db, args, user, opts = {}) {
   requireGrant(db, user, 'crm.recording', 'edit', CALL_LOG_ROLES, 'слушать записи разговоров');
-  const id = Number((args && args.call_id) || 0);
+  return recordingUrlForCall(db, Number((args && args.call_id) || 0), opts);
+}
+
+/**
+ * AI_CALLS_V1 — то же, что кнопка «Прослушать», но без пользователя: разбор записей
+ * ИИ (services/ai/calls.js) берёт запись ровно этим путём, второго способа спросить
+ * станцию нет. Права проверяет тот, кто зовёт: экран — telephonyCallRecording выше,
+ * ИИ — включённая администратором функция «Анализ записей звонков».
+ * @returns {Promise<{url: string, reason?: string}>}
+ */
+export async function recordingUrlForCall(db, id, { pbxRecordingUrlImpl = pbxRecordingUrl, sleep = waitMs, now = Date.now } = {}) {
   const call = id ? db.prepare('SELECT id, general_call_id, provider, provider_id, started_at, waitsec, billsec, recording_url FROM calls WHERE id = ?').get(id) : null;
   if (!call) throw new RpcError('Звонок не найден.', 404);
   if (call.recording_url) return { url: call.recording_url };

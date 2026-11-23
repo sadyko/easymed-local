@@ -13,6 +13,15 @@ never anything a clinic's patients did. See the schema comments in
 `server/db/migrations/001_registry.sql` for why that boundary is treated as
 load-bearing rather than incidental.
 
+**One exception to "nothing a patient did", stated plainly (AI_CHAT_V1).** A
+clinic that switches on the AI assistant sends the recent chat with a patient
+(up to 20 messages, the patient's profile name, the post a comment was left
+under) and its public price list to `POST /cp/v1/ai/chat-reply`. Those patient
+messages PASS THROUGH this process to Anthropic and back — they are never
+stored, never logged, and never written to the registry. What is stored is
+`ai_usage`: per clinic and month, numbers only (requests, tokens, cost). See
+"AI assistant" below.
+
 ## Why this is a separate top-level directory, not part of the clinic app
 
 `control-plane/` deploys to a different machine, for a different audience
@@ -179,6 +188,51 @@ licence.
 At boot the control plane says whether `EASYMED_SIGNING_KEY` is the production
 key compiled into every clinic (`Signing key: the production vendor key.`) or
 warns loudly that it is not — expected only on a development machine.
+
+## AI assistant (`/cp/v1/ai/chat-reply`)
+
+AI_CHAT_V1. Clinics with the `ai` module (their own or their main clinic's) and
+a paid subscription ask this service for a reply to a patient; this service
+holds the only Anthropic key, checks the module, the subscription and the
+clinic's monthly limit (`clinics.ai_monthly_limit_usd`, 20 USD by default),
+calls Claude, and records usage in `ai_usage` — numbers only. The clinic
+authenticates with its install_token in the `X-Install-Token` header, checked
+before the body is read; the body limit is 1 MB, the clinic facts 250 000
+characters.
+
+**The SDK is installed separately on the vendor server, and only there.**
+`@anthropic-ai/sdk` is declared in `control-plane/package.json` /
+`package-lock.json` and NOT in the root `package.json` — the root is what
+ships to every clinic in a release bundle, and clinics never talk to
+Anthropic. In this repo the control plane borrows the root `node_modules`
+(see above), so locally the SDK is simply absent: the code loads it lazily, the
+tests never call Claude, and the server boots with a warning.
+
+On the vendor server, once (and again whenever the SDK version in
+`control-plane/package-lock.json` changes — 1.6.0 at the time of writing):
+
+```
+cd /opt/easymed-cp
+npm i --no-save @anthropic-ai/sdk@1.6.0
+node -e "import('@anthropic-ai/sdk').then(()=>console.log('ok'))"    # must print ok
+```
+
+and put the key in the systemd unit's EnvironmentFile, readable by root only:
+
+```
+# /etc/easymed-cp.env   (chmod 600, owned by root; EnvironmentFile=/etc/easymed-cp.env in easymed-cp.service)
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+then `systemctl daemon-reload && systemctl restart easymed-cp`. At boot the
+control plane prints `AI assistant: SDK and ANTHROPIC_API_KEY present.` — or a
+loud WARNING naming what is missing. It never refuses to start over this:
+check-in and licences matter more. While either is missing, every AI request
+answers `503 upstream` and the clinic hands the chat to its operators.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | none | The vendor's Anthropic key. Only on the vendor server, never in any clinic |
 
 ## Development
 

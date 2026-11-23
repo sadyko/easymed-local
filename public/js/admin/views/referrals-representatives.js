@@ -51,10 +51,13 @@ export async function renderReferralsRepresentatives(host, ctx = {}) {
         const d = state.data;
         const t = d ? d.totals : {};
         const money = !!(d && d.money);
+        // REP_OWN_DOCTORS_V1 — представитель видит только своих врачей: плиток «Представителей»
+        // и «Без представителя» у него нет — других представителей и ничьих врачей он не видит.
+        const own = !!(d && d.own_only);
         refs.kpis.appendChild(kpiRow(
-            kpi(d ? t.representatives : '…', 'Представителей'),
+            own ? null : kpi(d ? t.representatives : '…', 'Представителей'),
             kpi(d ? t.assigned : '…', 'Врачей закреплено'),
-            kpi(d ? t.unassigned : '…', 'Без представителя', { accent: d && t.unassigned > 0 ? 'warn' : '' }),
+            own ? null : kpi(d ? t.unassigned : '…', 'Без представителя', { accent: d && t.unassigned > 0 ? 'warn' : '' }),
             kpi(d ? t.patients : '…', 'Пациентов за период'),
             money ? kpi(sumText(t.received), 'Получено за период', { accent: 'ok' }) : null,
         ));
@@ -65,7 +68,8 @@ export async function renderReferralsRepresentatives(host, ctx = {}) {
         if (state.error) { refs.body.appendChild(errorEl(state.error)); return; }
         if (!state.data) { refs.body.appendChild(loadingEl()); return; }
         const d = state.data;
-        const canAssign = grantAllows('settings.referral_sources', 'edit');
+        // REP_OWN_DOCTORS_V1 — своих врачей представитель другому не передаёт (сервер откажет).
+        const canAssign = grantAllows('settings.referral_sources', 'edit') && !d.own_only;
 
         if (!d.representatives.length) {
             refs.body.appendChild(h('div', { class: 'card', style: { marginBottom: '16px' } },
@@ -124,7 +128,7 @@ export async function renderReferralsRepresentatives(host, ctx = {}) {
         const tb = h('tbody');
         for (const s of g.rows) {
             const sel = h('select', { class: 'ref-select', 'data-ref-assign': s.id, disabled: !canAssign,
-                title: canAssign ? '' : tr('Закреплять врачей может роль с правом «Список источников: Изменение».'),
+                title: canAssign || d.own_only ? '' : tr('Закреплять врачей может роль с правом «Список источников: Изменение».'),
                 onchange: async () => {
                     const prev = s.representative_id;
                     const next = sel.value === '' ? null : Number(sel.value);
@@ -157,7 +161,7 @@ export async function renderReferralsRepresentatives(host, ctx = {}) {
                     onPrint: () => printSource(s),
                     // REFERRAL_EDIT_FROM_REPS_V1 — то же право, что у закрепления в этой
                     // строке: «Список источников: Изменение».
-                    onEdit: canAssign && typeof ctx.openSourceCard === 'function' ? async () => {
+                    onEdit: grantAllows('settings.referral_sources', 'edit') && typeof ctx.openSourceCard === 'function' ? async () => {
                         const opened = await ctx.openSourceCard(s.id);
                         if (!opened) toast(tr('Карточку врача открыть не удалось — найдите его во вкладке «Врачи-источники».'), 'fail');
                     } : null,

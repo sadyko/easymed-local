@@ -61,7 +61,7 @@ test('кнопка «Телефон» есть у администратора; 
   const { viewRoot, btn } = await shell();
   assert.ok(btn, 'кнопки «Телефон» нет');
   assert.ok(btn.attrs && 'data-crm-phone' in btn.attrs);
-  assert.match(textOf(btn), /Телефон/);
+  assert.equal(btn.getAttribute('aria-label'), 'Телефон');   // PHONE_CALLCENTER_ONLY_V1 — только знак, подпись в aria-label
   const d = await open(btn);
   assert.ok(d, 'панель не появилась в document.body');
   assert.ok(!String(d.className).includes('cph-closed'), 'панель осталась закрытой');
@@ -279,4 +279,19 @@ test('переход в другой раздел панель не закрыв
   await tick(60);
   assert.ok(!String(d.className).includes('cph-closed'), 'телефон закрылся вместе с доской');
   assert.equal(edge().hidden, true);
+});
+
+// PHONE_CALLCENTER_ONLY_V1 — оболочка передаёт onlyRoles: ['callcenter']: кнопку видит
+// только call-центр (основной или дополнительной ролью), администратор — нет.
+test('onlyRoles: кнопка только у роли callcenter — основной или дополнительной', async () => {
+  const mountAs = (user) => {
+    resetCrmPhone();
+    window.easymed.state.user = user;
+    return mountPhoneButton({ onNavigate() {}, shiftTarget: mk('div'), onlyRoles: ['callcenter'] });
+  };
+  assert.equal(mountAs(ADMIN), null, 'администратор без роли call-центра получил кнопку');
+  assert.equal(mountAs({ id: 9, full_name: 'Рег', role: 'registrar' }), null);
+  assert.ok(mountAs({ id: 10, full_name: 'Оператор', role: 'callcenter' }), 'у call-центра кнопки нет');
+  assert.ok(mountAs({ ...ADMIN, extra_roles: ['callcenter'] }), 'дополнительная роль call-центра не дала кнопку');
+  resetCrmPhone();
 });

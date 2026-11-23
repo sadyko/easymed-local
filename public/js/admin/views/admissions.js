@@ -47,7 +47,6 @@
 import { supabase } from '../../supabase.js';
 import { IN_BED_STATUSES, OPEN_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, clear, PageHead, fmtDateTime, initials } from '../ui.js';
-import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { dateNumeric } from '../../shared/date-words.js';   // WARD_TABLE_V1 — «с 06.09»
 import { isModuleAllowed, hasActorRole } from '../permissions.js';
@@ -157,19 +156,24 @@ async function paint(root, onNavigate = null, { only = null } = {}) {
         can = (data && data.can) || {};
     } catch (e) { can = {}; }
 
-    root.appendChild(PageHead({
+    // INPATIENT_HEAD_LEFT_V1 (2026-11-21, владелец со снимком шапки: «put these
+    // buttons to the left side and remove reload button») — «Обновить» снята
+    // (данные перечитываются при каждом входе и переключении вкладки, а после
+    // заявки — через onDone), «Заявка на госпитализацию» — у ЛЕВОГО края строки
+    // (.adm-head, admin-views.css), где начинается взгляд, а не в правом углу.
+    const head = PageHead({
         title: 'Стационар',
-        subtitle: wardOnly
-            ? 'Кто лежит, кто ждёт первичного осмотра и кому не назначен лечащий врач'
-            : 'Заявки на госпитализацию и размещение на койках',
-        right: [
-            h('button', { class: 'btn btn-sm', type: 'button', onclick: reload }, Icon('Refresh', { size: 13 }), ' ', tr('Обновить')),
-            wardOnly ? null : h('button', {
+        // INPATIENT_NO_SUBTITLE_V1 (2026-11-21, владелец: «remove such text and use space smartly») —
+        // поясняющего подзаголовка нет, в шапке остались только кнопки.
+        right: wardOnly ? null : [
+            h('button', {
                 class: 'btn btn-primary btn-sm', type: 'button',
                 onclick: () => openAdmissionOrderModal({ onDone: reload }),
             }, Icon('Plus', { size: 13 }), ' ', tr('Заявка на госпитализацию')),
-        ].filter(Boolean),
-    }));
+        ],
+    });
+    head.className += ' adm-head';
+    root.appendChild(head);
 
     let rows;
     try { rows = await load(); }
@@ -581,6 +585,24 @@ function defaultTab(tabs) {
     return tabs.some((t) => t.id === 'orders') ? 'orders' : 'patients';
 }
 
+// INPATIENT_SUBNAV_V1 (2026-11-21, владелец со снимком баннера «Стационара»:
+// «make these buttons as a sub button to inpatient button, and when you go other
+// button they shouldn't disappear») — вкладки раздела — ПОДПУНКТЫ «Стационара» в
+// левой колонке (admin.js inpatientSubRail), а не полоса в баннере. Колонка
+// рисует их сама (visibleTabs — тот же отбор по ролям), поэтому они видны и
+// пока открыт соседний пункт («Задачи медсестры»), и до первого входа в раздел.
+// Переключает вкладку живого экрана — через эти два входа; экрана нет (ещё не
+// открывали или он вытеснен из кэша) — колонка открывает раздел с payload.sub.
+let liveHub = null;
+const hubAlive = () => !!liveHub && liveHub.root.isConnected !== false;
+export function defaultInpatientTab() { return defaultTab(visibleTabs()); }
+export function currentInpatientTab() { return hubAlive() ? liveHub.active() : null; }
+export function selectInpatientTab(id) {
+    if (!hubAlive()) return false;
+    liveHub.select(id);
+    return true;
+}
+
 /**
  * Хост раздела «Стационар». `ctx` — то же, что оболочка даёт любому экрану:
  * { onNavigate, payload, tabId }. `payload.sub` называет вкладку.
@@ -593,32 +615,20 @@ export async function renderInpatient(container, ctx = {}) {
     const root = h('div', { class: 'fade-in' });
     container.appendChild(root);
 
-    // Полоса вкладок — те же .reg-tabs/.reg-tab, что у «Пациентов»: один язык
-    // выделения на всю оболочку, а не свой на каждую полосу.
-    const strip = h('div', { class: 'reg-tabs', role: 'tablist', 'aria-label': tr('Стационар') });
-    const buttons = {};
+    // INPATIENT_SUBNAV_V1 — полосы вкладок на экране нет: вкладки — подпункты
+    // «Стационара» в левой колонке. Здесь — только панели.
     const hosts = {};
     const tabs = visibleTabs();
     const DEFAULT_TAB = defaultTab(tabs);
     for (const t of tabs) {
         hosts[t.id] = h('div', {
-            id: 'inp-panel-' + t.id, role: 'tabpanel',
-            'aria-labelledby': 'inp-tab-' + t.id, 'data-tab-panel': t.id,
+            id: 'inp-panel-' + t.id, role: 'region', 'aria-label': tr(t.label),
+            'data-tab-panel': t.id,
             style: { display: 'none' },
         });
-        buttons[t.id] = h('button', {
-            class: 'reg-tab', type: 'button', role: 'tab',
-            id: 'inp-tab-' + t.id, 'aria-controls': 'inp-panel-' + t.id,
-            'aria-selected': 'false', tabindex: '-1', 'data-tab': t.id,
-            onclick: () => { select(t.id); },
-            onkeydown: (ev) => moveByKey(ev, t.id),
-        }, Icon(t.icon, { size: 14 }), h('span', null, tr(t.label)));
-        strip.appendChild(buttons[t.id]);
     }
-    // SECTION_HERO_V1 — полоса вкладок живёт в тёмном баннере раздела, слева
-    // под названием (владелец: «button … inside of it but in the left side»).
-    // Подзаголовок и кнопки каждой вкладки остаются в её шапке ниже.
-    root.appendChild(sectionHero({ section: 'admissions', title: 'Стационар', tabs: strip }).el);
+    // INPATIENT_SUBNAV_V1 — баннера (имя, приветствие, часы) тоже нет: имя раздела
+    // — заголовок колонки и выбранный подпункт, как у «Порционника» и «Выписок».
     for (const t of tabs) root.appendChild(hosts[t.id]);
 
     let active = tabs.some((t) => t.id === sub) ? sub : DEFAULT_TAB;
@@ -627,34 +637,9 @@ export async function renderInpatient(container, ctx = {}) {
     // в панель, которую уже переключили.
     let mountSeq = 0;
 
-    // Полоса объявлена как tablist, а в tablist по стрелкам ходят: из порядка
-    // обхода Tab вынуты все кнопки, кроме активной, и без этого обработчика до
-    // двух вкладок из трёх нельзя было бы добраться с клавиатуры вовсе.
-    function moveByKey(ev, id) {
-        const key = ev && ev.key;
-        const step = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0;
-        let next = null;
-        if (step) {
-            // INPATIENT_FOUR_TABS_V1 — ходим по ВИДИМЫМ вкладкам: у врача нет
-            // «Заявок», и шаг по полному списку упирался бы в кнопку, которой
-            // на экране нет.
-            const i = tabs.findIndex((t) => t.id === id);
-            next = tabs[(i + step + tabs.length) % tabs.length];
-        } else if (key === 'Home') next = tabs[0];
-        else if (key === 'End') next = tabs[tabs.length - 1];
-        if (!next) return;
-        if (typeof ev.preventDefault === 'function') ev.preventDefault();
-        select(next.id);
-        buttons[next.id].focus();
-    }
-
     function paintStrip({ animate = false } = {}) {
-        for (const t of tabs) {   // INPATIENT_FOUR_TABS_V1 — только видимые: у врача нет кнопки «Заявки»
+        for (const t of tabs) {   // INPATIENT_FOUR_TABS_V1 — только видимые: у врача нет «Заявок»
             const on = t.id === active;
-            const b = buttons[t.id];
-            b.className = 'reg-tab' + (on ? ' on' : '');
-            b.setAttribute('aria-selected', on ? 'true' : 'false');
-            b.setAttribute('tabindex', on ? '0' : '-1');
             hosts[t.id].style.display = on ? '' : 'none';
             if (on && animate) animateIn(hosts[t.id]);
         }
@@ -727,6 +712,7 @@ export async function renderInpatient(container, ctx = {}) {
         await mount(id);
     }
 
+    liveHub = { root, active: () => active, select };   // INPATIENT_SUBNAV_V1 — колонка переключает вкладки этого экрана
     await select(active, { initial: true });
 
     return { activeTab: () => active, select };

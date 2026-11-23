@@ -36,27 +36,29 @@ const num = (n) => money(n);
 const pct = (v) => String(Math.round((Number(v) || 0) * 10) / 10).replace('.', ',') + '%';
 const dmy = (s) => (s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '');
 
-export async function openOperatorKpi() {
-    const overlay = h('div', { class: 'modal', 'data-operator-kpi': '' });
+// CRM_PANELS_INLINE_V1 — { mount }: та же карточка видом раздела CRM, а не окном
+// (без затемнения и «Закрыть»; уйти — кнопкой «Доска» в колонке).
+export async function openOperatorKpi({ mount = null } = {}) {
+    const overlay = h('div', { class: mount ? 'crm-panel-host' : 'modal', 'data-operator-kpi': '' });
     const close = () => overlay.remove();
-    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+    if (!mount) overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
 
     const title = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } }, '');
     const controls = h('div', { class: 'okpi-controls' });
     const body = h('div', { class: 'modal-body okpi-body' });
 
     overlay.appendChild(h('div', {
-        class: 'modal-card',
-        style: { width: 'calc(100vw - 48px)', maxWidth: '1280px', height: 'calc(100vh - 48px)', display: 'flex', flexDirection: 'column' },
+        class: 'modal-card' + (mount ? ' crm-panel-card' : ''),
+        style: mount ? {} : { width: 'calc(100vw - 48px)', maxWidth: '1280px', height: 'calc(100vh - 48px)', display: 'flex', flexDirection: 'column' },
     },
         h('header', { class: 'modal-head' },
             h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
                 h('span', { class: 'okpi-ico' }, Icon('Target', { size: 17 })),
                 h('div', null, h('h2', { style: { margin: 0, fontSize: '15px' } }, tr('Мой KPI')), title)),
-            h('button', { class: 'modal-close', onclick: close }, '×')),
+            mount ? null : h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { style: { padding: '12px 20px 0' } }, controls),
         body));
-    document.body.appendChild(overlay);
+    (mount || document.body).appendChild(overlay);
 
     async function load() {
         clear(body);

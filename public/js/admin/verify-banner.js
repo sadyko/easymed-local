@@ -35,14 +35,14 @@ function injectStyles() {
 .vbm-card .vbm-sub{margin:0;color:#5d7d75;font-size:13.5px;line-height:1.5;}
 .vbm-drop{border:2px dashed #d8e0e6;border-radius:10px;padding:16px;text-align:center;cursor:pointer;
   transition:border-color .12s,background .12s;}
-.vbm-drop:hover{border-color:#0d8a72;background:#f3f7f6;}
+.vbm-drop:hover{border-color:var(--primary-600);background:var(--primary-50);}
 .vbm-drop.has{border-color:#0a7c5a;background:#eef7f0;}
 .vbm-drop .vbm-name{font-size:13.5px;color:#5d7d75;margin-top:4px;word-break:break-word;}
 .vbm-drop.has .vbm-name{color:#0a7c5a;font-weight:600;}
 .vbm-lbl{font-size:12.5px;font-weight:600;color:#0c1a17;margin-bottom:5px;}
 .vbm-foot{display:flex;gap:10px;margin-top:6px;}
 .vbm-btn{flex:1;border:none;border-radius:10px;padding:11px 18px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer;}
-.vbm-btn.primary{background:linear-gradient(180deg,#0d8a72,#0a6e61);color:#fff;}
+.vbm-btn.primary{background:var(--brand-gradient);color:#fff;}
 .vbm-btn.primary:disabled{opacity:.55;cursor:not-allowed;}
 .vbm-btn.ghost{background:transparent;color:#5d7d75;}
 .vbm-err{color:#c83434;font-size:12.5px;min-height:16px;}`;

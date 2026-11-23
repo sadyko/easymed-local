@@ -15,7 +15,7 @@
 // Данные — выдуманные.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, RPC, CALLS, mk, walk, textOf, byAttr, byClass, tick, TOASTS, periodChip, crmView } from './crm-harness.mjs';
+import { S, RPC, CALLS, mk, walk, textOf, byAttr, byClass, tick, TOASTS, periodChip, crmView, railNodes, crmPanel } from './crm-harness.mjs';
 import { DEFAULT_STAGES } from '../crm-settings-logic.js?v=crmcfg1';
 
 const { renderCrm, crmExportRows, CRM_FILTER_ALL } = await import('../views/crm.js');
@@ -65,7 +65,7 @@ test('Q1: при «Сегодня» поиск находит давнюю от�
   try {
     chip(root, /^Сегодня$/).click(); await tick(100);
     assert.ok(!byClass(root, 'crm-card').some((c) => textOf(c).includes('Давняя Заявка')), 'стенд не тот');
-    assert.ok(periodLine(root), 'строки о периоде нет');
+    assert.equal(periodLine(root), null, 'строка о периоде вернулась');   // CRM_NO_PERIOD_LINE_V1
     S.search = [OLD];   // сервер ищет по всем датам
     await search(root, '935550112');
     assert.ok(byClass(root, 'crm-card').some((c) => textOf(c).includes('Давняя Заявка')), 'поиск при выбранном периоде не нашёл давнюю карточку');
@@ -80,7 +80,7 @@ test('Q1: при «Сегодня» поиск находит давнюю от�
     // поиск стёрли — снова период
     await search(root, '');
     assert.ok(!textOf(root).includes('Давняя Заявка'));
-    assert.ok(periodLine(root));
+    assert.equal(periodLine(root), null, 'после поиска вернулась строка о периоде');   // CRM_NO_PERIOD_LINE_V1 — строки о периоде нет и без поиска
     assert.equal(byAttr(root, 'data-crm-search-all').length, 0);
   } finally { await search(root, ''); await backToAll(root); }
 });
@@ -128,7 +128,7 @@ test('панель «Телефон», журнал и набор: номер д
   } finally { await backToAll(root); }
 });
 
-test('«Список» за период без карточек — «За этот период заявок нет»; строка над доской — только когда давних открытых больше нуля (Q2)', async () => {
+test('«Список» за период без карточек — «За этот период заявок нет»; строки о давних открытых нет (CRM_NO_PERIOD_LINE_V1)', async () => {
   const { root } = await shell([OLD]);
   try {
     crmView(root, 'list'); await tick(80);
@@ -136,7 +136,7 @@ test('«Список» за период без карточек — «За эт
     const t = textOf(root);
     assert.ok(t.includes('За этот период заявок нет'), 'пустой период назван не так: ' + t.slice(0, 300));
     assert.ok(!t.includes('Заявок пока нет'), '«Заявок пока нет», хотя за другие дни заявка есть');
-    assert.match(textOf(periodLine(root)), /Открытых за другие дни: 1 — /);
+    assert.equal(periodLine(root), null, 'строка о периоде вернулась');
   } finally { await backToAll(root); }
   // давних открытых нет — строки нет
   const again = await shell([TODAY, { ...OLD, id: 21, status: 'came' }]);
@@ -158,16 +158,16 @@ test('«Отчёт»: база не ответила при выбранном �
   };
   try {
     chip(root, /^Сегодня$/).click(); await tick(100);
-    walk(root).find((n) => n.tagName === 'BUTTON' && /Отчёт/.test(textOf(n))).click(); await tick(80);
-    let modal = modalOpen();
+    railNodes().find((n) => n.tagName === 'BUTTON' && /Отчёт/.test(textOf(n))).click(); await tick(80);   // RAIL_TOOLS_V1
+    let modal = crmPanel(root);   // CRM_PANELS_INLINE_V1
     assert.ok(byAttr(modal, 'data-report-error').length, 'нет ошибки: отчёт посчитан по доске за период');
     assert.equal(byAttr(modal, 'data-report-fallback').length, 0);
     assert.ok(!textOf(modal).includes('Конверсия'), 'числа отчёта по доске, загруженной за период');
-    modal.remove();
+    crmView(root, 'kanban'); await tick(100);   // CRM_PANELS_INLINE_V1 — назад на доску, к фильтрам
     // «Всё время» — доска держит всё: прежний запасной счёт с пометкой
     chip(root, /^Всё время$/).click(); await tick(100);
-    walk(root).find((n) => n.tagName === 'BUTTON' && /Отчёт/.test(textOf(n))).click(); await tick(80);
-    modal = modalOpen();
+    railNodes().find((n) => n.tagName === 'BUTTON' && /Отчёт/.test(textOf(n))).click(); await tick(80);   // RAIL_TOOLS_V1
+    modal = crmPanel(root);
     assert.ok(byAttr(modal, 'data-report-fallback').length, 'при «Всё время» пропал запасной счёт по доске');
     assert.equal(byAttr(modal, 'data-report-error').length, 0);
   } finally { globalThis.fetch = realFetch; await backToAll(root); }

@@ -76,7 +76,9 @@ test('«Всё время»: закрытая колонка упёрлась в
 
 // CRM_PERIOD_ALL_COLUMNS_V1 — ОБНОВЛЕНО НАМЕРЕННО: открытые тоже грузятся за период
 // (раньше — все, без даты), и отдельным лёгким запросом — открытые вне периода.
-test('период: закрытые и открытые грузятся за период, без предела; открытые вне периода — лёгким запросом', async () => {
+// CRM_NO_PERIOD_LINE_V1 (2026-11-21) — строки о давних открытых нет, и лёгкий запрос
+// «открытые вне периода» больше не уходит.
+test('период: закрытые и открытые грузятся за период, без предела; открытые вне периода не спрашиваются', async () => {
   const root = await board([lead(1, 'in_process'), lead(2, 'came')]);
   CALLS.length = 0;
   chipText(root, /^Сегодня$/).click();
@@ -90,8 +92,7 @@ test('период: закрытые и открытые грузятся за �
   assert.ok(open, 'открытые не перезагружены');
   assert.ok(open.filters.some((f) => f.col === 'created_at' && f.op === 'gte'), 'открытые не ограничены периодом');
   assert.equal(open.limit, undefined);
-  const lite = reads.find((c) => c.columns === OUTSIDE_SELECT);
-  assert.ok(lite && lite.filters.some((f) => f.col === 'created_at' && f.op === 'lt'), 'открытые вне периода не спрошены');
+  assert.equal(reads.filter((c) => c.columns === OUTSIDE_SELECT).length, 0, 'открытые вне периода снова спрашиваются — строки, которой они нужны, нет');
   // вернуть «Всё время» — модульное состояние общее для тестов файла
   chipText(root, /^Всё время$/).click();
   await tick(60);
@@ -139,7 +140,7 @@ const showAllBtn = (root) => walk(periodLine(root)).find((n) => n.tagName === 'B
 const dmy = (ymd) => ymd.split('-').reverse().join('.');
 const ymdOf = (d) => [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
 
-test('C3 (3.23.0): «Период» сужает каждую колонку — открытые и «Не пришёл» тоже; строка над доской называет давние открытые', async () => {
+test('C3 (3.23.0): «Период» сужает каждую колонку — открытые и «Не пришёл» тоже; строки над доской нет, сужение видно по списку «Период»', async () => {
   const leads = [
     lead(1, 'recall', { full_name: 'Старый Перезвон', created_at: isoAgo(40) }),
     lead(2, 'recall', { full_name: 'Сегодняшний', created_at: isoAgo(0) }),
@@ -160,46 +161,37 @@ test('C3 (3.23.0): «Период» сужает каждую колонку —
     assert.equal(countOf(root, 'no_show'), '0', '«Не пришёл» не сужена периодом');
     assert.ok(!textOf(colOf(root, 'came')).includes('Давний Пришедший'), 'закрытая карточка вне периода видна');
     assert.ok(textOf(colOf(root, 'came')).includes('Пришёл сегодня'));
-    assert.equal(textOf(periodLine(root)), 'Период «Сегодня»: показаны заявки, поступившие сегодня. Открытых за другие дни: 3 — Показать все');
-    // «Список» — те же карточки и та же строка
+    // CRM_NO_PERIOD_LINE_V1 — строки над доской нет; сужение видно по самому списку.
+    assert.equal(periodLine(root), null, 'строка о периоде вернулась');
+    assert.ok(String(byAttr(root, 'data-period-select')[0].className).includes('is-filtered'), 'список «Период» не подсвечен при «Сегодня»');
+    // «Список» — те же карточки
     crmView(root, 'list'); await tick(80);
     assert.ok(!textOf(root).includes('Старый Перезвон') && textOf(root).includes('Сегодняшний'), '«Список» не по периоду');
-    assert.ok(periodLine(root), 'в «Списке» нет строки о периоде');
     crmView(root, 'kanban'); await tick(80);
     // ушли из раздела и вернулись — период сохранился
     const again = mk('div');
     await renderCrm(again, { onNavigate() {} }); await tick();
     assert.ok(!textOf(colOf(again, 'recall')).includes('Старый Перезвон'));
-    // «Показать все» — «Всё время»: строка ушла, давние карточки на месте
-    showAllBtn(again).click(); await tick(80);
-    assert.equal(periodLine(again), null);
-    assert.ok(String(chipText(again, /^Всё время$/).className).includes(' on'), '«Показать все» не включило «Всё время»');
+    // «Всё время»: давние карточки на месте, список «Период» больше не подсвечен
+    chipText(again, /^Всё время$/).click(); await tick(80);
+    assert.ok(!String(byAttr(again, 'data-period-select')[0].className).includes('is-filtered'), '«Всё время» подсвечено как фильтр');
     assert.ok(textOf(colOf(again, 'recall')).includes('Старый Перезвон'));
     assert.equal(countOf(again, 'no_show'), '1');
   } finally { chipText(root, /^Всё время$/).click(); await tick(80); window.easymed.state.user = null; }
 });
 
-test('CRM_PERIOD_ALL_COLUMNS_V1: строка называет выбранный период — «Эта неделя», «30 дней», свои даты', async () => {
+// CRM_NO_PERIOD_LINE_V1 / CRM_FILTER_LIT_V1 (2026-11-21) — строки, называвшей период,
+// нет; выбранный период виден самим списком: он светло-оранжевый, пока стоит не «Всё время».
+test('CRM_FILTER_LIT_V1: выбранный период — подсвеченный список, строки над доской нет', async () => {
   const root = await board([lead(1, 'recall', { created_at: isoAgo(400) }), lead(2, 'recall', { created_at: isoAgo(0) })]);
+  const lit = () => String(byAttr(root, 'data-period-select')[0].className).includes('is-filtered');
   try {
-    chipText(root, /^Эта неделя$/).click(); await tick(80);
-    assert.equal(textOf(periodLine(root)), 'Период «Эта неделя»: показаны заявки, поступившие на этой неделе. Открытых за другие дни: 1 — Показать все');
-    chipText(root, /^30 дней$/).click(); await tick(80);
-    assert.equal(textOf(periodLine(root)), 'Период «30 дней»: показаны заявки, поступившие за последние 30 дней. Открытых за другие дни: 1 — Показать все');
-    chipText(root, /^Свой период$/).click(); await tick(80);
-    const now = new Date();
-    const from = dmy(ymdOf(new Date(now.getFullYear(), now.getMonth(), 1)));
-    const to = dmy(ymdOf(now));
-    assert.equal(textOf(periodLine(root)), `Период «${from} – ${to}»: показаны заявки, поступившие с ${from} по ${to}. Открытых за другие дни: 1 — Показать все`);
-    const [fromInp, toInp] = walk(root).filter((n) => n.tagName === 'INPUT' && n.attrs.type === 'date');
-    // Ревью 3.23.0 (Q2) — строка только при N > 0: открытая карточка ПОСЛЕ «по» (дата в будущем).
-    S.leads.push(lead(3, 'recall', { created_at: isoAgo(-2) }));
-    fromInp.value = ''; fromInp.dispatchEvent({ type: 'change', target: fromInp }); await tick(80);
-    assert.equal(textOf(periodLine(root)), `Период «по ${to}»: показаны заявки, поступившие по ${to}. Открытых за другие дни: 1 — Показать все`);
-    const [f2, t2] = walk(root).filter((n) => n.tagName === 'INPUT' && n.attrs.type === 'date');
-    f2.value = ymdOf(new Date(now.getFullYear(), now.getMonth(), 1)); f2.dispatchEvent({ type: 'change', target: f2 }); await tick(80);
-    t2.value = ''; t2.dispatchEvent({ type: 'change', target: t2 }); await tick(80);
-    assert.equal(textOf(periodLine(root)), `Период «с ${from}»: показаны заявки, поступившие с ${from}. Открытых за другие дни: 1 — Показать все`);
+    assert.equal(lit(), false, '«Всё время» подсвечено как фильтр');
+    for (const label of [/^Эта неделя$/, /^30 дней$/, /^Свой период$/]) {
+      chipText(root, label).click(); await tick(80);
+      assert.equal(lit(), true, 'список «Период» не подсвечен: ' + label);
+      assert.equal(periodLine(root), null, 'строка о периоде вернулась');
+    }
   } finally { chipText(root, /^Всё время$/).click(); await tick(80); window.easymed.state.user = null; }
 });
 
@@ -225,7 +217,7 @@ test('CRM_PERIOD_ALL_COLUMNS_V1: «Свой период» — «по» вклю
     assert.ok(!shown.includes('Полночь следующего дня'), 'карточка следующего дня попала в период');
     assert.equal(countOf(root, 'recall'), '2');
     assert.equal(countOf(root, 'came'), '1');
-    assert.match(textOf(periodLine(root)), /Открытых за другие дни: 1 — /);
+    assert.equal(periodLine(root), null, 'строка о периоде вернулась');   // CRM_NO_PERIOD_LINE_V1
   } finally { chipText(root, /^Всё время$/).click(); await tick(80); window.easymed.state.user = null; }
 });
 
@@ -273,37 +265,27 @@ const sel = (root, attr) => byAttr(root, attr)[0];
 const pick = async (root, attr, v) => { const x = sel(root, attr); x.value = v; x.dispatchEvent({ type: 'change', target: x, currentTarget: x }); await tick(80); };
 const allOpt = (root, attr) => walk(sel(root, attr)).find((n) => n.tagName === 'OPTION' && n.attrs.value === (attr === 'data-op-select' ? 'all' : CRM_FILTER_ALL));
 
-test('CRM_PERIOD_ALL_COLUMNS_V1: «Открытых за другие дни» — с тем же оператором, источником и меткой; скрытая колонка не считается', async () => {
-  const leads = [
-    lead(1, 'recall', { source: 'call', assigned_to: 7, created_at: isoAgo(40) }),
-    lead(2, 'recall', { source: 'instagram', assigned_to: 24, created_at: isoAgo(40) }),
-    lead(3, 'in_process', { source: 'instagram', assigned_to: null, created_at: isoAgo(40) }),
-    lead(4, 'approved', { source: 'call', created_at: isoAgo(40) }),     // скрытая колонка
-    lead(5, 'came', { source: 'call', created_at: isoAgo(40) }),         // закрытая
-    lead(6, 'recall', { source: 'call', created_at: isoAgo(0) }),        // в периоде
-  ];
-  const root = await boardCfg(leads, [{ request_id: 3, tag_key: 'vip' }]);
-  const n = () => (/Открытых за другие дни: (\d+)/.exec(textOf(periodLine(root))) || [])[1];
+// CRM_NO_PERIOD_LINE_V1 (2026-11-21) — тест «Открытых за другие дни» снят вместе со
+// строкой: давние открытые больше не считаются. Здесь — подсветка остальных фильтров.
+test('CRM_FILTER_LIT_V1: источник, оператор и метка подсвечены, пока выбраны не «Все»', async () => {
+  const root = await boardCfg([lead(1, 'recall', { source: 'call' }), lead(3, 'in_process', { source: 'instagram' })], [{ request_id: 3, tag_key: 'vip' }]);
+  const lit = (attr) => String(sel(root, attr).className).includes('is-filtered');
   try {
-    chipText(root, /^Сегодня$/).click(); await tick(80);
-    assert.equal(n(), '3', 'скрытая, закрытая или сегодняшняя карточка посчитаны');
-    await pick(root, 'data-src-select', 'instagram');
-    assert.equal(n(), '2', 'число не учло источник');
-    // Метку выбирают при «Всё время» (за сегодня меток нет) — и возвращаются к «Сегодня».
-    chipText(root, /^Всё время$/).click(); await tick(80);
+    for (const attr of ['data-src-select', 'data-op-select', 'data-tag-select']) assert.equal(lit(attr), false, attr + ' подсвечен при «Все»');
+    // По одному и со сбросом: «Метки» показывают только метки видимых карточек,
+    // и под двумя другими фильтрами список меток пропал бы.
     await pick(root, 'data-tag-select', 'vip');
-    chipText(root, /^Сегодня$/).click(); await tick(80);
-    assert.equal(n(), '1', 'число не учло метку');
+    assert.equal(lit('data-tag-select'), true, 'метка не подсвечена');
     await pick(root, 'data-tag-select', CRM_FILTER_ALL);
+    await pick(root, 'data-src-select', 'instagram');
+    assert.equal(lit('data-src-select'), true, 'источник не подсвечен');
     await pick(root, 'data-src-select', CRM_FILTER_ALL);
-    assert.equal(n(), '3');
     await pick(root, 'data-op-select', 'me');
-    assert.equal(n(), '1', 'число не учло оператора');
-    const lite = CALLS.filter((c) => c.table === 'crm_requests' && c.columns === OUTSIDE_SELECT).pop();
-    assert.ok(lite.filters.some((f) => f.col === 'assigned_to' && f.op === 'eq' && String(f.val) === '7'), 'оператор не ушёл в запрос');
+    assert.equal(lit('data-op-select'), true, 'оператор не подсвечен');
   } finally {
-    await pick(root, 'data-op-select', 'all');
-    chipText(root, /^Всё время$/).click(); await tick(80);
+    for (const [attr, v] of [['data-tag-select', CRM_FILTER_ALL], ['data-src-select', CRM_FILTER_ALL], ['data-op-select', 'all']]) {
+      if (sel(root, attr)) await pick(root, attr, v);
+    }
     S.config = null; S.leadTags = []; window.easymed.state.user = null;
   }
 });
@@ -482,7 +464,7 @@ test('«Не пришёл» — живая колонка: без 300, числ�
     assert.ok(!textOf(colOf(root, 'no_show')).includes('Давний Не пришёл'), '«Период» не сузил «Не пришёл»');
     assert.equal(countOf(root, 'no_show'), '349');
     assert.ok(!textOf(colOf(root, 'stopped')).includes('Давний Остановлен'), 'закрытая карточка вне периода видна');
-    assert.match(textOf(periodLine(root)), /Открытых за другие дни: 1 — /, 'давняя «Не пришёл» не названа строкой над доской');
+    assert.equal(periodLine(root), null, 'строка о периоде вернулась');   // CRM_NO_PERIOD_LINE_V1
     // «Список» — те же карточки
     crmView(root, 'list'); await tick(80);
     assert.ok(!textOf(root).includes('Давний Не пришёл'), '«Список» не сузил «Не пришёл» периодом');

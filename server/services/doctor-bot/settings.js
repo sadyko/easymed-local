@@ -4,6 +4,7 @@
 // telegram/settings.js без того, что здесь не нужно (виды документов,
 // приветствие, push).
 import { encryptToken, decryptToken, loadOrCreateKey, looksLikeBotToken, tokenHint } from '../telegram/crypto.js';
+import { templateProblem, DEFAULT_TEMPLATE } from '../../../public/js/admin/doctor-bot-message.js';   // DOCTOR_BOT_TEMPLATE_V1
 
 export class SettingsError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -88,6 +89,7 @@ export function publicSettings(db) {
     last_check_error: row.last_check_error || '',
     last_check_at: row.last_check_at || null,
     updated_at: row.updated_at || null,
+    message_template: row.message_template || '',   // DOCTOR_BOT_TEMPLATE_V1 — '' = стандартный
   };
 }
 
@@ -120,6 +122,16 @@ export function saveSettings(db, args = {}, userId = null, { keyPath } = {}) {
     patch.last_check_status = ''; patch.last_check_error = ''; patch.last_check_at = null;
   }
   if (patch.enabled && !patch.bot_token_enc) throw new SettingsError('Сначала введите токен бота, потом включайте его.');
+  // DOCTOR_BOT_TEMPLATE_V1 — текст уведомления врачу. Пустой или совпавший со
+  // стандартным хранится как '' — правка стандартного текста в новой версии
+  // дойдёт и до клиник, которые свой текст не меняли. Сохраняется и без токена.
+  if (args.message_template !== undefined && args.message_template !== null) {
+    const t = String(args.message_template).replace(/\r\n?/g, '\n');
+    const problem = templateProblem(t);
+    if (problem) throw new SettingsError(problem);
+    db.prepare('UPDATE doctor_bot_settings SET message_template = ? WHERE id = 1')
+      .run(!t.trim() || t.trim() === DEFAULT_TEMPLATE ? '' : t);
+  }
   db.prepare(`UPDATE doctor_bot_settings SET
       enabled = @enabled, bot_token_enc = @bot_token_enc, bot_token_hint = @bot_token_hint,
       bot_username = @bot_username, bot_id = @bot_id,

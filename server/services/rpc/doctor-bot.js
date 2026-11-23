@@ -22,6 +22,8 @@ function rethrow(e) {
   throw e;
 }
 
+// DOCTOR_BOT_TEMPLATE_V1 — образец уведомления вкладка собирает сама из
+// message_template (publicSettings) общим модулем public/js/admin/doctor-bot-message.js.
 export function doctorBotSettingsGet(db, _args, user) {
   requireAdmin(user);
   return publicSettings(db);

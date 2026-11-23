@@ -29,6 +29,7 @@
 import { h, Icon } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';
 import { currentUser } from '../data.js';
+import { setRailTools } from '../rail-tools.js';   // HERO_TABS_TO_RAIL_V1
 
 const WEEKDAYS = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -74,12 +75,24 @@ function heroName() {
  *   tabs — элемент кнопок раздела (вкладки) — встаёт СЛЕВА под названием
  *          (SECTION_HERO_LEFT_V2; справа под часами они были SECTION_HERO_RIGHT_V1);
  *   actions — элемент действий раздела — встаёт справа под часами.
+ *   rail — HERO_TABS_TO_RAIL_V1: id пункта меню. Вкладки встают не в баннер, а
+ *          в левую колонку вместо этого пункта (admin/rail-tools.js).
  *   greeting / clock — CRM_HERO_V2: false снимает приветствие с тёплой строкой и
  *          дату с часами. CRM (владелец: «remove right side text and date,
  *          instead put buttons there») отдаёт правую сторону своим кнопкам.
  * Возвращает { el, stop, setSub(text), setTabs(el), setActions(el) }.
  */
-export function sectionHero({ section, title, sub = '', tabs = null, actions = null, greeting = true, clock = true } = {}) {
+export function sectionHero({ section, title, sub = '', tabs = null, actions = null, greeting = true, clock = true, rail = null, banner = true } = {}) {
+    // CLINIC_NO_BANNER_V1 (2026-11-21, владелец со снимком баннера «Процедур»:
+    // «remove such places in clinic block's each section to use spaces smartly»)
+    // — banner: false: баннер не рисуется вовсе (el = null, часы не тикают), а
+    // вкладки с `rail` по-прежнему уходят в колонку. Имя раздела — заголовок
+    // колонки и выбранный в ней пункт.
+    if (!banner) {
+        const toRailOnly = (node) => { if (rail) setRailTools(rail, node ? () => [[node]] : null); };
+        toRailOnly(tabs);
+        return { el: null, stop() {}, setSub() {}, setTabs: toRailOnly, setActions() {} };
+    }
     const now = new Date();
     const name = heroName();
     const subEl = h('div', { class: 'phub-hero-sub' }, sub ? tr(sub) : '');
@@ -88,7 +101,14 @@ export function sectionHero({ section, title, sub = '', tabs = null, actions = n
     const time = h('b', { class: 'num' }, heroTimeLabel(now));
     const tabsSlot = h('div', { class: 'shero-tabs' });
     const actionsSlot = h('div', { class: 'shero-actions' });
-    if (tabs) tabsSlot.appendChild(tabs); else tabsSlot.hidden = true;
+    // HERO_TABS_TO_RAIL_V1 (2026-11-21, владелец: «make all buttons on blue to
+    // the left navigation bar, in each in cabinet of doctor, lab, procedures,
+    // and documents») — с `rail` вкладки раздела уходят в колонку: баннер их не
+    // держит, слот вкладок пуст и скрыт.
+    // Нет вкладок (нет права на режимы) — регистрация снимается, и колонка рисует обычный пункт.
+    const toRail = (node) => setRailTools(rail, node ? () => [[node]] : null);
+    if (rail) { toRail(tabs); tabsSlot.hidden = true; }   // без вкладок — снять прежнюю регистрацию
+    else if (tabs) tabsSlot.appendChild(tabs); else tabsSlot.hidden = true;
     if (actions) actionsSlot.appendChild(actions); else actionsSlot.hidden = true;
     const message = SECTION_MESSAGES[section] || '';
     const el = h('div', { class: 'phub-hero shero', 'data-phub-hero': '', 'data-section-hero': section || '' },
@@ -136,7 +156,7 @@ export function sectionHero({ section, title, sub = '', tabs = null, actions = n
     return {
         el, stop,
         setSub: (text) => { subEl.textContent = text ? tr(text) : ''; },
-        setTabs: (node) => fill(tabsSlot, node),
+        setTabs: (node) => (rail ? toRail(node) : fill(tabsSlot, node)),
         setActions: (node) => fill(actionsSlot, node),
     };
 }

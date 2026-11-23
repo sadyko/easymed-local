@@ -66,7 +66,7 @@
 // обязан показать ей ровно эти пять строк, а не пятнадцать полей.
 
 import { supabase } from '../../supabase.js';
-import { h, Icon, Tag, clear, toast, field, PageHead, initials } from '../ui.js';
+import { h, Icon, Tag, clear, toast, field, initials } from '../ui.js';
 import { sectionHero } from './section-hero.js';   // SECTION_HERO_V1 — баннер клинического раздела
 // SYSTEM_LANGUAGE_V1 — тот же оттенок пациента, что в стационаре, в колонке дня
 // врача и на карточке приёма: один человек — один цвет во всей программе.
@@ -614,10 +614,9 @@ export async function renderMarNurse(root, ctx = {}) {
             h('button', { class: 'btn btn-sm', type: 'button', onclick: () => load() },
                 Icon('Refresh', { size: 13 }), ' ', tr('Обновить'))) });
     headBox.appendChild(hero.el);
-    headBox.appendChild(PageHead({
-        title: 'Задачи медсестры',
-        subtitle: 'Кому и что вводить сейчас: пациент, доза, время — и что делать, если доза не введена',
-    }));
+    // INPATIENT_NO_SUBTITLE_V1 (2026-11-21, владелец: «remove such text and use space smartly») —
+    // поясняющей строки под баннером нет: баннер называет экран, вкладки
+    // начинаются сразу под ним.
     // MAR_OUTPATIENTS_V1 — две вкладки над сменой: стационар (лист назначений)
     // и амбулаторные (сегодняшние визиты, выдача с рук). Системные .tabs.
     const tabBtn = (mode, label) => h('button', {

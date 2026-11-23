@@ -17,6 +17,10 @@ import { startRepBot } from './services/rep-bot/index.js';   // REP_BOT_V1 — �
 import { schedulePolling } from './services/telephony/poller.js';   // TELEPHONY_V1
 import { schedulePolling as scheduleMetaPolling } from './services/meta/poller.js';   // META_LEADS_V1 — опрос заявок из рекламы Meta
 import { scheduleInboxPolling } from './services/meta/inbox-poller.js';   // META_INBOX_V1 — переписка и комментарии Facebook / Instagram
+import { recoverJobsAtBoot } from './services/ai/queue.js';   // AI_CHAT_V1 — ИИ-помощник в чатах
+import { flagChat } from './services/ai/guards.js';   // AI_CHAT_V1
+import { startAiWorker } from './services/ai/worker.js';   // AI_CHAT_V1
+import { startCallWorker } from './services/ai/calls.js';   // AI_CALLS_V1 — ИИ разбирает записи звонков
 import { startLisListeners } from './lis/index.js';   // LIS_INGEST_V1
 import { createApp } from './app.js';
 import { setDataDir, setAppVersion } from './services/control/config.js';   // SUPERVISED_INSTALL_V1 / UPDATE_DELIVERY_V1
@@ -341,6 +345,25 @@ if (isMain) {
     // aborting the process a few lines below before a single request could
     // ever be served).
     recordEvent(db, 'boot');
+
+    // AI_CHAT_V1 — ИИ-помощник в чатах. Здесь, а не рядом с опросчиками: этот
+    // колбэк срабатывает только когда порт занят НАМИ. Второй случайно
+    // запущенный экземпляр падает на EADDRINUSE раньше и не трогает задачи
+    // живого сервера — иначе он счёл бы его 'sending' зависшими и передал
+    // чаты оператору, а 'working' вернул бы в очередь под вторым исполнителем.
+    // После перезапуска задача в 'sending' НЕ повторяется (ответ мог уже уйти —
+    // пациент получил бы его дважды): чат отмечается «нужен оператор».
+    // 'working' возвращается в очередь; слишком старые ждущие задачи
+    // исполнитель сам снимает на первом шаге (expireStaleJobs): поздний ответ
+    // хуже тишины. Выключенный ИИ стоит одного чтения настроек в 5 секунд,
+    // таймер unref. Любой сбой — предупреждение в журнал, не остановка клиники.
+    try {
+      for (const f of recoverJobsAtBoot(db).failed) flagChat(db, f.channel, f.chat_key, 'unknown_send');
+    } catch (e) { console.warn('[ai] boot recovery:', e && e.message); }
+    try { startAiWorker(db); } catch (e) { console.warn('[ai] worker:', e && e.message); }
+    // AI_CALLS_V1 — разбор записей звонков: выключенная функция стоит одного чтения
+    // настроек в 20 секунд; таймер unref, сбой — предупреждение, не остановка.
+    try { startCallWorker(db); } catch (e) { console.warn('[ai-calls] worker:', e && e.message); }
     console.log('');
     console.log('Easy-Med Local is running.');
     console.log(`  On this PC:      http://localhost:${PORT}`);

@@ -22,6 +22,7 @@ import { uploadFile } from '../storage.js';
 import { h, Icon, clear, toast, PageHead, initials, avColor } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { canEdit, settingsTileAllows } from '../permissions.js';
+import { aiStatusChip, loadAiFlags } from '../ai-chat-marks.js';   // AI_CHAT_V1 — чип «Отвечает ИИ» и «Нужен оператор»
 
 // TELEGRAM_CHAT_FOLDERS_V1 — вкладки над списком, как в Telegram.
 // `tab` — 'all' | 'unread' | номер папки. «Все» и «Непрочитанные» вычисляются
@@ -37,6 +38,9 @@ const state = {
   // Живут рядом с черновиком и по той же причине: опрос ленты пересобирает
   // панель, и выбранное вложение иначе исчезало бы вместе с полем ввода.
   attachments: {},
+  // AI_CHAT_V1 — чаты, которые ИИ передал людям («Нужен оператор»): 'telegram:<chat_id>'
+  // строкой. Пустое множество, пока ai_flags не ответил или отказал.
+  aiFlags: new Set(),
 };
 let refs = {};
 let poll = null;
@@ -100,7 +104,9 @@ export async function renderTelegramChat(container) {
         subtitle: canReply()
             ? 'Сообщения пациентов из Telegram-бота. Ответ уходит пациенту от имени клиники.'
             : 'Сообщения пациентов из Telegram-бота. У вас доступ только на чтение.',
-        right: canBroadcast() ? broadcastButton() : null,   // TELEGRAM_BROADCAST_V2
+        // AI_CHAT_V1 — чип «Отвечает ИИ» / «Отвечают операторы» перед кнопкой
+        // рассылки: оператор должен знать, ответит ли пациенту кто-то, кроме него.
+        right: [aiStatusChip(), canBroadcast() ? broadcastButton() : null].filter(Boolean),   // TELEGRAM_BROADCAST_V2
     }));
 
     // Папки — вертикальной полосой слева, как в Telegram Desktop: горизонтальная
@@ -167,6 +173,9 @@ function stopPolling() { if (poll) { clearInterval(poll); poll = null; } }
 
 async function loadChats() {
     let res;
+    // AI_CHAT_V1 — отметки ИИ параллельно со списком: список их не ждёт дольше,
+    // чем ждал бы сам себя.
+    const flagsP = loadAiFlags('telegram');
     try { res = await rpc('telegram_chats_list'); }
     catch (e) {
         clear(refs.list);
@@ -176,6 +185,7 @@ async function loadChats() {
     }
     state.chats = res.chats || [];
     state.folders = res.folders || [];
+    state.aiFlags = await flagsP;   // AI_CHAT_V1
     paintTabs();
     paintList();
 }
@@ -443,6 +453,10 @@ function paintList() {
                         fontSize: '12.5px', fontWeight: '600', padding: '1px 6px', minWidth: '18px',
                         textAlign: 'center', flex: '0 0 auto',
                     } }, String(c.unread)) : null),
+
+                // AI_CHAT_V1 — ИИ не смог ответить сам и позвал людей.
+                state.aiFlags.has('telegram:' + String(c.chat_id)) ? h('div', { style: { marginTop: '3px' } },
+                    h('span', { class: 'ai-flag', 'data-ai-flag': String(c.chat_id) }, tr('Нужен оператор'))) : null,
 
                 c.blocked ? h('div', { style: {
                     fontSize: '12.5px', color: 'var(--crit-500,#b03a3a)', marginTop: '2px',
@@ -834,6 +848,9 @@ function bubble(m, grouped = false) {
                 fontSize: '12.5px', marginTop: '3px', textAlign: 'right',
                 color: out ? 'rgba(255,255,255,.75)' : 'var(--ink-400)',
             } },
+                // AI_CHAT_V1 — ответ ИИ-помощника помечен «ИИ»: оператор должен
+                // видеть, что это сказал не сотрудник (подписи у ИИ нет).
+                (out && m.by_ai) ? h('span', { class: 'ai-msg-note is-in-bubble', 'data-ai-msg': '' }, tr('ИИ'), ' · ') : null,
                 (KIND_NOTE[m.kind] ? KIND_NOTE[m.kind] + ' · ' : '') + timeShort(m.created_at))));
 }
 

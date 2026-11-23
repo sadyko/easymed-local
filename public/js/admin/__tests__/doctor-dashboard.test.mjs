@@ -102,7 +102,11 @@ globalThis.history = {
 
 const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
 const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
-const allButtons = (root) => walk(root).filter((n) => n.tagName === 'BUTTON');
+// HERO_TABS_TO_RAIL_V1 — вкладки раздела стоят в левой колонке оболочки: стенд
+// достаёт их из того же реестра (admin/rail-tools.js), что и колонка.
+const { railToolsFor } = await import('../rail-tools.js');
+const railNodes = (owner) => { const b = railToolsFor(owner); return b ? b().flat().filter(Boolean).flatMap((n) => walk(n)) : []; };
+const allButtons = (root) => [...railNodes('consultation'), ...walk(root)].filter((n) => n.tagName === 'BUTTON');   // вкладки — первыми, как стояли в баннере над экраном
 const buttonByText = (root, re) => allButtons(root).find((b) => re.test(textOf(b)));
 const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
 const byClass = (root, c) => walk(root).filter((n) => hasClass(n, c));

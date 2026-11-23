@@ -18,23 +18,23 @@ function injectStyles() {
   font-size:13.5px;color:#0c2a26;display:flex;flex-direction:column;gap:12px;}
 #setup-checklist .scl-head{display:flex;align-items:center;gap:10px;}
 #setup-checklist .scl-title{font-weight:700;font-size:13.5px;color:#0b3a33;flex:1;}
-#setup-checklist .scl-prog{font-size:12.5px;font-weight:600;color:#0d8a72;}
+#setup-checklist .scl-prog{font-size:12.5px;font-weight:600;color:var(--primary-600);}
 #setup-checklist .scl-dismiss{border:none;background:transparent;color:#5d7d75;font-size:12.5px;
   font-family:inherit;cursor:pointer;padding:4px 6px;border-radius:6px;}
-#setup-checklist .scl-dismiss:hover{background:#e3f1ec;}
+#setup-checklist .scl-dismiss:hover{background:var(--primary-50);}
 #setup-checklist .scl-steps{display:flex;flex-direction:column;gap:8px;}
 #setup-checklist .scl-step{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:10px;
   background:#fff;border:1px solid #dceee8;}
 #setup-checklist .scl-step.done{background:#eef7f0;border-color:#bfe3cd;}
 #setup-checklist .scl-mark{width:22px;height:22px;border-radius:999px;flex:0 0 22px;display:grid;
-  place-items:center;font-size:12.5px;font-weight:700;background:#e3f1ec;color:#0d8a72;}
-#setup-checklist .scl-step.done .scl-mark{background:#0d8a72;color:#fff;}
+  place-items:center;font-size:12.5px;font-weight:700;background:var(--primary-50);color:var(--primary-600);}
+#setup-checklist .scl-step.done .scl-mark{background:var(--primary-600);color:#fff;}
 #setup-checklist .scl-body{flex:1;min-width:0;}
 #setup-checklist .scl-name{font-weight:600;color:#0c2a26;}
 #setup-checklist .scl-sub{font-size:12.5px;color:#5d7d75;margin-top:1px;}
-#setup-checklist .scl-cta{flex:0 0 auto;border:1px solid #0d8a72;background:#fff;color:#0a6e61;
+#setup-checklist .scl-cta{flex:0 0 auto;border:1px solid var(--primary-600);background:#fff;color:var(--primary-700);
   border-radius:8px;padding:6px 13px;font-size:12.5px;font-weight:600;font-family:inherit;cursor:pointer;}
-#setup-checklist .scl-cta:hover{background:#0d8a72;color:#fff;}
+#setup-checklist .scl-cta:hover{background:var(--primary-600);color:#fff;}
 #setup-checklist .scl-step.done .scl-cta{visibility:hidden;}`;
     document.head.appendChild(s);
 }

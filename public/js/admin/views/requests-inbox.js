@@ -162,7 +162,7 @@ export async function renderRequestsInbox(container) {
     // ── Teal hero (matches the dashboard) ──────────────────────────────────────
     function hero() {
         return h('div', { style: {
-            background: 'linear-gradient(120deg, #1a2e40 0%, #2a4a65 50%, #355c7d 100%)',
+            background: 'var(--brand-gradient)',   // BRAND_GRADIENT_V1
             borderRadius: '14px', padding: '20px 24px', color: 'white', position: 'relative', overflow: 'hidden',
         } },
             h('div', { style: { position: 'absolute', right: '-40px', top: '-40px', width: '220px', height: '220px', background: 'radial-gradient(circle, rgba(255,255,255,0.10) 0%, transparent 65%)' } }),

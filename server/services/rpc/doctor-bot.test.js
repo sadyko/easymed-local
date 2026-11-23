@@ -190,3 +190,20 @@ test('M2: подтвердить нельзя, если врача выключ�
   assert.throws(() => doctorBotLinkConfirm(db, { id: l }, admin), (e) => e.status === 409);
   assert.equal(db.prepare('SELECT status FROM doctor_bot_links WHERE id = ?').get(l).status, 'pending');
 });
+
+// DOCTOR_BOT_TEMPLATE_V1 — свой текст уведомления: сохраняется и без токена, без
+// {пациент} — отказ, стандартный и пустой хранятся как '', менять — только администратору.
+test('DOCTOR_BOT_TEMPLATE_V1: message_template сохраняется, проверяется и сбрасывается', async () => {
+  const { DEFAULT_TEMPLATE } = await import('../../../public/js/admin/doctor-bot-message.js');
+  const db = fresh();
+  assert.equal(doctorBotSettingsGet(db, {}, admin).message_template, '', 'по умолчанию — стандартный');
+  const out = await doctorBotSettingsSave(db, { message_template: 'Ваш пациент {пациент}\r\n{услуги}' }, admin);
+  assert.equal(out.message_template, 'Ваш пациент {пациент}\n{услуги}', 'сохранён, концы строк — \\n');
+  await assert.rejects(() => doctorBotSettingsSave(db, { message_template: 'без метки' }, admin), (e) => e.status === 400 && /\{пациент\}/.test(e.message));
+  await assert.rejects(() => doctorBotSettingsSave(db, { message_template: '{пациент}' + 'x'.repeat(2001) }, admin), (e) => e.status === 400);
+  assert.equal(doctorBotSettingsGet(db, {}, admin).message_template, 'Ваш пациент {пациент}\n{услуги}', 'отказ ничего не меняет');
+  assert.equal((await doctorBotSettingsSave(db, { message_template: DEFAULT_TEMPLATE }, admin)).message_template, '');
+  await doctorBotSettingsSave(db, { message_template: 'X {пациент}' }, admin);
+  assert.equal((await doctorBotSettingsSave(db, { message_template: '  ' }, admin)).message_template, '');
+  await assert.rejects(() => doctorBotSettingsSave(db, { message_template: 'X {пациент}' }, { id: 9, role: 'registrar' }), (e) => e.status === 403);
+});

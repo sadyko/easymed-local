@@ -23,7 +23,7 @@ import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary, reportChoices, payPeriodClose, payPeriodReopen, payPeriodStatus } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
-import { referralsRepresentatives, referralsAssignRepresentative, referralsRepresentativeOptions, referralsInternal, referralsActivity, referralsSourceDetail, referralsDoctorDetail } from './referrals.js';   // REFERRALS_CRM_V1 — «Реферирование» под CRM
+import { referralsRepresentatives, referralsAssignRepresentative, referralsRepresentativeOptions, referralsInternal, referralsActivity, referralsSourceDetail, referralsDoctorDetail, referralsScope } from './referrals.js';   // REFERRALS_CRM_V1 — «Реферирование» под CRM
 import { doctorBotSettingsGet, doctorBotSettingsSave, doctorBotTokenClear, doctorBotTestConnection, doctorBotStats, doctorBotLinksList, doctorBotLinkRevoke,
          doctorBotLinkConfirm, doctorBotLinkReject } from './doctor-bot.js';   // REFERRALS_CRM_V1 — бот для врачей-источников; FIX_318_V1 (M2) — подтверждение подключения
 import { dailyReportSettingsGet, dailyReportSettingsSave, dailyReportTokenClear, dailyReportFindChats, dailyReportPreview,
@@ -82,7 +82,7 @@ import { patientDuplicatesScan, patientDupDismiss } from './patient-duplicates.j
 import { documentsFeed } from './documents.js';   // DOCS_FEED_V1
 import { getClinicBySlug } from './clinic.js';
 import { callcenterReport } from './callcenter.js';
-import { operatorKpi } from './operator-kpi.js';   // OPERATOR_KPI_V1 — «Мой KPI» оператора
+import { operatorKpi, salesTeamReport } from './operator-kpi.js';   // OPERATOR_KPI_V1 — «Мой KPI» оператора
 import { billAccommodation, unbillAccommodation, accommodationState } from './accommodation.js';
 import { setAdmissionDate } from './admission-date.js';   // ADMISSION_DATE_EDIT_V1   // ACCOMMODATION_AS_SERVICE_V1   // CALLCENTER_REPORT_V1
 import { deleteService, serviceDeleteCheck } from './catalog.js';   // SERVICE_DELETE_V1
@@ -98,6 +98,7 @@ import { roomsSetupDelete } from './rooms-delete.js';   // ROOMS_DELETE_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramBroadcastOptions, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
+import { aiSettingsGet, aiSettingsSave, aiFlags, aiKeySave, aiKeyClear, aiCallGet, aiCallScores } from './ai.js';   // AI_CHAT_V1
 import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions,
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
          telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording,
@@ -174,6 +175,7 @@ export const RPC = {
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
   callcenter_report:        (db, args, user) => callcenterReport(db, args, user),
   crm_operator_kpi:         (db, args, user) => operatorKpi(db, args, user),   // OPERATOR_KPI_V1
+  crm_sales_team_report:    (db, args, user) => salesTeamReport(db, args, user),   // CRM_SALES_TEAM_V1 — отдел продаж по менеджерам
   // CUSTDEV_V1 — обзвон пациентов после визита
   custdev_list:             (db, args, user) => custdevList(db, args, user),
   custdev_sync:             (db, args, user) => custdevSync(db, args, user),
@@ -309,6 +311,7 @@ export const RPC = {
   referrals_activity:               (db, args, user) => referralsActivity(db, args, user),
   referrals_source_detail:          (db, args, user) => referralsSourceDetail(db, args, user),
   referrals_doctor_detail:          (db, args, user) => referralsDoctorDetail(db, args, user),
+  referrals_scope:                  (db, args, user) => referralsScope(db, args, user),   // REP_OWN_DOCTORS_V1
   // REFERRALS_CRM_V1 — Telegram-бот для врачей-источников (вкладка «Реферирование → Telegram-бот»), администратору.
   doctor_bot_settings_get:          (db, args, user) => doctorBotSettingsGet(db, args, user),
   doctor_bot_settings_save:         (db, args, user) => doctorBotSettingsSave(db, args, user),
@@ -745,6 +748,14 @@ export const RPC = {
   // которые НЕ admin-only: раздел выдаётся ролям, и его уровень (viewer /
   // editor) решает, читать переписку или ещё и отвечать в неё.
   telegram_chats_list:            (db, args, user) => telegramChatsList(db, args, user),
+  // AI_CHAT_V1 — переключатель ИИ-помощника и чаты «Нужен оператор».
+  ai_settings_get:                (db, args, user) => aiSettingsGet(db, args, user),
+  ai_settings_save:               (db, args, user) => aiSettingsSave(db, args, user),
+  ai_key_save:  (db, args, user) => aiKeySave(db, args, user),    // AI_OWN_KEY_V1 — свой ключ OpenAI (администратор)
+  ai_key_clear: (db, args, user) => aiKeyClear(db, args, user),   // AI_OWN_KEY_V1
+  ai_call_get:    (db, args, user) => aiCallGet(db, args, user),      // AI_CALLS_V1 — разбор звонка (расшифровка)
+  ai_call_scores: (db, args, user) => aiCallScores(db, args, user),   // AI_CALLS_V1 — оценки операторов
+  ai_flags:                       (db, args, user) => aiFlags(db, args, user),
   telegram_chat_messages:         (db, args, user) => telegramChatMessages(db, args, user),
   telegram_chat_unread:           (db, args, user) => telegramChatUnread(db, args, user),
   telegram_chat_link:       (db, args, user) => telegramChatLink(db, args, user),   // TELEGRAM_ORPHAN_CHAT_V1

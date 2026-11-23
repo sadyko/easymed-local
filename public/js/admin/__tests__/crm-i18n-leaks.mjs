@@ -6,7 +6,7 @@
 // осталось кириллицей. Раньше утекали подписи источников («Звонок · N») и
 // ступеней в «Отчёте» («Пришёл · N»): к ним приклеивали число ДО перевода.
 import assert from 'node:assert/strict';
-import { S, mk, walk, byAttr, tick, TOASTS, crmView } from './crm-harness.mjs';
+import { S, mk, walk, byAttr, tick, TOASTS, crmView, railNodes, crmPanel } from './crm-harness.mjs';
 
 const CYR = /[А-Яа-яЁёҚқҒғЎўҲҳ]/;
 function leaks(root) {
@@ -50,22 +50,24 @@ export async function crmLeaks(lang) {
   // CRM_FILTERS_DROPDOWN_V1 — «Оператор» — выпадающий список, не чипы.
   const setOp = async (k) => { const s = byAttr(root, 'data-op-select')[0]; s.value = k; s.dispatchEvent({ type: 'change', target: s, currentTarget: s }); await tick(60); };
   found.kanban = leaks(root);
+  // RAIL_TOOLS_V1 — кнопки раздела живут в левой колонке: проверяем и их.
+  found.rail = [...new Set(railNodes().flatMap((n) => leaks({ children: [n] })))];
   await setOp('me');
   found.kanbanMine = leaks(root);
   await setOp('all');
-  // CRM_PERIOD_ALL_COLUMNS_V1 (3.23.0) — строка о периоде над доской: каждый период
-  // и свои даты; «Показать все» возвращает «Всё время».
-  for (const key of ['today', 'week', '30', 'custom']) {
-    // CRM_PERIOD_DROPDOWN_V1 — период выбирается в списке.
+  // CRM_PERIOD_ALL_COLUMNS_V1 (3.23.0) — каждый период и свои даты.
+  // CRM_NO_PERIOD_LINE_V1 (2026-11-21) — строки о периоде над доской больше нет;
+  // проверяем, что и при выбранном периоде на экране нет кириллицы.
+  const pickPeriod = async (key) => {
     const ps = byAttr(root, 'data-period-select')[0];
     ps.value = key; ps.dispatchEvent({ type: 'change', target: ps, currentTarget: ps });
     await tick(60);
-    assert.equal(byAttr(root, 'data-crm-period-line').length, 1, 'нет строки о периоде: ' + key);
+  };
+  for (const key of ['today', 'week', '30', 'custom']) {
+    await pickPeriod(key);
     found['period_' + key] = leaks(root);
   }
-  byAttr(root, 'data-crm-period-all')[0].click();
-  await tick(60);
-  assert.equal(byAttr(root, 'data-crm-period-line').length, 0, '«Показать все» не вернуло «Всё время»');
+  await pickPeriod('all');
   const inp = walk(root).find((n) => n.tagName === 'INPUT' && String(n.className).includes('crm-search'));
   inp.value = '909092638'; inp.dispatchEvent({ type: 'input', target: inp, currentTarget: inp });
   await tick(560); await tick(40);
@@ -82,11 +84,11 @@ export async function crmLeaks(lang) {
   found.tasksAll = leaks(tv);
   crmView(root, 'kanban'); await tick(60);
   await setOp('none');
-  const reportBtn = walk(root).find((n) => n.tagName === 'BUTTON' && walk(n).some((c) => c._t && /Report|Hisobot|Отчёт/.test(c._t)));
+  const reportBtn = [...walk(root), ...railNodes()].find((n) => n.tagName === 'BUTTON' && walk(n).some((c) => c._t && /Report|Hisobot|Отчёт/.test(c._t)));
   reportBtn.click(); await tick(80);
-  const modal = document.body.children.find((n) => String(n.className).includes('modal'));
+  const modal = crmPanel(root);   // CRM_PANELS_INLINE_V1 — отчёт видом раздела
   found.report = leaks(modal);
-  modal.remove();
+  crmView(root, 'kanban'); await tick(80);
   await setOp('all');
   const set = mk('div');
   await renderCrmSettings(set); await tick();

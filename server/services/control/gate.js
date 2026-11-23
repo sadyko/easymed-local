@@ -18,6 +18,8 @@ import { controlState } from './state.js';
 // immediately, fixed in one line. The alternative default would silently leave a
 // hole open for as long as nobody looked.
 const READ_ONLY_RPCS = new Set([
+  // AI_CHAT_V1 — состояние ИИ-помощника и чаты «Нужен оператор» — чистое чтение; ai_settings_save остаётся записью.
+  'ai_settings_get', 'ai_flags', 'ai_call_get', 'ai_call_scores',   // AI_CALLS_V1 — чтение
   'dashboard_summary', 'reports_overview', 'run_report', 'owner_report',
   // V3120_FIX — графики сводки и статистика операторов телефонии — чистое
   // чтение: без них клиника с просроченной лицензией видела пустую сводку.
@@ -80,7 +82,7 @@ const READ_ONLY_RPCS = new Set([
   // DOCTOR_LINES_SPECIALTY_V1 — варианты фильтра «Врач» в «Отчётах»; чтение.
   'report_choices',
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',
-  'callcenter_report', 'crm_operator_kpi', 'queue_board', 'documents_feed', 'accommodation_state',
+  'callcenter_report', 'crm_operator_kpi', 'crm_sales_team_report', 'queue_board', 'documents_feed', 'accommodation_state',
   'deposit_balance', 'list_deposits', 'service_delete_check', 'get_clinic_by_slug',
   'list_card_sales',   // CARD_SALE_V1 — список карт кассы; чтение
   // PATIENT_AGGREGATES_V1 — числа рядом с фамилиями в картотеке. Чистое чтение,
@@ -264,7 +266,7 @@ const READ_ONLY_RPCS = new Set([
   'nav_visibility_get',   // NAV_VISIBILITY_V1 — список скрытых разделов меню
   'telegram_broadcast_options',   // TG_BROADCAST_FILTERS_V1 — справочники фильтров рассылки
   'referrals_representatives', 'referrals_internal', 'referrals_activity',   // REFERRALS_CRM_V1 — «Реферирование»
-  'referrals_source_detail', 'referrals_doctor_detail',
+  'referrals_source_detail', 'referrals_doctor_detail', 'referrals_scope',   // REP_OWN_DOCTORS_V1
   'doctor_bot_settings_get', 'doctor_bot_stats', 'doctor_bot_links_list',   // REFERRALS_CRM_V1 — бот для врачей-источников
   'rep_bot_settings_get', 'rep_bot_stats', 'rep_bot_links_list', 'rep_bot_additions_list',   // REP_BOT_V1 — бот медпредставителей: только SELECT
   'rep_bot_claims_list',   // REP_BOT_CLAIMS_V1 — открытые заявки на закрепление: только SELECT (rep_bot_claim_decide — запись)
