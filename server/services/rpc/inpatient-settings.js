@@ -193,7 +193,29 @@ export function inpatientSettingsGet(db, _args, user) {
   const settings = {};
   for (const k of SWITCH_KEYS) settings[k] = s[k];
   settings.title_required_fields = s.title_required_fields.slice();
-  return { settings, docs: docsOf(db), log, updated_at: s.updated_at, can_edit: hasAnyRole(user, SETTINGS_WRITE_ROLES) };
+  return { settings, docs: docsOf(db), log, doc_titles: logDocTitles(db, log), updated_at: s.updated_at, can_edit: hasAnyRole(user, SETTINGS_WRITE_ROLES) };
+}
+
+/**
+ * INPATIENT_REQUIRED_V1 (ревью) — имена документов, названных в журнале: { род: своё имя }.
+ * Набор (docsOf) отдаёт только действующие, и строка журнала про свой документ клиники,
+ * убранный из набора, называла его родом («own_7»). Читаются ВСЕ роды справочника, и
+ * убранные (тот же приём, что loadCaseDocTitles в inpatient-reviews.js — импортировать его
+ * отсюда нельзя: кольцо). Удалённого насовсем рода в базе нет — нет и имени (экран пишет
+ * «Свой документ»); встроенный род без своего имени — '' (экран берёт словарное).
+ */
+function logDocTitles(db, log) {
+  const kinds = [...new Set((log || []).map((l) => /^doc:(.+):(required|sections)$/.exec(String(l.field || ''))).filter(Boolean).map((m) => m[1]))];
+  const out = {};
+  if (!kinds.length) return out;
+  try {
+    const one = db.prepare('SELECT title FROM case_doc_types WHERE kind = ?');
+    for (const k of kinds) {
+      const r = one.get(k);
+      if (r) out[k] = r.title || '';
+    }
+  } catch (e) { /* база старше миграции 115 — имён нет */ }
+  return out;
 }
 
 const ALLOWED_KEYS = new Set([...SWITCH_KEYS, 'title_required_fields', 'docs']);

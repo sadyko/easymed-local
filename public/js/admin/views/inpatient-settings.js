@@ -29,6 +29,10 @@
 // второй раз (SETTINGS_WRITE_ROLES). can_edit: false всё же возможен (роль клиники
 // без кода роли проходит ворота «неизвестная роль не прячет») — тогда только
 // просмотр: всё погашено, кнопки нет.
+// INPATIENT_REQUIRED_V1 (ревью) — два входа: плитка «Стационар» в хабе настроек (у кого
+// есть «Настройки») и кнопка «Настройки стационара» на доске стационара (admissions.js) —
+// роль «Главный врач» по умолчанию «Настроек» не имеет, а страница открывается ему и без них.
+// «Назад» у того, кому «Настройки» закрыты, ведёт на доску (admin.js BACK_ALT_OF).
 //
 // Классы страницы — общие (.card, .field.checkbox, .view-only-note); своё — в
 // style: общий файл стилей правят параллельно, а странице хватает раскладки.
@@ -107,11 +111,18 @@ export function settingsDiff(before, after) {
     return out;
 }
 
-/** Имя документа для журнала: из набора, иначе — словарное имя встроенного рода, иначе — род как есть. */
-function docName(kind, docs) {
+/**
+ * Имя документа для журнала: из набора; иначе — своё имя из ответа сервера (doc_titles —
+ * и убранных из набора); иначе — словарное имя встроенного рода; иначе — «Свой документ».
+ * INPATIENT_REQUIRED_V1 (ревью) — свой документ клиники, убранный или удалённый, назывался
+ * родом («own_7»): набор отдаёт только действующие документы.
+ */
+function docName(kind, docs, titles) {
     const d = (Array.isArray(docs) ? docs : []).find((x) => x && x.kind === kind);
     if (d) return caseDocTitle(d.kind, d.title);
-    return CASE_DOC_TITLE[kind] ? caseDocTitle(kind, '') : String(kind);
+    const own = titles && typeof titles === 'object' ? String(titles[kind] == null ? '' : titles[kind]).trim() : '';
+    if (own) return own;
+    return CASE_DOC_TITLE[kind] ? caseDocTitle(kind, '') : tr('Свой документ');
 }
 
 function parseList(raw) {
@@ -119,8 +130,17 @@ function parseList(raw) {
     catch (e) { return null; }
 }
 
-/** Одна строка журнала «Кто менял» на языке экрана. */
-export function logLineText(entry, docs) {
+/**
+ * Одна строка журнала «Кто менял» на языке экрана.
+ * INPATIENT_REQUIRED_V1 (ревью) — читаемость:
+ *   • смена значения — в скобках («… (включён → выключен)»): в подписях переключателей
+ *     уже есть « — », и «… приёмного врача — включён → выключен» читалось тремя тире;
+ *   • обязательность документа (и титульного листа) — «обязательный → по желанию», а не
+ *     «включён → выключен»: так она названа на странице;
+ *   • пустой список полей или разделов — «не выбраны», а не «—»;
+ *   • свой документ клиники, которого в наборе уже нет, — по имени (titles = doc_titles).
+ */
+export function logLineText(entry, docs, titles) {
     const e = entry || {};
     const f = String(e.field || '');
     const m = /^doc:(.+):(required|sections)$/.exec(f);
@@ -129,18 +149,19 @@ export function logLineText(entry, docs) {
     // Состояние переключателя — «включён / выключен»: у слова «нет» в словаре английское
     // «none» (пустое значение), и строка журнала читалась бы «yes → none».
     const yesNo = (v) => (String(v) === '1' ? tr('включён') : String(v) === '0' ? tr('выключен') : String(v == null ? '' : v));
+    const reqOpt = (v) => (String(v) === '1' ? tr('обязательный') : String(v) === '0' ? tr('по желанию') : String(v == null ? '' : v));
     const list = (labelOf) => (v) => {
         const l = parseList(v);
         if (!l) return String(v == null ? '' : v);
-        return l.length ? l.map(labelOf).join(', ') : '—';
+        return l.length ? l.map(labelOf).join(', ') : tr('не выбраны');
     };
     if (SWITCH_LABEL[f]) { what = tr(SWITCH_LABEL[f]); fmt = yesNo; }
-    else if (f === 'title_required') { what = tr('Титульный лист — обязательный документ'); fmt = yesNo; }
+    else if (f === 'title_required') { what = tr('Титульный лист'); fmt = reqOpt; }
     else if (f === 'title_required_fields') { what = tr('Обязательные поля титульного листа'); fmt = list(titleFieldLabel); }
-    else if (m && m[2] === 'required') { what = trf('{doc}: обязательный документ', { doc: docName(m[1], docs) }); fmt = yesNo; }
-    else if (m) { what = trf('{doc}: обязательные разделы', { doc: docName(m[1], docs) }); fmt = list((k) => tr(sectionLabel(m[1], k))); }
+    else if (m && m[2] === 'required') { what = docName(m[1], docs, titles); fmt = reqOpt; }
+    else if (m) { what = trf('{doc}: обязательные разделы', { doc: docName(m[1], docs, titles) }); fmt = list((k) => tr(sectionLabel(m[1], k))); }
     else { what = f; fmt = (v) => String(v == null ? '' : v); }
-    return trf('{when} · {who}: {what} — {from} → {to}', {
+    return trf('{when} · {who}: {what} ({from} → {to})', {
         when: e.at ? fmtDateTime(e.at) : '—',
         who: e.user_name || '—',
         what,
@@ -228,9 +249,12 @@ export async function renderInpatientSettings(container, _ctx = {}) {
     }
 
     // base — как в базе (последний ответ сервера), cur — что на экране.
-    const page = { root, base: snapshot(data), cur: null, log: [], canEdit: true, busy: false, isDirty: () => false };
+    // INPATIENT_REQUIRED_V1 (ревью) — docTitles: имена документов из журнала (и убранных из
+    // набора); saved: строка состояния говорит «сохранено», пока нет новой правки.
+    const page = { root, base: snapshot(data), cur: null, log: [], docTitles: {}, canEdit: true, busy: false, saved: false, isDirty: () => false };
     page.cur = snapshot(data);
     page.log = Array.isArray(data.log) ? data.log : [];
+    page.docTitles = (data.doc_titles && typeof data.doc_titles === 'object') ? data.doc_titles : {};
     page.canEdit = data.can_edit !== false;
     page.isDirty = () => page.canEdit && Object.keys(settingsDiff(page.base, page.cur)).length > 0;
     armLeaveGuard(page);
@@ -240,7 +264,10 @@ export async function renderInpatientSettings(container, _ctx = {}) {
     paint();
 
     function paint() {
-        refs = { sentences: {}, dischargeCb: null, dischargeNote: null, dischargeDoc: null, fieldCbs: [], titleNote: null, saveBtn: null, dirtyEl: null };
+        // INPATIENT_REQUIRED_V1 (ревью) — switchCbs / docCbs / chips: все органы управления, чтобы
+        // погасить их на время сохранения; dischargeOff — пометка «переключатель не действует».
+        refs = { sentences: {}, switchCbs: [], docCbs: [], chips: [], dischargeCb: null, dischargeNote: null, dischargeDoc: null, dischargeOff: null,
+            fieldCbs: [], titleNote: null, saveBtn: null, dirtyEl: null };
         clear(body);
         if (!page.canEdit) {
             body.appendChild(h('div', { class: 'view-only-note', role: 'note' }, Icon('Lock', { size: 14 }), ' ',
@@ -261,15 +288,39 @@ export async function renderInpatientSettings(container, _ctx = {}) {
         const rows = STOP_SWITCHES.map((s, i) => {
             const id = uid('sw');
             const descId = id + '-d';
-            const { wrap } = switchControl({
+            const isDischarge = s.key === 'discharge_needs_epicrisis';
+            // INPATIENT_REQUIRED_V1 (ревью) — выписка включена, а выписного эпикриза в наборе нет:
+            // переключатель ничего не держит (сервер спрашивает эпикриз, только пока он в
+            // наборе) — пометка под фразой говорит это прямо и описывает переключатель.
+            const offId = isDischarge ? id + '-x' : null;
+            const sw = switchControl({
                 id, checked: page.cur.settings[s.key] === 1, disabled: !page.canEdit,
-                attrs: { 'data-ips-switch': s.key }, describedBy: descId,
+                attrs: { 'data-ips-switch': s.key }, describedBy: offId ? descId + ' ' + offId : descId,
                 label: tr(s.label), labelStyle: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' },
-                onChange: (v) => { page.cur.settings[s.key] = v ? 1 : 0; refresh(); },
+                onChange: (v) => {
+                    page.cur.settings[s.key] = v ? 1 : 0;
+                    // INPATIENT_REQUIRED_V1 (ревью) — выписку включили обратно: флаг эпикриза снова
+                    // решает она, и правка, сделанная при выключенной выписке, ушла бы в базу
+                    // невидимой (переключатель эпикриза показан включённым и заблокированным).
+                    // Возвращаем флагу сохранённое значение.
+                    if (isDischarge && v) {
+                        const cur = page.cur.docs.find((d) => d.kind === 'discharge');
+                        const was = page.base.docs.find((d) => d.kind === 'discharge');
+                        if (cur && was) cur.required = was.required;
+                    }
+                    refresh();
+                },
             });
+            refs.switchCbs.push(sw.cb);
             const sentence = h('p', { id: descId, class: 'muted', style: Object.assign({}, NOTE, { marginLeft: '28px' }) });
             refs.sentences[s.key] = sentence;
-            return h('div', { style: Object.assign({}, ROW, i === 0 ? { borderTop: '0' } : null), 'data-ips-row': s.key }, wrap, sentence);
+            let off = null;
+            if (isDischarge) {
+                off = h('p', { id: offId, class: 'muted', style: Object.assign({}, NOTE, { marginLeft: '28px', color: 'var(--warn-800)' }), 'data-ips-discharge-off': '' },
+                    Icon('Warning', { size: 13 }), ' ', tr('Выписной эпикриз убран из набора — переключатель не действует.'));
+                refs.dischargeOff = off;
+            }
+            return h('div', { style: Object.assign({}, ROW, i === 0 ? { borderTop: '0' } : null), 'data-ips-row': s.key }, sw.wrap, sentence, off);
         });
         return card('Shield', 'Что останавливает работу', ...rows);
     }
@@ -287,6 +338,7 @@ export async function renderInpatientSettings(container, _ctx = {}) {
             ariaLabel: tr('Титульный лист — обязательный документ'), label: tr('Обязательный'),
             onChange: (v) => { page.cur.settings.title_required = v ? 1 : 0; refresh(); },
         });
+        refs.switchCbs.push(t.cb);   // INPATIENT_REQUIRED_V1 (ревью) — гасится на время сохранения
         rows.push(docRow('title', titleName, t.wrap, null, null, true));
 
         for (const d of page.cur.docs) {
@@ -307,6 +359,8 @@ export async function renderInpatientSettings(container, _ctx = {}) {
                 refs.dischargeCb = s.cb;
                 refs.dischargeNote = note;
                 refs.dischargeDoc = d;
+            } else {
+                refs.docCbs.push(s.cb);   // INPATIENT_REQUIRED_V1 (ревью) — эпикриз гасит refresh по своему правилу
             }
             const chips = h('div', { role: 'group', 'aria-label': trf('{doc}: обязательные разделы', { doc: name }),
                 style: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' } },
@@ -315,8 +369,9 @@ export async function renderInpatientSettings(container, _ctx = {}) {
                     tr(sectionLabel(d.kind, key)));
                 paintChip(btn, d.required_sections.includes(key));
                 btn.disabled = !page.canEdit;
+                refs.chips.push(btn);   // INPATIENT_REQUIRED_V1 (ревью) — гасится на время сохранения
                 btn.addEventListener('click', () => {
-                    if (!page.canEdit) return;
+                    if (!page.canEdit || page.busy) return;
                     const want = new Set(d.required_sections);
                     if (want.has(key)) want.delete(key); else want.add(key);
                     d.required_sections = cleanRequiredSections([...want], d.sections);
@@ -372,7 +427,7 @@ export async function renderInpatientSettings(container, _ctx = {}) {
             ? h('ul', { style: { listStyle: 'none', margin: '8px 0 0', padding: 0 } },
                 ...lines.map((e) => h('li', { 'data-ips-log': String(e.id == null ? '' : e.id),
                     style: { padding: '6px 0', borderTop: '1px solid var(--ink-100)', fontSize: '12.5px', lineHeight: 1.5, color: 'var(--ink-700)' } },
-                logLineText(e, page.cur.docs))))
+                logLineText(e, page.cur.docs, page.docTitles))))   // INPATIENT_REQUIRED_V1 (ревью) — имена убранных документов
             : h('p', { class: 'muted', style: Object.assign({}, NOTE, { margin: '8px 0 0' }) }, tr('Изменений ещё не было.'));
         return card('Clock', 'Кто менял', content);
     }
@@ -383,7 +438,9 @@ export async function renderInpatientSettings(container, _ctx = {}) {
     function footer() {
         refs.saveBtn = h('button', { class: 'btn btn-primary', type: 'button', 'data-ips-save': '' }, Icon('Check', { size: 13 }), ' ', tr('Сохранить'));
         refs.saveBtn.addEventListener('click', save);
-        refs.dirtyEl = h('span', { class: 'muted', role: 'status', style: { fontSize: '12.5px' } });
+        // INPATIENT_REQUIRED_V1 (ревью) — tabindex -1: после сохранения фокус встаёт сюда (кнопка
+        // «Сохранить» погашена — без правок сохранять нечего, а на погашенную фокус не встаёт).
+        refs.dirtyEl = h('span', { class: 'muted', role: 'status', tabindex: '-1', style: { fontSize: '12.5px' } });
         return h('div', { style: { position: 'sticky', bottom: '0', zIndex: 2, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px',
             padding: '12px 0', marginBottom: '16px', background: 'var(--white)', borderTop: '1px solid var(--ink-100)' } },
         refs.saveBtn, refs.dirtyEl);
@@ -391,6 +448,12 @@ export async function renderInpatientSettings(container, _ctx = {}) {
 
     /** Всё, что зависит от состояния, — на месте: фразы, эпикриз, поля листа, «Сохранить». */
     function refresh() {
+        // INPATIENT_REQUIRED_V1 (ревью) — пока идёт сохранение, всё погашено: правка, сделанная
+        // во время запроса, затёрлась бы ответом сервера (страница перерисовывается по нему).
+        const locked = !page.canEdit || page.busy;
+        for (const cb of refs.switchCbs) cb.disabled = locked;
+        for (const cb of refs.docCbs) cb.disabled = locked;
+        for (const btn of refs.chips) btn.disabled = locked;
         for (const s of STOP_SWITCHES) {
             const el = refs.sentences[s.key];
             if (el) el.textContent = tr(page.cur.settings[s.key] === 1 ? s.on : s.off);
@@ -399,21 +462,26 @@ export async function renderInpatientSettings(container, _ctx = {}) {
         if (refs.dischargeCb && refs.dischargeDoc) {
             const bySwitch = page.cur.settings.discharge_needs_epicrisis === 1;
             refs.dischargeCb.checked = bySwitch ? true : refs.dischargeDoc.required;
-            refs.dischargeCb.disabled = !page.canEdit || bySwitch;
+            refs.dischargeCb.disabled = locked || bySwitch;
             refs.dischargeNote.textContent = bySwitch ? tr('Обязателен, пока включено «Выписка — только с выписным эпикризом».') : '';
             refs.dischargeNote.hidden = !bySwitch;
         }
+        // INPATIENT_REQUIRED_V1 (ревью) — выписка включена, а эпикриза в наборе нет: переключатель не действует.
+        if (refs.dischargeOff) {
+            refs.dischargeOff.hidden = !(page.cur.settings.discharge_needs_epicrisis === 1 && !page.cur.docs.some((d) => d.kind === 'discharge'));
+        }
         // Титульный лист «не обязателен» — не требуется ни одно поле.
         const titleOn = page.cur.settings.title_required === 1;
-        for (const cb of refs.fieldCbs) cb.disabled = !page.canEdit || !titleOn;
+        for (const cb of refs.fieldCbs) cb.disabled = locked || !titleOn;
         if (refs.titleNote) {
             refs.titleNote.textContent = titleOn ? '' : tr('Титульный лист не обязателен — поля не требуются.');
             refs.titleNote.hidden = titleOn;
         }
         if (refs.saveBtn) {
             const dirty = page.isDirty();
+            if (dirty) page.saved = false;   // INPATIENT_REQUIRED_V1 (ревью) — новая правка: «сохранено» уже неправда
             refs.saveBtn.disabled = page.busy || !dirty;
-            refs.dirtyEl.textContent = dirty ? tr('● Есть несохранённые изменения') : '';
+            refs.dirtyEl.textContent = dirty ? tr('● Есть несохранённые изменения') : (page.saved ? tr('Настройки стационара сохранены.') : '');
         }
     }
 
@@ -434,7 +502,7 @@ export async function renderInpatientSettings(container, _ctx = {}) {
             // Правки остаются на экране: человек исправит причину и нажмёт ещё раз.
             page.busy = false;
             refresh();
-            toast(failure, 'error');
+            toast(failure, 'fail');   // INPATIENT_REQUIRED_V1 (ревью) — 'fail': так тост красный (admin.css), 'error' стиля не имел
             return;
         }
         // Ответ сохранения — то же, что inpatient_settings_get после записи; старый
@@ -449,11 +517,19 @@ export async function renderInpatientSettings(container, _ctx = {}) {
             page.base = snapshot(fresh);
             page.cur = snapshot(fresh);
             page.log = Array.isArray(fresh.log) ? fresh.log : page.log;
+            if (fresh.doc_titles && typeof fresh.doc_titles === 'object') page.docTitles = fresh.doc_titles;   // INPATIENT_REQUIRED_V1 (ревью)
             page.canEdit = fresh.can_edit !== false;
         } else {
             page.base = snapshot(page.cur);
         }
+        page.saved = true;   // INPATIENT_REQUIRED_V1 (ревью) — строка состояния говорит «сохранено»
         paint();
-        toast('Настройки стационара сохранены.', 'success');
+        toast('Настройки стационара сохранены.', 'ok');   // INPATIENT_REQUIRED_V1 (ревью) — 'ok', как у прочих экранов
+        // INPATIENT_REQUIRED_V1 (ревью) — перерисовка унесла нажатую кнопку, и фокус падал на
+        // body. Новая «Сохранить» погашена (сохранять нечего), поэтому фокус — на строку
+        // состояния: читалка слышит «Настройки стационара сохранены.», Tab идёт дальше отсюда.
+        if (refs.dirtyEl && typeof refs.dirtyEl.focus === 'function') {
+            try { refs.dirtyEl.focus(); } catch (e) { /* фокус не встал — не беда */ }
+        }
     }
 }

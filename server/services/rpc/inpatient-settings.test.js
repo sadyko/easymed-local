@@ -7,7 +7,7 @@ import {
   inpatientSettingsGet, inpatientSettingsSave, loadInpatientSettings, titleRequiredKeys, requiredFlags, DEFAULT_SETTINGS,
   SETTINGS_WRITE_ROLES,
 } from './inpatient-settings.js';
-import { caseDocTypeSave, caseDocTypesList, DOC_TYPE_WRITE_ROLES } from './case-doc-types.js';
+import { caseDocTypeSave, caseDocTypesList, caseDocTypeSetActive, caseDocTypeDelete, DOC_TYPE_WRITE_ROLES } from './case-doc-types.js';
 import { loadCaseDocSet } from './inpatient-reviews.js';
 import { isReadOnlyRpc } from '../control/gate.js';
 import { RPC } from './index.js';   // реестр RPC (index.js `export const RPC = {`)
@@ -307,4 +307,27 @@ test('лицензия: чтение проходит блокировку, за
 test('title_required = 0 — не обязательно ни одно поле листа', () => {
   assert.deepEqual(titleRequiredKeys({ title_required: 0, title_required_fields: ['phone'] }), []);
   assert.deepEqual(titleRequiredKeys({ title_required: 1, title_required_fields: ['phone'] }), ['phone']);
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — журнал «Кто менял» называет документ, которого в наборе уже нет:
+// чтение отдаёт имена всех родов из журнала (и убранных из набора); удалённого насовсем — нет.
+test('(ревью) чтение: doc_titles — имена родов из журнала, и убранных из набора; удалённого насовсем нет', () => {
+  const db = seed();
+  const kept = caseDocTypeSave(db, { title: 'Тестовый лист', due_rule: 'none' }, head).type;
+  const gone = caseDocTypeSave(db, { title: 'Лишний лист', due_rule: 'none' }, head).type;
+  inpatientSettingsSave(db, { docs: [{ kind: kept.kind, required: false }, { kind: gone.kind, required: false }, { kind: 'primary', required_sections: ['plan'] }] }, admin);
+  caseDocTypeSetActive(db, { kind: kept.kind, active: false }, head);
+  caseDocTypeDelete(db, { kind: gone.kind }, head);
+  const g = inpatientSettingsGet(db, {}, nurse);
+  assert.ok(!g.docs.some((d) => d.kind === kept.kind), 'убранный документ всё ещё в наборе');
+  assert.equal(g.doc_titles[kept.kind], 'Тестовый лист');
+  assert.ok(!(gone.kind in g.doc_titles), 'удалённого рода в базе нет — и имени нет');
+  assert.equal(g.doc_titles.primary, '', 'встроенный род без своего имени — пустое имя (экран берёт словарное)');
+  // Только роды из журнала — не весь справочник.
+  assert.deepEqual(Object.keys(g.doc_titles).sort(), [kept.kind, 'primary'].sort());
+  // База старше 298 — журнала нет, имён тоже.
+  const old = dropTo297(seed());
+  assert.deepEqual(inpatientSettingsGet(old, {}, nurse).doc_titles, {});
+  old.close();
+  db.close();
 });

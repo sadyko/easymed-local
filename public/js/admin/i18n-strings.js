@@ -72,7 +72,11 @@ export const STRINGS = {
   "Обязательные поля титульного листа": {"en":"Required title sheet fields","ru":"Обязательные поля титульного листа","uz":"Titul varag‘ining majburiy maydonlari"},   // INPATIENT_REQUIRED_V1
   "{doc}: обязательный документ": {"en":"{doc}: required document","ru":"{doc}: обязательный документ","uz":"{doc}: majburiy hujjat"},   // INPATIENT_REQUIRED_V1
   "{doc}: обязательные разделы": {"en":"{doc}: required sections","ru":"{doc}: обязательные разделы","uz":"{doc}: majburiy bo‘limlar"},   // INPATIENT_REQUIRED_V1
-  "{when} · {who}: {what} — {from} → {to}": {"en":"{when} · {who}: {what} — {from} → {to}","ru":"{when} · {who}: {what} — {from} → {to}","uz":"{when} · {who}: {what} — {from} → {to}"},   // INPATIENT_REQUIRED_V1
+  "{when} · {who}: {what} ({from} → {to})": {"en":"{when} · {who}: {what} ({from} → {to})","ru":"{when} · {who}: {what} ({from} → {to})","uz":"{when} · {who}: {what} ({from} → {to})"},   // INPATIENT_REQUIRED_V1
+  "не выбраны": {"en":"none selected","ru":"не выбраны","uz":"tanlanmagan"},   // INPATIENT_REQUIRED_V1
+  "обязательный": {"en":"required","ru":"обязательный","uz":"majburiy"},   // INPATIENT_REQUIRED_V1
+  "Свой документ": {"en":"Clinic’s own document","ru":"Свой документ","uz":"Klinikaning o‘z hujjati"},   // INPATIENT_REQUIRED_V1
+  "Выписной эпикриз убран из набора — переключатель не действует.": {"en":"The discharge summary is not in the clinic set — this switch has no effect.","ru":"Выписной эпикриз убран из набора — переключатель не действует.","uz":"Chiqarish epikrizi to‘plamdan olib tashlangan — bu kalit ta’sir qilmaydi."},   // INPATIENT_REQUIRED_V1
   "Настройки стационара сохранены.": {"en":"Inpatient settings saved.","ru":"Настройки стационара сохранены.","uz":"Statsionar sozlamalari saqlandi."},   // INPATIENT_REQUIRED_V1
   "Настройки стационара недоступны: {msg}": {"en":"Inpatient settings are unavailable: {msg}","ru":"Настройки стационара недоступны: {msg}","uz":"Statsionar sozlamalari mavjud emas: {msg}"},   // INPATIENT_REQUIRED_V1
   "Что обязательно: документы истории болезни, поля титульного листа, порядок шагов": {"en":"What is required: case-history documents, title sheet fields, order of steps","ru":"Что обязательно: документы истории болезни, поля титульного листа, порядок шагов","uz":"Nima majburiy: kasallik tarixi hujjatlari, titul varag‘i maydonlari, qadamlar tartibi"},   // INPATIENT_REQUIRED_V1

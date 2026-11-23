@@ -414,3 +414,31 @@ test('DOCTOR_CARD_VIA_LINE_V1: карта пациента из кабинета
         'карта из кабинета делит панель с обычной картой — её «Нет доступа» осталось бы в кэше');
     assert.equal((shell.match(/canOpenPatientCardVia\(/g) || []).length, 2, 'обе двери оболочки (монтирование и отрисовка) не знают про карту из кабинета');
 });
+
+// INPATIENT_REQUIRED_V1 (ревью) — «Настройки → Стационар» открываются главному врачу и
+// администратору и БЕЗ раздела «Настройки»: роль «Главный врач» по умолчанию его не имеет,
+// вход у него — кнопка на доске стационара. Прочим кодам ролей — нет и с «Настройками»; роль
+// клиники без кода роли — как прежде, по «Настройкам». «Назад» с этой страницы у того, кому
+// «Настройки» закрыты, ведёт на доску стационара (admin.js BACK_ALT_OF), а не в «Нет доступа».
+test('INPATIENT_REQUIRED_V1 (ревью): «Настройки → Стационар» — главному врачу и администратору без «Настроек»; прочим кодам — нет; «назад» — на доску', () => {
+    try {
+        for (const code of ['head_doctor', 'admin']) {
+            perms.setEffectiveFromRole(role(code, ['patients', 'beds'], { beds: 'editor' }));
+            assert.equal(perms.isRouteAllowed('settings'), false, 'стенд: «Настройки» открыты');
+            assert.equal(perms.isRouteAllowed('inpatient-settings'), true, code + ' без «Настроек» — страница закрыта');
+            assert.equal(perms.isRouteAllowed('admissions'), true, code + ': доска стационара, куда ведёт «назад», закрыта');
+        }
+        for (const code of ['doctor', 'nurse', 'senior_nurse', 'registrar', 'cashier']) {
+            perms.setEffectiveFromRole(role(code, ['patients', 'beds', 'settings'], { beds: 'editor' }));
+            assert.equal(perms.isRouteAllowed('inpatient-settings'), false, code + ': страница открылась');
+        }
+        perms.setEffectiveFromRole(role('Своя роль', ['patients', 'beds'], { beds: 'editor' }));
+        assert.equal(perms.isRouteAllowed('inpatient-settings'), false, 'своя роль без «Настроек»');
+        perms.setEffectiveFromRole(role('Своя роль', ['settings']));
+        assert.equal(perms.isRouteAllowed('inpatient-settings'), true, 'своя роль с «Настройками» — как прежде');
+    } finally {
+        perms.setFullAccess('Admin');
+    }
+    assert.match(shellSrc, /const BACK_ALT_OF = \{ 'inpatient-settings': 'admissions' \};/, '«назад» без «Настроек» ведёт не на доску');
+    assert.equal(parentTable()['inpatient-settings'], 'settings', 'родитель страницы — по-прежнему «Настройки»');
+});

@@ -972,3 +972,33 @@ test('INPATIENT_REQUIRED_V1 (ревью): медсестра со специал
         delete globalThis.window.easymed;
     }
 });
+
+// ─── INPATIENT_REQUIRED_V1 (ревью) — вход в «Настройки стационара» с доски ──────
+// Роль «Главный врач» по умолчанию раздела «Настройки» не имеет, и плитка хаба ему не
+// видна: вход — кнопка на доске стационара. Только администратору и главному врачу
+// (тем, кому страница откроется), на обеих вкладках.
+test('INPATIENT_REQUIRED_V1 (ревью): «Настройки стационара» на доске — администратору и главному врачу; медсестре и врачу — нет', async () => {
+    const calls = [];
+    globalThis.window.easymed = { navigate: (...a) => calls.push(a) };
+    const role = (name, sections) => ({ name, permissions: { sections, levels: { beds: 'editor' } } });
+    try {
+        perms.setFullAccess('Admin');
+        for (const only of [null, 'patients']) {
+            const root = await renderScreen({ only });
+            const btn = findBtn(root, 'Настройки стационара');
+            assert.ok(btn, 'нет кнопки на вкладке ' + String(only));
+            assert.ok(walk(btn).some((e) => e.tagName === 'SVG' || e.tagName === 'svg'), 'кнопка без значка Icon()');
+            btn.click();
+            assert.deepEqual(calls.pop(), ['inpatient-settings']);
+        }
+        perms.setEffectiveFromRole(role('head_doctor', ['patients', 'beds']));
+        assert.ok(findBtn(await renderScreen({ only: 'patients' }), 'Настройки стационара'), 'главному врачу без «Настроек» входа нет');
+        for (const code of ['nurse', 'senior_nurse', 'doctor', 'registrar']) {
+            perms.setEffectiveFromRole(role(code, ['patients', 'beds', 'settings']));
+            assert.equal(findBtn(await renderScreen({ only: 'patients' }), 'Настройки стационара'), undefined, code + ': кнопка ведёт в «Нет доступа»');
+        }
+    } finally {
+        perms.setFullAccess('Admin');
+        delete globalThis.window.easymed;
+    }
+});

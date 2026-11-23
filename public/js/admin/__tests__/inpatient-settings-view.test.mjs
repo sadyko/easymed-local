@@ -31,7 +31,7 @@ class FakeNode {
     querySelector() { return null; }
     querySelectorAll() { return []; }
     remove() { }
-    focus() {} blur() {}
+    focus() { globalThis.document.activeElement = this; } blur() {}
     get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
     set textContent(v) { this._text = String(v); this.children.length = 0; }
     get classList() { const s = this; return { contains: (c) => String(s.className).split(/\s+/).includes(c), add() {}, remove() {}, toggle() {} }; }
@@ -53,7 +53,7 @@ globalThis.Node = FakeNode;
 const BODY = mkEl('body');
 globalThis.document = {
     createElement: mkEl, createElementNS: (_n, t) => mkEl(t), createTextNode: (t) => new FakeText(t),
-    head: mkEl('head'), body: BODY, documentElement: mkEl('html'),
+    head: mkEl('head'), body: BODY, documentElement: mkEl('html'), activeElement: null,
     addEventListener() {}, removeEventListener() {},
     getElementById(id) { return BODY.children.find((c) => c.attrs && c.attrs.id === id) || null; },
 };
@@ -77,7 +77,8 @@ const docSw = (root, kind) => byAttr(root, 'INPUT', 'data-ips-doc-required', kin
 const field = (root, key) => byAttr(root, 'INPUT', 'data-ips-field', key);
 const chip = (root, kind, section) => walk(root).find((e) => e.tagName === 'BUTTON' && e.attrs['data-ips-kind'] === kind && e.attrs['data-ips-section'] === section);
 const toggle = (el, on) => { el.checked = on; el.dispatchEvent({ type: 'change' }); };
-const toastText = () => { const t = BODY.children.find((c) => c.attrs && c.attrs.id === 'toast'); return t ? t._text : ''; };
+const toastEl = () => BODY.children.find((c) => c.attrs && c.attrs.id === 'toast') || null;
+const toastText = () => { const t = toastEl(); return t ? t._text : ''; };
 
 // ─── «сервер» ───────────────────────────────────────────────────────────────
 const DATA = {
@@ -96,6 +97,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 let SERVER = clone(DATA);
 let FAIL_GET = null;
 let FAIL_SAVE = null;
+let HOLD_SAVE = null;   // INPATIENT_REQUIRED_V1 (ревью) — обещание: сохранение отвечает, когда оно выполнится
 const rpcCalls = [];
 function applySave(args) {
     let changed = 0;
@@ -121,6 +123,7 @@ globalThis.fetch = async (url, opts = {}) => {
     rpcCalls.push({ name, args: body });
     if (name === 'inpatient_settings_get') return FAIL_GET ? fail(FAIL_GET, 501) : ok(clone(SERVER));
     if (name === 'inpatient_settings_save') {
+        if (HOLD_SAVE) await HOLD_SAVE;
         if (FAIL_SAVE) return fail(FAIL_SAVE, 403);
         const changed = applySave(body);
         return ok(Object.assign(clone(SERVER), { changed }));
@@ -128,7 +131,7 @@ globalThis.fetch = async (url, opts = {}) => {
     return fail('unknown rpc ' + name);
 };
 
-function reset() { SERVER = clone(DATA); FAIL_GET = null; FAIL_SAVE = null; rpcCalls.length = 0; }
+function reset() { SERVER = clone(DATA); FAIL_GET = null; FAIL_SAVE = null; HOLD_SAVE = null; rpcCalls.length = 0; }
 async function mount() {
     const { renderInpatientSettings } = await import('../views/inpatient-settings.js');
     const root = mkEl('div');
@@ -336,16 +339,32 @@ test('settingsDiff и строка журнала', async () => {
     assert.deepEqual(settingsDiff(DATA, DATA), {});
     assert.ok(logLineText(DATA.log[0], DATA.docs).includes('Лечащий врач — только после осмотра приёмного врача'));
     assert.ok(logLineText(DATA.log[0], DATA.docs).includes('Сотрудник head'));
-    assert.match(logLineText(DATA.log[0], DATA.docs), /включён → выключен/);
+    // INPATIENT_REQUIRED_V1 (ревью) — смена значения — в скобках: в подписи переключателя уже
+    // есть « — », и «… приёмного врача — включён → выключен» читалось тремя тире подряд.
+    const sw1 = logLineText(DATA.log[0], DATA.docs);
+    assert.match(sw1, /Лечащий врач — только после осмотра приёмного врача \(включён → выключен\)/);
     const sec = logLineText({ at: '2026-11-23T08:00:00Z', user_name: 'Сотрудник head', field: 'doc:own_7:sections', old_value: '[]', new_value: '["plan"]' }, DATA.docs);
     assert.ok(sec.includes('Тестовый лист'));
-    assert.match(sec, /— → План обследования и лечения/);
+    assert.match(sec, /\(не выбраны → План обследования и лечения\)/, 'пустой список — «не выбраны», а не «—»');
     const flds = logLineText({ at: '2026-11-23T08:00:00Z', user_name: 'Сотрудник head', field: 'title_required_fields', old_value: '["height_cm"]', new_value: '["height_cm","pulse_bpm"]' }, DATA.docs);
-    assert.match(flds, /Обязательные поля титульного листа — Рост → Рост, Пульс/);
+    assert.match(flds, /Обязательные поля титульного листа \(Рост → Рост, Пульс\)/);
+    // Обязательность документа — словами «обязательный / по желанию», а не «включён / выключен».
     const tr1 = logLineText({ at: '2026-11-23T08:00:00Z', user_name: 'Сотрудник head', field: 'title_required', old_value: '1', new_value: '0' }, DATA.docs);
-    assert.match(tr1, /Титульный лист — обязательный документ — включён → выключен/);
+    assert.match(tr1, /Титульный лист \(обязательный → по желанию\)/);
     const dreq = logLineText({ at: '2026-11-23T08:00:00Z', user_name: 'Сотрудник head', field: 'doc:primary:required', old_value: '1', new_value: '0' }, DATA.docs);
-    assert.match(dreq, /Первичный осмотр и план лечения: обязательный документ — включён → выключен/);
+    assert.match(dreq, /Первичный осмотр и план лечения \(обязательный → по желанию\)/);
+    const dback = logLineText({ at: '2026-11-23T08:00:00Z', user_name: 'Сотрудник head', field: 'doc:primary:required', old_value: '0', new_value: '1' }, DATA.docs);
+    assert.match(dback, /\(по желанию → обязательный\)/);
+    for (const line of [sw1, sec, flds, tr1, dreq]) {
+        assert.doesNotMatch(line, / — (включён|выключен|обязательный|по желанию|не выбраны|Рост)\b/, 'тире перед значением: ' + line);
+    }
+    // Свой документ клиники, убранный из набора, — по имени из журнала сервера (doc_titles);
+    // удалённый насовсем — «Свой документ»; встроенный вне набора — словарное имя.
+    const gone = (kind) => ({ at: '2026-11-23T08:00:00Z', user_name: 'Сотрудник head', field: 'doc:' + kind + ':required', old_value: '1', new_value: '0' });
+    assert.match(logLineText(gone('own_9'), DATA.docs, { own_9: 'Убранный лист' }), /Убранный лист \(обязательный → по желанию\)/);
+    assert.match(logLineText(gone('own_12'), DATA.docs, {}), /Свой документ \(обязательный → по желанию\)/);
+    assert.match(logLineText(gone('own_12'), DATA.docs), /Свой документ/, 'без словаря имён — тоже «Свой документ»');
+    assert.match(logLineText(gone('round'), DATA.docs, {}), /Дневник наблюдения \(обязательный → по желанию\)/);
     // Изменения документов: только изменённое, без лишних ключей.
     const after = clone(DATA);
     after.docs[0].required = false;
@@ -357,7 +376,7 @@ test('settingsDiff и строка журнала', async () => {
     });
 });
 
-test('маршрут: главный врач и администратор — да; регистратура, врач, медсёстры с «Настройками» — нет; плитка в «Помещениях»; оболочка знает маршрут', async () => {
+test('маршрут: главный врач и администратор — да (и без «Настроек»); регистратура, врач, медсёстры с «Настройками» — нет; плитка в «Помещениях»; оболочка знает маршрут', async () => {
     const perms = await import('../permissions.js');
     const role = (name, sections) => ({ name, permissions: { sections, levels: {} } });
     try {
@@ -365,12 +384,21 @@ test('маршрут: главный врач и администратор — 
         assert.equal(perms.isRouteAllowed('inpatient-settings'), true);
         perms.setEffectiveFromRole(role('head_doctor', ['settings']));
         assert.equal(perms.isRouteAllowed('inpatient-settings'), true);
-        perms.setEffectiveFromRole(role('head_doctor', ['patients']));
-        assert.equal(perms.isRouteAllowed('inpatient-settings'), false, 'главному врачу без «Настроек» открылась страница настроек');
+        // INPATIENT_REQUIRED_V1 (ревью) — роль «Главный врач» по умолчанию раздела «Настройки» не
+        // имеет: страница открывается ему и без него (вход — кнопка на доске стационара).
+        perms.setEffectiveFromRole(role('head_doctor', ['patients', 'beds']));
+        assert.equal(perms.isRouteAllowed('inpatient-settings'), true, 'главному врачу без «Настроек» страница закрыта');
+        perms.setEffectiveFromRole(role('admin', ['patients']));
+        assert.equal(perms.isRouteAllowed('inpatient-settings'), true);
         for (const code of ['registrar', 'doctor', 'nurse', 'senior_nurse', 'cashier']) {
             perms.setEffectiveFromRole(role(code, ['settings']));
             assert.equal(perms.isRouteAllowed('inpatient-settings'), false, code + ': страница открылась');
         }
+        // Роль клиники без кода роли: как прежде — по «Настройкам».
+        perms.setEffectiveFromRole(role('Своя роль', ['patients', 'beds']));
+        assert.equal(perms.isRouteAllowed('inpatient-settings'), false, 'своя роль без «Настроек» открыла страницу');
+        perms.setEffectiveFromRole(role('Своя роль', ['settings']));
+        assert.equal(perms.isRouteAllowed('inpatient-settings'), true);
     } finally { perms.setFullAccess('Admin'); }
     const { GROUPS } = await import('../views/settings-hub.js');
     const rooms = GROUPS.find((g) => g.key === 'rooms');
@@ -392,9 +420,121 @@ test('правило маршрута — те же роли, что у серв
     const server = fs.readFileSync(new URL('../../../../server/services/rpc/inpatient-settings.js', import.meta.url), 'utf8');
     const perms = fs.readFileSync(new URL('../permissions.js', import.meta.url), 'utf8');
     const srv = server.match(/export const SETTINGS_WRITE_ROLES = \[([^\]]*)\]/);
-    const cli = perms.match(/if \(view === 'inpatient-settings'\) return isModuleAllowed\('settings'\) && hasActorRole\(\[([^\]]*)\]\);/);
+    const cli = perms.match(/if \(view === 'inpatient-settings'\) return actorRoleCodes\(\)\.length \? hasActorRole\(\[([^\]]*)\]\) : isModuleAllowed\('settings'\);/);
     assert.ok(srv, 'SETTINGS_WRITE_ROLES не найден на сервере');
     assert.ok(cli, 'правило inpatient-settings не найдено в permissions.js');
     const list = (s) => s.split(',').map((x) => x.trim().replace(/^'|'$/g, '')).filter(Boolean).sort();
     assert.deepEqual(list(cli[1]), list(srv[1]), 'экран и сервер разошлись в том, кто меняет настройки стационара');
+});
+
+// ─── INPATIENT_REQUIRED_V1 (ревью) — правки страницы после ревью ─────────────────
+test('ревью: журнал называет свой документ клиники, убранный из набора, — по имени из ответа сервера', async () => {
+    reset();
+    SERVER.log = [{ id: 5, at: '2026-11-23T08:00:00Z', user_name: 'Сотрудник head', field: 'doc:own_9:required', old_value: '1', new_value: '0' }];
+    SERVER.doc_titles = { own_9: 'Убранный лист' };
+    const root = await mount();
+    const li = walk(root).find((e) => e.tagName === 'LI' && e.attrs['data-ips-log'] === '5');
+    assert.match(textOf(li), /Убранный лист \(обязательный → по желанию\)/);
+});
+
+test('ревью: выписка включена, а выписного эпикриза в наборе нет — под переключателем «переключатель не действует»', async () => {
+    reset();
+    SERVER.docs = SERVER.docs.filter((d) => d.kind !== 'discharge');
+    const root = await mount();
+    const note = 'Выписной эпикриз убран из набора — переключатель не действует.';
+    const el = walk(root).find((e) => e.attrs && e.attrs['data-ips-discharge-off'] !== undefined);
+    assert.ok(el, 'пометки нет');
+    assert.equal(el.hidden, false);
+    assert.ok(textOf(el).includes(note));
+    assert.ok(String(sw(root, 'discharge_needs_epicrisis').attrs['aria-describedby']).split(' ').includes(el.attrs.id), 'пометка не описывает переключатель');
+    // Выключили выписку — пометка уходит (переключатель и так ничего не держит).
+    toggle(sw(root, 'discharge_needs_epicrisis'), false);
+    assert.equal(el.hidden, true);
+    // Эпикриз в наборе — пометки нет.
+    reset();
+    const root2 = await mount();
+    const el2 = walk(root2).find((e) => e.attrs && e.attrs['data-ips-discharge-off'] !== undefined);
+    assert.ok(!el2 || el2.hidden === true, 'эпикриз в наборе, а пометка видна');
+});
+
+test('ревью: выписку включили обратно — флаг эпикриза возвращается к сохранённому, скрытой правки нет', async () => {
+    reset();
+    const root = await mount();
+    toggle(sw(root, 'discharge_needs_epicrisis'), false);
+    toggle(docSw(root, 'discharge'), true);   // на сервере «по желанию»
+    toggle(sw(root, 'discharge_needs_epicrisis'), true);
+    assert.equal(findBtn(root, 'Сохранить').disabled, true, 'осталась невидимая правка эпикриза');
+    assert.ok(!textOf(root).includes('Есть несохранённые изменения'));
+    toggle(sw(root, 'discharge_needs_epicrisis'), false);
+    assert.equal(docSw(root, 'discharge').checked, false, 'флаг эпикриза — сохранённый, а не прежняя правка');
+});
+
+test('ревью: пока идёт сохранение, все переключатели, разделы и поля погашены; ответ — снова доступны', async () => {
+    reset();
+    const root = await mount();
+    toggle(sw(root, 'admitting_at_placement'), false);
+    let release;
+    HOLD_SAVE = new Promise((r) => { release = r; });
+    findBtn(root, 'Сохранить').click();
+    await settle();
+    const controls = () => walk(root).filter((e) => (e.tagName === 'INPUT' && e.attrs.type === 'checkbox') || (e.tagName === 'BUTTON' && e.attrs['data-ips-section']));
+    assert.ok(controls().length > 20);
+    assert.deepEqual(controls().filter((e) => !e.disabled).map((e) => e.attrs['data-ips-switch'] || e.attrs['data-ips-field'] || e.attrs['data-ips-section'] || e.attrs['data-ips-doc-required']), [],
+        'во время сохранения что-то можно нажать');
+    assert.equal(findBtn(root, 'Сохранить').disabled, true);
+    release();
+    HOLD_SAVE = null;
+    await settle();
+    assert.equal(sw(root, 'intake_before_attending').disabled, false, 'после ответа переключатели не вернулись');
+    assert.equal(chip(root, 'primary', 'diagnosis').disabled, false);
+    assert.equal(field(root, 'height_cm').disabled, false);
+    assert.equal(docSw(root, 'discharge').disabled, true, 'эпикриз заблокирован, пока выписка включена');
+    // Отказ тоже возвращает доступ.
+    toggle(sw(root, 'primary_needs_diagnosis'), false);
+    FAIL_SAVE = 'Настройки стационара меняет главный врач или администратор.';
+    findBtn(root, 'Сохранить').click();
+    await settle();
+    assert.equal(sw(root, 'intake_before_attending').disabled, false);
+    assert.equal(chip(root, 'primary', 'diagnosis').disabled, false);
+});
+
+test('ревью: отказ — тост «fail» (красный, как в остальном приложении); удача — «ok»', async () => {
+    reset();
+    const root = await mount();
+    toggle(sw(root, 'admitting_at_placement'), false);
+    FAIL_SAVE = 'Настройки стационара меняет главный врач или администратор.';
+    findBtn(root, 'Сохранить').click();
+    await settle();
+    assert.equal(toastEl().dataset.kind, 'fail');
+    FAIL_SAVE = null;
+    findBtn(root, 'Сохранить').click();
+    await settle();
+    assert.equal(toastEl().dataset.kind, 'ok');
+});
+
+test('ревью: после сохранения фокус — на строке состояния «Настройки стационара сохранены.» (кнопка погашена)', async () => {
+    reset();
+    const root = await mount();
+    toggle(sw(root, 'admitting_at_placement'), false);
+    findBtn(root, 'Сохранить').click();
+    await settle();
+    const status = walk(root).find((e) => e.attrs && e.attrs.role === 'status');
+    assert.ok(status, 'строки состояния нет');
+    assert.equal(document.activeElement, status, 'фокус остался на снятой со страницы кнопке');
+    assert.equal(status.attrs.tabindex, '-1');
+    assert.ok(textOf(status).includes('Настройки стационара сохранены.'));
+    // Новая правка — строка говорит о несохранённом, а не о сохранённом.
+    toggle(sw(root, 'primary_needs_diagnosis'), false);
+    assert.ok(!textOf(status).includes('Настройки стационара сохранены.'));
+    assert.ok(textOf(status).includes('Есть несохранённые изменения'));
+});
+
+test('ревью: новые строки страницы — в словаре на трёх языках, без кириллицы в uz/en', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    for (const k of ['Выписной эпикриз убран из набора — переключатель не действует.', 'не выбраны', 'обязательный', 'Свой документ',
+        '{when} · {who}: {what} ({from} → {to})', 'Настройки стационара']) {
+        const e = STRINGS[k];
+        assert.ok(e && e.ru && e.uz && e.en, 'нет в словаре: ' + k);
+        assert.doesNotMatch(e.uz + e.en, /[А-Яа-яЁё]/, k);
+    }
 });

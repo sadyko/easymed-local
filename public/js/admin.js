@@ -985,6 +985,20 @@ export function backTargetOf(parent) {
     return home && isRouteAllowed(home) && !navHiddenFor(home) ? home : null;
 }
 
+// INPATIENT_REQUIRED_V1 (ревью) — ВТОРОЙ ВХОД ПОДЭКРАНА. «Настройки стационара» — подэкран
+// Настроек (плитка «Помещений», PARENT_OF), но открываются и кнопкой на доске стационара:
+// роль «Главный врач» по умолчанию «Настроек» не имеет (permissions.js пускает её и без них).
+// Родитель закрыт — «назад» ведёт туда, откуда этот человек и пришёл (на доску), а не на
+// домашний экран роли (backTargetOf). Родитель открыт — как было, к родителю.
+const BACK_ALT_OF = { 'inpatient-settings': 'admissions' };
+function backTargetFor(view) {
+    const parent = parentViewOf(view);
+    const alt = BACK_ALT_OF[view];
+    const open = (v) => !!v && isRouteAllowed(v) && !navHiddenFor(v);
+    if (alt && parent && !open(parent) && open(alt)) return alt;
+    return backTargetOf(parent);
+}
+
 // INLINE_HEAD_V1 (2026-11-21, владелец со снимком «Чат Facebook и Instagram»:
 // «this place is used not effective, as there are a lot of free spaces, correct
 // it and make accurate»). На экранах инструментов «Коммерции» шапка занимала две
@@ -1008,7 +1022,7 @@ function renderBackControl() {
     if (!backEl) return;
     const pane = state.panes.find((p) => p.key === state.activeKey);
     const view = pane ? pane.view : state.view;
-    const target = (inlineHeadView(view) || OWN_BACK_VIEWS.has(view)) ? null : backTargetOf(parentViewOf(view));   // INLINE_HEAD_V1, OWN_BACK_VIEWS
+    const target = (inlineHeadView(view) || OWN_BACK_VIEWS.has(view)) ? null : backTargetFor(view);   // INLINE_HEAD_V1, OWN_BACK_VIEWS; INPATIENT_REQUIRED_V1 (ревью) — второй вход
     // Кнопка не просто прячется — она ОТКЛЮЧАЕТСЯ: спрятанная, но нажимаемая
     // кнопка ловит клавиатуру и уводит с экрана без предупреждения.
     backEl.hidden = !target;

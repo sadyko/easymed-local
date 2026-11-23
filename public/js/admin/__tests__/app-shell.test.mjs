@@ -955,6 +955,31 @@ test('BACK_TO_ALLOWED_V1: медсестре «назад» с карточки 
     }
 });
 
+// INPATIENT_REQUIRED_V1 (ревью) — «Настройки стационара» открываются и с доски стационара:
+// роль «Главный врач» по умолчанию «Настроек» не имеет. «Назад» у такого человека ведёт на
+// доску, откуда он пришёл, — не в «Нет доступа» и не на домашний экран роли.
+test('INPATIENT_REQUIRED_V1 (ревью): главному врачу без «Настроек» «назад» со страницы настроек стационара ведёт на доску стационара', async () => {
+    const perms = await import('../permissions.js');
+    try {
+        perms.setEffectiveFromRole({ name: 'head_doctor', permissions: { sections: ['patients', 'beds', 'consultation'], levels: { patients: 'editor', beds: 'editor' } } });
+        assert.equal(perms.isModuleAllowed('settings'), false, 'тест подобран неверно: «Настройки» открыты');
+        assert.equal(perms.isRouteAllowed('inpatient-settings'), true, 'страница настроек стационара главному врачу закрыта');
+        await go('inpatient-settings');
+        const back = byId('section-back');
+        assert.equal(back.hidden, false, 'со страницы пропала кнопка «назад»');
+        assert.equal(/Настройки/.test(labelOf(back)), false, '«назад» зовёт в Настройки — там ждёт «Нет доступа»');
+        back.click();
+        await settle(80);
+        assert.equal(shell().state.view, 'admissions', '«назад» увёл не на доску стационара: ' + shell().state.view);
+        assert.equal(/No access|Нет доступа/.test(VIEW_ROOT.textContent), false);
+    } finally {
+        perms.setFullAccess('Admin');
+    }
+    // У полного доступа — как было: к родителю, в Настройки.
+    await go('inpatient-settings');
+    assert.match(labelOf(byId('section-back')), /Настройки|Settings/);
+});
+
 test('BACK_TO_ALLOWED_V1: у администратора «назад» не изменилось — оно ведёт к родителю', async () => {
     await perms_setFull();
     await go('departments');

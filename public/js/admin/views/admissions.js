@@ -49,7 +49,7 @@ import { IN_BED_STATUSES, OPEN_STATUSES, admissionStatusLabel } from '../../shar
 import { h, Icon, Tag, clear, PageHead, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { dateNumeric } from '../../shared/date-words.js';   // WARD_TABLE_V1 — «с 06.09»
-import { isModuleAllowed, hasActorRole } from '../permissions.js';
+import { isModuleAllowed, hasActorRole, isRouteAllowed } from '../permissions.js';   // INPATIENT_REQUIRED_V1 (ревью) — isRouteAllowed: кнопка «Настройки стационара»
 import { currentUser } from '../data.js';   // ADMITTING_DOCTOR_V1 — «это мой пациент на осмотр?»
 import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard,
          openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet, goToCaseOverview, canOpenCaseOverview, canOpenMarSheet } from './admission-modal.js?v=inp5';
@@ -133,6 +133,10 @@ async function load() {
     return data || [];
 }
 
+// INPATIENT_REQUIRED_V1 (ревью) — кнопки шапки без пустых мест; нет ни одной — нет и строки
+// кнопок (PageHead рисует её на любой непустой right), как было у вкладки врача.
+const headButtons = (list) => { const l = list.filter(Boolean); return l.length ? l : null; };
+
 async function paint(root, onNavigate = null, { only = null } = {}) {
     clear(root);
     const reload = () => paint(root, onNavigate, { only });
@@ -167,16 +171,30 @@ async function paint(root, onNavigate = null, { only = null } = {}) {
     // (данные перечитываются при каждом входе и переключении вкладки, а после
     // заявки — через onDone), «Заявка на госпитализацию» — у ЛЕВОГО края строки
     // (.adm-head, admin-views.css), где начинается взгляд, а не в правом углу.
+    // INPATIENT_REQUIRED_V1 (ревью) — вход в «Настройки → Стационар» прямо с доски: роль
+    // «Главный врач» по умолчанию раздела «Настройки» не имеет, и плитки хаба не видит.
+    // Кнопка — ровно тем, кому страница откроется (isRouteAllowed: администратор и главный
+    // врач), на обеих вкладках; остальным она вела бы в «Нет доступа».
+    const settingsBtn = isRouteAllowed('inpatient-settings')
+        ? h('button', {
+            class: 'btn btn-outline btn-sm', type: 'button', 'data-inpatient-settings-link': '',
+            onclick: () => {
+                const fn = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
+                if (fn) fn('inpatient-settings');
+            },
+        }, Icon('Settings', { size: 13 }), ' ', tr('Настройки стационара'))
+        : null;
     const head = PageHead({
         title: 'Стационар',
         // INPATIENT_NO_SUBTITLE_V1 (2026-11-21, владелец: «remove such text and use space smartly») —
         // поясняющего подзаголовка нет, в шапке остались только кнопки.
-        right: wardOnly ? null : [
-            h('button', {
+        right: headButtons([
+            wardOnly ? null : h('button', {
                 class: 'btn btn-primary btn-sm', type: 'button',
                 onclick: () => openAdmissionOrderModal({ onDone: reload }),
             }, Icon('Plus', { size: 13 }), ' ', tr('Заявка на госпитализацию')),
-        ],
+            settingsBtn,
+        ]),
     });
     head.className += ' adm-head';
     root.appendChild(head);
