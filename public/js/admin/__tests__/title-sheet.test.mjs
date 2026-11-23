@@ -94,6 +94,8 @@ let SETTINGS = null;
 let DOCTORS = [];
 // INPATIENT_REQUIRED_V1 (ревью) — обещание, которого ждёт ответ настроек: настройки «в пути».
 let SETTINGS_GATE = null;
+// INPATIENT_REQUIRED_V1 (ревью) — ответ admission_title_sheet_get подменяет сам тест (null — обычный).
+let SHEET_GET = null;
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     let body = {}; try { body = JSON.parse(opts.body || '{}'); } catch { /* not ours */ }
@@ -107,7 +109,7 @@ globalThis.fetch = async (url, opts = {}) => {
         return SETTINGS ? ok(SETTINGS) : fail('нет');
     }
     if (name === 'admission_attending_candidates') return ok({ doctors: DOCTORS });
-    if (name === 'admission_title_sheet_get') return ok(Object.assign({}, VIEW, { sheet: null, bmi: null, complete: false, missing: ['height_cm'] }));
+    if (name === 'admission_title_sheet_get') return ok(SHEET_GET || Object.assign({}, VIEW, { sheet: null, bmi: null, complete: false, missing: ['height_cm'] }));
     if (name === 'admission_admit') return ok({ admission: { id: body.admission_id, status: 'admitted' }, title_sheet: body.title_sheet ? { height_cm: 172 } : null });
     if (name === 'admission_title_sheet_save') return ok(Object.assign({}, VIEW, { complete: true }));
     return fail('unknown rpc ' + name);
@@ -517,6 +519,78 @@ test('INPATIENT_REQUIRED_V1: отметки — только экран; печ�
     const { titleSheetPrintHtml } = await import('../views/title-sheet-print.js');
     const html = titleSheetPrintHtml(Object.assign({}, VIEW, { sheet: null, complete: false, missing: ['height_cm'] }), { fontFaceCss: '' });
     assert.ok(!html.includes('rq-') && !html.includes('Не заполнено'), 'отметки попали на бумагу');
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — клиника не требует ни одного поля листа (лист «по желанию»
+// или пустой список): пустой лист «полон» по пустому списку. Тост размещения говорил
+// «Титульный лист заполнен.», а строка под листом — «Заполнен:  · » без кого и когда.
+const toastEl = () => BODY.children.find((c) => c.attrs && c.attrs.id === 'toast');
+test('INPATIENT_REQUIRED_V1 (ревью): ни одно поле не обязательно — тост размещения только «Пациент размещён на койке.»', async () => {
+    const { openAdmissionTitleSheetModal, loadInpatientRulesSoon } = await import('../views/title-sheet.js');
+    const cases = [
+        { settings: { title_required: 0, admitting_at_placement: 0 }, docs: [] },
+        { settings: { title_required_fields: [], admitting_at_placement: 0 }, docs: [] },
+    ];
+    try {
+        for (const s of cases) {
+            SETTINGS = s;
+            await loadInpatientRulesSoon();   // правила уже прочитаны — окно рисуется ими
+            rpcCalls.length = 0;
+            let done = 0;
+            openAdmissionTitleSheetModal({ admission: { id: 11, status: 'ordered', patients: {} }, bed: { id: 6, code: 'T-2' }, onDone: async () => { done += 1; } });
+            await settle();
+            findBtn(topEl(), 'Положить').click();
+            await settle();
+            assert.ok(rpcCalls.some((c) => c.name === 'admission_admit'), 'не положен');
+            assert.equal(done, 1);
+            assert.equal(toastEl().textContent, 'Пациент размещён на койке.', JSON.stringify(s.settings));
+            assert.equal(toastEl().dataset.kind, 'ok');
+        }
+        // Умолчания (восемь полей) — как раньше: лист с одним ростом «заполнен не до конца».
+        SETTINGS = null;
+        await loadInpatientRulesSoon();
+        openAdmissionTitleSheetModal({ admission: { id: 11, status: 'ordered', patients: {} }, bed: { id: 6, code: 'T-2' } });
+        await settle();
+        findBtn(topEl(), 'Положить').click();
+        await settle();
+        await saveAnyway();
+        assert.equal(toastEl().textContent, 'Пациент размещён на койке. Титульный лист заполнен не до конца — допишите его в истории болезни.');
+        assert.equal(toastEl().dataset.kind, 'warn');
+        const { STRINGS } = await import('../i18n-strings.js');
+        const s = STRINGS['Пациент размещён на койке.'];
+        assert.ok(s && s.uz && s.en && !/[А-Яа-яЁё]/.test(s.uz + s.en), 'строки нет в словаре');
+    } finally { SETTINGS = null; }
+});
+
+test('INPATIENT_REQUIRED_V1 (ревью): ни одно поле не обязательно — строка под листом не пишет «Заполнен» без кого и когда', async () => {
+    const { buildTitleSheetEditor } = await import('../views/title-sheet.js');
+    const unsigned = Object.assign({}, VIEW.sheet, { filled_by_name: '', filled_at: null });
+    try {
+        // Лист есть, полон по пустому списку, подписи нет — только бумаги.
+        SHEET_GET = Object.assign({}, VIEW, { sheet: unsigned, complete: true, missing: [], required_fields: [], title_required: false });
+        let ed = buildTitleSheetEditor({ admission: { id: 11 } });
+        await settle();
+        let line = textOf(ed.belowSheet[0]);
+        assert.ok(!line.includes('Заполнен'), line);
+        assert.ok(line.includes('Договор — ') && line.includes('Памятка — '), 'бумаги пропали: ' + line);
+        // Листа нет — строки нет совсем (не «заполнен не до конца»: требовать нечего).
+        SHEET_GET = Object.assign({}, VIEW, { sheet: null, complete: false, missing: [], required_fields: [], title_required: true });
+        ed = buildTitleSheetEditor({ admission: { id: 11 } });
+        await settle();
+        assert.equal(textOf(ed.belowSheet[0]).trim(), '');
+        // Список сократили — лист полон, но без подписи «заполнил»: «Заполнен» без кого и когда не пишем.
+        SHEET_GET = Object.assign({}, VIEW, { sheet: unsigned, complete: true, missing: [], required_fields: ['height_cm'] });
+        ed = buildTitleSheetEditor({ admission: { id: 11 } });
+        await settle();
+        line = textOf(ed.belowSheet[0]);
+        assert.ok(!line.includes('Заполнен'), line);
+        // Умолчания — как раньше: подписанный полный лист называет, кто и когда.
+        SHEET_GET = Object.assign({}, VIEW, { required_fields: ['height_cm', 'weight_kg', 'temp_c', 'bp_sys', 'bp_dia', 'pulse_bpm', 'pediculosis', 'sanitation'] });
+        ed = buildTitleSheetEditor({ admission: { id: 11 } });
+        await settle();
+        line = textOf(ed.belowSheet[0]);
+        assert.ok(line.includes('Заполнен: Медсестра Петрова · '), line);
+    } finally { SHEET_GET = null; }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

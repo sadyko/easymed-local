@@ -443,3 +443,111 @@ test('раздел, разложенный по двум листам A4: пус
     assert.equal(await ed.submit(), true);
     assert.ok(rpcCalls.some((c) => c.name === 'admission_review_save'));
 });
+
+// ─── INPATIENT_REQUIRED_V1 (ревью): окно закрыли, пока сохранение ждало правил клиники ──
+// «Положить», «Сохранить» и «Опубликовать» ждут inpatient_settings_get до 10 с. Человек за
+// это время закрыл окно или ушёл к другому документу — сохранение не уходит за его спиной.
+// Окно, которое осталось открытым, сохраняет как раньше.
+test('(ревью) окно документа закрыли, пока «Опубликовать» ждал правил, — ничего не публикуется; открытое — публикует', async () => {
+    await primeDefaultRules();
+    SETTINGS = { settings: { primary_needs_diagnosis: 0 }, docs: [] };
+    let release = gate();
+    try {
+        openAdmissionReviewModal({ admission: ADM, kind: 'primary' });
+        await settle();
+        const win = modalsIn()[0];
+        rpcCalls.length = 0;
+        findBtn(win, 'Опубликовать осмотр').click();
+        await settle();
+        findBtn(win, 'Закрыть').click();
+        assert.equal(modalsIn().length, 0);
+        release();
+        await settle();
+        assert.ok(!rpcCalls.some((c) => c.name === 'admission_review_save'), 'закрытое окно опубликовало осмотр');
+        assert.ok(!BODY.children.some((c) => c.attrs && c.attrs['data-dialog'] === 'required-missing'), 'закрытое окно спросило «Заполнено не всё»');
+        // То же, но окно не закрывали — публикует, как раньше.
+        release = gate();
+        openAdmissionReviewModal({ admission: ADM, kind: 'primary' });
+        await settle();
+        rpcCalls.length = 0;
+        findBtn(modalsIn()[0], 'Опубликовать осмотр').click();
+        await settle();
+        release();
+        await settle();
+        assert.ok(rpcCalls.some((c) => c.name === 'admission_review_save' && c.args.publish === true));
+    } finally { if (SETTINGS_GATE) release(); SETTINGS = null; resetBody(); }
+});
+
+test('(ревью) окно размещения закрыли, пока «Положить» ждал правил, — пациента не кладут; открытое — кладёт', async () => {
+    const { openAdmissionTitleSheetModal } = await import('../views/title-sheet.js');
+    resetBody();
+    SETTINGS = { settings: { admitting_at_placement: 0, title_required: 0 }, docs: [] };
+    let release = gate();
+    try {
+        let done = 0;
+        openAdmissionTitleSheetModal({ admission: { id: 11, status: 'ordered', patients: {} }, bed: { id: 6, code: 'T-2' }, onDone: async () => { done += 1; } });
+        await settle();
+        const win = modalsIn()[0];
+        rpcCalls.length = 0;
+        findBtn(win, 'Положить').click();
+        await settle();
+        findBtn(win, 'Закрыть').click();
+        assert.equal(modalsIn().length, 0);
+        release();
+        await settle();
+        assert.ok(!rpcCalls.some((c) => c.name === 'admission_admit'), 'закрытое окно положило пациента');
+        assert.equal(done, 0);
+        release = gate();
+        openAdmissionTitleSheetModal({ admission: { id: 11, status: 'ordered', patients: {} }, bed: { id: 6, code: 'T-2' }, onDone: async () => { done += 1; } });
+        await settle();
+        rpcCalls.length = 0;
+        findBtn(modalsIn()[0], 'Положить').click();
+        await settle();
+        release();
+        await settle();
+        assert.ok(rpcCalls.some((c) => c.name === 'admission_admit'), 'открытое окно не положило пациента');
+    } finally { if (SETTINGS_GATE) release(); SETTINGS = null; resetBody(); }
+});
+
+test('(ревью) рабочий экран: лист и документ убрали со страницы, пока «Сохранить» / «Опубликовать» ждали правил, — ничего не сохраняется', async () => {
+    const { buildTitleSheetEditor } = await import('../views/title-sheet.js');
+    resetBody();
+    const mount = (ed) => {
+        const host = mkEl('div');
+        BODY.appendChild(host);
+        host.appendChild(ed.topNote);
+        for (const f of ed.fields.filter(Boolean)) host.appendChild(f);
+        return host;
+    };
+    const cases = [
+        { build: (rules) => buildTitleSheetEditor({ admission: { id: 11 }, rules }), rpc: 'admission_title_sheet_save' },
+        { build: (rules) => buildReviewEditor({ admission: ADM, kind: 'intake', rules }), rpc: 'admission_review_save' },
+    ];
+    try {
+        for (const c of cases) {
+            for (const leave of [true, false]) {
+                let resolve = null;
+                const later = new Promise((r) => { resolve = r; });
+                const ed = c.build(later);
+                const host = mount(ed);
+                await settle();
+                rpcCalls.length = 0;
+                const p = ed.submit();
+                await settle();
+                if (leave) host.remove();   // ушли к другому документу: панель очищена
+                resolve(rules({ title_required: 0 }));
+                const ok = await p;
+                await settle();
+                if (leave) {
+                    assert.equal(ok, false, c.rpc);
+                    assert.ok(!rpcCalls.some((x) => x.name === c.rpc), 'убранный редактор сохранил: ' + c.rpc);
+                    assert.ok(!BODY.children.some((x) => x.attrs && x.attrs['data-dialog'] === 'required-missing'), 'убранный редактор спросил');
+                } else {
+                    assert.equal(ok, true, c.rpc);
+                    assert.ok(rpcCalls.some((x) => x.name === c.rpc), 'редактор на странице не сохранил: ' + c.rpc);
+                }
+                resetBody();
+            }
+        }
+    } finally { resetBody(); }
+});

@@ -86,6 +86,26 @@ function isEditable(el) {
     return v === '' || /^(true|plaintext-only)$/i.test(String(v));
 }
 const isControl = (el) => !!el && (/^(INPUT|SELECT|TEXTAREA)$/.test(String(el.tagName || '').toUpperCase()) || isEditable(el));
+// INPATIENT_REQUIRED_V1 (ревью) — ARIA разрешает aria-required не каждому элементу, а только
+// ролям, у которых «обязательно» что-то значит. Редактор с contenteditable без роли,
+// радиокнопка (role=radio), кнопка — нет: на них aria-required недопустим (axe:
+// aria-allowed-attr). Им остаются aria-invalid, aria-describedby, «Не заполнено», скрытое
+// «обязательно» у подписи и строка сверху — этого читалке хватает.
+const REQUIRED_ROLES = new Set(['checkbox', 'combobox', 'gridcell', 'listbox', 'radiogroup', 'searchbox',
+    'spinbutton', 'switch', 'textbox', 'tree', 'treegrid']);
+// Типы <input>, чья роль (или «без роли, но с атрибутами textbox») aria-required принимает.
+const REQUIRED_INPUT_TYPES = new Set(['', 'text', 'search', 'tel', 'url', 'email', 'password', 'number',
+    'date', 'datetime-local', 'month', 'week', 'time', 'checkbox']);
+function allowsAriaRequired(el) {
+    if (!el || typeof el.setAttribute !== 'function') return false;
+    const role = typeof el.getAttribute === 'function' ? String(el.getAttribute('role') || '').trim().split(/\s+/)[0].toLowerCase() : '';
+    if (role) return REQUIRED_ROLES.has(role);
+    const tag = String(el.tagName || '').toUpperCase();
+    if (tag === 'SELECT' || tag === 'TEXTAREA') return true;
+    if (tag !== 'INPUT') return false;   // contenteditable, кнопки, рамки — без роли не берут
+    const type = String((typeof el.getAttribute === 'function' && el.getAttribute('type')) || el.type || '').trim().toLowerCase();
+    return REQUIRED_INPUT_TYPES.has(type);
+}
 const hasChild = (parent, node) => !!parent && Array.prototype.includes.call(parent.children || [], node);
 const hasCls = (el, name) => !!el && String(el.className || '').split(/\s+/).includes(name);
 const kids = (el) => Array.prototype.slice.call((el && el.children) || []);
@@ -189,7 +209,10 @@ export function requiredMarks({ fields = [] } = {}) {
     // INPATIENT_REQUIRED_V1 (ревью) — только самому полю: видимой кнопке списка программы
     // (.uisel-field, role=button) ARIA aria-required не разрешает. Обязательность остаётся у
     // родного <select>, а aria-invalid / aria-describedby кнопка получает (ariaOf).
+    // INPATIENT_REQUIRED_V1 (ревью) — и только полю с ролью, которой ARIA его разрешает
+    // (allowsAriaRequired): редактор с contenteditable без роли его не получает.
     function markRequired(t) {
+        if (!allowsAriaRequired(t)) return;
         if (typeof t.getAttribute !== 'function' || t.getAttribute('aria-required') !== 'true') ownReq.add(t);
         t.setAttribute('aria-required', 'true');
     }

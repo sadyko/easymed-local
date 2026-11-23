@@ -552,3 +552,50 @@ test('ревью: «Заполнено не всё» с причиной — с�
     assert.ok(e && e.ru && e.uz && e.en, 'причины нет в словаре');
     assert.doesNotMatch(e.uz + e.en, /[А-Яа-яЁё]/);
 });
+
+// INPATIENT_REQUIRED_V1 (ревью) — aria-required ARIA разрешает только ролям, у которых
+// «обязательно» что-то значит (textbox, combobox, checkbox…) и родным полям ввода.
+// Редактор с contenteditable без роли и радиокнопка его не получают — им остаются
+// aria-invalid, aria-describedby, «Не заполнено», скрытое «обязательно» у подписи и строка сверху.
+test('ревью: aria-required — только полю с разрешённой ролью; contenteditable без роли и радиокнопка — без него, остальные отметки на месте', () => {
+    const kinds = [(e) => { e.isContentEditable = true; }, (e) => { e.setAttribute('contenteditable', 'true'); }, (e) => { e.setAttribute('contenteditable', ''); }];
+    for (const mark of kinds) {
+        const wrap = mkEl('div'); const ed = mkEl('div'); mark(ed); wrap.appendChild(ed);
+        const lbl = mkEl('span'); lbl._text = 'Жалобы';
+        const m = requiredMarks({ fields: [{ key: 'complaints', label: 'Жалобы', el: ed, labelEl: lbl, isEmpty: () => !String(ed.textContent).trim() }] });
+        assert.equal(ed.getAttribute('aria-required'), null, 'aria-required на contenteditable без роли');
+        assert.equal(ed.getAttribute('aria-invalid'), 'true');
+        const msgId = wrap.children[1].getAttribute('id');
+        assert.ok(msgId && String(ed.getAttribute('aria-describedby')).split(' ').includes(msgId), 'описание «Не заполнено» потерялось');
+        assert.ok(textOf(lbl).includes('обязательно') && cls(lbl).includes('rq-req'), 'скрытое «обязательно» у подписи');
+        assert.equal(m.summary.hidden, false);
+        assert.ok(textOf(m.summary).includes('Жалобы'));
+        ed._text = 'текст'; ed.dispatchEvent({ type: 'input' });
+        assert.notEqual(ed.getAttribute('aria-invalid'), 'true');
+        assert.equal(ed.getAttribute('aria-required'), null);
+        m.setFields([]);
+    }
+    // Редактор с ролью textbox — aria-required разрешён и ставится; снятие — снимает своё.
+    const tb = mkEl('div'); tb.setAttribute('contenteditable', 'true'); tb.setAttribute('role', 'textbox');
+    const wrapTb = mkEl('div'); wrapTb.appendChild(tb);
+    const m2 = requiredMarks({ fields: [{ key: 'plan', label: 'План', el: tb, isEmpty: () => true }] });
+    assert.equal(tb.getAttribute('aria-required'), 'true');
+    m2.setFields([]);
+    assert.equal(tb.getAttribute('aria-required'), null);
+    // Радиокнопка (role=radio) aria-required не берёт; aria-invalid — да. Родные поля — как раньше.
+    const r1 = mkEl('input'); r1.setAttribute('type', 'radio'); const grp = mkEl('div'); grp.appendChild(r1);
+    const txt = mkEl('input'); txt.setAttribute('type', 'number'); const boxN = mkEl('span'); boxN.appendChild(txt);
+    const chk = mkEl('input'); chk.setAttribute('type', 'checkbox'); const boxC = mkEl('span'); boxC.appendChild(chk);
+    const area = mkEl('textarea'); const boxA = mkEl('span'); boxA.appendChild(area);
+    const m3 = requiredMarks({ fields: [
+        { key: 'sanitation', label: 'Санитарная обработка', el: r1, box: grp, watch: [r1], isEmpty: () => true },
+        { key: 'pulse_bpm', label: 'Пульс', el: txt, box: boxN, isEmpty: () => true },
+        { key: 'consent_signed', label: 'Информированное согласие', el: chk, box: boxC, isEmpty: () => true },
+        { key: 'note', label: 'Примечание', el: area, box: boxA, isEmpty: () => true },
+    ] });
+    assert.equal(r1.getAttribute('aria-required'), null, 'aria-required на радиокнопке');
+    assert.equal(r1.getAttribute('aria-invalid'), 'true');
+    for (const el of [txt, chk, area]) assert.equal(el.getAttribute('aria-required'), 'true', el.tagName);
+    m3.setFields([]);
+    for (const el of [txt, chk, area]) assert.equal(el.getAttribute('aria-required'), null, el.tagName);
+});

@@ -58,7 +58,7 @@ import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.j
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // TITLE_SHEET_V1 — вынесено, чтобы не было кольца
 // TITLE_SHEET_V1 — шаг 2 размещения. INPATIENT_REQUIRED_V1 (ревью) — правила клиники: окно
 // рисуется сразу, публикация их ждёт (общая память прочитанных правил — в title-sheet.js).
-import { openAdmissionTitleSheetModal, inpatientRulesNow, isRulesPromise, settleWithin, loadInpatientRulesSoon } from './title-sheet.js';
+import { openAdmissionTitleSheetModal, inpatientRulesNow, isRulesPromise, settleWithin, loadInpatientRulesSoon, rulesThenStillOpen } from './title-sheet.js';   // INPATIENT_REQUIRED_V1 (ревью) — rulesThenStillOpen
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isRouteAllowed } from '../permissions.js';   // V3120_CLEANUP — переходы только в открытые экраны
 import { moneyDisplay } from '../../shared/money-input.js';   // CASE_OVERVIEW_V1 — сумма счёта в подтверждении выписки
@@ -1383,7 +1383,9 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         if (refuseSignWhileActing()) return false;
         // INPATIENT_REQUIRED_V1 (ревью) — что обязательно, решают правила клиники, а не
         // умолчания: нажатие раньше ответа настроек ждёт его (кнопка — «Выполняем…»).
-        await rulesReady;
+        // INPATIENT_REQUIRED_V1 (ревью) — пока ждали, окно закрыли или документ убрали с
+        // рабочего экрана — не публикуем: человек передумал, а запись ушла бы за его спиной.
+        if (!(await rulesThenStillOpen(rulesReady, marks.summary))) return false;
         // CASE_DX_LIST_V1 — сперва забираем написанное в поле диагноза, и только
         // потом спрашиваем, есть ли диагноз: иначе осмотр отклонялся бы у врача,
         // который диагноз написал, но не нажал «Добавить свой».

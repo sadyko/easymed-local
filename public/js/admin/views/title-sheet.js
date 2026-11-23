@@ -70,6 +70,32 @@ export function loadInpatientRulesSoon(ms = RULES_WAIT_MS) {
         return r || inpatientRulesNow();
     });
 }
+/**
+ * INPATIENT_REQUIRED_V1 (ревью) — стоит ли узел ещё на странице (окно не закрыто,
+ * редактор не убран). Пока «Положить» / «Сохранить» / «Опубликовать» ждут правил клиники
+ * (до RULES_WAIT_MS), человек мог закрыть окно или уйти к другому документу — и
+ * сохранение не должно уйти за его спиной. isConnected браузера верен, но поддельные DOM
+ * тестов отвечают «да» всегда: верим только его «нет», а «да» проверяем подъёмом по
+ * родителям до документа.
+ */
+export function stillOnPage(el) {
+    if (!el) return false;
+    if (el.isConnected === false) return false;
+    let n = el;
+    while (n.parentNode) n = n.parentNode;
+    if (typeof document === 'undefined' || !document) return false;
+    return n === document || n.nodeType === 9 || n === document.body || n === document.documentElement;
+}
+/**
+ * INPATIENT_REQUIRED_V1 (ревью) — дождаться правил клиники и сказать, открыто ли ещё окно.
+ * Окно, которого на странице не было и при нажатии (экран вызвал сохранение сам), не
+ * проверяется: закрыть его было нельзя. Было и пропало — false: ничего не делаем.
+ */
+export async function rulesThenStillOpen(ready, anchor) {
+    const wasOpen = stillOnPage(anchor);
+    await ready;
+    return !wasOpen || stillOnPage(anchor);
+}
 
 // INPATIENT_DOCS_V1 — три бумаги при поступлении (владелец: «hospitalization
 // agreement, informed consent, stationary pamyatka»). Печатаются тем же
@@ -453,7 +479,9 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
     ], tr('Положить'), async () => {
         // INPATIENT_REQUIRED_V1 (ревью) — решают правила клиники, а не умолчания: нажатие
         // раньше ответа настроек ждёт его (кнопка тем временем «Выполняем…»).
-        await rulesReady;
+        // INPATIENT_REQUIRED_V1 (ревью) — пока ждали, окно закрыли — не кладём: человек
+        // передумал, а пациент лёг бы на койку за его спиной.
+        if (!(await rulesThenStillOpen(rulesReady, m && m.overlay))) return false;
         // INPATIENT_REQUIRED_V1 — приёмный врач при включённом переключателе — жёсткий
         // запрет: окно называет только его и предлагает лишь «Дописать». Остальные пустые
         // поля листа — вопрос «Сохранить как есть»: пустые измерения дописывают позже.
@@ -474,11 +502,17 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
         });
         if (error) { toast(error.message || tr('Не удалось положить на койку.'), 'fail'); return false; }
         // INPATIENT_REQUIRED_V1 — «заполнен» по списку клиники; поля карточки — из формы.
-        const complete = !!(data && data.title_sheet && sheetCompleteness(data.title_sheet, titleKeysOf(rules), form.read().patient).complete);
-        toast(complete
-            ? tr('Пациент размещён на койке. Титульный лист заполнен.')
-            : tr('Пациент размещён на койке. Титульный лист заполнен не до конца — допишите его в истории болезни.'),
-        complete ? 'ok' : 'warn');
+        // INPATIENT_REQUIRED_V1 (ревью) — клиника не требует ни одного поля (лист «по
+        // желанию» или список пуст): пустой лист «полон» по пустому списку, и тост говорил
+        // «Титульный лист заполнен.» про пустой лист. Тогда — только «размещён».
+        const keys = titleKeysOf(rules);
+        const complete = !!(data && data.title_sheet && sheetCompleteness(data.title_sheet, keys, form.read().patient).complete);
+        toast(!keys.length
+            ? tr('Пациент размещён на койке.')
+            : (complete
+                ? tr('Пациент размещён на койке. Титульный лист заполнен.')
+                : tr('Пациент размещён на койке. Титульный лист заполнен не до конца — допишите его в истории болезни.')),
+        !keys.length || complete ? 'ok' : 'warn');
         if (onDone) await onDone();
         return true;
     }, {
@@ -527,6 +561,17 @@ export function buildTitleSheetEditor({ admission, onDone, rules = DEFAULT_RULES
     let view = null;
     const showStatus = () => {
         if (!view) { status.textContent = ''; return; }
+        // INPATIENT_REQUIRED_V1 (ревью) — клиника не требует ни одного поля (лист «по
+        // желанию» или список пуст): пустой лист «полон» по пустому списку, подписи
+        // «заполнил» у него нет, и строка выходила «Заполнен:  · ». Полнота тогда ничего
+        // не значит — только бумаги (листа нет — ничего). То же у полного листа без подписи
+        // (клиника сократила список): «Заполнен» без кого и когда не пишем. Старый сервер
+        // required_fields не присылает — как раньше.
+        const noneRequired = Array.isArray(view.required_fields) && view.required_fields.length === 0;
+        if (noneRequired || (view.complete && view.sheet && !view.sheet.filled_at)) {
+            status.textContent = view.sheet ? papersSummary(view.sheet, { withDates: false }) : '';
+            return;
+        }
         // INPATIENT_REQUIRED_V1 — недописанный лист называет пустые поля словами экрана.
         const names = (Array.isArray(view.missing) ? view.missing : []).map(titleFieldLabel).filter(Boolean);
         const head = view.complete && view.sheet
@@ -561,7 +606,9 @@ export function buildTitleSheetEditor({ admission, onDone, rules = DEFAULT_RULES
         topNote: marks.summary,   // INPATIENT_REQUIRED_V1 — рабочий экран ставит её над листом
         submitLabel: tr('Сохранить'),
         submit: async () => {
-            await rulesReady;   // INPATIENT_REQUIRED_V1 (ревью) — решают правила клиники, не умолчания
+            // INPATIENT_REQUIRED_V1 (ревью) — решают правила клиники, не умолчания. Пока ждали,
+            // лист убрали со страницы (ушли к другому документу, закрыли историю) — не сохраняем.
+            if (!(await rulesThenStillOpen(rulesReady, marks.summary))) return false;
             // INPATIENT_REQUIRED_V1 — пустые обязательные поля: «Дописать» или «Сохранить как есть».
             const missing = marks.missing();
             if (missing.length) {
