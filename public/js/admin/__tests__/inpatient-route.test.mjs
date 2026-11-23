@@ -851,7 +851,8 @@ test('маршрут стационара проходится целиком: �
         beActor('nurse');
         BODY.children.length = 0; rpcCalls = [];
         const root = await screen(kitchen.renderKitchenSheet);
-        assert.ok(textOf(root).includes('Порционник'));
+        // CLINIC_NO_BANNER_V1 (ветка партнёра, владелец 2026-11-21) — баннера «Порционник» больше нет:
+        // имя экрана — пункт левой колонки; экран узнаётся по содержимому ниже.
         assert.ok(textOf(root).includes('Иванов Иван Иванович'), 'пациента на койке нет в заказе на кухню');
         assert.ok(textOf(root).includes('T-2'), 'койка в порционнике не названа');
         // И СТОЛ, НАЗНАЧЕННЫЙ ВРАЧОМ, — ЗДЕСЬ. Это и есть замкнувшийся круг:
@@ -962,7 +963,7 @@ test('маршрут стационара проходится целиком: �
         beActor('senior_nurse');
         BODY.children.length = 0; rpcCalls = [];
         const root = await screen(dischargeView.renderDischarge);
-        assert.ok(textOf(root).includes('Выписки к оформлению'));
+        // CLINIC_NO_BANNER_V1 — баннера «Выписки к оформлению» больше нет (имя — пункт колонки).
         assert.ok(textOf(root).includes('Иванов Иван Иванович'), 'пациента с поданной заявкой нет в очереди оформления');
         assert.ok(textOf(root).includes('Выписан домой'), 'исход, объявленный врачом, до оформляющего не доехал');
         assert.ok(textOf(root).includes('Юсупов А.'), 'очередь не называет лечащего врача');
