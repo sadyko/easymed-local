@@ -9,9 +9,7 @@ import { firstStageKey } from '../services/crm/contact-window.js';
 import { _setSender } from './notify.js'; // WEBSITE_V1 (задача W3-5)
 import { encryptToken, loadOrCreateKey } from '../services/telegram/crypto.js';
 
-// WEBSITE_V1: app.js приходит в Task 7 — до тех пор HTTP-тесты ниже (skip) берут
-// приложение ленивым импортом, а остальные зовут handleRequest напрямую.
-const startSite = async (prep, opts) => (await import('./app.test.js')).startSite(prep, opts);
+import { startSite } from './app.test.js';
 
 // Засев — через профили (как это делает администратор), не через website_doctors.
 export function seedSite(db) {
@@ -223,12 +221,11 @@ test('W3-5: недоступный Telegram не портит заявку — i
   } finally { process.off('unhandledRejection', onUnhandled); db.close(); }
 });
 
-// ---- Тесты ниже идут через HTTP-приложение сайта: app.js появится в Task 7 (там — снять skip).
-const NEEDS_APP = { skip: 'needs app.js — Task 7' };
+// ---- Тесты ниже идут через HTTP-приложение сайта.
 const post = (base, body, headers = {}) => fetch(base + '/api/requests', { method: 'POST',
   headers: { 'Content-Type': 'application/json', ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) });
 
-test('rate limit: шестая заявка за минуту с одного IP — 429', NEEDS_APP, async () => {
+test('rate limit: шестая заявка за минуту с одного IP — 429', async () => {
   const { server, base, db } = await startSite(seedSite);
   invalidateContentCache();
   try {
@@ -238,7 +235,7 @@ test('rate limit: шестая заявка за минуту с одного IP
   } finally { server.close(); }
 });
 
-test('HTTP: заявка с кукой wsid сохраняет session_id', NEEDS_APP, async () => {
+test('HTTP: заявка с кукой wsid сохраняет session_id', async () => {
   const { server, base, db } = await startSite(seedSite);
   invalidateContentCache();
   try {
@@ -249,7 +246,7 @@ test('HTTP: заявка с кукой wsid сохраняет session_id', NEED
   } finally { server.close(); }
 });
 
-test('страница записи: селекты только из опубликованного', NEEDS_APP, async () => {
+test('страница записи: селекты только из опубликованного', async () => {
   const { server, base } = await startSite(seedSite);
   invalidateContentCache();
   try {
@@ -263,7 +260,7 @@ test('страница записи: селекты только из опубл
 
 // Fix round 1 (security review): битый JSON и слишком большое тело обязаны падать
 // в терминальный обработчик ошибок app.js и уходить JSON-конвертом, не 500.
-test('битый JSON и слишком большое тело — 4xx JSON-конверт, не голая ошибка', NEEDS_APP, async () => {
+test('битый JSON и слишком большое тело — 4xx JSON-конверт, не голая ошибка', async () => {
   const { server, base, db } = await startSite(seedSite);
   invalidateContentCache();
   try {

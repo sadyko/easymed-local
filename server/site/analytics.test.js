@@ -3,8 +3,7 @@
 // 204, что бы ни случилось (мусор в теле, бот, превышение лимита).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-// WEBSITE_V1: app.js приходит в Task 7 — до тех пор импорт ленивый, а HTTP-тесты ниже помечены skip.
-const startSite = async (...a) => (await import('./app.test.js')).startSite(...a);
+import { startSite } from './app.test.js';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { recordBeacon, pruneWebsiteAnalytics } from './analytics.js';
@@ -46,7 +45,7 @@ async function beacon(base, body, cookie) {
   });
 }
 
-test('маячок всегда отвечает 204 — даже на мусорное тело', { skip: 'needs app.js — Task 7' }, async () => {
+test('маячок всегда отвечает 204 — даже на мусорное тело', async () => {
   const { server, base, db } = await startSite();
   try {
     const res = await fetch(base + '/api/beacon', {
@@ -59,7 +58,7 @@ test('маячок всегда отвечает 204 — даже на мусо�
   } finally { server.close(); }
 });
 
-test('первый маячок создаёт сессию и просмотр, выставляет обе куки', { skip: 'needs app.js — Task 7' }, async () => {
+test('первый маячок создаёт сессию и просмотр, выставляет обе куки', async () => {
   const { server, base, db } = await startSite();
   try {
     const res = await beacon(base, { path: '/uz/', page_type: 'home', ref: '', lang: 'uz' });
@@ -79,7 +78,7 @@ test('первый маячок создаёт сессию и просмотр,
   } finally { server.close(); }
 });
 
-test('второй маячок с той же кукой wsid переиспользует сессию', { skip: 'needs app.js — Task 7' }, async () => {
+test('второй маячок с той же кукой wsid переиспользует сессию', async () => {
   const { server, base, db } = await startSite();
   try {
     const first = await beacon(base, { path: '/uz/', page_type: 'home', ref: '', lang: 'uz' });
@@ -99,7 +98,7 @@ test('второй маячок с той же кукой wsid переиспо�
   } finally { server.close(); }
 });
 
-test('UA бота не пишет ничего в базу', { skip: 'needs app.js — Task 7' }, async () => {
+test('UA бота не пишет ничего в базу', async () => {
   const { server, base, db } = await startSite();
   try {
     const res = await fetch(base + '/api/beacon', {
@@ -114,7 +113,7 @@ test('UA бота не пишет ничего в базу', { skip: 'needs app.
   } finally { server.close(); }
 });
 
-test('строка запроса вырезается из сохранённого пути, utm попадает в сессию', { skip: 'needs app.js — Task 7' }, async () => {
+test('строка запроса вырезается из сохранённого пути, utm попадает в сессию', async () => {
   const { server, base, db } = await startSite();
   try {
     await beacon(base, {
@@ -133,7 +132,7 @@ test('строка запроса вырезается из сохранённо
 // Fix 3 — entry_path сессии обязан быть тем же query-stripped путём, что и
 // сохранённый просмотр: раньше сессия хранила path КАК ЕСТЬ, включая '?...',
 // и туда же протекали произвольные query-параметры (например, чужой email).
-test('entry_path сессии — без строки запроса, даже если в ней PII-подобный мусор', { skip: 'needs app.js — Task 7' }, async () => {
+test('entry_path сессии — без строки запроса, даже если в ней PII-подобный мусор', async () => {
   const { server, base, db } = await startSite();
   try {
     await beacon(base, {
@@ -151,7 +150,7 @@ test('entry_path сессии — без строки запроса, даже �
 // клиента (например, `wvid=x; Domain=evil`, декодированное из query-encoded
 // значения), эхом уходит обратно в Set-Cookie — классическая инъекция
 // атрибутов куки через отражённый ввод.
-test('невалидная кука wvid (инъекция атрибутов) не отражается в ответе — минтится свежая', { skip: 'needs app.js — Task 7' }, async () => {
+test('невалидная кука wvid (инъекция атрибутов) не отражается в ответе — минтится свежая', async () => {
   const { server, base, db } = await startSite();
   try {
     const res = await beacon(base, { path: '/uz/', page_type: 'home', ref: '', lang: 'uz' },
@@ -165,7 +164,7 @@ test('невалидная кука wvid (инъекция атрибутов) �
   } finally { server.close(); }
 });
 
-test('присланная кука wvid помечает сессию как возвращение', { skip: 'needs app.js — Task 7' }, async () => {
+test('присланная кука wvid помечает сессию как возвращение', async () => {
   const { server, base, db } = await startSite();
   try {
     await beacon(base, { path: '/uz/', page_type: 'home', ref: '', lang: 'uz' }, 'wvid=aaaaaaaaaaaaaaaaaaaaaaaa');
@@ -174,7 +173,7 @@ test('присланная кука wvid помечает сессию как в
   } finally { server.close(); }
 });
 
-test('реферер с хостом самого сайта (Host запроса) — это не внешний переход', { skip: 'needs app.js — Task 7' }, async () => {
+test('реферер с хостом самого сайта (Host запроса) — это не внешний переход', async () => {
   const { server, base, db } = await startSite();
   try {
     // base — это http://127.0.0.1:<port> тестового сервера: тот же хост,
@@ -187,7 +186,7 @@ test('реферер с хостом самого сайта (Host запрос�
   } finally { server.close(); }
 });
 
-test('мусорный lang сохраняется как пустая строка, а не протаскивается как есть', { skip: 'needs app.js — Task 7' }, async () => {
+test('мусорный lang сохраняется как пустая строка, а не протаскивается как есть', async () => {
   const { server, base, db } = await startSite();
   try {
     await beacon(base, { path: '/uz/', page_type: 'home', ref: '', lang: 'fr-CA<script>' });
@@ -196,7 +195,7 @@ test('мусорный lang сохраняется как пустая стро�
   } finally { server.close(); }
 });
 
-test('61-й маячок за минуту с одного IP — всё ещё 204, но без новой строки', { skip: 'needs app.js — Task 7' }, async () => {
+test('61-й маячок за минуту с одного IP — всё ещё 204, но без новой строки', async () => {
   const { server, base, db } = await startSite();
   try {
     for (let i = 0; i < 60; i++) {
