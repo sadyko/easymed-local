@@ -332,3 +332,195 @@ test('модуль не тянет экранов (без колец) и общ�
     assert.doesNotMatch(src, /from\s+'[^']*\?v=/, 'штамп ?v=');
     assert.doesNotMatch(src, /\bconfirm\s*\(/, 'никаких window.confirm');
 });
+
+// ─── INPATIENT_REQUIRED_V1 (ревью) ───────────────────────────────────────────
+/** Подмена, как её делает ui-select.js кадром позже: обёртка .uisel встаёт на место
+ *  <select>, в ней видимая кнопка .uisel-field, а родной список уезжает внутрь,
+ *  спрятанный (.uisel-native, tabIndex -1, data-ui-select="on"). */
+function swapSelect(sel) {
+    const wrap = mkEl('div'); wrap.className = 'uisel';
+    const btn = mkEl('button'); btn.className = 'uisel-field';
+    btn.setAttribute('type', 'button'); btn.setAttribute('aria-haspopup', 'listbox');
+    wrap.appendChild(btn);
+    const p = sel.parentNode;
+    if (p) { p.children.splice(p.children.indexOf(sel), 0, wrap); wrap.parentNode = p; p.removeChild(sel); }
+    wrap.appendChild(sel);
+    sel.dataset.uiSelect = 'on'; sel.setAttribute('data-ui-select', 'on');
+    sel.className = (sel.className + ' uisel-native').trim(); sel.tabIndex = -1;
+    return btn;
+}
+const msgsIn = (n) => walk(n).filter((e) => cls(e).includes('rq-msg'));
+const srsIn = (n) => walk(n).filter((e) => cls(e).includes('rq-sr'));
+const viewsCss = () => fs.readFileSync(new URL('../../../css/admin-views.css', import.meta.url), 'utf8');
+
+test('ревью: список программы вместо <select> — фокус и aria-required/aria-invalid/aria-describedby на видимой кнопке', () => {
+    const lbl = mkEl('label'); lbl._text = 'Приёмный врач';
+    const box = mkEl('div'); const sel = mkEl('select'); box.appendChild(sel);
+    const btn = swapSelect(sel);
+    btn.setAttribute('aria-describedby', 'own-hint');
+    const m = requiredMarks({ fields: [{ key: 'doc', label: 'Приёмный врач', el: sel, box, labelEl: lbl, isEmpty: () => !sel.value }] });
+    assert.equal(btn.getAttribute('aria-required'), 'true', 'обязательность — на кнопке, до которой доходят Tab и читалка');
+    assert.equal(btn.getAttribute('aria-invalid'), 'true');
+    const ids = String(btn.getAttribute('aria-describedby')).split(' ');
+    assert.ok(ids.includes('own-hint'), 'чужое описание кнопки осталось');
+    const msg = byId(box, ids.find((x) => x !== 'own-hint'));
+    assert.ok(msg && textOf(msg).includes('Не заполнено'));
+    // Переход из строки сверху и focusFirst — на видимую кнопку, не на спрятанный список.
+    walk(m.summary).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Приёмный врач')).click();
+    assert.equal(document.activeElement, btn);
+    assert.notEqual(sel._focused, true);
+    document.activeElement = null;
+    assert.equal(m.focusFirst(), true);
+    assert.equal(document.activeElement, btn);
+    // Выбор в списке программы — change на родном поле.
+    sel.value = '7'; sel.dispatchEvent({ type: 'change' });
+    assert.equal(btn.getAttribute('aria-invalid'), null);
+    assert.equal(btn.getAttribute('aria-describedby'), 'own-hint');
+    m.setFields([]);
+    assert.equal(btn.getAttribute('aria-required'), null, 'своё aria-required снято');
+    assert.equal(btn.getAttribute('aria-describedby'), 'own-hint');
+});
+
+test('ревью: aria-required, поставленное экраном на кнопку, отметки не снимают', () => {
+    const box = mkEl('div'); const sel = mkEl('select'); box.appendChild(sel);
+    const btn = swapSelect(sel);
+    btn.setAttribute('aria-required', 'true');
+    const m = requiredMarks({ fields: [{ key: 'doc', label: 'Врач', el: sel, box, isEmpty: () => !sel.value }] });
+    m.setFields([]);
+    assert.equal(btn.getAttribute('aria-required'), 'true');
+});
+
+test('ревью: подмена списка кадром позже — кнопку находят в момент действия, пересчёт через два кадра переносит aria-*', () => {
+    const rafWas = globalThis.requestAnimationFrame;
+    const q = [];
+    globalThis.requestAnimationFrame = (fn) => { q.push(fn); return q.length; };
+    try {
+        const form = mkEl('div'); const sel = mkEl('select'); form.appendChild(sel);
+        const m = requiredMarks({ fields: [{ key: 'doc', label: 'Врач', el: sel, isEmpty: () => !sel.value }] });
+        assert.ok(textOf(form.children[1]).includes('Не заполнено'), '«Не заполнено» — сразу за списком');
+        const btn = swapSelect(sel);
+        assert.equal(form.children[0], btn.parentNode);
+        assert.ok(textOf(form.children[1]).includes('Не заполнено'), 'после подмены — за обёрткой');
+        assert.equal(btn.parentNode.children.length, 2, 'внутри обёртки только кнопка и родной список');
+        m.focusFirst();
+        assert.equal(document.activeElement, btn, 'фокус — на кнопку, найденную в момент действия');
+        while (q.length) q.shift()();
+        assert.equal(btn.getAttribute('aria-required'), 'true');
+        assert.equal(btn.getAttribute('aria-invalid'), 'true');
+        assert.ok(String(btn.getAttribute('aria-describedby')).includes(form.children[1].attrs.id));
+        m.setFields([]);
+    } finally { globalThis.requestAnimationFrame = rafWas; }
+});
+
+test('ревью: список программы без рамки опустел после подмены — «Не заполнено» за обёрткой, красную рамку несёт кнопка (CSS)', () => {
+    const form = mkEl('div'); const sel = mkEl('select'); form.appendChild(sel); sel.value = '3';
+    const btn = swapSelect(sel);
+    const m = requiredMarks({ fields: [{ key: 'doc', label: 'Врач', el: sel, isEmpty: () => !sel.value }] });
+    assert.equal(msgsIn(form).length, 0);
+    sel.value = ''; sel.dispatchEvent({ type: 'change' });
+    assert.equal(btn.parentNode.children.length, 2, 'внутрь обёртки ничего не легло');
+    assert.equal(form.children.length, 2);
+    assert.ok(textOf(form.children[1]).includes('Не заполнено'));
+    assert.ok(cls(sel).includes('rq-empty'));
+    const css = viewsCss();
+    const block = css.slice(css.indexOf('INPATIENT_REQUIRED_V1'), css.indexOf('/* end INPATIENT_REQUIRED_V1'));
+    assert.match(block, /\.uisel:has\(>\s*select\.rq-empty\)\s*>\s*\.uisel-field\s*\{[^}]*box-shadow/);
+    assert.match(block, /@media print[\s\S]*\.uisel:has\(>\s*select\.rq-empty\)\s*>\s*\.uisel-field[\s\S]*box-shadow:\s*none/);
+    m.setFields([]);
+});
+
+test('ревью: редактор contenteditable без рамки — «Не заполнено» после него, текст редактора цел', () => {
+    const kinds = [(e) => { e.isContentEditable = true; }, (e) => { e.setAttribute('contenteditable', 'true'); }];
+    for (const mark of kinds) {
+        const wrap = mkEl('div'); const ed = mkEl('div'); mark(ed); wrap.appendChild(ed);
+        const m = requiredMarks({ fields: [{ key: 'complaints', label: 'Жалобы', el: ed, isEmpty: () => !String(ed.textContent).trim() }] });
+        assert.equal(ed.children.length, 0, 'внутри редактора нет «Не заполнено»');
+        assert.equal(wrap.children.length, 2);
+        assert.ok(textOf(wrap.children[1]).includes('Не заполнено'));
+        assert.ok(cls(ed).includes('rq-empty'));
+        assert.equal(m.missing().length, 1);
+        ed._text = 'текст'; ed.dispatchEvent({ type: 'input' });
+        assert.equal(ed.textContent, 'текст', 'текст редактора не испорчен');
+        assert.equal(wrap.children[1].hidden, true);
+        assert.equal(m.missing().length, 0);
+        m.setFields([]);
+    }
+});
+
+test('ревью: окно «Заполнено не всё» не печатается (no-print)', async () => {
+    const p = askSaveAnyway({ missing: ['Рост'] });
+    const dlg = lastDialog();
+    assert.ok(cls(dlg).includes('modal') && cls(dlg).includes('no-print'));
+    assert.match(viewsCss(), /@media print\s*\{\s*\.no-print\s*\{\s*display:\s*none\s*!important/);
+    findBtn(dlg, 'Дописать').click();
+    await p;
+});
+
+/** Окно формы под вопросом: крестик, поля (спрятанный родной список, неактивное поле,
+ *  доступное поле) и кнопка отправки — как inpatientModal. */
+function formModal() {
+    const overlay = mkEl('div'); overlay.className = 'modal';
+    const card = mkEl('div'); card.className = 'modal-card modal-compact';
+    const head = mkEl('header'); const close = mkEl('button'); close.className = 'modal-close'; head.appendChild(close);
+    const body = mkEl('div'); body.className = 'modal-body';
+    const native = mkEl('select'); native.tabIndex = -1;
+    const off = mkEl('input'); off.disabled = true;
+    const first = mkEl('input');
+    body.appendChild(native); body.appendChild(off); body.appendChild(first);
+    const foot = mkEl('footer'); const submit = mkEl('button'); submit.className = 'btn btn-primary'; foot.appendChild(submit);
+    card.appendChild(head); card.appendChild(body); card.appendChild(foot); overlay.appendChild(card);
+    BODY.appendChild(overlay);
+    return { overlay, card, close, first, submit };
+}
+
+test('ревью: фокус не возвращается на неактивную или убранную кнопку и не остаётся на body — первое доступное поле окна', async () => {
+    const w = formModal();
+    // inpatientModal гасит «Положить» на время сохранения.
+    w.submit.focus(); w.submit.disabled = true;
+    let p = askSaveAnyway({ missing: ['Рост'] });
+    findBtn(lastDialog(), 'Сохранить как есть').click();
+    assert.equal(await p, 'save');
+    assert.equal(document.activeElement, w.first, 'неактивная кнопка — фокус на первое доступное поле окна');
+    // Кнопку убрали из окна, пока висел вопрос.
+    w.submit.disabled = false; w.submit.focus();
+    p = askSaveAnyway({ missing: ['Рост'] });
+    w.submit.parentNode.removeChild(w.submit);
+    Object.defineProperty(w.submit, 'isConnected', { get: () => false, configurable: true });
+    findBtn(lastDialog(), 'Дописать').click();
+    assert.equal(await p, 'fix');
+    assert.equal(document.activeElement, w.first, 'убранная кнопка — фокус на первое доступное поле окна');
+    // Фокус был на body, а окно открыто — фокус уходит в окно, не на body.
+    document.activeElement = BODY;
+    p = askSaveAnyway({ missing: ['Рост'] });
+    findBtn(lastDialog(), 'Дописать').click();
+    await p;
+    assert.equal(document.activeElement, w.first, 'окно открыто — фокус в окне');
+    BODY.removeChild(w.overlay);
+});
+
+test('ревью: setFields с новыми записями тех же полей не множит «Не заполнено»; общая подпись — одно «обязательно»; снятие убирает подсказки из DOM', () => {
+    const lbl = mkEl('label'); lbl._text = 'АД';
+    const box = mkEl('span'); const sys = mkEl('input'); const dia = mkEl('input'); box.appendChild(sys); box.appendChild(dia);
+    const entries = () => [
+        { key: 'bp_sys', label: 'АД верхнее', el: sys, box, labelEl: lbl, isEmpty: () => !sys.value },
+        { key: 'bp_dia', label: 'АД нижнее', el: dia, box, labelEl: lbl, isEmpty: () => !dia.value },
+    ];
+    const m = requiredMarks({ fields: entries() });
+    m.setFields(entries());
+    m.setFields(entries());
+    assert.equal(msgsIn(box).length, 1, 'одна подсказка на рамку');
+    assert.equal(srsIn(lbl).length, 1, 'одно скрытое «обязательно» на подпись');
+    // Одно из двух заполнено — рамка всё ещё красная, подсказка видна, описание — только у пустого.
+    sys.value = '120'; sys.dispatchEvent({ type: 'input' });
+    assert.ok(cls(box).includes('rq-empty'));
+    assert.equal(msgsIn(box)[0].hidden, false);
+    assert.equal(sys.getAttribute('aria-describedby'), null);
+    assert.equal(sys.getAttribute('aria-invalid'), null);
+    assert.ok(String(dia.getAttribute('aria-describedby')).includes(msgsIn(box)[0].attrs.id));
+    assert.deepEqual(m.missing().map((x) => x.key), ['bp_dia']);
+    m.setFields([]);
+    assert.equal(msgsIn(box).length, 0, '«Не заполнено» убрано из DOM');
+    assert.equal(srsIn(lbl).length, 0);
+    assert.equal(dia.getAttribute('aria-describedby'), null);
+    assert.ok(!cls(lbl).includes('rq-req'));
+});

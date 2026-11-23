@@ -76,8 +76,40 @@ function setDescribed(el, id, on) {
     if (ids.length) el.setAttribute('aria-describedby', ids.join(' '));
     else dropAttr(el, 'aria-describedby', '');
 }
-const isControl = (el) => !!el && /^(INPUT|SELECT|TEXTAREA)$/.test(String(el.tagName || ''));
+// INPATIENT_REQUIRED_V1 (ревью) — редактор с contenteditable тоже поле: «Не заполнено»,
+// дописанное ВНУТРЬ, становилось частью текста документа (и поле больше не считалось
+// пустым). Пустое значение атрибута по HTML — тоже «редактируемо».
+function isEditable(el) {
+    if (!el) return false;
+    if (el.isContentEditable === true) return true;
+    const v = typeof el.getAttribute === 'function' ? el.getAttribute('contenteditable') : null;
+    return v === '' || /^(true|plaintext-only)$/i.test(String(v));
+}
+const isControl = (el) => !!el && (/^(INPUT|SELECT|TEXTAREA)$/.test(String(el.tagName || '').toUpperCase()) || isEditable(el));
 const hasChild = (parent, node) => !!parent && Array.prototype.includes.call(parent.children || [], node);
+const hasCls = (el, name) => !!el && String(el.className || '').split(/\s+/).includes(name);
+const kids = (el) => Array.prototype.slice.call((el && el.children) || []);
+// INPATIENT_REQUIRED_V1 (ревью) — <select> в окнах подменяет список программы:
+// ui-enhance.js кадром позже вызывает enhanceSelect (ui-select.js), и родное поле
+// уезжает в обёртку .uisel спрятанным (.uisel-native, tabIndex -1, data-ui-select="on"),
+// а видимая часть — кнопка .uisel-field рядом с ним в той же обёртке. Подмена случается
+// ПОСЛЕ setFields, поэтому кнопку ищем в момент действия: фокус, aria-*, место подсказки.
+const isSelect = (el) => !!el && String(el.tagName || '').toUpperCase() === 'SELECT';
+function isSwapped(el) {
+    if (!isSelect(el)) return false;
+    if (el.dataset && el.dataset.uiSelect === 'on') return true;
+    if (typeof el.getAttribute === 'function' && el.getAttribute('data-ui-select') === 'on') return true;
+    return hasCls(el, 'uisel-native');
+}
+/** Элемент, до которого доходят клавиатура и читалка: кнопка списка программы или само поле. */
+function visibleOf(el) {
+    if (!el || !isSwapped(el)) return el || null;
+    return kids(el.parentNode).find((c) => c !== el && hasCls(c, 'uisel-field')) || el;
+}
+/** После чего ставить «Не заполнено» у поля без рамки: у подменённого списка — за обёрткой. */
+function afterAnchor(frame) {
+    return isSwapped(frame) && hasCls(frame.parentNode, 'uisel') ? frame.parentNode : frame;
+}
 const reducedMotion = () => {
     try { return !!(typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
     catch (e) { return false; }
@@ -91,6 +123,11 @@ const reducedMotion = () => {
  *   рамка — само поле, и «Не заполнено» встаёт сразу после него); labelEl — подпись
  *   (звезда и скрытое «обязательно»); watch — ещё элементы, чьи input/change
  *   пересчитывают отметки (радиокнопки группы). label — уже на языке экрана.
+ *   INPATIENT_REQUIRED_V1 (ревью): el — <select>, подменённый списком программы, —
+ *   фокус и aria-* получает и видимая кнопка .uisel-field (ищется в момент действия);
+ *   el с contenteditable — поле, «Не заполнено» встаёт после него, не внутрь. У полей с
+ *   общей рамкой одна подсказка (рамка красная, пока пусто хоть одно); с общей подписью —
+ *   одно скрытое «обязательно».
  * @returns {{summary: Element, refresh: () => string[], setFields: (fields) => string[],
  *            missing: () => Array<{key:string,label:string}>, focusFirst: () => boolean}}
  */
@@ -99,42 +136,59 @@ export function requiredMarks({ fields = [] } = {}) {
     let shown = null;              // что сейчас в строке сверху: перерисовка — только когда список пустых другой
     const summary = h('div', { class: 'rq-summary no-print', 'data-rq-summary': '' });
     summary.hidden = true;
-    const msgs = new Map();        // поле → «Не заполнено»
-    const srs = new Map();         // поле → скрытое «обязательно»
-    const ownReq = new Set();      // поля, которым aria-required поставили мы (снимаем только свои)
+    // INPATIENT_REQUIRED_V1 (ревью) — ключи — ЭЛЕМЕНТЫ, не записи полей: экран зовёт
+    // setFields с новыми записями тех же полей (правила пришли позже), и по записи
+    // каждый вызов дописывал ещё одно «Не заполнено»; два поля с одной подписью
+    // (АД верхнее и нижнее) давали два скрытых «обязательно».
+    const msgs = new Map();        // рамка → «Не заполнено»
+    const srs = new Map();         // подпись → скрытое «обязательно»
+    const ownReq = new Set();      // элементы, которым aria-required поставили мы (снимаем только свои)
     const bound = new Set();       // элементы, на которые навешан пересчёт
+    let gen = 0;                   // поколение списка: отложенный пересчёт старого списка не нужен
 
     const frameOf = (f) => f.box || f.el || null;
     const isEmptyF = (f) => (typeof f.isEmpty === 'function' ? !!f.isEmpty() : false);
+    // Куда ставить aria-*: само поле и — если список подменён — видимая кнопка.
+    const ariaOf = (f) => {
+        if (!f.el) return [];
+        const v = visibleOf(f.el);
+        return (v && v !== f.el ? [f.el, v] : [f.el]).filter((t) => typeof t.setAttribute === 'function');
+    };
 
     function focusField(f) {
-        const target = frameOf(f);
+        const vis = visibleOf(f.el);
+        const target = f.box || vis;
         if (target && typeof target.scrollIntoView === 'function') {
             try { target.scrollIntoView({ block: 'center', behavior: reducedMotion() ? 'auto' : 'smooth' }); } catch (e) { /* не прокрутилось — не беда */ }
         }
         // preventScroll: фокус не перебивает плавную прокрутку рывком.
-        if (f.el && typeof f.el.focus === 'function') {
-            try { f.el.focus({ preventScroll: true }); } catch (e) { /* без фокуса */ }
+        if (vis && typeof vis.focus === 'function') {
+            try { vis.focus({ preventScroll: true }); } catch (e) { /* без фокуса */ }
         }
     }
-    // «Не заполнено» заводим, когда поле впервые пусто: в рамке, а у рамки-поля — сразу за ним.
-    function msgFor(f) {
-        if (msgs.has(f)) return msgs.get(f);
-        const frame = frameOf(f);
+    // «Не заполнено» заводим, когда рамка впервые пуста: в рамке, а у рамки-поля — сразу за ним.
+    function msgFor(frame) {
+        if (msgs.has(frame)) return msgs.get(frame);
         if (!frame) return null;
         const msg = h('span', { class: 'rq-msg no-print', id: 'rq-msg-' + (++_seq) }, 'Не заполнено');
-        if (!isControl(frame)) frame.appendChild(msg);
-        else if (frame.parentNode && typeof frame.insertAdjacentElement === 'function') frame.insertAdjacentElement('afterend', msg);
+        const at = isControl(frame) ? afterAnchor(frame) : null;
+        if (!at) frame.appendChild(msg);
+        else if (at.parentNode && typeof at.insertAdjacentElement === 'function') at.insertAdjacentElement('afterend', msg);
         else return null;
-        msgs.set(f, msg);
+        msgs.set(frame, msg);
         return msg;
     }
     // Подпись раздела переименовывают (textContent) — скрытое «обязательно» возвращается.
-    function ensureSr(f) {
-        if (!f.labelEl || typeof f.labelEl.appendChild !== 'function') return;
-        if (!srs.has(f)) srs.set(f, h('span', { class: 'rq-sr' }, ' ' + tr('обязательно')));
-        const sr = srs.get(f);
-        if (!hasChild(f.labelEl, sr)) f.labelEl.appendChild(sr);
+    function ensureSr(labelEl) {
+        if (!labelEl || typeof labelEl.appendChild !== 'function') return;
+        if (!srs.has(labelEl)) srs.set(labelEl, h('span', { class: 'rq-sr' }, ' ' + tr('обязательно')));
+        const sr = srs.get(labelEl);
+        if (!hasChild(labelEl, sr)) labelEl.appendChild(sr);
+    }
+    // aria-required ставим и в refresh: кнопка списка программы появляется после setFields.
+    function markRequired(t) {
+        if (typeof t.getAttribute !== 'function' || t.getAttribute('aria-required') !== 'true') ownReq.add(t);
+        t.setAttribute('aria-required', 'true');
     }
     function paintSummary(missing) {
         const sig = missing.map((f) => f.key + '\u0001' + f.label).join('\u0002');
@@ -154,53 +208,75 @@ export function requiredMarks({ fields = [] } = {}) {
     }
     function refresh() {
         const missing = [];
+        const emptyOf = new Map();     // поле → пусто ли
+        const frameEmpty = new Map();  // рамка → пусто ли хоть одно её поле (АД верхнее и нижнее в одной рамке)
         for (const f of list) {
             const empty = isEmptyF(f);
-            setClass(frameOf(f), 'rq-empty', empty);
-            if (f.el && typeof f.el.setAttribute === 'function') {
-                if (empty) f.el.setAttribute('aria-invalid', 'true');
-                else dropAttr(f.el, 'aria-invalid', 'false');
-            }
-            const msg = empty ? msgFor(f) : msgs.get(f);
-            if (msg) {
-                msg.hidden = !empty;
-                setDescribed(f.el, msg.getAttribute('id'), empty);
-            }
-            ensureSr(f);
+            emptyOf.set(f, empty);
             if (empty) missing.push(f);
+            const frame = frameOf(f);
+            if (frame) frameEmpty.set(frame, frameEmpty.get(frame) === true || empty);
+        }
+        for (const [frame, empty] of frameEmpty) {
+            setClass(frame, 'rq-empty', empty);
+            const msg = empty ? msgFor(frame) : msgs.get(frame);
+            if (msg) msg.hidden = !empty;
+        }
+        for (const f of list) {
+            const empty = emptyOf.get(f);
+            const msg = msgs.get(frameOf(f));
+            for (const t of ariaOf(f)) {
+                markRequired(t);
+                if (empty) t.setAttribute('aria-invalid', 'true');
+                else dropAttr(t, 'aria-invalid', 'false');
+                if (msg) setDescribed(t, msg.getAttribute('id'), empty);
+            }
+            ensureSr(f.labelEl);
         }
         paintSummary(missing);
         return missing.map((f) => f.key);
     }
     const onChange = () => { refresh(); };
-    function unmark(f) {
-        setClass(frameOf(f), 'rq-empty', false);
-        setClass(f.labelEl, 'rq-req', false);
-        if (f.el) {
-            dropAttr(f.el, 'aria-invalid', 'false');
-            if (ownReq.has(f)) dropAttr(f.el, 'aria-required', 'false');
+    // INPATIENT_REQUIRED_V1 (ревью) — снять ВСЁ своё с прежнего списка: aria-* с поля и
+    // его видимой кнопки, классы, и «Не заполнено» / «обязательно» — из DOM, а не только
+    // спрятать. Сперва описания (им нужны id подсказок), потом сами подсказки.
+    function unmarkAll(old) {
+        for (const f of old) {
+            setClass(frameOf(f), 'rq-empty', false);
+            setClass(f.labelEl, 'rq-req', false);
+            const msg = msgs.get(frameOf(f));
+            for (const t of ariaOf(f)) {
+                dropAttr(t, 'aria-invalid', 'false');
+                if (msg) setDescribed(t, msg.getAttribute('id'), false);
+            }
         }
-        const msg = msgs.get(f);
-        if (msg) { msg.hidden = true; setDescribed(f.el, msg.getAttribute('id'), false); }
+        for (const t of ownReq) dropAttr(t, 'aria-required', 'false');
+        ownReq.clear();
+        for (const msg of msgs.values()) if (msg.parentNode) msg.parentNode.removeChild(msg);
+        msgs.clear();
         // Только если ещё на месте: настоящий DOM бросает, когда узла среди детей нет.
-        const sr = srs.get(f);
-        if (sr && hasChild(f.labelEl, sr)) f.labelEl.removeChild(sr);
+        for (const [labelEl, sr] of srs) if (hasChild(labelEl, sr)) labelEl.removeChild(sr);
+        srs.clear();
+    }
+    // Список программы подменяет <select> кадром позже (ui-enhance.js ставит подмену в
+    // requestAnimationFrame после вставки): через два кадра пересчёт ещё раз — aria-*
+    // ложатся на появившуюся кнопку. Фокус кнопку и так находит в момент действия.
+    function resyncAfterSwap() {
+        const my = ++gen;
+        if (typeof requestAnimationFrame !== 'function') return;
+        if (!list.some((f) => isSelect(f.el) && !isSwapped(f.el))) return;
+        requestAnimationFrame(() => requestAnimationFrame(() => { if (my === gen) refresh(); }));
     }
     function setFields(next) {
-        for (const f of list) unmark(f);
+        unmarkAll(list);
         for (const w of bound) {
             if (typeof w.removeEventListener === 'function') { w.removeEventListener('input', onChange); w.removeEventListener('change', onChange); }
         }
         bound.clear();
-        ownReq.clear();
         list = (Array.isArray(next) ? next : []).filter(Boolean);
         shown = null;   // новые поля — новые кнопки строки сверху
         for (const f of list) {
             setClass(f.labelEl, 'rq-req', true);
-            if (f.el && typeof f.el.setAttribute === 'function') {
-                if (typeof f.el.getAttribute !== 'function' || f.el.getAttribute('aria-required') !== 'true') ownReq.add(f);
-                f.el.setAttribute('aria-required', 'true');
-            }
             for (const w of [f.el, ...(f.watch || [])]) {
                 if (!w || typeof w.addEventListener !== 'function' || bound.has(w)) continue;
                 bound.add(w);
@@ -208,7 +284,9 @@ export function requiredMarks({ fields = [] } = {}) {
                 w.addEventListener('change', onChange);
             }
         }
-        return refresh();
+        const out = refresh();
+        resyncAfterSwap();
+        return out;
     }
     setFields(fields);
     return {
@@ -219,6 +297,51 @@ export function requiredMarks({ fields = [] } = {}) {
 }
 
 const FOCUSABLE = (n) => !!n && /^(BUTTON|INPUT|SELECT|TEXTAREA|A)$/.test(String(n.tagName || '').toUpperCase()) && !n.disabled;
+
+// INPATIENT_REQUIRED_V1 (ревью) — куда вернуть фокус, когда окно закрылось. Окно формы
+// (inpatientModal, docActionsBar) гасит кнопку отправки на время сохранения — а вопрос
+// задаётся именно из её обработчика; на неактивную или убранную кнопку фокус не
+// встаёт, и браузер оставлял его на body при открытом окне формы.
+// Обход — по children, без querySelectorAll: так же работает и поддельный DOM тестов.
+const walkEls = (root, out = []) => { for (const c of kids(root)) { out.push(c); walkEls(c, out); } return out; };
+const canFocus = (n) => FOCUSABLE(n) && n.isConnected !== false && !n.hidden
+    && !(typeof n.tabIndex === 'number' && n.tabIndex < 0)                  // спрятанный родной список (.uisel-native)
+    && (typeof n.getClientRects !== 'function' || n.getClientRects().length > 0);   // display: none
+function closestCls(n, name) {
+    for (let x = n; x; x = x.parentNode) if (hasCls(x, name)) return x;
+    return null;
+}
+/** Верхнее открытое окно приложения (.modal в <body>) — его карточка. */
+function topModalCard() {
+    if (typeof document === 'undefined' || !document.body) return null;
+    const mods = kids(document.body).filter((n) => hasCls(n, 'modal'));
+    for (let i = mods.length - 1; i >= 0; i--) {
+        const card = walkEls(mods[i]).find((n) => hasCls(n, 'modal-card'));
+        if (card) return card;
+    }
+    return null;
+}
+/** Первое доступное поле окна: сперва тело окна (поля формы), потом вся карточка. */
+function firstFocusableIn(card) {
+    const body = walkEls(card).find((n) => hasCls(n, 'modal-body'));
+    return (body && walkEls(body).find(canFocus)) || walkEls(card).find(canFocus) || null;
+}
+function restoreFocus(back, openerCard) {
+    const doc = typeof document !== 'undefined' ? document : null;
+    if (back && (!doc || back !== doc.body) && back.isConnected !== false && !back.disabled && typeof back.focus === 'function') {
+        try { back.focus(); } catch (e) { /* фокус не встал — ищем дальше */ }
+        if (!doc || doc.activeElement === back) return;
+    }
+    const card = (openerCard && openerCard.isConnected !== false) ? openerCard : topModalCard();
+    if (!card) return;   // окон нет — фокусу на body и место
+    const target = firstFocusableIn(card);
+    try {
+        if (target) { target.focus(); return; }
+        // Полей нет — сама карточка (tabindex -1: в обход по Tab она не встаёт).
+        if (typeof card.getAttribute === 'function' && card.getAttribute('tabindex') == null) card.setAttribute('tabindex', '-1');
+        if (typeof card.focus === 'function') card.focus();
+    } catch (e) { /* фокус вернуть некуда */ }
+}
 
 /**
  * «Заполнено не всё». Мягкий случай — «Дописать» / «Сохранить как есть»;
@@ -231,14 +354,16 @@ export function askSaveAnyway({ missing = [], hard = false } = {}) {
     return new Promise((resolve) => {
         const id = 'rq-dlg-' + (++_seq);
         const back = typeof document !== 'undefined' ? document.activeElement : null;   // куда вернуть фокус
-        const overlay = h('div', { class: 'modal', style: { zIndex: '200' }, 'data-dialog': 'required-missing' });
+        const openerCard = closestCls(back, 'modal-card');   // окно формы, из которого спросили (пока кнопка на месте)
+        // INPATIENT_REQUIRED_V1 (ревью) — no-print: вопрос на экране не попадает в печать.
+        const overlay = h('div', { class: 'modal no-print', style: { zIndex: '200' }, 'data-dialog': 'required-missing' });
         let finished = false;
         const done = (v) => {
             if (finished) return;
             finished = true;
             document.removeEventListener('keydown', onKey, true);
             overlay.remove();
-            try { if (back && typeof back.focus === 'function' && back.isConnected !== false) back.focus(); } catch (e) { /* фокус вернуть некуда */ }
+            restoreFocus(back, openerCard);
             resolve(v);
         };
         const names = (Array.isArray(missing) ? missing : []).map((x) => String(x == null ? '' : x).trim()).filter(Boolean);

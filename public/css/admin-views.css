@@ -10130,7 +10130,10 @@ select.crm-filter-sel.is-filtered,
 .rq-empty { box-shadow: 0 0 0 2px var(--crit-500); background: var(--crit-50); border-radius: 6px; }
 .rq-msg { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 600; color: var(--crit-700); }
 .rq-msg[hidden] { display: none; }   /* у блока атрибут hidden проигрывает display: block */
-.f3 .rq-empty { position: relative; }
+/* INPATIENT_REQUIRED_V1 (ревью) — <select> без рамки подменён списком программы (ui-select.js):
+   родное поле спрятано (.uisel-native), красную рамку несёт видимая кнопка рядом с ним. */
+.uisel:has(> select.rq-empty) > .uisel-field { box-shadow: 0 0 0 2px var(--crit-500); background: var(--crit-50); }
+.f3 .rq-empty:not(.uisel-native) { position: relative; }   /* спрятанному родному списку — его absolute */
 .f3 .rq-msg { position: absolute; left: 0; top: 100%; margin-top: 1px; font-size: 10px; white-space: nowrap; }   /* бланк 003 держится одной страницы — подпись не добавляет высоты */
 .rq-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 8px 12px; margin: 0 0 10px; border-radius: 10px; background: var(--crit-50); color: var(--crit-700); font-size: 13px; line-height: 1.45; }
 .rq-summary[hidden] { display: none; }
@@ -10140,5 +10143,5 @@ select.crm-filter-sel.is-filtered,
 .rq-jump { border: 0; background: none; padding: 0; font: inherit; color: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .rq-jump:hover { text-decoration-thickness: 2px; }
 .rq-jump:focus-visible { outline: 2px solid var(--crit-500); outline-offset: 2px; border-radius: 3px; }
-@media print { .rq-summary, .rq-msg, .rq-sr { display: none !important; } .rq-req::after { content: none !important; } .rq-empty { box-shadow: none !important; background: none !important; } }
+@media print { .rq-summary, .rq-msg, .rq-sr { display: none !important; } .rq-req::after { content: none !important; } .rq-empty, .uisel:has(> select.rq-empty) > .uisel-field { box-shadow: none !important; background: none !important; } }
 /* end INPATIENT_REQUIRED_V1 */
