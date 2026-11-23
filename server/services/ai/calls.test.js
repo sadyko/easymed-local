@@ -135,6 +135,25 @@ test('запись ещё готовится — позже; станция бе
   assert.equal(await processOneCall(db3, deps()), 'off');
 });
 
+// AI_CALLS_DOWNLOAD_REFUSED_V1 (ревью слияния 2026-11-23) — АТС отказала отдать запись
+// (403/401/404): пропускается ОДИН звонок, ключ OpenAI «не принятым» не становится;
+// сбой АТС (5xx) — повтор позже.
+test('запись не отдали (403) — пропуск звонка, ИИ не остановлен; сбой АТС (502) — повтор', async () => {
+  const dlFail = (status) => async () => { const e = new Error('x'); e.status = status; e.error = { type: 'download_failed' }; throw e; };
+  for (const status of [401, 403, 404]) {
+    const db = await world();
+    const id = addCall(db);
+    assert.equal(await processOneCall(db, deps({ download: dlFail(status) })), 'skipped', String(status));
+    assert.equal(readAiSettings(db).blocked, '', status + ': отказ загрузки остановил весь ИИ как «ключ не принят»');
+    assert.deepEqual(db.prepare('SELECT status, reason FROM ai_call_analysis WHERE call_id = ?').get(id), { status: 'skipped', reason: 'download_failed' });
+  }
+  const db = await world();
+  const id = addCall(db);
+  assert.equal(await processOneCall(db, deps({ download: dlFail(502) })), 'retry');
+  assert.equal(readAiSettings(db).blocked, '');
+  assert.equal(db.prepare('SELECT status FROM ai_call_analysis WHERE call_id = ?').get(id).status, 'queued');
+});
+
 test('после перезапуска начатый разбор возвращается в очередь', async () => {
   const db = await world();
   const id = addCall(db);

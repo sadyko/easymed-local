@@ -241,6 +241,7 @@ export const TABLE_PLAN = Object.freeze({
   // снова отвечает в чате, который уже передан людям. Визитов и денег в них нет.
   ai_chat_jobs: keep('crm'),
   ai_chat_flags: keep('crm'),
+  ai_call_analysis: keep('crm'),   // AI_CALLS_V1 — разбор звонков ИИ (ревью слияния: решения не было)
 
   // ── сотрудники, роли, права ────────────────────────────────────────────
   users: keep('staff'),

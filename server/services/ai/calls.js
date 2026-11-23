@@ -311,6 +311,14 @@ export async function processOneCall(db, deps = {}) {
     const status = e && e.status;
     const type = e && e.error && e.error.type;
     console.warn('[ai-calls] call', job.call_id, status || 'no-status', type || 'no-type');   // без текста разговора
+    // AI_CALLS_DOWNLOAD_REFUSED_V1 (ревью слияния 2026-11-23) — АТС не отдала запись (401/403/404 —
+    // ссылка устарела или закрыта): это беда ОДНОЙ записи, а не ключа OpenAI. Раньше 401/403 загрузки
+    // ставили «ключ не принят» на весь ИИ, звонок возвращался в очередь, и после пересохранения ключа
+    // та же запись снова останавливала всё. Сбой АТС (5xx, 429) — повтор, как сеть.
+    if (type === 'download_failed') {
+      if (status === 429 || status >= 500) return retryOrFail(db, job, 'network', d.now());
+      return finish('skipped', 'download_failed');
+    }
     if (status === 401 || status === 403 || type === 'insufficient_quota') {
       setAiBlocked(db, 'bad_key', iso(d.now()));
       db.prepare("UPDATE ai_call_analysis SET status = 'queued', attempts = attempts - 1 WHERE call_id = ?").run(job.call_id);

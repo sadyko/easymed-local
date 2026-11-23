@@ -88,7 +88,44 @@ function appliedMigrationNames(db) {
     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
   ).get();
   if (!trackingTableExists) return new Set();
-  return new Set(db.prepare('SELECT name FROM schema_migrations').all().map(r => r.name));
+  const names = new Set(db.prepare('SELECT name FROM schema_migrations').all().map(r => r.name));
+  // MIGRATION_RENUMBER_V1 — applied under an old name = applied under the new one.
+  for (const [oldName, newName] of Object.entries(RENAMED_MIGRATIONS)) {
+    if (names.has(oldName)) names.add(newName);
+  }
+  return names;
+}
+
+// MIGRATION_RENUMBER_V1 (2026-11-23) — FILES RENAMED AFTER SOME DATABASE APPLIED
+// THEM. The partner's branch local/ai-on-main numbered its migrations 284/287
+// (AI chat), 291, 292 and 293 on a development machine; main had already used
+// 287 and 293, so at the merge they became 294–297. schema_migrations records
+// the FULL FILENAME, so a database that ran the branch would see 294_ai_chat.sql
+// as new and die on "table ai_settings already exists" at boot. Old name →
+// new name: such a database is re-stamped (migrate) and counted as applied
+// (pendingMigrations) instead of re-running the file. None of the old names
+// ever shipped in a release tag; the map only rescues machines that ran the branch.
+const RENAMED_MIGRATIONS = Object.freeze({
+  '284_ai_chat.sql': '294_ai_chat.sql',
+  '287_ai_chat.sql': '294_ai_chat.sql',
+  '291_ai_own_key_features.sql': '295_ai_own_key_features.sql',
+  '292_ai_call_analysis.sql': '296_ai_call_analysis.sql',
+  '293_doctor_bot_message_template.sql': '297_doctor_bot_message_template.sql',
+});
+export { RENAMED_MIGRATIONS };
+
+function restampRenamedMigrations(db) {
+  const has = db.prepare('SELECT 1 FROM schema_migrations WHERE name = ?');
+  const rename = db.prepare('UPDATE schema_migrations SET name = ? WHERE name = ?');
+  const drop = db.prepare('DELETE FROM schema_migrations WHERE name = ?');
+  db.transaction(() => {
+    for (const [oldName, newName] of Object.entries(RENAMED_MIGRATIONS)) {
+      if (!has.get(oldName)) continue;
+      if (has.get(newName)) drop.run(oldName);   // both 284_ and 287_ ai_chat on one machine
+      else rename.run(newName, oldName);
+      console.warn(`[migrate] ${oldName} was renumbered to ${newName} — schema_migrations re-stamped.`);
+    }
+  })();
 }
 
 const migrationNumber = (file) => Number(file.slice(0, file.indexOf('_')));
@@ -123,6 +160,7 @@ export function migrate(db, dir = MIGRATIONS_DIR) {
   )`);
 
   const files = loadMigrationFiles(dir);
+  restampRenamedMigrations(db);   // MIGRATION_RENUMBER_V1
   const applied = appliedMigrationNames(db);
   // V3120_FIX — a file numbered BELOW the highest one already applied runs
   // out of its intended order (it was written against an older schema, or two
