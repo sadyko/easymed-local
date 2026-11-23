@@ -12,14 +12,15 @@ import { REQUIRED_KEYS, PATIENT_FIELDS } from './title-sheet-rules.js';
 test('поля листа: группы, где живут, без ФИО, даты рождения, ИМТ и примечания', () => {
   assert.deepEqual(TITLE_GROUPS, ['patient', 'admission', 'measures', 'exam', 'papers']);
   assert.deepEqual(TITLE_FIELDS.filter((f) => f.group === 'patient').map((f) => f.key),
-    ['gender', 'phone', 'address', 'national_id', 'occupation', 'emergency_contact_name', 'emergency_contact_phone', 'blood_type', 'allergies']);
+    ['phone', 'address', 'national_id', 'occupation', 'emergency_contact_name', 'emergency_contact_phone', 'blood_type', 'allergies']);
   assert.deepEqual(TITLE_FIELDS.filter((f) => f.group === 'admission').map((f) => f.key), ['referred_from', 'delivered_by', 'mobility', 'since_onset']);
   assert.deepEqual(TITLE_FIELDS.filter((f) => f.group === 'measures').map((f) => f.key), ['height_cm', 'weight_kg', 'temp_c', 'bp_sys', 'bp_dia', 'pulse_bpm']);
   assert.deepEqual(TITLE_FIELDS.filter((f) => f.group === 'exam').map((f) => f.key), ['pediculosis', 'sanitation']);
   assert.deepEqual(TITLE_FIELDS.filter((f) => f.group === 'papers').map((f) => [f.key, f.col]),
     [['contract_signed', 'contract_signed_at'], ['consent_signed', 'consent_signed_at'], ['memo_given', 'memo_given_at']]);
-  assert.deepEqual(TITLE_FIELDS.filter((f) => f.group === 'patient').map((f) => f.key), [...PATIENT_FIELDS],
-    'поля карточки — те же, что лист вправе поправить (title-sheet-rules.js PATIENT_FIELDS)');
+  assert.deepEqual(TITLE_FIELDS.filter((f) => f.group === 'patient').map((f) => f.key), PATIENT_FIELDS.filter((k) => k !== 'gender'),
+    'поля карточки — те же, что лист вправе поправить (title-sheet-rules.js PATIENT_FIELDS), кроме пола');
+  assert.ok(!TITLE_FIELD_KEYS.includes('gender'), 'пол не бывает пустым (умолчание other) — обязательным его не делают');
   for (const k of ['full_name', 'date_of_birth', 'bmi', 'note']) assert.ok(!TITLE_FIELD_KEYS.includes(k), k);
   assert.deepEqual(DEFAULT_TITLE_REQUIRED, [...REQUIRED_KEYS], 'умолчание — сегодняшние восемь полей');
   assert.deepEqual(SWITCH_KEYS, ['intake_before_attending', 'admitting_at_placement', 'primary_needs_diagnosis', 'discharge_needs_epicrisis', 'title_required']);
@@ -34,6 +35,8 @@ test('missingTitleFields: лист, карточка пациента и отм�
   // Форма экрана присылает галочку, а не время — это тоже «отмечено».
   assert.deepEqual(missingTitleFields({ sheet: { consent_signed: true }, patient }, ['consent_signed']), []);
   assert.deepEqual(missingTitleFields({ sheet: { consent_signed: false }, patient }, ['consent_signed']), ['consent_signed']);
+  assert.deepEqual(missingTitleFields({ sheet: { consent_signed: false, consent_signed_at: '2026-11-23T08:00:00Z' }, patient }, ['consent_signed']),
+    ['consent_signed'], 'снятая галочка главнее старой отметки');
   // Пробелы — пусто; ноль — значение.
   assert.deepEqual(missingTitleFields({ sheet: { referred_from: '   ', height_cm: 0 } }, ['referred_from', 'height_cm']), ['referred_from']);
   // Неизвестный ключ не требуется.
@@ -50,6 +53,7 @@ test('разделы: cleanRequiredSections / parseRequiredSections / missingSec
   assert.deepEqual(parseRequiredSections('["body","plan"]', 'operation'), ['body'], 'у протокола операции нет плана');
   assert.deepEqual(parseRequiredSections('испорчено', 'primary'), []);
   assert.deepEqual(parseRequiredSections(null, 'primary'), []);
+  assert.deepEqual(parseRequiredSections(['body', 'plan'], 'operation'), ['body'], 'уже разобранный список');
   const fields = { complaints: '<p><br></p>', objective: '<p>ясно</p>', diagnosis: '  ', plan: '<table></table>', body: '' };
   assert.deepEqual(missingSections(fields, ['complaints', 'objective', 'diagnosis', 'plan', 'body']), ['complaints', 'diagnosis', 'plan', 'body']);
   assert.deepEqual(missingSections({ diagnosis: 'J18.9' }, ['diagnosis']), []);

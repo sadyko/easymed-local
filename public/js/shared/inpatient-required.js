@@ -15,9 +15,13 @@ import { richIsEmpty, textIsBlank } from './rich-text.js';
  * 'paper' — отметка бумаги (заполнено = время отметки, колонка col).
  * Не предлагаются: ФИО и дата рождения (личность, правится в карточке), ИМТ
  * (вычисляется), примечание.
+ * INPATIENT_REQUIRED_V1 (ревью) — и ПОЛ: карточка хранит 'other' там, где пол не выбран
+ * (миграция 002, DEFAULT 'other'), и «Другое» — настоящий ответ. Отличить «не указан» от
+ * «другое» нечем, поле было бы обязательным, которое никогда не пустое. Пол и так
+ * спрашивает регистрация.
  */
 export const TITLE_FIELDS = Object.freeze([
-  ...['gender', 'phone', 'address', 'national_id', 'occupation',
+  ...['phone', 'address', 'national_id', 'occupation',
     'emergency_contact_name', 'emergency_contact_phone', 'blood_type', 'allergies']
     .map((key) => ({ key, group: 'patient', where: 'patient' })),
   ...['referred_from', 'delivered_by', 'mobility', 'since_onset'].map((key) => ({ key, group: 'admission', where: 'sheet' })),
@@ -47,7 +51,12 @@ export function titleFieldFilled(def, { sheet = null, patient = null } = {}) {
   }
   if (!sheet) return false;
   // Бумага: в базе — время отметки, в форме экрана — галочка.
-  if (def.where === 'paper') return !blank(sheet[def.col]) || sheet[def.key] === true;
+  // INPATIENT_REQUIRED_V1 (ревью) — галочка формы, если она есть, главнее старой отметки в базе:
+  // снятая галочка значит «не подписано», даже когда строка из базы ещё несёт время.
+  if (def.where === 'paper') {
+    if (typeof sheet[def.key] === 'boolean') return sheet[def.key];
+    return !blank(sheet[def.col]);
+  }
   return !blank(sheet[def.key]);
 }
 
@@ -73,7 +82,7 @@ export function cleanRequiredSections(list, allowedSections) {
 export function parseRequiredSections(raw, kind) {
   if (raw === null || raw === undefined || raw === '') return [];
   try {
-    const v = JSON.parse(raw);
+    const v = Array.isArray(raw) ? raw : JSON.parse(raw);   // INPATIENT_REQUIRED_V1 (ревью) — уже разобранный список тоже
     return cleanRequiredSections(Array.isArray(v) ? v : [], sectionsFor(kind));
   } catch (e) { return []; }
 }

@@ -17,7 +17,10 @@ const DEFAULT_SECTIONS = Object.freeze(['complaints', 'objective', 'diagnosis', 
  * бывает. Разделы, которых нет в списке, НЕ ТЕРЯЮТСЯ: их прежнее значение
  * уходит обратно на сервер как было (см. buildReviewEditor).
  */
-export const KIND_SECTIONS = Object.freeze({
+// INPATIENT_REQUIRED_V1 (ревью) — заморожен и каждый список внутри: Object.freeze мелкий, а
+// sectionsFor теперь зовёт сервер на каждый запрос — правка возвращённого массива испортила бы
+// список всему процессу.
+export const KIND_SECTIONS = Object.freeze(Object.fromEntries(Object.entries({
     intake:      ['complaints', 'objective', 'diagnosis', 'plan'],
     primary:     ['complaints', 'objective', 'diagnosis', 'plan', 'body'],
     head_review: ['objective', 'diagnosis', 'plan'],
@@ -30,7 +33,7 @@ export const KIND_SECTIONS = Object.freeze({
     operation:   ['body'],
     consent:     ['body'],
     other:       ['body'],
-});
+}).map(([kind, list]) => [kind, Object.freeze(list)])));
 
 /**
  * Разделы документа. ДИАГНОЗ ЕСТЬ У КАЖДОГО.
@@ -47,9 +50,9 @@ export const KIND_SECTIONS = Object.freeze({
  */
 export function sectionsFor(kind) {
     // INPATIENT_REQUIRED_V1 — у неизвестного рода (свой документ клиники) — полный набор;
-    // копия, а не сам замороженный список: вызывающие вправе её менять.
-    const base = KIND_SECTIONS[kind] || DEFAULT_SECTIONS.slice();
-    if (base.includes('diagnosis')) return base;
+    // ВСЕГДА копия, а не сам замороженный список: вызывающие вправе её менять.
+    const base = KIND_SECTIONS[kind] || DEFAULT_SECTIONS;
+    if (base.includes('diagnosis')) return base.slice();
     // Место диагноза — сразу за «объективно», а если его нет — первым: так он
     // стоит во всех документах, где был, и не уезжает в конец у остальных.
     const at = base.indexOf('objective');

@@ -19,4 +19,13 @@ test('экран не держит второй копии списка: case-do
   const src = fs.readFileSync(path.join(here, '..', 'admin', 'views', 'case-doc-a4.js'), 'utf8');
   assert.ok(src.includes("from '../../shared/case-doc-sections.js'"), 'case-doc-a4.js должен импортировать общий список');
   assert.ok(!/export const KIND_SECTIONS\s*=\s*Object\.freeze\(\{/.test(src), 'вторая копия KIND_SECTIONS в case-doc-a4.js');
+  assert.ok(!/\bKIND_SECTIONS\s*=/.test(src), 'KIND_SECTIONS присваивается в case-doc-a4.js');
+  assert.ok(!/function\s+sectionsFor\b/.test(src), 'своя sectionsFor в case-doc-a4.js');
+});
+
+test('ревью: списки разделов заморожены, sectionsFor отдаёт копию', () => {
+  for (const [kind, list] of Object.entries(KIND_SECTIONS)) assert.ok(Object.isFrozen(list), kind);
+  const a = sectionsFor('intake');
+  a.push('x');
+  assert.ok(!sectionsFor('intake').includes('x'), 'правка ответа не должна портить список');
 });
