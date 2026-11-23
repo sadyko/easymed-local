@@ -239,3 +239,12 @@ test('CRM_PERIOD_BOOKED_V1: записанные вне периода — по 
   assert.deepEqual(out.rows, []);
   assert.equal(out.error.message, 'boom');
 });
+
+// CRM_REPORT_CUSTOM_PERIOD_V1 — свой период: обе границы в запрос (с — gte, по — lt), days не трогается.
+test('отчёт: свой период уходит в запрос обеими границами', async () => {
+  const { loadReportRows } = await import('../views/crm-board-load.js');
+  const db = fakeDb(() => ({ data: [], error: null }));
+  await loadReportRows({ db, days: 30, from: '2026-11-01T00:00:00.000Z', to: '2026-11-11T00:00:00.000Z' });
+  const f = db.calls[0].filters.filter(([, col]) => col === 'created_at');
+  assert.deepEqual(f, [['gte', 'created_at', '2026-11-01T00:00:00.000Z'], ['lt', 'created_at', '2026-11-11T00:00:00.000Z']]);
+});

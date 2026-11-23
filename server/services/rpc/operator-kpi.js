@@ -244,15 +244,31 @@ export function operatorKpi(db, args, user) {
 // Видит только тот, кому открыта вся доска (canSeeAllLeads): чужие деньги —
 // та же граница, что выбор чужого оператора в «Мой KPI».
 // Период — как у отчёта на экране: days = 1 (сегодня), 7, 30, 0 — всё время.
+// CRM_REPORT_CUSTOM_PERIOD_V1 (2026-11-23, владелец: «add here own period, no need for
+// whole period») — или свой период: from и to, даты ГГГГ-ММ-ДД включительно. Даты,
+// которые не даты, не принимаются (тогда — days); перевёрнутые меняются местами.
 // ---------------------------------------------------------------------------
+// CRM_REPORT_CUSTOM_PERIOD_V1 — свой период отчёта: обе даты настоящие ГГГГ-ММ-ДД, иначе null.
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+function customRange(args) {
+  const f = String((args && args.from) || '');
+  const t = String((args && args.to) || '');
+  if (!YMD_RE.test(f) || !YMD_RE.test(t)) return null;
+  if (!Number.isFinite(Date.parse(f + 'T00:00:00Z')) || !Number.isFinite(Date.parse(t + 'T00:00:00Z'))) return null;
+  return f <= t ? { from: f, to: t } : { from: t, to: f };
+}
+
 export function salesTeamReport(db, args, user) {
   if (!user || !canOpen(db, user)) throw new RpcError('Раздел CRM вам не выдан.', 403);
   if (!canSeeAllLeads(db, user)) throw new RpcError('Отчёт по отделу продаж видит руководитель колл-центра.', 403);
 
   const days = Number(args && args.days);
-  const to = today(db);
-  const from = days > 0 ? ymd(new Date(parse(to).getTime() - (Math.floor(days) - 1) * 86400000)) : '2000-01-01';
+  const own = customRange(args);
+  const to = own ? own.to : today(db);
+  const from = own ? own.from : (days > 0 ? ymd(new Date(parse(to).getTime() - (Math.floor(days) - 1) * 86400000)) : '2000-01-01');
   const R = [from, to];
+  // Длина периода в днях — для шага графиков ниже (свой период считается так же, как days).
+  const span = own ? Math.round((parse(to).getTime() - parse(from).getTime()) / 86400000) + 1 : days;
 
   const WON = wonStageKey(db);
   const SCHEDULED = scheduledStageKey(db) || '';
@@ -323,7 +339,7 @@ export function salesTeamReport(db, args, user) {
   // деньги — по дню оплаты (то же правило «Принесли», без повторов пациента).
   // Шаг — день, а за «всё время» и периоды длиннее 90 дней — месяц: сотни
   // столбиков по дню не читаются.
-  const byMonth = !(days > 0 && days <= 90);
+  const byMonth = !(span > 0 && span <= 90);   // CRM_REPORT_CUSTOM_PERIOD_V1 — span, а не days
   const bucket = (col) => (byMonth ? `substr(${localDate(col)}, 1, 7)` : localDate(col));
   const leadSeries = db.prepare(`
     SELECT ${bucket('r.created_at')} AS k, COUNT(*) AS leads, SUM(r.status = ?) AS came

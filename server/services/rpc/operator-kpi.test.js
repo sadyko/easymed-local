@@ -214,3 +214,21 @@ test('отдел продаж: ряд по дням для графиков сх
   assert.equal(sum('revenue'), r.totals.revenue);
   assert.equal(salesTeamReport(db, { days: 0 }, { id: 1, role: 'admin' }).step, 'month');
 });
+
+// CRM_REPORT_CUSTOM_PERIOD_V1 — свой период отчёта: даты включительно; перевёрнутые меняются
+// местами; не даты — как days. Заявки стенда заведены сегодня.
+test('отдел продаж: свой период from..to', async () => {
+  const ADMIN = { id: 1, role: 'admin' };
+  const { today } = await import('../domain/day.js');
+  const t = today(db);
+  const day = salesTeamReport(db, { days: 1 }, ADMIN);
+  const own = salesTeamReport(db, { from: t, to: t }, ADMIN);
+  assert.equal(own.totals.total, day.totals.total, 'сегодня..сегодня — то же, что «Сегодня»');
+  assert.equal(own.totals.revenue, day.totals.revenue);
+  const past = salesTeamReport(db, { from: '2000-01-01', to: '2000-01-31' }, ADMIN);
+  assert.equal(past.totals.total, 0, 'период без заявок — ноль');
+  const swapped = salesTeamReport(db, { from: t, to: '2000-01-01' }, ADMIN);
+  assert.equal(swapped.totals.total, day.totals.total, 'перевёрнутые даты меняются местами');
+  const junk = salesTeamReport(db, { from: 'вчера', to: t, days: 1 }, ADMIN);
+  assert.equal(junk.totals.total, day.totals.total, 'не дата — считаем по days');
+});

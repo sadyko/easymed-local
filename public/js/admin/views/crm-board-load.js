@@ -215,9 +215,14 @@ export const REPORT_SELECT = 'id, status, source, sources, created_at, assigned_
  * @param {number} o.days  период отчёта в днях (0 — всё время)
  * @returns {Promise<object[]|null>}  null — сервер не ответил
  */
-export async function loadReportRows({ db = supabase, days = 30, operator = 'all', me = null, now = new Date() } = {}) {
+// CRM_REPORT_CUSTOM_PERIOD_V1 — from/to (ISO, to — не включая) — свой период отчёта;
+// без них — последние days дней, как было.
+export async function loadReportRows({ db = supabase, days = 30, from = null, to = null, operator = 'all', me = null, now = new Date() } = {}) {
     let q = db.from('crm_requests').select(REPORT_SELECT);
-    if (days) q = q.gte('created_at', new Date(now.getTime() - days * 86400000).toISOString());
+    if (from || to) {
+        if (from) q = q.gte('created_at', from);
+        if (to) q = q.lt('created_at', to);
+    } else if (days) q = q.gte('created_at', new Date(now.getTime() - days * 86400000).toISOString());
     const { data, error } = await withOperator(q, operator, me);
     return error ? null : (data || []);
 }

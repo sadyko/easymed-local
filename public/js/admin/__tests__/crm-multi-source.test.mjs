@@ -230,10 +230,16 @@ test('CRM_UNIFY_V1: «Отчёт» спрашивает базу за свой �
   assert.ok((q.filters || []).some((f) => f.col === 'created_at' && f.op === 'gte'), 'период отчёта (30 дней) не ушёл в запрос');
   const modal = crmPanel(root);   // CRM_PANELS_INLINE_V1
   CALLS.length = 0;
-  walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n) === 'Всё время').click();
+  // CRM_REPORT_CUSTOM_PERIOD_V1 — «Всё время» убрано (владелец: «add here own period, no need for
+  // whole period»); «Свой период» уходит в запрос обеими границами: с — gte, по (следующий день) — lt.
+  assert.equal(walk(modal).some((n) => n.tagName === 'BUTTON' && textOf(n) === 'Всё время'), false, '«Всё время» больше нет');
+  walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n) === 'Свой период').click();
   await tick(60);
   const q2 = CALLS.find(isReport);
-  assert.ok(q2 && !(q2.filters || []).some((f) => f.col === 'created_at'), '«Всё время» в отчёте обрезано датой');
+  assert.ok(q2, 'свой период — новый запрос');
+  assert.ok((q2.filters || []).some((f) => f.col === 'created_at' && f.op === 'gte'), 'начало периода ушло в запрос');
+  assert.ok((q2.filters || []).some((f) => f.col === 'created_at' && f.op === 'lt'), 'конец периода ушёл в запрос');
+  assert.equal(byAttr(modal, 'data-report-range').length, 1, 'рядом с кнопками — поля «с» и «по»');
   // отчёт считает ответ базы: стенд отдаёт те же четыре заявки
   assert.deepEqual(byAttr(modal, 'data-src-total')[0].children.map(textOf), ['Всего', '4', '1', '25%']);
   window.easymed.state.user = null;

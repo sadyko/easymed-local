@@ -4186,7 +4186,22 @@ async function paint() {
         const close = () => overlay.remove();
         if (!mount) overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
-        let period = 30;   // дней; 0 = всё время
+        let period = 30;   // дней; 'custom' — свой период (customFrom..customTo)
+        // CRM_REPORT_CUSTOM_PERIOD_V1 (2026-11-23, владелец: «add here own period, no need
+        // for whole period») — вместо «Всё время» — «Свой период»: две даты включительно.
+        // По умолчанию — последние 30 дней, чтобы первое нажатие уже что-то показало.
+        let customFrom = ymdLocal(new Date(Date.now() - 29 * 86400000));
+        let customTo = ymdLocal(new Date());
+        const customBad = () => !customFrom || !customTo || customFrom > customTo;
+        // Границы периода: from — начало первого дня, to — начало дня ПОСЛЕ последнего
+        // (не включая); у готовых периодов to — null, то есть «до сейчас».
+        function bounds() {
+            if (period === 'custom') {
+                const end = new Date(customTo + 'T00:00:00'); end.setDate(end.getDate() + 1);
+                return { from: new Date(customFrom + 'T00:00:00'), to: end };
+            }
+            return { from: period ? new Date(Date.now() - period * 86400000) : null, to: null };
+        }
         const bodyEl = h('div', { class: 'modal-body', style: { overflowY: 'auto' } });
         // CRM_UNIFY_V1 — «Отчёт» считает заявки ПО БАЗЕ своим лёгким запросом за
         // свой период (crm-board-load.js loadReportRows, Р14), а не то, что
@@ -4199,7 +4214,10 @@ async function paint() {
             const my = ++reportSeq;
             reportRows = undefined;
             paintReport();
-            const got = await loadReportRows({ days: period, operator: state.operator, me: selfUserId() });   // CRM_UNIFY_V1 — с фильтром «Оператор»
+            const b = bounds();
+            const got = await loadReportRows(period === 'custom'
+                ? { from: b.from.toISOString(), to: b.to.toISOString(), operator: state.operator, me: selfUserId() }
+                : { days: period, operator: state.operator, me: selfUserId() });   // CRM_UNIFY_V1 — с фильтром «Оператор»
             if (my !== reportSeq) return;   // пока считали, выбрали другой период
             reportRows = got;
             paintReport();
@@ -4208,8 +4226,10 @@ async function paint() {
         function rowsInPeriod() {
             if (Array.isArray(reportRows)) return reportRows;
             if (!period) return state.rows;
-            const from = Date.now() - period * 86400000;
-            return state.rows.filter(r => Date.parse(r.created_at || 0) >= from);
+            const b = bounds();
+            const from = b.from.getTime();
+            const to = b.to ? b.to.getTime() : Infinity;
+            return state.rows.filter(r => { const t = Date.parse(r.created_at || 0); return t >= from && t < to; });
         }
         function paintReport() {
             clear(bodyEl);
@@ -4222,8 +4242,26 @@ async function paint() {
                 class: 'btn btn-sm ' + (period === days ? 'btn-primary' : 'btn-outline'), type: 'button',
                 onclick: () => { period = days; refresh(); },   // CRM_UNIFY_V1 — новый период — новый запрос
             }, label);
-            bodyEl.appendChild(h('div', { class: 'row', style: { gap: '8px', marginBottom: '14px' } },
-                chip(1, 'Сегодня'), chip(7, '7 дней'), chip(30, '30 дней'), chip(0, 'Всё время')));
+            // CRM_REPORT_CUSTOM_PERIOD_V1 — «Свой период» и две даты рядом, как у доски
+            // (та же «таблетка» .crm-range). Перевёрнутый диапазон не считается — говорим прямо.
+            const range = () => {
+                const box = h('div', { class: 'crm-range' + (customBad() ? ' bad' : ''), 'data-report-range': '' });
+                const inp = (value, set) => {
+                    const el = h('input', { type: 'date', value: value || '', max: ymdLocal(new Date()) });
+                    el.addEventListener('change', () => { set(el.value); if (customBad()) paintReport(); else refresh(); });
+                    return el;
+                };
+                box.appendChild(h('span', { class: 'lbl' }, 'с'));
+                box.appendChild(inp(customFrom, (v) => { customFrom = v; }));
+                box.appendChild(h('span', { class: 'lbl' }, 'по'));
+                box.appendChild(inp(customTo, (v) => { customTo = v; }));
+                if (customBad()) box.appendChild(h('span', { class: 'err' }, 'начало позже конца'));
+                return box;
+            };
+            bodyEl.appendChild(h('div', { class: 'row', style: { gap: '8px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' } },
+                chip(1, 'Сегодня'), chip(7, '7 дней'), chip(30, '30 дней'), chip('custom', 'Свой период'),
+                period === 'custom' ? range() : null));
+            if (period === 'custom' && customBad()) return;
             // CRM_UNIFY_V1 — отчёт считает с фильтром «Оператор» доски и называет его.
             if (operatorLabel()) {
                 bodyEl.appendChild(h('div', { class: 'muted', 'data-report-operator': '', style: { fontSize: '13.5px', margin: '-6px 0 12px' } },
@@ -4268,7 +4306,8 @@ async function paint() {
             bodyEl.appendChild(teamBox);
             const teamSeq = reportSeq;
             (async () => {
-                const { data, error } = await supabase.rpc('crm_sales_team_report', { days: period });
+                const { data, error } = await supabase.rpc('crm_sales_team_report',
+                    period === 'custom' ? { from: customFrom, to: customTo } : { days: period });   // CRM_REPORT_CUSTOM_PERIOD_V1
                 if (teamSeq !== reportSeq) return;   // пока считали, выбрали другой период
                 clear(teamBox);
                 if (error || !data || !Array.isArray(data.managers)) return;
@@ -4326,10 +4365,11 @@ async function paint() {
             const opsBox = h('div', { style: { marginBottom: '14px' } });
             bodyEl.appendChild(opsBox);
             (async () => {
-                const to = new Date();
-                const from = period ? new Date(Date.now() - period * 86400000) : new Date(2000, 0, 1);
+                const b = bounds();   // CRM_REPORT_CUSTOM_PERIOD_V1 — тот же период, что у заявок
+                const from = b.from || new Date(2000, 0, 1);
+                const to = b.to || new Date(Date.now() + 60000);
                 const { data, error } = await supabase.rpc('telephony_operator_stats',
-                    { from: from.toISOString(), to: new Date(to.getTime() + 60000).toISOString() });
+                    { from: from.toISOString(), to: to.toISOString() });
                 clear(opsBox);
                 // Отчёт о работе людей открыт администратору; оператору сервер
                 // откажет, и это не ошибка экрана — просто раздела у него нет.
