@@ -20,6 +20,7 @@ import { startUiEnhance } from './admin/ui-enhance.js?v=uien1';
 import { pulseFade, revealOn, HIDDEN_CLASS, SHOWN_CLASS } from './admin/motion.js?v=mo1';   // SHELL_REVEAL_V1 — появление для всех экранов
 import {
     isModuleAllowed, isRouteAllowed, actorRoleCodes,   // actorRoleCodes — ROLE_HOME_V1
+    canOpenPatientCardVia,   // DOCTOR_CARD_VIA_LINE_V1
     setFullAccess, setEffectiveFromRole, setEffectiveFromRoles, currentRoleLabel, setOwnCustomGrants,
     setActorRoleGrants,   // JOURNALS_V1_RJ3 — права каждой роли в силе (и дополнительных у администратора)
     scopedProviderId, ownDepartmentId, PERSONAL_VIEWS,   // ownDepartmentId / PERSONAL_VIEWS — MY_STOCK_V1
@@ -799,6 +800,9 @@ function viewKeyFor(view, payload) {
     if (view === 'service-workspace' && payload?.serviceId) return `service-workspace:${payload.serviceId}`;
     if (view === 'service-workspace' && payload?.visitId)   return `service-workspace:visit:${payload.visitId}`;
     if (view === 'consultation'      && payload?.visitId)   return `consultation:${payload.visitId}`;
+    // DOCTOR_CARD_VIA_LINE_V1 — карта из кабинета — своя панель на строку: её право решается при
+    // монтировании, и обычная карта (или её «Нет доступа») не делит с ней кэш.
+    if (view === 'patient-card'      && payload?.viaLine)   return `patient-card:via:${payload.viaLine}`;
     if (view.startsWith('settings:')) return view;
     if (view.startsWith('report:'))   return view;
     return view;
@@ -1285,7 +1289,7 @@ window.addEventListener('popstate', (e) => {
 async function renderViewInto(pane) {
     const root = pane.root;
     clear(root);
-    if (!isRouteAllowed(pane.view)) {
+    if (!isRouteAllowed(pane.view) && !(pane.view === 'patient-card' && canOpenPatientCardVia(pane.payload))) {   // DOCTOR_CARD_VIA_LINE_V1
         root.appendChild(accessDenied());
         return;
     }
@@ -1429,7 +1433,8 @@ async function renderViewInner(viewRoot, viewName, ctx) {
     }
     // NAV_VISIBILITY_V1 — раньше прав: роль без права увидела бы «нет доступа» там,
     // где раздела в клинике просто нет.
-    if (navHiddenFor(viewName)) {
+    const viaCard = viewName === 'patient-card' && canOpenPatientCardVia(ctx && ctx.payload);   // DOCTOR_CARD_VIA_LINE_V1
+    if (navHiddenFor(viewName) && !viaCard) {
         // Своя заглушка, не renderPlaceholder: тот дописывает к имени слово «module» (экран «скоро»).
         // FIX_318_V1 (B1) — «На главную» только туда, где можно работать: кнопка,
         // ведущая на этот же скрытый экран, водила бы по кругу.
@@ -1442,7 +1447,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
                 canGoHome ? h('button', { class: 'btn btn-outline', type: 'button', style: { marginTop: '14px' }, onclick: () => navigate(home) }, 'На главную') : null)));
         return;
     }
-    if (!isRouteAllowed(viewName)) {
+    if (!isRouteAllowed(viewName) && !viaCard) {
         viewRoot.appendChild(accessDenied());
         return;
     }

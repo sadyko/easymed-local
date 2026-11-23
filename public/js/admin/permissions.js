@@ -1200,6 +1200,14 @@ export function isModuleAllowed(navId) {
 // Is a concrete route allowed? Handles sub-routes that don't have their own
 // nav item (patient-card → patients, service-workspace → consultation,
 // settings:<key> → that exact key, report:<key> → reports).
+// DOCTOR_CARD_VIA_LINE_V1 (2026-11-23) — карта пациента из кабинета врача («Карта пациента» в окне приёма)
+// открывается и роли без раздела «Пациенты»: адрес несёт строку кабинета (payload.viaLine), и её
+// проверяет сервер (rpc/patient-card.js cabinetLineAccess) — здесь только «есть кабинет и есть строка».
+export function canOpenPatientCardVia(payload) {
+    const n = Number(payload && payload.viaLine);
+    return Number.isInteger(n) && n > 0 && isRouteAllowed('service-workspace');
+}
+
 export function isRouteAllowed(view) {
     // ROLE_REPORTS_SETTINGS_V1 — экран-плитка настроек: настроенное окно
     // решает само; ненастроенное — прежние строки ниже, как было. Ревью C1/I1:

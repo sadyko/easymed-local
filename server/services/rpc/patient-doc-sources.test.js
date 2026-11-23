@@ -634,3 +634,37 @@ test('полировка п. 15: черновик со словом «signed» �
   out = patientDocSources(db, { patient_id: 1 }, DOCTOR);
   assert.ok(!out.groups.consult.some((d) => d.source === 'visit'), 'подписанная запись — заключение визита второй раз не показывается');
 });
+
+// DOCTOR_CARD_VIA_LINE_V1 (2026-11-23, владелец: «if we close the patients in the doctors role in the
+// workplace there is button of the patient card. we need to open it for this doctor, and for this patient
+// even if patients list is not available for the doctors») — та же роль только с кабинетом открывает
+// КАРТУ пациента своей строки (patient_card с via_line): только для чтения, без «Счёта» и долга;
+// чужой пациент, чужая строка, без строки, отменённая строка — прежний отказ; правка карты — отказ.
+test('DOCTOR_CARD_VIA_LINE_V1: роль только с кабинетом — карта пациента своей строки, только чтение и без денег; остальное — 403', async () => {
+  const { patientCard, patientCardSavePatient } = await import('./patient-card.js');
+  const db = seed();
+  db.prepare("INSERT INTO role_permissions (role, permissions) VALUES ('uzi_doc', ?)").run(JSON.stringify({ sections: ['consultation'] }));
+  db.prepare("INSERT INTO patients (id, full_name, mrn) VALUES (2, 'Пациент Второй', 'T-2')").run();
+  line(db, 61, 50, 902, { doctor: 3 });   // строка врача УЗИ у пациента 1
+  line(db, 64, 51, 901, { doctor: 4 });   // строка другого врача у пациента 1
+  const uzi = { id: 3, role: 'doctor', custom_role_code: 'uzi_doc' };
+  const denied = (args, user = uzi) => assert.throws(() => patientCard(db, args, user), (e) => e.status === 403, JSON.stringify(args));
+  denied({ patient_id: 1 });                       // без строки — раздела «Пациенты» нет
+  const card = patientCard(db, { patient_id: 1, via_line: 61 }, uzi);
+  assert.equal(card.via_line, true);
+  assert.equal(card.patient.id, 1);
+  assert.equal(card.tabs.billing, 'none', '«Счёт» открыт карте из кабинета');
+  assert.ok(Object.values(card.tabs).every((l) => l === 'none' || l === 'view'), 'вкладка выше просмотра: ' + JSON.stringify(card.tabs));
+  assert.equal(card.invoices, null);
+  assert.equal(card.debt, null);
+  denied({ patient_id: 2, via_line: 61 });         // строка — пациента 1
+  denied({ patient_id: 1, via_line: 64 });         // строка другого врача
+  denied({ patient_id: 1, via_line: 99999 });      // строки нет
+  assert.throws(() => patientCardSavePatient(db, { patient_id: 1, via_line: 61, patch: { phone: '+998901112233' } }, uzi),
+    (e) => e.status === 403, 'правка карты пропущена по строке кабинета');
+  db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = 61").run();
+  denied({ patient_id: 1, via_line: 61 });         // отменённая строка карту не открывает
+  // штатный врач с разделом «Пациенты» — карта как раньше, via_line ничего не меняет
+  const full = patientCard(db, { patient_id: 1, via_line: 61 }, DOCTOR);
+  assert.equal(full.via_line, false);
+});

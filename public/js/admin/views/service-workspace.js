@@ -1005,7 +1005,7 @@ export function soapForm(ctx) {
         h('div', { class: 'ws-pb-row2' }, _pchip('Тел', _p.phone || '—'), _pchip('Дата рожд', _p.dob || _p.birthDate || '—')),
     );
     const _patientBtns = h('div', { class: 'ws-topbtns' }, _histBtn,
-        ctx.onNavigate ? h('button', { class: 'btn btn-amber btn-sm', type: 'button', onclick: () => ctx.onNavigate('patient-card', _p) }, 'Карта пациента ', Icon('ArrowRight', { size: 12 })) : null);
+        ctx.onNavigate ? h('button', { class: 'btn btn-amber btn-sm', type: 'button', onclick: () => ctx.onNavigate('patient-card', { ..._p, viaLine: ctx.visitServiceId || null }) }, 'Карта пациента ', Icon('ArrowRight', { size: 12 })) : null);   // DOCTOR_CARD_VIA_LINE_V1 — строка кабинета
 
     return h('div', { class: 'card', 'data-print-root': '', style: { overflow: 'hidden' } },
         // Doc bar — patient block (left) + document controls (right), one line (WS_TOPLINE_V1)
@@ -3416,7 +3416,7 @@ async function paintPatientDocs(ctx) {
 // Open a stored document — the full viewer (files + structured conclusions) lives in the
 // patient card's Documents tab.
 function openPatientDoc(ctx, d) {
-    if (ctx.onNavigate) ctx.onNavigate('patient-card', ctx.patient);
+    if (ctx.onNavigate) ctx.onNavigate('patient-card', { ...(ctx.patient || {}), viaLine: ctx.visitServiceId || null });   // DOCTOR_CARD_VIA_LINE_V1
     else toast('Документ доступен в карте пациента', 'info');
 }
 

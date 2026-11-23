@@ -39,6 +39,7 @@ import { patientVisitSummary } from '../domain/visit-summary.js';   // LAST_VISI
 import fs from 'node:fs';
 import path from 'node:path';
 import { getDataDir } from '../control/config.js';
+import { hasColumn } from '../domain/buildings.js';   // DOCTOR_CARD_VIA_LINE_V1 — cabinetLineAccess
 import { patientFileRefusal, refusalText } from '../../../public/js/shared/patient-file-limits.js';
 import { refundedOpenLineIds } from '../domain/pay-releases.js';   // REFUND_ANY_V1 — «услуга возвращена»
 import { REFUNDED_SIGN_REFUSAL } from '../../../public/js/shared/refunded-line.js';   // REFUND_ANY_V1
@@ -98,6 +99,52 @@ export function patientCardAccess(db, user) {
   for (const t of PATIENT_CARD_TABS) tabs[t] = patientTabLevel(db, user, t);
   return { roles, tabs };
 }
+
+// DOCTOR_CARD_VIA_LINE_V1 — переехало сюда из rpc/patient-doc-sources.js без изменений.
+const posInt = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
+const CABINET_SECTION = 'consultation';
+
+/**
+ * PASTE_SOURCES_V1 (ревью M3) — окно вставки по ТЕКУЩЕЙ строке кабинета.
+ * Роль с кабинетом врача, но без раздела «Пациенты», видит документы пациента
+ * той строки, которую кабинет ей открывает. PASTE_SOURCES_V1 (полировка 3.21.0,
+ * п. 12; ревью R-L1) — что именно пускает:
+ *   • строка — не товар, своего здания (vs.sync_origin пуст), не отменена, не снята
+ *     и не возвращена (status 'cancelled' / 'removed' / 'refunded' и отметка возврата
+ *     pay_refund_releases 'out' у строки без счёта — K5);
+ *   • визит строки — своего здания (v.sync_origin пуст), не отменён и не «не пришёл»;
+ *   • строка назначена этому человеку (у администратора — любая с исполнителем).
+ * Лабораторные и процедурные строки самого человека пускаются тоже: это НЕ ровно
+ * отбор «Мои услуги» (views/consultation.js loadServices), а его границы по зданию,
+ * отмене и исполнителю — данных шире, чем роль и так читает, окно не открывает.
+ * Пациент запроса — пациент строки; иначе null. Уровни вкладок и реестр таблиц — те
+ * же, что у карты.
+ */
+const LINE_GONE = ['cancelled', 'removed', 'refunded'];   // PASTE_SOURCES_V1 (полировка, п. 12)
+export function cabinetLineAccess(db, user, pid, vsId) {
+  if (!pid || !vsId || !user) return null;
+  if (!canViewSection(db, user, CABINET_SECTION)) return null;
+  const roles = effectiveRoles(user);
+  if (!canRead('patients', roles)) return null;
+  const vsOrigin = hasColumn(db, 'visit_services', 'sync_origin') ? 'vs.sync_origin' : 'NULL';
+  const vOrigin = hasColumn(db, 'visits', 'sync_origin') ? 'v.sync_origin' : 'NULL';   // полировка, п. 12
+  const refunded = hasColumn(db, 'pay_refund_releases', 'line_id')
+    ? `(vs.invoice_item_id IS NULL AND EXISTS (SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = 'out' AND prr.line_id = vs.id))`
+    : '0';
+  const line = db.prepare(`SELECT vs.doctor_id, vs.status, vs.clinic_item_id, ${vsOrigin} AS vs_origin, v.patient_id,
+         v.status AS visit_status, ${vOrigin} AS v_origin, ${refunded} AS refunded
+      FROM visit_services vs JOIN visits v ON v.id = vs.visit_id WHERE vs.id = ?`).get(vsId);
+  if (!line || Number(line.patient_id) !== pid || LINE_GONE.includes(line.status) || line.clinic_item_id != null || line.vs_origin != null) return null;
+  // PASTE_SOURCES_V1 (полировка, п. 12) — визит отменён / «не пришёл» / другого здания; строка возвращена.
+  if (line.visit_status === 'cancelled' || line.visit_status === 'no_show' || line.v_origin != null || Number(line.refunded) === 1) return null;
+  const me = posInt(user.id);
+  const assigned = line.doctor_id != null && Number(line.doctor_id) === me;
+  if (!assigned && !(roles.includes('admin') && line.doctor_id != null)) return null;
+  const tabs = {};
+  for (const t of PATIENT_CARD_TABS) tabs[t] = patientTabLevel(db, user, t);
+  return { roles, tabs };
+}
+
 
 function patientId(args) {
   const id = Number(args && args.patient_id);
@@ -171,11 +218,33 @@ function parseJson(v) {
  * экран мог ОБЪЯСНИТЬ отказ, а не молча недосчитаться вкладки.
  */
 export function patientCard(db, args, user) {
-  const roles = requireCard(db, user);
+  // DOCTOR_CARD_VIA_LINE_V1 (2026-11-23, владелец: «if we close the patients in the doctors role in the
+  // workplace there is button of the patient card. we need to open it for this doctor, and for this
+  // patient even if patients list is not available for the doctors») — роль с кабинетом врача, но без
+  // раздела «Пациенты», открывает карту ПАЦИЕНТА СВОЕЙ СТРОКИ: экран кабинета присылает via_line (строку,
+  // которую кабинет ей открыл), и её проверяет то же правило, что окно «Вставить результаты»
+  // (cabinetLineAccess: строка назначена ему, пациент тот же, не отменена и не возвращена, визит живой,
+  // своё здание). Такая карта — ТОЛЬКО ДЛЯ ЧТЕНИЯ: вкладки не выше «просмотра», «Счёт» закрыт, долга
+  // нет; правки карты (patient_card_save, документы, услуги) по-прежнему требуют раздела «Пациенты».
+  let roles;
+  let viaLine = false;
+  let via = null;
+  try {
+    roles = requireCard(db, user);
+  } catch (e) {
+    if (!(e instanceof RpcError) || e.status !== 403) throw e;
+    via = cabinetLineAccess(db, user, posInt(args && args.patient_id), posInt(args && args.via_line));
+    if (!via) throw e;
+    roles = via.roles;
+    viaLine = true;
+  }
   const id = patientId(args);
 
   const tabs = {};
-  for (const t of PATIENT_CARD_TABS) tabs[t] = patientTabLevel(db, user, t);
+  for (const t of PATIENT_CARD_TABS) {
+    const lvl = patientTabLevel(db, user, t);
+    tabs[t] = !viaLine ? lvl : (t === 'billing' || lvl === 'none' ? 'none' : 'view');
+  }
 
   const full = db.prepare('SELECT ' + cols('patients', 'p') + ' FROM patients p WHERE p.id = ?').get(id);
   if (!full) throw new RpcError('Пациент не найден.', 404);
@@ -184,6 +253,7 @@ export function patientCard(db, args, user) {
   const out = {
     tabs,
     caps: PATIENT_TAB_CAPS,
+    via_line: viaLine,   // DOCTOR_CARD_VIA_LINE_V1 — карта открыта из кабинета, только для чтения
     patient: seeDetails ? full : pick(full, IDENTITY_COLUMNS),
     patient_limited: !seeDetails,
     payer_name: null,
@@ -211,7 +281,7 @@ export function patientCard(db, args, user) {
   try { out.telegram = telegramPatientStatus(db, { patient_id: id }, user); }
   catch { out.telegram = null; }
 
-  if (canRead('invoices', roles)) {
+  if (!viaLine && canRead('invoices', roles)) {   // DOCTOR_CARD_VIA_LINE_V1 — из кабинета денег карта не показывает
     const d = db.prepare(`
       SELECT COUNT(*) AS n, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
         FROM invoices WHERE patient_id = ? AND status = 'debt'`).get(id);

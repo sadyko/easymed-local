@@ -396,3 +396,21 @@ test('LIVE_AUDIT_FIX_V1: календарь записи — admin/registrar/doc
         perms.setFullAccess();
     }
 });
+
+// DOCTOR_CARD_VIA_LINE_V1 (2026-11-23) — врачу без раздела «Пациенты» карта пациента открывается только
+// из кабинета (адрес несёт строку кабинета viaLine; саму строку проверяет сервер). Без строки — прежний
+// отказ; без кабинета — отказ и со строкой. Оболочка (admin.js) ставит такой карте свою панель на строку.
+test('DOCTOR_CARD_VIA_LINE_V1: карта пациента из кабинета — только со строкой кабинета и только у роли с кабинетом', () => {
+    perms.setEffectiveFromRole(role('doctor', ['consultation'], { consultation: 'editor' }));
+    assert.equal(perms.isRouteAllowed('patient-card'), false, 'стенд: у роли нет «Пациентов»');
+    assert.equal(perms.canOpenPatientCardVia({ id: 'p-1', viaLine: 61 }), true, 'карта из кабинета закрыта');
+    assert.equal(perms.canOpenPatientCardVia({ id: 'p-1' }), false, 'без строки кабинета карта открылась');
+    assert.equal(perms.canOpenPatientCardVia({ id: 'p-1', viaLine: 'x' }), false);
+    perms.setEffectiveFromRole(role('cashier', ['cashier'], { cashier: 'admin' }));
+    assert.equal(perms.canOpenPatientCardVia({ id: 'p-1', viaLine: 61 }), false, 'карта из кабинета у роли без кабинета');
+    perms.setFullAccess('Admin');
+    const shell = fs.readFileSync(path.join(HERE, '..', '..', 'admin.js'), 'utf8');
+    assert.ok(shell.includes("if (view === 'patient-card'      && payload?.viaLine)   return `patient-card:via:${payload.viaLine}`;"),
+        'карта из кабинета делит панель с обычной картой — её «Нет доступа» осталось бы в кэше');
+    assert.equal((shell.match(/canOpenPatientCardVia\(/g) || []).length, 2, 'обе двери оболочки (монтирование и отрисовка) не знают про карту из кабинета');
+});

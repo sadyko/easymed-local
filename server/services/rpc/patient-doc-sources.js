@@ -70,7 +70,7 @@
 //
 // ТОЛЬКО ЧТЕНИЕ: ничего не пишет (READ_ONLY_RPCS в control/gate.js).
 import { RpcError } from './crm-config.js';
-import { patientCardAccess, fileOnThisMachine, DENIED_TEMPLATE, TAB_LABELS } from './patient-card.js';
+import { patientCardAccess, fileOnThisMachine, DENIED_TEMPLATE, TAB_LABELS, cabinetLineAccess } from './patient-card.js';   // DOCTOR_CARD_VIA_LINE_V1 — cabinetLineAccess
 import { effectiveRoles, canViewSection, PATIENT_CARD_TABS, patientTabLevel } from '../roles.js';
 import { canRead } from '../../db/schema-registry.js';
 import { hasColumn } from '../domain/buildings.js';
@@ -280,48 +280,8 @@ export function fitGroups(sizes, budget, times = null) {
 // ---------------------------------------------------------------------------
 // ПРАВА.
 // ---------------------------------------------------------------------------
-const CABINET_SECTION = 'consultation';
-
-/**
- * PASTE_SOURCES_V1 (ревью M3) — окно вставки по ТЕКУЩЕЙ строке кабинета.
- * Роль с кабинетом врача, но без раздела «Пациенты», видит документы пациента
- * той строки, которую кабинет ей открывает. PASTE_SOURCES_V1 (полировка 3.21.0,
- * п. 12; ревью R-L1) — что именно пускает:
- *   • строка — не товар, своего здания (vs.sync_origin пуст), не отменена, не снята
- *     и не возвращена (status 'cancelled' / 'removed' / 'refunded' и отметка возврата
- *     pay_refund_releases 'out' у строки без счёта — K5);
- *   • визит строки — своего здания (v.sync_origin пуст), не отменён и не «не пришёл»;
- *   • строка назначена этому человеку (у администратора — любая с исполнителем).
- * Лабораторные и процедурные строки самого человека пускаются тоже: это НЕ ровно
- * отбор «Мои услуги» (views/consultation.js loadServices), а его границы по зданию,
- * отмене и исполнителю — данных шире, чем роль и так читает, окно не открывает.
- * Пациент запроса — пациент строки; иначе null. Уровни вкладок и реестр таблиц — те
- * же, что у карты.
- */
-const LINE_GONE = ['cancelled', 'removed', 'refunded'];   // PASTE_SOURCES_V1 (полировка, п. 12)
-function cabinetLineAccess(db, user, pid, vsId) {
-  if (!pid || !vsId || !user) return null;
-  if (!canViewSection(db, user, CABINET_SECTION)) return null;
-  const roles = effectiveRoles(user);
-  if (!canRead('patients', roles)) return null;
-  const vsOrigin = hasColumn(db, 'visit_services', 'sync_origin') ? 'vs.sync_origin' : 'NULL';
-  const vOrigin = hasColumn(db, 'visits', 'sync_origin') ? 'v.sync_origin' : 'NULL';   // полировка, п. 12
-  const refunded = hasColumn(db, 'pay_refund_releases', 'line_id')
-    ? `(vs.invoice_item_id IS NULL AND EXISTS (SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = 'out' AND prr.line_id = vs.id))`
-    : '0';
-  const line = db.prepare(`SELECT vs.doctor_id, vs.status, vs.clinic_item_id, ${vsOrigin} AS vs_origin, v.patient_id,
-         v.status AS visit_status, ${vOrigin} AS v_origin, ${refunded} AS refunded
-      FROM visit_services vs JOIN visits v ON v.id = vs.visit_id WHERE vs.id = ?`).get(vsId);
-  if (!line || Number(line.patient_id) !== pid || LINE_GONE.includes(line.status) || line.clinic_item_id != null || line.vs_origin != null) return null;
-  // PASTE_SOURCES_V1 (полировка, п. 12) — визит отменён / «не пришёл» / другого здания; строка возвращена.
-  if (line.visit_status === 'cancelled' || line.visit_status === 'no_show' || line.v_origin != null || Number(line.refunded) === 1) return null;
-  const me = posInt(user.id);
-  const assigned = line.doctor_id != null && Number(line.doctor_id) === me;
-  if (!assigned && !(roles.includes('admin') && line.doctor_id != null)) return null;
-  const tabs = {};
-  for (const t of PATIENT_CARD_TABS) tabs[t] = patientTabLevel(db, user, t);
-  return { roles, tabs };
-}
+// DOCTOR_CARD_VIA_LINE_V1 — правило «текущая строка кабинета» (cabinetLineAccess) переехало в
+// rpc/patient-card.js: им же теперь открывается сама карта пациента из кабинета врача.
 
 /** Права карты; нет раздела «Пациенты» — текущая строка кабинета (ревью M3); иначе — прежний отказ. */
 function docSourcesAccess(db, user, pid, currentLine) {

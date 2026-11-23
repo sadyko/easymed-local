@@ -287,6 +287,10 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     const tabDelete = (tab) => levelOf(tab) === 'delete';
 
     const patientId = payload.id;
+    // DOCTOR_CARD_VIA_LINE_V1 — карта открыта из кабинета врача (строка кабинета в адресе). Без раздела
+    // «Пациенты» сервер отдаёт её только для чтения; «Назад» ведёт в кабинет, а не в закрытый список.
+    const viaLine = Number.isInteger(Number(payload.viaLine)) && Number(payload.viaLine) > 0 ? Number(payload.viaLine) : null;
+    const backToCabinet = !!viaLine && !isRouteAllowed('patients');
     const patientStub = () => ({ id: patient?.id, full_name: patient?.full_name, mrn: patient?.mrn, phone: patient?.phone });
 
     // ---- skeleton ----
@@ -314,7 +318,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // `patients` получала всё. Теперь спрашивает сервер, и он отдаёт
             // ровно те вкладки, которые роли выданы (закрытая приходит как
             // null), плюс их уровни — чтобы экран мог ОБЪЯСНИТЬ отказ.
-            const { data, error } = await supabase.rpc('patient_card', { patient_id: patientId });
+            const { data, error } = await supabase.rpc('patient_card', viaLine ? { patient_id: patientId, via_line: viaLine } : { patient_id: patientId });   // DOCTOR_CARD_VIA_LINE_V1
             if (token !== fetchToken) return;
             if (error || !data) {
                 clear(headerEl);
@@ -530,14 +534,14 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         },
             h('button', {
                 type: 'button',
-                onclick: () => onNavigate && onNavigate('patients'),
+                onclick: () => onNavigate && onNavigate(backToCabinet ? 'consultation' : 'patients'),   // DOCTOR_CARD_VIA_LINE_V1
                 style: {
                     display: 'inline-flex', alignItems: 'center', gap: '6px',
                     padding: '7px 12px', borderRadius: '9px', cursor: 'pointer',
                     border: '1px solid rgba(255,255,255,0.3)', background: 'rgba(255,255,255,0.12)',
                     color: '#fff', fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 600,
                 },
-            }, Icon('ChevronLeft', { size: 13 }), 'Пациенты'),
+            }, Icon('ChevronLeft', { size: 13 }), backToCabinet ? tr('Назад') : 'Пациенты'),
             h('span', { style: { flex: 1 } }),
             // ADMISSION_ORDER_V1 — вход в стационар ОТСЮДА: заявку оформляет
             // регистратура, а регистратура работает в карте пациента. Кнопка
@@ -547,7 +551,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // покое некогда.
             // V3120_FIX — и только тому, кому сервер оформит заявку: у
             // медсестры, лаборанта и кассира кнопка вела в «недоступно вашей роли».
-            canOrderAdmission() ? h('button', {
+            canOrderAdmission() && !backToCabinet ? h('button', {   // DOCTOR_CARD_VIA_LINE_V1 — из кабинета заявку не оформляют
                 type: 'button',
                 onclick: () => openAdmissionOrderModal({
                     patientId: patient?.id, patientName: patient?.full_name, patientMrn: patient?.mrn,
