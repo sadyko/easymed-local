@@ -47,7 +47,7 @@
 // дорогой вид дубля.
 
 import { supabase } from '../../supabase.js';
-import { sectionsFor, sectionLabel, richSection, freeSection, richToolbar, caseDocPrintBody, docHeadIds, docHeadFields, docActionsBar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';
+import { sectionsFor, sectionLabel, richSection, freeSection, richToolbar, caseDocPrintBody, docHeadIds, docHeadFields, docActionsBar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank, a4StackOf, a4Continuations } from './case-doc-a4.js';   // INPATIENT_REQUIRED_V1 (ревью) — раздел целиком, со вторым листом
 // CASE_DOC_TEMPLATES_V1 — библиотека шаблонов живёт в кабинете врача и
 // подгружается в момент нажатия (см. applyTemplate ниже): статический импорт
 // замыкает кольцо модулей и оставляет экран истории болезни на старом коде.
@@ -56,7 +56,9 @@ import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — список �
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.js';
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // TITLE_SHEET_V1 — вынесено, чтобы не было кольца
-import { openAdmissionTitleSheetModal } from './title-sheet.js';   // TITLE_SHEET_V1 — шаг 2 размещения
+// TITLE_SHEET_V1 — шаг 2 размещения. INPATIENT_REQUIRED_V1 (ревью) — правила клиники: окно
+// рисуется сразу, публикация их ждёт (общая память прочитанных правил — в title-sheet.js).
+import { openAdmissionTitleSheetModal, inpatientRulesNow, isRulesPromise, settleWithin, loadInpatientRulesSoon } from './title-sheet.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isRouteAllowed } from '../permissions.js';   // V3120_CLEANUP — переходы только в открытые экраны
 import { moneyDisplay } from '../../shared/money-input.js';   // CASE_OVERVIEW_V1 — сумма счёта в подтверждении выписки
@@ -83,7 +85,7 @@ import { dietTitle, mealsTitle, MEAL_FREQUENCIES } from './kitchen-sheet.js';
 import { caseDocsPanel, caseDocTitle, assembleCaseFile } from './case-docs.js?v=case1';
 // INPATIENT_REQUIRED_V1 — отметки обязательных разделов и «Сохранить как есть»; правила
 // клиники; пуст ли раздел — то же правило, что у сервера. Модули без ?v=.
-import { requiredMarks, askSaveAnyway, loadInpatientRules } from './required-marks.js';
+import { requiredMarks, askSaveAnyway } from './required-marks.js';
 import { DEFAULT_RULES, requiredSectionsOf } from '../../shared/inpatient-required.js';
 import { richIsEmpty, textIsBlank } from '../../shared/rich-text.js';
 
@@ -916,8 +918,13 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // разделы (только те, что у документа есть) открыты и не убираются; диагноз
     // первичного осмотра при включённом переключателе — жёсткий запрет. Чтение
     // редакции ничего не требует.
-    const rules = rulesIn || DEFAULT_RULES;
-    const dxHard = isPrimary && rules.primaryNeedsDiagnosis && !isView;
+    // INPATIENT_REQUIRED_V1 (ревью) — rules: правила или ОБЕЩАНИЕ правил (окно документа
+    // открывается, не дожидаясь настроек клиники). Пока обещание в пути — последние
+    // прочитанные правила (или сегодняшние); пришло — applyRules ниже, а «Опубликовать»
+    // ждёт его (rulesReady). Поэтому всё, что следует из правил, — let.
+    const rulesLater = isRulesPromise(rulesIn) ? rulesIn : null;
+    let rules = rulesLater ? inpatientRulesNow() : (rulesIn || DEFAULT_RULES);
+    let dxHard = isPrimary && rules.primaryNeedsDiagnosis && !isView;
 
     // CASE_DOC_A4_V1 — документ пишется РАЗДЕЛАМИ ЛИСТА, а не полями формы:
     // те же классы и та же панель форматирования, что в кабинете врача. Набор
@@ -925,7 +932,8 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // текст, дневник — жалобы, объективно, план), а диагноз остаётся одной
     // строкой простого текста: он едет в обзор, в журнал и в списки.
     const secKeys = sectionsFor(kind);
-    const reqSecs = isView ? [] : requiredSectionsOf(rules, kind).filter((k) => secKeys.includes(k));   // INPATIENT_REQUIRED_V1
+    const reqSecsOf = (r) => (isView ? [] : requiredSectionsOf(r, kind).filter((k) => secKeys.includes(k)));   // INPATIENT_REQUIRED_V1
+    let reqSecs = reqSecsOf(rules);
     const rich = {};
     const loaded = { complaints: '', objective: '', diagnosis: '', plan: '', body: '' };
     const diagnosis = h('input', { type: 'text', class: 'cd-dx', placeholder: tr('Диагноз при поступлении') });
@@ -964,9 +972,10 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // INPATIENT_REQUIRED_V1 — обязательный раздел открыт сразу и не сворачивается
     // никогда: ни крестиком, ни раскладкой черновика (см. fill). Подпись раздела
     // (madeTags) несёт звезду.
-    const reqRich = reqSecs.filter((k) => ALL_SECS.includes(k));
+    let reqRich = reqSecs.filter((k) => ALL_SECS.includes(k));
     for (const k of reqRich) secOn.add(k);
     const madeTags = {};
+    const madeSec = {};   // INPATIENT_REQUIRED_V1 (ревью) — setTitle / setRemovable раздела
     let remark = () => {};   // перерисовать отметки (подписи переименовали); настоящая — ниже
     // CASE_TPL_OVER_BLANK_V1 (2026-09-14) — что в разделе лежит БЛАНК КЛИНИКИ,
     // а не текст врача. Владелец: «we cannot use templates … in the
@@ -986,13 +995,20 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
             },
             onAdd: readOnly ? null : () => { secOn.add(key); syncSecs(); },
             // INPATIENT_REQUIRED_V1 — обязательный раздел крестика не получает.
-            onRemove: readOnly || reqRich.includes(key) ? null : () => { secOn.delete(key); syncSecs(); },
+            // INPATIENT_REQUIRED_V1 (ревью) — правила клиники приходят и после того, как
+            // раздел нарисован: крестик заводится у каждого и снимается setRemovable
+            // (ниже), а обязательный раздел не убирается, даже если крестик успели нажать.
+            onRemove: readOnly ? null : () => { if (reqRich.includes(key)) return; secOn.delete(key); syncSecs(); },
         });
         rich[key] = made.input;
         madeSecs[key] = made.sec;
         madeTags[key] = made.tag;   // INPATIENT_REQUIRED_V1
+        madeSec[key] = made;        // INPATIENT_REQUIRED_V1 (ревью)
         return made.sec;
     });
+    // INPATIENT_REQUIRED_V1 (ревью) — крестик только у необязательных разделов.
+    const syncRemovable = () => { for (const key of ALL_SECS) madeSec[key].setRemovable(!reqRich.includes(key)); };
+    syncRemovable();
 
     // Выключенный раздел показывает пунктирное «+ Добавить: имя» — той же
     // коробкой, что и включённый (CASE_DOC_SEC_MANAGER_V2). Отдельной полосы с
@@ -1046,9 +1062,34 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // (dxEditor), а здесь — лишь поле-носитель без места на экране. Владелец карточки
     // сообщает её рамку и поле ввода через bindDiagnosis — туда ляжет рамка и туда же
     // поставит курсор «Дописать». Диагноз в списке первым: на экране он выше листа.
-    const dxNeeded = dxHard || reqSecs.includes('diagnosis');
+    let dxNeeded = dxHard || reqSecs.includes('diagnosis');
     let dxTarget = { el: diagnosis, box: null, labelEl: null };
     const markLabel = (key) => secTitles[key] || tr(sectionLabel(kind, key));
+    // INPATIENT_REQUIRED_V1 (ревью) — РАЗДЕЛ НА ДВУХ ЛИСТАХ. Рабочий экран раскладывает
+    // документ по листам A4 (a4-sheets.js), и хвост раздела уезжает на следующий лист —
+    // во второе окно того же поля ([data-a4-cont]). Пуст ли раздел — по всему разделу
+    // (поле и продолжения), а не по первому листу. Печать в продолжении — свой input, и до
+    // поля он не доходит: он всплывает к стопке листов, и там его слушаем (стопку находим,
+    // когда отметки впервые спрашивают раздел уже на листе). Сохранение, как и прежде,
+    // сперва схлопывает листы (case-workspace.js withFlush) и читает целое поле.
+    let watchedStack = null;
+    const onStackInput = (ev) => {
+        for (let n = ev && ev.target; n && n !== watchedStack; n = n.parentNode) {
+            const k = typeof n.getAttribute === 'function' ? n.getAttribute('data-a4-cont') : null;
+            if (k !== null && k !== undefined) { if (reqRich.includes(k)) marks.refresh(); return; }
+        }
+    };
+    const watchStack = (el) => {
+        const at = a4StackOf(el);
+        if (!at || at.stack === watchedStack || typeof at.stack.addEventListener !== 'function') return;
+        if (watchedStack && typeof watchedStack.removeEventListener === 'function') watchedStack.removeEventListener('input', onStackInput);
+        watchedStack = at.stack;
+        watchedStack.addEventListener('input', onStackInput);
+    };
+    const sectionEmpty = (key) => {
+        watchStack(rich[key]);
+        return [rich[key], ...a4Continuations(rich[key])].every((el) => richIsEmpty(readRich(el)));
+    };
     const markFields = () => [
         dxNeeded ? {
             key: 'diagnosis', label: markLabel('diagnosis'),
@@ -1057,7 +1098,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         } : null,
         ...reqRich.map((key) => ({
             key, label: markLabel(key), el: rich[key], box: madeSecs[key], labelEl: madeTags[key],
-            isEmpty: () => richIsEmpty(readRich(rich[key])),
+            isEmpty: () => sectionEmpty(key),
         })),
     ].filter(Boolean);
     const marks = requiredMarks({ fields: markFields() });
@@ -1100,12 +1141,14 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
                 if (titles[k]) secTitles[k] = String(titles[k]);
             }
             // Подписи проставляются заново: раздел уже нарисован своим именем.
-            if (Object.keys(secTitles).length) {
-                for (const sec of sectionEls) {
-                    const key = sec.getAttribute && sec.getAttribute('data-sec');
-                    const tag = key && secTitles[key] && sec.children && sec.children[0];
-                    if (tag) tag.textContent = secTitles[key];
-                }
+            // INPATIENT_REQUIRED_V1 (ревью, давняя ошибка) — имя писалось в первого ребёнка
+            // коробки, а в правке и исправлении это кнопка «+ Добавить: …», не подпись:
+            // подпись оставалась прежней, а свёрнутая строка теряла «+ Добавить». Имя ставит
+            // сам раздел (setTitle): на подпись (madeTags[key]), в её aria-label и в строку
+            // «+ Добавить». Скрытое «обязательно», стёртое вместе с текстом подписи,
+            // возвращает remark() в конце fill.
+            for (const key of ALL_SECS) {
+                if (secTitles[key] && madeSec[key]) madeSec[key].setTitle(secTitles[key]);
             }
             // Состав разделов — как его оставил автор. Список пуст (старый
             // документ) — остаются положенные роду.
@@ -1278,6 +1321,36 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     const patientCard = patientAnchor(p.full_name || '',
         [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · '));
 
+    const epiHint = isDischarge ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }) : null;
+    const paintEpi = () => {
+        if (!epiHint) return;
+        const on = !!rules.dischargeNeedsEpicrisis;
+        epiHint.textContent = on ? tr('Заявку на выписку принимают только по ОПУБЛИКОВАННОМУ эпикризу: черновик — не документ.') : '';
+        epiHint.hidden = !on;
+    };
+    paintEpi();
+
+    // INPATIENT_REQUIRED_V1 (ревью) — ПРАВИЛА КЛИНИКИ ПРИШЛИ ПОСЛЕ ОКНА: всё, что из них
+    // следует, пересчитывается на месте, ничего не перерисовывая (врач мог уже писать).
+    // Новый обязательный раздел открывается и теряет крестик; переставший быть
+    // обязательным остаётся открытым (в нём могли писать) и получает крестик обратно.
+    const applyRules = (r) => {
+        rules = r || DEFAULT_RULES;
+        dxHard = isPrimary && rules.primaryNeedsDiagnosis && !isView;
+        reqSecs = reqSecsOf(rules);
+        reqRich = reqSecs.filter((k) => ALL_SECS.includes(k));
+        dxNeeded = dxHard || reqSecs.includes('diagnosis');
+        for (const k of reqRich) secOn.add(k);
+        syncSecs();
+        syncRemovable();
+        paintEpi();
+        remark();
+    };
+    // «Опубликовать» ждёт это обещание; зависшие настройки — не дольше RULES_WAIT_MS.
+    const rulesReady = rulesLater
+        ? settleWithin(rulesLater).then((r) => { if (r) applyRules(r); })
+        : Promise.resolve();
+
     const editorFields = [
         // Тетрадь: прежние дни, затем «Добавить запись» и поля новой.
         notesBox,
@@ -1291,10 +1364,9 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // нужно здесь, до того как врач закроет окно кнопкой «Сохранить
         // черновик» и вернётся к отказу, которого не ждал.
         // INPATIENT_REQUIRED_V1 — только когда клиника и правда требует эпикриз для выписки.
-        isDischarge && rules.dischargeNeedsEpicrisis
-            ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                tr('Заявку на выписку принимают только по ОПУБЛИКОВАННОМУ эпикризу: черновик — не документ.'))
-            : null,
+        // INPATIENT_REQUIRED_V1 (ревью) — место под подсказку есть у эпикриза всегда, текст
+        // ставит paintEpi: правила клиники приходят и после того, как окно нарисовано.
+        epiHint,
         isCorrection
             ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 tr('Исправление публикуется НОВОЙ записью: прежняя редакция остаётся в истории болезни целиком.'))
@@ -1309,6 +1381,9 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // ADMIN_ACT_AS_V1 (R3) — от чужого имени запись не пишется (кнопка и так
         // неактивна; это вторая дверь — отказ словами до запроса).
         if (refuseSignWhileActing()) return false;
+        // INPATIENT_REQUIRED_V1 (ревью) — что обязательно, решают правила клиники, а не
+        // умолчания: нажатие раньше ответа настроек ждёт его (кнопка — «Выполняем…»).
+        await rulesReady;
         // CASE_DX_LIST_V1 — сперва забираем написанное в поле диагноза, и только
         // потом спрашиваем, есть ли диагноз: иначе осмотр отклонялся бы у врача,
         // который диагноз написал, но не нажал «Добавить свой».
@@ -1454,8 +1529,10 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         diagnosisInput: secKeys.includes('diagnosis') ? diagnosis : null,
         // INPATIENT_REQUIRED_V1 — «диагноз обязателен» говорит карточка диагноза только при
         // включённом переключателе; отметки диагноза ложатся на неё через bindDiagnosis.
-        diagnosisRequired: dxHard,
+        // INPATIENT_REQUIRED_V1 (ревью) — геттер: правила клиники могут прийти позже окна.
+        get diagnosisRequired() { return dxHard; },
         bindDiagnosis,
+        rulesReady,   // INPATIENT_REQUIRED_V1 (ревью) — правила клиники применены (или не дождались)
         topNote: marks.summary,   // INPATIENT_REQUIRED_V1 — «Не заполнено: …» над листом / первой в окне
         title: reviewTitle(kind, mode, docTitle),
         icon: isDischarge || !REVIEW_TITLE[kind] ? 'Doc' : 'Stethoscope',
@@ -1493,12 +1570,25 @@ export function dxTypeIn(box) {
     return null;
 }
 
+// INPATIENT_REQUIRED_V1 (ревью) — открытые окна документов: «госпитализация:род» → окно.
+// Двойной щелчок по кнопке открывал два редактора одного черновика (и две публикации).
+const openReviewWindows = new Map();
+const isOnPage = (el) => !!el && !!el.parentNode && el.isConnected !== false;
+
 /** Тот же редактор — окном поверх карточки (как открывали до сих пор). */
 export async function openAdmissionReviewModal(opts = {}) {
+    // INPATIENT_REQUIRED_V1 (ревью) — одно окно на госпитализацию и род документа: пока
+    // оно открыто, повторный вызов ничего не открывает. Окно рисуется в этом же такте
+    // (ни одного await до modal), поэтому «открывается» и «открыто» — одно состояние.
+    const winKey = String((opts.admission && opts.admission.id) || '') + ':' + String(opts.kind || 'primary');
+    if (isOnPage(openReviewWindows.get(winKey))) return;
     // INPATIENT_REQUIRED_V1 — правила клиники: переданы (рабочий экран их уже читал)
     // или читаются здесь; сбой — сегодняшние правила.
-    const rules = opts.rules || await loadInpatientRules();
-    const ed = buildReviewEditor(Object.assign({}, opts, { rules }));
+    // INPATIENT_REQUIRED_V1 (ревью) — читаются, НЕ задерживая окно: прежде окно ждало
+    // inpatient_settings_get и при зависшем запросе не открывалось вовсе. Редактор получает
+    // обещание: рисуется по последним прочитанным правилам, поправляется, когда придут, и
+    // «Опубликовать» их ждёт.
+    const ed = buildReviewEditor(Object.assign({}, opts, { rules: opts.rules || loadInpatientRulesSoon() }));
     if (!ed) return;
     // CASE_DOC_A4_V1 — панель форматирования над листом и в окне тоже.
     // CASE_DX_PICK_V1 — на рабочем экране диагноз живёт в карточке слева, а в
@@ -1506,20 +1596,43 @@ export async function openAdmissionReviewModal(opts = {}) {
     // МКБ-10. Иначе окно осмотра осталось бы без диагноза вовсе.
     // INPATIENT_REQUIRED_V1 — звезду «Диагноз» ставят отметки (только когда диагноз
     // обязателен), рамка пустого диагноза — на карточке, курсор «Дописать» — в её поле.
-    const dxBox = ed.diagnosisInput ? dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }) : null;
+    let dxBox = ed.diagnosisInput ? dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }) : null;
     const dxField = dxBox ? field(tr('Диагноз'), dxBox) : null;
+    const dxLabel = dxField ? ((dxField.children && dxField.children[0]) || null) : null;
     if (dxBox && ed.bindDiagnosis) {
-        ed.bindDiagnosis({ box: dxBox, el: dxTypeIn(dxBox), labelEl: (dxField.children && dxField.children[0]) || null });
+        ed.bindDiagnosis({ box: dxBox, el: dxTypeIn(dxBox), labelEl: dxLabel });
     }
     // CASE_DOC_ACTIONS_V1 — в окне тот же ряд действий, что на рабочем экране;
     // «Сохранить» и «Черновик» остаются и в подвале окна — это его собственные
     // кнопки, и убирать их у окна нельзя.
-    modal(ed.title, ed.icon, [ed.topNote, ed.patientCard, docActionsBar({ applyTemplate: ed.applyTemplate, print: ed.print }), dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
+    const m = modal(ed.title, ed.icon, [ed.topNote, ed.patientCard, docActionsBar({ applyTemplate: ed.applyTemplate, print: ed.print }), dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
         width: 720,
         secondaryLabel: ed.secondaryLabel,
         onSecondary: ed.secondary,
         lockHint: ed.signLock,   // ADMIN_ACT_AS_V1 (R3)
     });
+    if (m && m.overlay) openReviewWindows.set(winKey, m.overlay);
+    // INPATIENT_REQUIRED_V1 (ревью) — правила клиники пришли и переключили «диагноз
+    // обязателен»: подпись карточки («Для первичного осмотра диагноз обязателен.» или
+    // «Диагноз ещё не добавлен.») рисует dxEditor при создании, поэтому карточка
+    // пересобирается на том же поле-носителе — список диагнозов в нём, недописанный текст
+    // и курсор переезжают в новую.
+    if (dxBox && ed.rulesReady) {
+        const shownRequired = ed.diagnosisRequired;
+        ed.rulesReady.then(() => {
+            if (ed.diagnosisRequired === shownRequired || !dxBox.parentNode || typeof dxBox.parentNode.replaceChild !== 'function') return;
+            const old = dxBox;
+            const fresh = dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired });
+            const oldIn = dxTypeIn(old);
+            const freshIn = dxTypeIn(fresh);
+            const hadFocus = !!oldIn && typeof document !== 'undefined' && document.activeElement === oldIn;
+            if (oldIn && freshIn) freshIn.value = oldIn.value;
+            old.parentNode.replaceChild(fresh, old);
+            dxBox = fresh;
+            if (ed.bindDiagnosis) ed.bindDiagnosis({ box: fresh, el: freshIn, labelEl: dxLabel });
+            if (hadFocus && freshIn && typeof freshIn.focus === 'function') freshIn.focus();
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

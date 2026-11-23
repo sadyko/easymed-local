@@ -92,6 +92,8 @@ const rpcCalls = [];
 // «сервер не ответил» (правила — умолчания, врачей нет).
 let SETTINGS = null;
 let DOCTORS = [];
+// INPATIENT_REQUIRED_V1 (ревью) — обещание, которого ждёт ответ настроек: настройки «в пути».
+let SETTINGS_GATE = null;
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     let body = {}; try { body = JSON.parse(opts.body || '{}'); } catch { /* not ours */ }
@@ -100,7 +102,10 @@ globalThis.fetch = async (url, opts = {}) => {
     if (!u.startsWith('/api/rpc/')) return fail('unexpected ' + u);
     const name = u.slice('/api/rpc/'.length);
     rpcCalls.push({ name, args: body });
-    if (name === 'inpatient_settings_get') return SETTINGS ? ok(SETTINGS) : fail('нет');
+    if (name === 'inpatient_settings_get') {
+        if (SETTINGS_GATE) await SETTINGS_GATE;
+        return SETTINGS ? ok(SETTINGS) : fail('нет');
+    }
     if (name === 'admission_attending_candidates') return ok({ doctors: DOCTORS });
     if (name === 'admission_title_sheet_get') return ok(Object.assign({}, VIEW, { sheet: null, bmi: null, complete: false, missing: ['height_cm'] }));
     if (name === 'admission_admit') return ok({ admission: { id: body.admission_id, status: 'admitted' }, title_sheet: body.title_sheet ? { height_cm: 172 } : null });
@@ -417,6 +422,89 @@ test('INPATIENT_REQUIRED_V1: строка под листом называет �
     await settle();
     // Сервер ответил missing: ['height_cm'] — строка говорит «Рост», а не ключ.
     assert.ok(textOf(ed.belowSheet[0]).includes('Лист заполнен не до конца: Рост.'), textOf(ed.belowSheet[0]));
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — «Положить» нажали раньше, чем пришли настройки клиники:
+// решают настройки, а не умолчания. Клиника выключила «Приёмный врач обязателен» —
+// жёсткого отказа быть не должно.
+test('INPATIENT_REQUIRED_V1 (ревью): «Положить» ждёт правил клиники — выключенный приёмный врач не даёт жёсткого отказа', async () => {
+    const { openAdmissionTitleSheetModal } = await import('../views/title-sheet.js');
+    // В памяти экрана — сегодняшние правила (приёмный врач обязателен): прежнее окно не дозвалось настроек.
+    SETTINGS = null;
+    openAdmissionTitleSheetModal({ admission: { id: 11, status: 'ordered', patients: {} }, bed: { id: 6, code: 'T-2' } });
+    await settle();
+    SETTINGS = { settings: { admitting_at_placement: 0, title_required_fields: ['height_cm'] }, docs: [] };
+    DOCTORS = [{ id: 77, full_name: 'Сотрудник doc77' }, { id: 78, full_name: 'Сотрудник doc78' }];
+    let release = null;
+    SETTINGS_GATE = new Promise((r) => { release = r; });
+    try {
+        rpcCalls.length = 0;
+        openAdmissionTitleSheetModal({ admission: { id: 11, status: 'ordered', patients: {} }, bed: { id: 6, code: 'T-2' } });
+        await settle();   // врачи пришли, настройки — ещё нет
+        const sheet = topEl();
+        const before = BODY.children.length;
+        findBtn(sheet, 'Положить').click();
+        await settle();
+        assert.equal(BODY.children.length, before, '«Положить» спросил по умолчаниям, не дождавшись правил клиники');
+        assert.ok(!rpcCalls.some((c) => c.name === 'admission_admit'));
+        SETTINGS_GATE = null; release();
+        await settle();
+        const dlg = topEl();
+        assert.ok(textOf(dlg).includes('Заполнено не всё') && textOf(dlg).includes('Рост'), textOf(dlg));
+        assert.ok(!textOf(dlg).includes('Приёмный врач'), 'выключенный переключатель, а окно требует приёмного врача');
+        findBtn(dlg, 'Сохранить как есть').click();
+        await settle();
+        const call = rpcCalls.find((c) => c.name === 'admission_admit');
+        assert.ok(call, 'лист не положен');
+        assert.equal(call.args.admitting_doctor_id, null);
+    } finally { if (SETTINGS_GATE) { SETTINGS_GATE = null; release(); } SETTINGS = null; DOCTORS = []; }
+});
+
+test('INPATIENT_REQUIRED_V1 (ревью): редактор в истории болезни — правила обещанием; «Сохранить» ждёт их', async () => {
+    const { buildTitleSheetEditor } = await import('../views/title-sheet.js');
+    const { rulesFromSettings } = await import('../../shared/inpatient-required.js');
+    let resolve = null;
+    const later = new Promise((r) => { resolve = r; });
+    rpcCalls.length = 0;
+    const ed = buildTitleSheetEditor({ admission: { id: 11 }, rules: later });
+    await settle();
+    const before = BODY.children.length;
+    const p = ed.submit();
+    await settle();
+    assert.equal(BODY.children.length, before, 'спросили, не дождавшись правил клиники');
+    assert.ok(!rpcCalls.some((c) => c.name === 'admission_title_sheet_save'), '«Сохранить» не дождался правил клиники');
+    resolve(rulesFromSettings({ settings: { title_required_fields: ['consent_signed'] } }));
+    await settle();
+    const dlg = topEl();
+    assert.ok(textOf(dlg).includes('Заполнено не всё') && textOf(dlg).includes('Информированное согласие'), textOf(dlg));
+    assert.ok(!textOf(dlg).includes('Рост'), 'вопрос по умолчаниям, а не по правилам клиники');
+    assert.ok(textOf(ed.topNote).includes('Информированное согласие') && !textOf(ed.topNote).includes('Рост'));
+    findBtn(dlg, 'Дописать').click();
+    assert.equal(await p, false);
+    assert.ok(!rpcCalls.some((c) => c.name === 'admission_title_sheet_save'));
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — на бланке 003 строки стоят в 4 px друг от друга: «Не заполнено»
+// под полем (top:100%) накрывало верх следующей строки и перехватывало щелчки по её полям.
+test('INPATIENT_REQUIRED_V1 (ревью): «Не заполнено» на бланке 003 — внутри ячейки, щелчки не перехватывает, высоты не добавляет', async () => {
+    const fsx = await import('node:fs');
+    const pathx = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = pathx.dirname(fileURLToPath(import.meta.url));
+    const css = fsx.readFileSync(pathx.join(dir, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
+    const block = css.slice(css.indexOf('/* INPATIENT_REQUIRED_V1 — отметки обязательных полей'), css.indexOf('/* end INPATIENT_REQUIRED_V1 */'));
+    const rule = (block.match(/\.f3 \.rq-msg \{([^}]*)\}/) || [])[1];
+    assert.ok(rule, 'нет правила «Не заполнено» для бланка 003');
+    assert.match(rule, /pointer-events:\s*none/, 'подсказка перехватывает щелчки по полям');
+    assert.match(rule, /position:\s*absolute/, 'подсказка встала в поток и добавляет листу высоту');
+    assert.doesNotMatch(rule, /top:\s*100%/, 'подсказка снова под полем — на следующей строке');
+    assert.match(rule, /top:\s*50%/, 'подсказка не по середине ячейки');
+    assert.match(rule, /translateY\(-50%\)/);
+    assert.match(rule, /right:\s*\d/, 'подсказка не у правого края ячейки');
+    assert.match(rule, /max-width:\s*calc\(100% - \d+px\)/, 'длинная подсказка вылезает из узкой ячейки');
+    assert.doesNotMatch(rule, /display:/, 'своё display перебивает .rq-msg[hidden]');
+    // Ячейка, в которой висит подсказка, — опора для absolute.
+    assert.match(block, /\.f3 \.rq-empty:not\(\.uisel-native\) \{ position: relative; \}/);
 });
 
 test('INPATIENT_REQUIRED_V1: отметки — только экран; печать листа их не получает', async () => {

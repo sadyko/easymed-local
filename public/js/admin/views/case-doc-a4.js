@@ -210,23 +210,47 @@ export function richSection(kind, key, { title = '', onRename = null, onAdd = nu
     // Порядок детей — тот же, что у a4Section в кабинете: свёрнутая строка,
     // подпись, крестик, текст. На нём держится и вся раскладка (CSS прячет
     // ровно этих детей, когда на коробке стоит a4-sec-off).
+    const addRow = onAdd
+        ? h('button', {
+            class: 'a4-sec-add', type: 'button',
+            onclick: () => onAdd(),
+        }, trf('+ Добавить: {name}', { name: shown() }))
+        : null;
+    const xBtn = onRemove
+        ? h('button', {
+            class: 'a4-sec-x no-print', type: 'button', title: tr('Убрать раздел'),
+            'aria-label': tr('Убрать раздел'), onclick: () => onRemove(),
+        }, '×')
+        : null;
     const sec = h('div', { class: 'a4-sec cd-sec', 'data-sec': key, style: { position: 'relative' } },
-        onAdd
-            ? h('button', {
-                class: 'a4-sec-add', type: 'button',
-                onclick: () => onAdd(),
-            }, trf('+ Добавить: {name}', { name: String(title || '').trim() || tr(sectionLabel(kind, key)) }))
-            : null,
+        addRow,
         tag,
         fmt ? fmt.toggle : null,
-        onRemove
-            ? h('button', {
-                class: 'a4-sec-x no-print', type: 'button', title: tr('Убрать раздел'),
-                'aria-label': tr('Убрать раздел'), onclick: () => onRemove(),
-            }, '×')
-            : null,
+        xBtn,
         fmt ? fmt.bar : null,
         input);
+
+    // INPATIENT_REQUIRED_V1 (ревью) — ИМЯ РАЗДЕЛА ОДНИМ МЕСТОМ: подпись, её aria-label и
+    // свёрнутая строка «+ Добавить: …». Редактор зовёт это, раскладывая сохранённую запись
+    // (давняя ошибка: он писал имя в первого ребёнка коробки, а это строка «+ Добавить»),
+    // и правка подписи открывается потом с этим же именем, а не с именем рода.
+    // textContent стирает скрытое «обязательно» подписи — его возвращают отметки (remark).
+    const setTitle = (value) => {
+        title = String(value || '').trim();
+        tag.textContent = shown();
+        if (onRename) tag.setAttribute('aria-label', trf('Переименовать раздел: {name}', { name: shown() }));
+        if (addRow) addRow.textContent = trf('+ Добавить: {name}', { name: shown() });
+    };
+    // INPATIENT_REQUIRED_V1 (ревью) — обязательный раздел крестика не несёт; правила клиники
+    // приходят и после того, как раздел нарисован, — крестик уходит и возвращается на своё
+    // место (перед панелью оформления или текстом). DOM-методами: в браузере sec.children —
+    // HTMLCollection.
+    const setRemovable = (on) => {
+        if (!xBtn) return;
+        const here = Array.from(sec.children || []).includes(xBtn);
+        if (on && !here) sec.insertBefore(xBtn, fmt ? fmt.bar : input);
+        else if (!on && here) sec.removeChild(xBtn);
+    };
 
     if (onRename) {
         tag.addEventListener('click', () => {
@@ -235,22 +259,20 @@ export function richSection(kind, key, { title = '', onRename = null, onAdd = nu
             let closed = false;
             // Подменяется РОВНО подпись: коробка держит ещё свёрнутую строку,
             // крестик и текст, и пересобирать её целиком значило бы потерять их.
+            // INPATIENT_REQUIRED_V1 (ревью, давняя ошибка) — в браузере sec.children —
+            // HTMLCollection: ни indexOf, ни splice у неё нет, и переименование подписи
+            // падало при первом щелчке (тесты молчали: подделка DOM держала массив).
+            // Узел меняется на месте DOM-методом, порядок остальных детей не трогаем.
             const swap = (from, to) => {
-                const i = sec.children.indexOf(from);
-                if (i < 0) return;
-                sec.removeChild(from);
-                const rest = sec.children.splice(i);
-                sec.appendChild(to);
-                for (const el of rest) sec.appendChild(el);
+                if (!Array.from(sec.children || []).includes(from)) return;
+                sec.replaceChild(to, from);
             };
             const stop = () => { if (closed) return; closed = true; swap(field, tag); };
             const save = () => {
                 if (closed) return;
                 closed = true;
                 const value = String(field.value || '').trim();
-                title = value === tr(sectionLabel(kind, key)) ? '' : value;
-                tag.textContent = shown();
-                tag.setAttribute('aria-label', trf('Переименовать раздел: {name}', { name: shown() }));
+                setTitle(value === tr(sectionLabel(kind, key)) ? '' : value);
                 swap(field, tag);
                 onRename(key, title);
             };
@@ -266,7 +288,47 @@ export function richSection(kind, key, { title = '', onRename = null, onAdd = nu
     // INPATIENT_REQUIRED_V1 — и подпись: на ней отметки ставят звезду и скрытое
     // «обязательно» (views/required-marks.js), а у коробки первым ребёнком бывает
     // свёрнутая строка «+ Добавить», не подпись.
-    return { sec, input, tag };
+    return { sec, input, tag, setTitle, setRemovable };
+}
+
+/**
+ * INPATIENT_REQUIRED_V1 (ревью) — СТОПКА ЛИСТОВ, в которой стоит поле раздела.
+ *
+ * A4_SHEETS_V1 (a4-sheets.js) кладёт хвост раздела, не влезшего на страницу, на
+ * следующий лист той же стопки: листы (.a4-paper) — соседи. Возвращает стопку и лист
+ * самого поля; поле не на листе (окно документа) — null.
+ */
+export function a4StackOf(field) {
+    for (let n = field && field.parentNode; n; n = n.parentNode) {
+        if (String(n.className || '').split(/\s+/).includes('a4-paper')) return n.parentNode ? { stack: n.parentNode, paper: n } : null;
+    }
+    return null;
+}
+
+/**
+ * INPATIENT_REQUIRED_V1 (ревью) — ПРОДОЛЖЕНИЯ РАЗДЕЛА на следующих листах: второе окно
+ * в то же поле ([data-a4-cont] с ключом поля, a4-sheets.js splitBlock). Пусто ли
+ * обязательный раздел, решает раздел ЦЕЛИКОМ — поле и его продолжения. Ищем только на
+ * других листах той же стопки: чужой документ соседней панели с тем же ключом сюда не
+ * попадёт, а на одном листе (продолжений нет) обход ничего не стоит. Обход — по children:
+ * так же работает поддельный DOM тестов.
+ */
+export function a4Continuations(field) {
+    const key = field && typeof field.getAttribute === 'function' ? field.getAttribute('data-a4-field') : null;
+    const at = key ? a4StackOf(field) : null;
+    if (!at) return [];
+    const out = [];
+    const walk = (n) => {
+        for (const c of Array.from((n && n.children) || [])) {
+            const k = typeof c.getAttribute === 'function' ? c.getAttribute('data-a4-cont') : null;
+            if (k !== null && k !== undefined) { if (k === key) out.push(c); continue; }
+            // Текст чужого раздела (абзацы) продолжений не содержит — внутрь не ходим.
+            if (String(c.className || '').split(/\s+/).includes('a4-input')) continue;
+            walk(c);
+        }
+    };
+    for (const sheet of Array.from(at.stack.children || [])) if (sheet !== at.paper) walk(sheet);
+    return out;
 }
 
 /**

@@ -35,6 +35,42 @@ import { DEFAULT_RULES, titleKeysOf, missingTitleFields } from '../../shared/inp
 
 export const TITLE_SHEET_KIND = 'title';
 
+// ---------------------------------------------------------------------------
+// INPATIENT_REQUIRED_V1 (ревью) — ПРАВИЛА КЛИНИКИ: ОКНО НЕ ЖДЁТ, СОХРАНЕНИЕ ЖДЁТ.
+// ---------------------------------------------------------------------------
+// Окна стационара рисуются сразу — по последним прочитанным правилам клиники (или
+// сегодняшним, пока не читали ни разу) — и поправляются, когда настройки придут. А вот
+// «Положить», «Сохранить» и «Опубликовать» решают по правилам КЛИНИКИ: нажатие раньше
+// ответа ждёт его. Иначе клиника, выключившая «Приёмный врач обязателен», получала
+// жёсткий отказ у медсестры, нажавшей кнопку раньше ответа настроек.
+//
+// Зависший запрос не держит кнопку «Выполняем…» вечно: ждём не дольше RULES_WAIT_MS,
+// дальше — правила, что уже на экране (так же, как при сбое: loadInpatientRules при
+// ошибке отдаёт сегодняшние). Живёт здесь, а не в required-marks.js: это общее у окна
+// размещения и окна документа (admission-modal.js его импортирует), и у них же память.
+export const RULES_WAIT_MS = 10000;
+let lastRules = null;   // последние прочитанные правила клиники — на всю страницу
+/** Правила, которыми окно рисуется сразу: последние прочитанные или сегодняшние. */
+export function inpatientRulesNow() { return lastRules || DEFAULT_RULES; }
+/** Обещание (thenable) или сами правила? */
+export function isRulesPromise(r) { return !!r && typeof r.then === 'function'; }
+/** Дождаться обещания не дольше ms; не дождались или оно упало — null. Никогда не бросает. */
+export function settleWithin(p, ms = RULES_WAIT_MS) {
+    return new Promise((resolve) => {
+        const t = setTimeout(() => resolve(null), ms);
+        Promise.resolve(p).then(
+            (v) => { clearTimeout(t); resolve(v || null); },
+            () => { clearTimeout(t); resolve(null); });
+    });
+}
+/** Прочитать правила клиники (не дольше RULES_WAIT_MS) и запомнить; не дождались — те, что на экране. */
+export function loadInpatientRulesSoon(ms = RULES_WAIT_MS) {
+    return settleWithin(loadInpatientRules(), ms).then((r) => {
+        if (r) lastRules = r;
+        return r || inpatientRulesNow();
+    });
+}
+
 // INPATIENT_DOCS_V1 — три бумаги при поступлении (владелец: «hospitalization
 // agreement, informed consent, stationary pamyatka»). Печатаются тем же
 // путём, что и все бланки (дизайнер «Документы» → printableSheet), текст —
@@ -359,7 +395,8 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
     form.fill({ patient: p, admission, sheet: null });
     // INPATIENT_REQUIRED_V1 — отметки рисуются сразу по сегодняшним правилам и
     // перерисовываются, когда придут правила клиники; строка «Не заполнено» — над полями.
-    let rules = DEFAULT_RULES;
+    // INPATIENT_REQUIRED_V1 (ревью) — сразу — по последним прочитанным (inpatientRulesNow).
+    let rules = inpatientRulesNow();
     const marks = requiredMarks({ fields: [] });
     (async () => {
         const { data } = await supabase.rpc('admission_title_sheet_get', { admission_id: admission.id });
@@ -402,7 +439,8 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
     ].filter(Boolean);
     const applyMarks = () => marks.setFields(markFields());
     applyMarks();
-    loadInpatientRules().then((r) => { rules = r || DEFAULT_RULES; applyMarks(); });
+    // INPATIENT_REQUIRED_V1 (ревью) — обещание правил держим: «Положить» его ждёт.
+    const rulesReady = loadInpatientRulesSoon().then((r) => { rules = r || DEFAULT_RULES; applyMarks(); });
 
     let m = null;
     m = inpatientModal(tr('Титульный лист'), 'Doc', [
@@ -413,6 +451,9 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
         // TITLE_SHEET_PAPERS_OUT_V1 — бумаги ПОД листом, а не в его конце.
         form.papersBlock,
     ], tr('Положить'), async () => {
+        // INPATIENT_REQUIRED_V1 (ревью) — решают правила клиники, а не умолчания: нажатие
+        // раньше ответа настроек ждёт его (кнопка тем временем «Выполняем…»).
+        await rulesReady;
         // INPATIENT_REQUIRED_V1 — приёмный врач при включённом переключателе — жёсткий
         // запрет: окно называет только его и предлагает лишь «Дописать». Остальные пустые
         // поля листа — вопрос «Сохранить как есть»: пустые измерения дописывают позже.
@@ -475,7 +516,13 @@ export function buildTitleSheetEditor({ admission, onDone, rules = DEFAULT_RULES
     const form = titleSheetForm();
     // INPATIENT_REQUIRED_V1 — отметки по правилам клиники (их читает рабочий экран
     // истории болезни); строка «Не заполнено» — topNote, над листом.
-    const marks = requiredMarks({ fields: titleMarkFields(form, titleKeysOf(rules || DEFAULT_RULES)) });
+    // INPATIENT_REQUIRED_V1 (ревью) — правила или обещание правил: пока обещание в пути —
+    // отметки по последним прочитанным, пришло — по правилам клиники, а «Сохранить» ждёт.
+    const later = isRulesPromise(rules) ? rules : null;
+    const marks = requiredMarks({ fields: titleMarkFields(form, titleKeysOf(later ? inpatientRulesNow() : (rules || DEFAULT_RULES))) });
+    const rulesReady = later
+        ? settleWithin(later).then((r) => { if (r) marks.setFields(titleMarkFields(form, titleKeysOf(r))); })
+        : Promise.resolve();
     const status = h('div', { class: 'muted ts-hint' });
     let view = null;
     const showStatus = () => {
@@ -514,6 +561,7 @@ export function buildTitleSheetEditor({ admission, onDone, rules = DEFAULT_RULES
         topNote: marks.summary,   // INPATIENT_REQUIRED_V1 — рабочий экран ставит её над листом
         submitLabel: tr('Сохранить'),
         submit: async () => {
+            await rulesReady;   // INPATIENT_REQUIRED_V1 (ревью) — решают правила клиники, не умолчания
             // INPATIENT_REQUIRED_V1 — пустые обязательные поля: «Дописать» или «Сохранить как есть».
             const missing = marks.missing();
             if (missing.length) {

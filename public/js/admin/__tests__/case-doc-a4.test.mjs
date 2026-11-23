@@ -25,6 +25,20 @@ class FakeNode {
     }
     appendChild(c) { this.children.push(c); if (c && typeof c === 'object') c._parent = this; return c; }
     removeChild(c) { const i = this.children.indexOf(c); if (i > -1) this.children.splice(i, 1); return c; }
+    // INPATIENT_REQUIRED_V1 (ревью) — DOM-методы, которыми раздел подменяет подпись и
+    // возвращает крестик: настоящий узел их знает, а раздел ими и пользуется.
+    insertBefore(n, ref) {
+        if (n._parent) n._parent.removeChild(n);
+        const i = ref ? this.children.indexOf(ref) : -1;
+        if (i < 0) this.children.push(n); else this.children.splice(i, 0, n);
+        n._parent = this; return n;
+    }
+    replaceChild(n, old) {
+        if (n._parent) n._parent.removeChild(n);
+        const i = this.children.indexOf(old);
+        if (i < 0) throw new Error('NotFoundError: заменяемого узла нет среди детей');
+        this.children[i] = n; n._parent = this; old._parent = null; return old;
+    }
     get firstChild() { return this.children.length ? this.children[0] : null; }
     // Настоящий узел знает своего родителя, и код на это опирается (печать
     // поднимается от разделов до листа). Без этого подделка тише настоящего
@@ -231,6 +245,101 @@ test('CASE_DOC_SEC_MANAGER_V2: раздел сворачивается в стр
     const plain = a4.richSection('round', 'body');
     assert.equal(plain.sec.children.length, 2,
         'у нередактируемого раздела остаются только подпись и текст: ' + plain.sec.children.map((c) => c.className).join(', '));
+});
+
+// INPATIENT_REQUIRED_V1 (ревью, давняя ошибка) — в браузере sec.children — HTMLCollection:
+// индекс и length есть, а indexOf и splice — нет. Переименование подписи звало оба и
+// в клинике падало при первом щелчке; тесты молчали, потому что подделка держала массив.
+class CollNode extends FakeNode {
+    get children() {
+        const kids = this._kids;
+        const coll = { length: kids.length, item: (i) => kids[i] || null, [Symbol.iterator]: () => kids[Symbol.iterator]() };
+        kids.forEach((k, i) => { coll[i] = k; });
+        return coll;
+    }
+    set children(v) { this._kids = Array.from(v || []); }
+    appendChild(c) { if (c && c._parent) c._parent.removeChild(c); this._kids.push(c); if (c && typeof c === 'object') c._parent = this; return c; }
+    removeChild(c) { const i = this._kids.indexOf(c); if (i < 0) throw new Error('NotFoundError'); this._kids.splice(i, 1); c._parent = null; return c; }
+    insertBefore(n, ref) {
+        if (n._parent) n._parent.removeChild(n);
+        const i = ref ? this._kids.indexOf(ref) : -1;
+        if (i < 0) this._kids.push(n); else this._kids.splice(i, 0, n);
+        n._parent = this; return n;
+    }
+    replaceChild(n, old) {
+        if (n._parent) n._parent.removeChild(n);
+        const i = this._kids.indexOf(old);
+        if (i < 0) throw new Error('NotFoundError');
+        this._kids[i] = n; n._parent = this; old._parent = null; return old;
+    }
+    get firstChild() { return this._kids.length ? this._kids[0] : null; }
+    replaceChildren() { this._kids.length = 0; }
+    get textContent() { return this._text + this._kids.map((c) => c.textContent).join(''); }
+    set textContent(v) { this._text = String(v); this._kids = []; }
+}
+function withCollectionDom(fn) {
+    const was = globalThis.document.createElement;
+    globalThis.document.createElement = (tag) => {
+        if (String(tag).toUpperCase() === 'TEMPLATE') return mkEl(tag);
+        return new CollNode(tag);
+    };
+    try { return fn(); } finally { globalThis.document.createElement = was; }
+}
+const kidsOf = (el) => Array.from(el.children);
+
+test('INPATIENT_REQUIRED_V1 (ревью, давняя ошибка): подпись переименовывается и при настоящем HTMLCollection', () => {
+    const renamed = [];
+    withCollectionDom(() => {
+        const made = a4.richSection('primary', 'objective', {
+            onRename: (k, title) => renamed.push([k, title]), onAdd: () => {}, onRemove: () => {},
+        });
+        assert.equal(typeof made.sec.children.indexOf, 'undefined', 'подделка снова держит массив — проверка ничего не ловит');
+        const order = () => kidsOf(made.sec).map((c) => String(c.className || c.tagName).split(/\s+/)[0]);
+        const was = order();
+        const at = was.indexOf('a4-sec-tag');
+        made.tag.click();
+        const field = kidsOf(made.sec).find((c) => c.tagName === 'INPUT');
+        assert.ok(field, 'поле правки подписи не появилось');
+        assert.equal(kidsOf(made.sec).indexOf(field), at, 'поле правки встало не на место подписи');
+        assert.equal(kidsOf(made.sec).length, was.length, 'подмена подписи потеряла или удвоила детей раздела');
+        field.value = 'Состояние по системам';
+        field.dispatchEvent({ type: 'keydown', key: 'Enter' });
+        assert.deepEqual(order(), was, 'после правки дети раздела стоят в другом порядке');
+        assert.match(made.tag.textContent, /Состояние по системам/);
+        assert.deepEqual(renamed, [['objective', 'Состояние по системам']]);
+        // Свёрнутая строка называет раздел новым именем.
+        const add = kidsOf(made.sec).find((c) => String(c.className).split(/\s+/).includes('a4-sec-add'));
+        assert.match(add.textContent, /\+ Добавить: Состояние по системам/);
+    });
+});
+
+test('INPATIENT_REQUIRED_V1 (ревью): setTitle — имя из записи на подписи и в строке «+ Добавить»; setRemovable убирает и возвращает крестик на место', () => {
+    withCollectionDom(() => {
+        const made = a4.richSection('round', 'body', { onRename: () => {}, onAdd: () => {}, onRemove: () => {} });
+        made.setTitle('Свой итог');
+        assert.equal(made.tag.textContent, 'Свой итог');
+        assert.match(made.tag.getAttribute('aria-label'), /Свой итог/);
+        const add = kidsOf(made.sec).find((c) => String(c.className).split(/\s+/).includes('a4-sec-add'));
+        assert.match(add.textContent, /\+ Добавить: Свой итог/);
+        // Правка подписи открывается с нынешним именем, а не с именем рода.
+        made.tag.click();
+        const field = kidsOf(made.sec).find((c) => c.tagName === 'INPUT');
+        assert.equal(field.value, 'Свой итог');
+        field.dispatchEvent({ type: 'keydown', key: 'Escape' });
+
+        const cls = () => kidsOf(made.sec).map((c) => String(c.className || c.tagName).split(/\s+/)[0]);
+        const was = cls();
+        assert.ok(was.includes('a4-sec-x'));
+        made.setRemovable(false);
+        assert.ok(!cls().includes('a4-sec-x'), 'обязательный раздел остался с крестиком');
+        made.setRemovable(false);   // повтор — без ошибки
+        made.setRemovable(true);
+        assert.deepEqual(cls(), was, 'крестик вернулся не на своё место');
+    });
+    // У раздела без крестика (бланк, чтение) — тихо ничего.
+    const plain = a4.richSection('round', 'body');
+    plain.setRemovable(true);
+    assert.equal(plain.sec.children.length, 2);
 });
 
 // CASE_DOC_ACTIONS_V1 — владелец: «remove this [панель форматирования], and

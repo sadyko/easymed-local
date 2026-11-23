@@ -10128,14 +10128,23 @@ select.crm-filter-sel.is-filtered,
 .rq-req::after { content: " *"; content: " *" / ""; color: var(--crit-500); font-weight: 700; }
 .rq-sr { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .rq-empty { box-shadow: 0 0 0 2px var(--crit-500); background: var(--crit-50); border-radius: 6px; }
-.rq-msg { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 600; color: var(--crit-700); }
+.rq-msg { display: block; margin-top: 3px; font-size: 12.5px; font-weight: 600; color: var(--crit-700); }   /* INPATIENT_REQUIRED_V1 (ревью) — 12.5px: пол шкалы шрифтов (type-scale.test.mjs) */
 .rq-msg[hidden] { display: none; }   /* у блока атрибут hidden проигрывает display: block */
 /* INPATIENT_REQUIRED_V1 (ревью) — <select> без рамки подменён списком программы (ui-select.js):
    родное поле спрятано (.uisel-native), красную рамку несёт видимая кнопка рядом с ним. */
 .uisel:has(> select.rq-empty) > .uisel-field { box-shadow: 0 0 0 2px var(--crit-500); background: var(--crit-50); }
 .f3 .rq-empty:not(.uisel-native) { position: relative; }   /* спрятанному родному списку — его absolute */
-.f3 .rq-msg { position: absolute; left: 0; top: 100%; margin-top: 1px; font-size: 10px; white-space: nowrap; }   /* бланк 003 держится одной страницы — подпись не добавляет высоты */
-.rq-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 8px 12px; margin: 0 0 10px; border-radius: 10px; background: var(--crit-50); color: var(--crit-700); font-size: 13px; line-height: 1.45; }
+/* INPATIENT_REQUIRED_V1 (ревью) — строки бланка 003 стоят в 4 px друг от друга: подсказка под полем
+   (top: 100%) накрывала верх следующей строки и перехватывала щелчки по её полям. Теперь она ВНУТРИ
+   своей ячейки — у правого края, по середине высоты (пустое поле справа свободно), не шире ячейки
+   (длинное — многоточием); щелчок проходит сквозь неё в поле. absolute — листу высоты не добавляет,
+   бланк держится одной страницы (FORM_003_ONE_PAGE_V1, setupA4Fit). Кегль — пол шкалы (12.5px);
+   фон рамки закрывает под собой подсказку-единицу поля («см», «кг»). */
+.f3 .rq-msg { position: absolute; top: 50%; right: 4px; left: auto; transform: translateY(-50%); margin: 0; padding: 0 4px; max-width: calc(100% - 8px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; line-height: 1.2; border-radius: 3px; background: var(--crit-50); pointer-events: none; }
+/* Группа радиокнопок без выбора тянется до конца своей строки: подсказке справа есть место, и кнопки
+   она не накрывает (высоты строке это не добавляет — только ширину в той же строке). */
+.f3 .ts-radios.rq-empty { flex: 1 1 auto; }
+.rq-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 8px 12px; margin: 0 0 10px; border-radius: 10px; background: var(--crit-50); color: var(--crit-700); font-size: 13.5px; line-height: 1.45; }   /* 13.5px — шаг шкалы шрифтов */
 .rq-summary[hidden] { display: none; }
 .rq-summary-t { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
 .rq-summary-t svg { flex: 0 0 auto; align-self: center; }

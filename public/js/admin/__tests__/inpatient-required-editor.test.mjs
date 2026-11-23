@@ -18,6 +18,19 @@ class FakeNode {
     }
     appendChild(c) { this.children.push(c); c.parentNode = this; return c; }
     removeChild(c) { const i = this.children.indexOf(c); if (i > -1) this.children.splice(i, 1); c.parentNode = null; return c; }
+    // INPATIENT_REQUIRED_V1 (ревью) — как настоящий DOM: узел переезжает, а не копируется.
+    insertBefore(n, ref) {
+        if (n.parentNode) n.parentNode.removeChild(n);
+        const i = ref ? this.children.indexOf(ref) : -1;
+        if (i < 0) this.children.push(n); else this.children.splice(i, 0, n);
+        n.parentNode = this; return n;
+    }
+    replaceChild(n, old) {
+        if (n.parentNode) n.parentNode.removeChild(n);
+        const i = this.children.indexOf(old);
+        if (i < 0) throw new Error('NotFoundError: заменяемого узла нет среди детей');
+        this.children[i] = n; n.parentNode = this; old.parentNode = null; return old;
+    }
     insertAdjacentElement(where, n) {
         const p = this.parentNode;
         if (where !== 'afterend' || !p) return null;
@@ -81,9 +94,15 @@ const findBtn = (root, label) => walk(root).find((e) => e.tagName === 'BUTTON' &
 const settle = () => new Promise((r) => setTimeout(r, 30));
 const hasCls = (el, c) => String((el && el.className) || '').split(/\s+/).includes(c);
 const topEl = () => BODY.children[BODY.children.length - 1];
+// Убрать окна со страницы так, как это делает браузер: узел теряет родителя (по нему окно
+// документа знает, что прежнее закрыто).
+const resetBody = () => { for (const c of BODY.children.splice(0)) c.parentNode = null; };
 
 // ─── «сервер» ───────────────────────────────────────────────────────────────
 let SETTINGS = null;
+// INPATIENT_REQUIRED_V1 (ревью) — обещание, которого ждёт ответ настроек: так тест держит
+// inpatient_settings_get «в пути» (медленный или зависший сервер).
+let SETTINGS_GATE = null;
 let REVIEWS = [];
 const rpcCalls = [];
 globalThis.fetch = async (url, opts = {}) => {
@@ -94,7 +113,10 @@ globalThis.fetch = async (url, opts = {}) => {
     if (!u.startsWith('/api/rpc/')) return ok([]);
     const name = u.slice('/api/rpc/'.length);
     rpcCalls.push({ name, args: body });
-    if (name === 'inpatient_settings_get') return SETTINGS ? ok(SETTINGS) : fail('нет');
+    if (name === 'inpatient_settings_get') {
+        if (SETTINGS_GATE) await SETTINGS_GATE;
+        return SETTINGS ? ok(SETTINGS) : fail('нет');
+    }
     if (name === 'admission_reviews_list') return ok({ reviews: REVIEWS });
     if (name === 'admission_review_save') return ok({ review: { id: 9 }, admission: { id: 7, status: 'admitted' } });
     return ok({});
@@ -253,7 +275,7 @@ test('чтение редакции: отметок нет, раздел уби�
 });
 
 test('окно документа: строка «Не заполнено» первой, диагноз в рамке со звездой, «Дописать» ставит курсор в поле диагноза', async () => {
-    BODY.children.length = 0;
+    resetBody();
     await openAdmissionReviewModal({ admission: ADM, kind: 'primary', rules: rules({}) });
     await settle();
     const modal = BODY.children.find((c) => c.className === 'modal');
@@ -275,7 +297,7 @@ test('окно документа: строка «Не заполнено» пе
 });
 
 test('окно документа читает правила клиники само: переключатель выключен — без звезды и без вопроса', async () => {
-    BODY.children.length = 0;
+    resetBody();
     SETTINGS = { settings: { primary_needs_diagnosis: 0 }, docs: [] };
     try {
         await openAdmissionReviewModal({ admission: ADM, kind: 'primary' });
@@ -289,4 +311,135 @@ test('окно документа читает правила клиники с�
         assert.ok(!BODY.children.some((c) => c.attrs && c.attrs['data-dialog'] === 'required-missing'), 'вопрос при выключенном переключателе');
         assert.ok(rpcCalls.some((c) => c.name === 'admission_review_save' && c.args.publish === true));
     } finally { SETTINGS = null; }
+});
+
+// ─── INPATIENT_REQUIRED_V1 (ревью) ──────────────────────────────────────────
+const modalsIn = () => BODY.children.filter((c) => c.className === 'modal');
+const gate = () => { let release = null; SETTINGS_GATE = new Promise((r) => { release = r; }); return () => { SETTINGS_GATE = null; release(); }; };
+// В памяти экрана — сегодняшние правила: прежнее окно прочитало «настроек нет».
+async function primeDefaultRules() {
+    resetBody();
+    SETTINGS = null;
+    await openAdmissionReviewModal({ admission: { id: 70, patients: {} }, kind: 'intake' });
+    await settle();
+    resetBody();
+}
+
+test('окно документа открывается сразу, не дожидаясь настроек клиники; двойное нажатие — одно окно', async () => {
+    await primeDefaultRules();
+    const release = gate();
+    try {
+        openAdmissionReviewModal({ admission: ADM, kind: 'primary' });
+        openAdmissionReviewModal({ admission: ADM, kind: 'primary' });   // второй щелчок по той же кнопке
+        await settle();
+        assert.equal(modalsIn().length, 1, 'настройки «в пути» — окно не открылось (или открылось дважды)');
+        release();
+        await settle();
+        assert.equal(modalsIn().length, 1, 'пришли настройки — открылось второе окно на тот же черновик');
+        // Закрыли — то же окно открывается снова; другой документ той же госпитализации — тоже.
+        findBtn(modalsIn()[0], 'Закрыть').click();
+        assert.equal(modalsIn().length, 0);
+        openAdmissionReviewModal({ admission: ADM, kind: 'primary' });
+        openAdmissionReviewModal({ admission: ADM, kind: 'daily' });
+        await settle();
+        assert.equal(modalsIn().length, 2);
+    } finally { if (SETTINGS_GATE) release(); resetBody(); }
+});
+
+test('окно документа: настройки пришли позже — отметки и обязательные разделы поправляются; «Опубликовать» ждёт настроек', async () => {
+    await primeDefaultRules();
+    const release = gate();
+    SETTINGS = { settings: { primary_needs_diagnosis: 0 }, docs: [{ kind: 'primary', required_sections: ['objective'] }] };
+    try {
+        openAdmissionReviewModal({ admission: ADM, kind: 'primary' });
+        await settle();
+        const modal = modalsIn()[0];
+        const dxLabel = walk(modal).find((e) => e.tagName === 'LABEL' && textOf(e).includes('Диагноз'));
+        assert.ok(hasCls(dxLabel, 'rq-req'), 'пока настроек нет — сегодняшние правила: диагноз обязателен');
+        const obj = walk(modal).find((e) => e.attrs && e.attrs['data-sec'] === 'objective');
+        assert.ok(hasCls(obj, 'a4-sec-off'));
+        rpcCalls.length = 0;
+        findBtn(modal, 'Опубликовать осмотр').click();
+        await settle();
+        assert.ok(!BODY.children.some((c) => c.attrs && c.attrs['data-dialog'] === 'required-missing'),
+            'публикация не дождалась правил клиники и спросила по умолчаниям');
+        assert.ok(!rpcCalls.some((c) => c.name === 'admission_review_save'), 'публикация ушла до правил клиники');
+        release();
+        await settle();
+        // Правила пришли: диагноз не обязателен, «Объективно» открыт, отмечен, без крестика.
+        assert.ok(!hasCls(dxLabel, 'rq-req'), 'звезда диагноза осталась при выключенном переключателе');
+        assert.ok(!textOf(walk(modal).find((e) => hasCls(e, 'dx-ed'))).includes('обязателен'), 'карточка диагноза всё ещё называет его обязательным');
+        assert.ok(!hasCls(obj, 'a4-sec-off') && hasCls(obj, 'rq-empty'), 'обязательный по правилам клиники раздел не открыт и не отмечен');
+        assert.ok(!walk(obj).some((e) => e.tagName === 'BUTTON' && (e.attrs['aria-label'] || '') === 'Убрать раздел'), 'обязательный раздел можно убрать');
+        // Нажатая до ответа публикация спрашивает уже по правилам клиники — мягко и про раздел.
+        const dlg = topEl();
+        assert.equal(dlg.attrs['data-dialog'], 'required-missing');
+        assert.ok(textOf(dlg).includes('Объективно') && !textOf(dlg).includes('Диагноз'), textOf(dlg));
+        findBtn(dlg, 'Сохранить как есть').click();
+        await settle();
+        assert.ok(rpcCalls.some((c) => c.name === 'admission_review_save' && c.args.publish === true));
+        // Следующее окно сразу рисуется последними прочитанными правилами — без звезды диагноза.
+        resetBody();
+        const release2 = gate();
+        try {
+            openAdmissionReviewModal({ admission: ADM, kind: 'primary' });
+            await settle();
+            const label2 = walk(modalsIn()[0]).find((e) => e.tagName === 'LABEL' && textOf(e).includes('Диагноз'));
+            assert.ok(!hasCls(label2, 'rq-req'), 'новое окно забыло прочитанные правила клиники');
+        } finally { release2(); }
+    } finally { if (SETTINGS_GATE) release(); SETTINGS = null; resetBody(); }
+});
+
+test('давняя ошибка: сохранённое имя раздела ложится на подпись, а не на «+ Добавить»; «обязательно» на месте', async () => {
+    REVIEWS = [{
+        id: 5, kind: 'intake', published_at: null, complaints: '', objective: '', diagnosis: '', plan: '', body: '',
+        sections_json: JSON.stringify({ secs: ['complaints'], titles: { complaints: 'Жалобы при поступлении', objective: 'Статус' } }),
+    }];
+    try {
+        const ed = buildReviewEditor({ admission: ADM, kind: 'intake', reviewId: 5, rules: INTAKE_COMPLAINTS() });
+        await settle();
+        const sec = secOf(ed, 'complaints');
+        const tag = walk(sec).find((e) => hasCls(e, 'a4-sec-tag'));
+        const add = walk(sec).find((e) => hasCls(e, 'a4-sec-add') && e.tagName === 'BUTTON');
+        assert.ok(textOf(tag).includes('Жалобы при поступлении'), 'подпись раздела не назвала сохранённое имя: ' + textOf(tag));
+        assert.ok(textOf(tag).includes('обязательно'), 'переименование подписи стёрло скрытое «обязательно»');
+        assert.ok(hasCls(tag, 'rq-req'));
+        assert.ok(textOf(add).includes('+ Добавить'), 'сохранённое имя затёрло кнопку «+ Добавить»: ' + textOf(add));
+        // Необязательный раздел тоже назван своим именем и в свёрнутой строке.
+        const objAdd = walk(secOf(ed, 'objective')).find((e) => hasCls(e, 'a4-sec-add') && e.tagName === 'BUTTON');
+        assert.ok(textOf(objAdd).includes('+ Добавить') && textOf(objAdd).includes('Статус'), textOf(objAdd));
+    } finally { REVIEWS = []; }
+});
+
+test('раздел, разложенный по двум листам A4: пусто ли — по всему разделу; печать в продолжении пересчитывает отметки', async () => {
+    const ed = buildReviewEditor({ admission: ADM, kind: 'intake', rules: INTAKE_COMPLAINTS() });
+    await settle();
+    // Рабочий экран: стопка листов, первый лист несёт документ, второй — хвост «Жалоб»
+    // (a4-sheets.js: [data-a4-cont] того же ключа, тоже contenteditable).
+    const stack = mkEl('div');
+    const sheet = (cls) => { const p = mkEl('div'); p.className = cls; const flow = mkEl('div'); flow.className = 'a4-flow'; p.appendChild(flow); stack.appendChild(p); return flow; };
+    const flow1 = sheet('a4-paper');
+    for (const f of ed.fields.filter(Boolean)) flow1.appendChild(f);
+    const flow2 = sheet('a4-paper a4-paper-next');
+    const wrap = mkEl('div'); wrap.className = 'a4-cont-wrap';
+    const cont = mkEl('div'); cont.className = 'a4-input'; cont.setAttribute('data-a4-cont', 'complaints'); cont.setAttribute('contenteditable', 'true');
+    wrap.appendChild(cont); flow2.appendChild(wrap);
+    const sec = secOf(ed, 'complaints');
+    const inp = inputOf(ed, 'complaints');
+    // Первый лист пуст, текст — на втором: раздел не пуст.
+    cont.innerHTML = '<p>кашель</p>';
+    inp.innerHTML = ''; inp.dispatchEvent({ type: 'input' });
+    assert.ok(!hasCls(sec, 'rq-empty'), 'раздел с текстом на втором листе отмечен пустым');
+    assert.equal(ed.topNote.hidden, true);
+    // Стёрли текст в продолжении — событие input всплывает к стопке листов — отметка вернулась.
+    cont.innerHTML = '<p><br></p>';
+    stack.dispatchEvent({ type: 'input', target: cont });
+    assert.ok(hasCls(sec, 'rq-empty'), 'правка в продолжении не пересчитала отметки');
+    cont.innerHTML = '<p>одышка</p>';
+    stack.dispatchEvent({ type: 'input', target: cont });
+    assert.ok(!hasCls(sec, 'rq-empty'));
+    // «Опубликовать» с текстом только во втором окне раздела не спрашивает.
+    rpcCalls.length = 0;
+    assert.equal(await ed.submit(), true);
+    assert.ok(rpcCalls.some((c) => c.name === 'admission_review_save'));
 });
