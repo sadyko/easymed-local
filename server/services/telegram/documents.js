@@ -254,7 +254,7 @@ function buildLab(db, vsid, patient) {
   // LAB-xxxxxx» (раньше бот печатал голый номер без префикса), «Приём» —
   // забор или день визита, «Выдан» — проверка или последний ввод. Пациент
   // в Telegram получает ТОТ ЖЕ документ, что и на стойке.
-  const { dateIn, dateOut } = labIssueDates({
+  const { dateIn, dateOut, confirmedAt } = labIssueDates({   // LAB_CONFIRMED_TIME_V1 — и время подтверждения
     visitDate: head.visit_date,
     collectedAt: head.sample_collected_at,
     verifiedAt: labMaxDate(rows, 'verified_at'),
@@ -269,6 +269,7 @@ function buildLab(db, vsid, patient) {
       requestNo: labAccession(vsid),
       dateIn,
       dateOut,
+      confirmedAt,   // LAB_CONFIRMED_TIME_V1
       labChief: (verifier && verifier.full_name) || '',
       labChiefSpec: 'Врач клинической лабораторной диагностики',
       groups: [{ title: head.service_name + ' · № ' + labAccession(vsid), tests, ...matrixPart }],   // TG_LAB_MATRIX_V1

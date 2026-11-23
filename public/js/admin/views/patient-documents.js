@@ -802,7 +802,7 @@ export async function printLabReport(visit, results, brand, patient) {
     if (!groups.length) return toast('Результатов нет — печатать нечего.', 'info');
 
     const vsIds = [...new Set((results || []).map((r) => r.vsId).filter((v) => v != null))];
-    const { dateIn, dateOut } = labIssueDates({
+    const { dateIn, dateOut, confirmedAt } = labIssueDates({   // LAB_CONFIRMED_TIME_V1 — и время подтверждения
         visitDate: visit.visit_date,
         verifiedAt: labMaxDate(results, 'verifiedAt'),
         lastEnteredAt: labMaxDate(results, 'enteredAt'),
@@ -817,6 +817,7 @@ export async function printLabReport(visit, results, brand, patient) {
             requestNo: vsIds.length === 1 ? labAccession(vsIds[0]) : '',
             dateIn,
             dateOut,
+            confirmedAt,   // LAB_CONFIRMED_TIME_V1
             patientName: patient && patient.full_name ? patient.full_name : '—',
             dob: fmtDMY(patient && patient.date_of_birth),
             sex: labSexRu(patient && patient.gender),

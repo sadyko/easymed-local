@@ -12,6 +12,8 @@
 // бланке из лаборатории и «в норме» на бланке из карты. Поэтому — сюда, и
 // покрыто тестами отдельно от браузера.
 
+import { dateNumeric } from '../../shared/date-words.js';   // LAB_CONFIRMED_TIME_V1 — местные дата и время
+
 // Шаблон знает только три состояния: H (выше), L (ниже), · (норма).
 //
 // 'abnormal' и 'critical' сами по себе не говорят, в какую сторону отклонение,
@@ -397,10 +399,23 @@ export function labScanNumber(q) {
     return m ? parseInt(m[1], 10) : null;
 }
 
+// LAB_CONFIRMED_TIME_V1 (2026-11-23, владелец: «we need to make for the analysis
+// reports the time of the confirmed») — бланк называет, КОГДА анализ подтвердила
+// лаборатория: confirmedAt — «23.11.2026, 14:05» по местным часам, пусто, если
+// подтверждения нет (последний ввод подтверждением не выдаётся). Заодно даты
+// «Приём»/«Выдан» — МЕСТНЫЙ день: отметка — момент в UTC, и подтверждённое
+// с 00:00 до 05:00 по Ташкенту печаталось вчерашним днём (бралось начало строки).
+function localDMY(v) {
+    const s = String(v == null ? '' : v);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return fmtDMY(s);   // голый день — как есть
+    return dateNumeric(s) || fmtDMY(s);
+}
+
 export function labIssueDates({ visitDate, collectedAt, verifiedAt, lastEnteredAt } = {}) {
     return {
-        dateIn: fmtDMY(collectedAt || visitDate),
-        dateOut: fmtDMY(verifiedAt || lastEnteredAt),
+        dateIn: localDMY(collectedAt || visitDate),
+        dateOut: localDMY(verifiedAt || lastEnteredAt),
+        confirmedAt: verifiedAt ? dateNumeric(verifiedAt, { withTime: true }) : '',
     };
 }
 

@@ -1989,7 +1989,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // created_at группировки), а номер заявки не печатался вовсе — и
             // пациент держал два разных документа об одном анализе.
             const vsIds = [...new Set(doc.rows.map((r) => r.vsId).filter((v) => v != null))];
-            const { dateIn, dateOut } = labIssueDates({
+            const { dateIn, dateOut, confirmedAt } = labIssueDates({   // LAB_CONFIRMED_TIME_V1 — и время подтверждения
                 visitDate: labMaxDate(doc.rows, 'date'),
                 verifiedAt: labMaxDate(doc.rows, 'verifiedAt'),
                 lastEnteredAt: labMaxDate(doc.rows, 'enteredAt'),
@@ -2002,6 +2002,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     requestNo: vsIds.length === 1 ? labAccession(vsIds[0]) : '',
                     dateIn,
                     dateOut,
+                    confirmedAt,   // LAB_CONFIRMED_TIME_V1
                     patientName: patient.full_name || '—',
                     dob: fmtDMY(patient.date_of_birth),
                     sex: labSexRu(patient.gender),

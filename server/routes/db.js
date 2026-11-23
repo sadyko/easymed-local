@@ -527,6 +527,27 @@ export function refundedSignRefusal(db, meta, body, user) {   // REFUND_ANY_V1 �
 // подменить. Номер (actor_user_id) — как прислан: сотрудника. true — тело
 // изменено, запрос собирается заново.
 const ACTOR_NAME_TABLES = new Set(['patient_activity_log', 'invoice_audit_log']);
+
+// LAB_CONFIRMED_TIME_V1 (2026-11-23) — ВРЕМЯ ПОДТВЕРЖДЕНИЯ АНАЛИЗА СТАВИТ СЕРВЕР.
+// Бланк теперь печатает «Подтверждено: 23.11.2026, 14:05», а verified_at сюда
+// присылал экран лаборатории — по часам ЕГО компьютера (laboratory.js nowIso).
+// Сбитые часы у лаборанта — и время на бланке пациента неверное. Отметку пишут
+// только «Проверить и выдать» и «Подтвердить» — всегда «сейчас», поэтому любое
+// непустое verified_at в записи lab_results / visit_services заменяется временем
+// сервера (тот же вид, что у экрана). Снятие отметки (null) — как прислано.
+export function stampVerifiedServerTime(meta, body) {
+  if (!meta || !VERIFY_TABLES.has(meta.table)) return false;
+  if (meta.op !== 'insert' && meta.op !== 'update' && meta.op !== 'upsert') return false;
+  const v = body && body.values;
+  const rows = (Array.isArray(v) ? v : [v]).filter((r) => r && typeof r === 'object');
+  const now = new Date().toISOString().slice(0, 19) + 'Z';
+  let changed = false;
+  for (const r of rows) {
+    if (r.verified_at != null && r.verified_at !== '') { r.verified_at = now; changed = true; }
+  }
+  return changed;
+}
+
 function stampActingActorName(meta, body, user) {
   if (!user || !user.acting_admin || !meta || !ACTOR_NAME_TABLES.has(meta.table)) return false;
   if (meta.op !== 'insert' && meta.op !== 'upsert') return false;
@@ -615,6 +636,8 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     }
     // Ревью безопасности (LOW 5) — имя «от имени» в журналах ставит сервер.
     if (stampActingActorName(compiled.meta, req.body, req.user)) compiled = compile(req.body, req.user, { db });
+    // LAB_CONFIRMED_TIME_V1 — время подтверждения анализа — по часам сервера.
+    if (stampVerifiedServerTime(compiled.meta, req.body)) compiled = compile(req.body, req.user, { db });
 
     // STAFF_SYNC_V1 (ревью Фазы 3, I3) — ТАБЛИЦЫ ГЛАВНОЙ КЛИНИКИ В ФИЛИАЛЕ
     // ТОЛЬКО ДЛЯ ЧТЕНИЯ.

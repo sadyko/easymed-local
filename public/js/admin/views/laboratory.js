@@ -2486,17 +2486,21 @@ function verifyDialog(r, patient, results) {
         try {
             const u = currentUser();
             const stamp = nowIso();
+            // LAB_CONFIRMED_TIME_V1 — время подтверждения ставит сервер (routes/db.js
+            // stampVerifiedServerTime); бланк, напечатанный сразу, берёт записанное.
+            let printStamp = stamp;
             for (const x of results) {
-                const { error } = await supabase.from('lab_results')
+                const { data: saved, error } = await supabase.from('lab_results')
                     .update({ verified_by: u.id || null, verified_at: stamp }).eq('id', x.id).select().single();
                 if (error) throw error;
+                if (saved && saved.verified_at) printStamp = saved.verified_at;
             }
             const { error: stErr } = await supabase.from('visit_services')
                 .update({ status: 'completed', verified_by: u.id || null, verified_at: stamp }).eq('id', r.id);
             if (stErr) throw stErr;
             toast(trf('Результаты выданы — {acc}', { acc: accession(r) }), 'ok');
             m.close();
-            if (printCb.checked) printReport(r, patient, results, { verifiedAt: stamp, verifiedBy: u.full_name || u.username || '' });
+            if (printCb.checked) printReport(r, patient, results, { verifiedAt: printStamp, verifiedBy: u.full_name || u.username || '' });
             await fetchAndPaint();
         } catch (e) {
             toast(trf('Не удалось подтвердить: {msg}', { msg: (e && e.message) || e }), 'fail');
@@ -2672,10 +2676,14 @@ async function buildLabDoc(rows, patient, opts = {}) {
     // или день визита, «Выдан» — проверка или последний ввод. Раньше здесь
     // подставлялось «сегодня», и перепечатанный назавтра документ менял дату.
     const allResults = rows.flatMap((x) => state.resultsByVs[x.id] || []);
-    const { dateIn, dateOut } = labIssueDates({
+    // LAB_CONFIRMED_TIME_V1 — «Бланк» из нескольких анализов: время подтверждения —
+    // последнего из них и только когда подтверждены ВСЕ (иначе «—»); было — первой
+    // строки, какой бы она ни была.
+    const allVerified = rows.length > 0 && rows.every((x) => x.verified_at);
+    const { dateIn, dateOut, confirmedAt } = labIssueDates({   // LAB_CONFIRMED_TIME_V1 — и время подтверждения
         visitDate: (state.patientMap[first.visit_id] || {}).visit_date,
         collectedAt: first.sample_collected_at,
-        verifiedAt: opts.verifiedAt || first.verified_at,
+        verifiedAt: opts.verifiedAt || (allVerified ? labMaxDate(rows, 'verified_at') : ''),
         lastEnteredAt: labMaxDate(allResults, 'entered_at'),
     });
     return {
@@ -2684,6 +2692,7 @@ async function buildLabDoc(rows, patient, opts = {}) {
         requestNo: rows.length === 1 ? accession(first) : '',
         dateIn,
         dateOut,
+        confirmedAt,   // LAB_CONFIRMED_TIME_V1
         patientName: patient.full_name || '—',
         dob: fmtDMY(patient.date_of_birth),
         sex: labSexRu(patient.gender),

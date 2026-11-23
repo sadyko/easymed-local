@@ -354,8 +354,28 @@ test('поиск по скану: не номер заказа — null, обы�
 });
 
 test('Приём: забор, а без забора — день визита', () => {
-    assert.equal(labIssueDates({ visitDate: '2026-08-18T19:00:00Z', collectedAt: '2026-08-19T06:00:00Z' }).dateIn, '19.08.2026');
-    assert.equal(labIssueDates({ visitDate: '2026-08-18T19:00:00Z' }).dateIn, '18.08.2026');
+    // Часы выбраны так, что местный день совпадает с днём UTC в любом поясе от UTC−5 до UTC+12.
+    assert.equal(labIssueDates({ visitDate: '2026-08-18T11:00:00Z', collectedAt: '2026-08-19T06:00:00Z' }).dateIn, '19.08.2026');
+    assert.equal(labIssueDates({ visitDate: '2026-08-18T11:00:00Z' }).dateIn, '18.08.2026');
+    assert.equal(labIssueDates({ visitDate: '2026-08-18' }).dateIn, '18.08.2026', 'голый день — как есть');
+});
+
+// LAB_CONFIRMED_TIME_V1 — даты бланка — местный день (отметки хранятся в UTC), и бланк
+// называет время подтверждения. Ожидание строится по часам машины прогона: в CI (UTC)
+// и у клиники (UTC+5) тест проверяет одно и то же правило.
+const localStamp = (iso, withTime) => {
+    const d = new Date(iso);
+    const p = (n) => String(n).padStart(2, '0');
+    const day = `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
+    return withTime ? `${day}, ${p(d.getHours())}:${p(d.getMinutes())}` : day;
+};
+test('LAB_CONFIRMED_TIME_V1: «Подтверждено» — местные дата и время подтверждения; без подтверждения — пусто', () => {
+    const late = '2026-08-18T21:30:00Z';   // в Ташкенте — уже 19.08, 02:30
+    const d = labIssueDates({ verifiedAt: late, lastEnteredAt: '2026-08-18T10:00:00Z' });
+    assert.equal(d.confirmedAt, localStamp(late, true));
+    assert.equal(d.dateOut, localStamp(late, false), '«Выдан» — местный день подтверждения, а не день UTC');
+    assert.equal(labIssueDates({ lastEnteredAt: '2026-08-18T10:00:00Z' }).confirmedAt, '', 'последний ввод — не подтверждение');
+    assert.equal(labIssueDates({}).confirmedAt, '');
 });
 
 test('Выдан: проверка, без неё — последний ввод, и НИКОГДА не «сегодня»', () => {

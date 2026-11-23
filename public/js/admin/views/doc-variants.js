@@ -506,7 +506,7 @@ function sampleImaging() {
 
 function sampleLab() {
     return {
-        requestNo: '9932010003', dateIn: '01.10.2024', dateOut: dateNumeric(new Date()),
+        requestNo: '9932010003', dateIn: '01.10.2024', dateOut: dateNumeric(new Date()), confirmedAt: dateNumeric(new Date(), { withTime: true }),
         patientName: 'Рахимов Жасур Бахтиёрович', dob: '14.03.1989', sex: 'Мужской', mrn: '0024815',
         conclusion: 'Дислипидемия (повышение общего холестерина, ЛПНП и триглицеридов) в сочетании с гипергликемией натощак и повышенным HbA1c. Рекомендована консультация эндокринолога и повторная липидограмма через 1 месяц.',
         labChief: 'Мустафаев Б. Р.', labChiefSpec: 'Врач клинической лабораторной диагностики',
@@ -915,6 +915,8 @@ table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:1
       { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
       { label: 'Пол', uz: 'Jinsi', value: sexShown(d.sex) },
       { label: 'Забор', uz: 'Namuna olindi', value: d.dateIn },
+      // LAB_CONFIRMED_TIME_V1 — когда лаборатория подтвердила: дата и время; нет подтверждения — «—».
+      { label: 'Подтверждено', uz: 'Tasdiqlandi', value: d.confirmedAt },
     ],
   })}
   ${(d.groups || []).map(grp).join('')}
@@ -979,6 +981,7 @@ ${ECONOMY_BW_CSS}
       { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
       { label: 'Пол', uz: 'Jinsi', value: sexShown(d.sex) },
       { label: 'Выдан', uz: 'Berildi', value: d.dateOut || dateNumeric(new Date()) },
+      { label: 'Подтверждено', uz: 'Tasdiqlandi', value: d.confirmedAt },   // LAB_CONFIRMED_TIME_V1
     ],
   })}
   ${(d.groups || []).map(grp).join('')}
