@@ -160,10 +160,21 @@ globalThis.Node = FakeNode;
 // ---- The real shell markup, rebuilt from public/admin.html --------------
 // Not hand-invented: the ids and classes below are asserted against the real
 // file in the «app bar» test, so this harness cannot drift away from the page.
+//
+// SHELL_TESTS_DEPT_TOPNAV_V1 (2026-11-23) — разметка повторяет admin.html после
+// DEPT_TOPNAV_V1 / CONTROLS_IN_DEPTBAR_V1 (2026-11-21): полоса разделов сверху
+// (знак клиники, вкладки #dept-nav, органы управления, #rail-open), колонка
+// функций #app-rail со своей шапкой (#rail-title, #sidebar-toggle), подложка
+// #rail-scrim, в строке экрана — «назад» и имя. Без #dept-nav оболочка вкладок
+// разделов не рисует вовсе (renderSectionTabs выходит молча), и переключатель
+// языка проверялся бы без полосы, которую человек видит первой.
 const BODY = mkEl('body');
 const APP  = mkEl('div'); APP.className = 'app'; BODY.appendChild(APP);
 function shellEl(tag, id, cls) { const e = mkEl(tag); if (id) e.setAttribute('id', id); if (cls) e.className = cls; return e; }
 const SIDEBAR   = shellEl('nav', 'sidebar-body', 'sidebar-body');
+const DEPT_NAV  = shellEl('nav', 'dept-nav', 'dept-nav');
+const RAIL_TITLE = shellEl('h2', 'rail-title', 'rail-title');
+const RAIL_OPEN = shellEl('button', 'rail-open', 'deptbar-menu');
 const APPBAR    = shellEl('header', 'topbar', 'appbar');
 // APPBAR_BACK_V1 / BACK_TO_ALLOWED_V1 — кнопка «назад» в верхней панели
 // (public/admin.html: <button id="section-back" class="appbar-back" hidden>).
@@ -188,13 +199,27 @@ const UROLE_EL  = shellEl('div', 'user-role', 'user-role');
 USER_BTN.appendChild(AVATAR_EL); USER_BTN.appendChild(UNAME_EL); USER_BTN.appendChild(UROLE_EL);
 CONTROLS.appendChild(RELOAD_EL); CONTROLS.appendChild(BELL_EL); CONTROLS.appendChild(BRANCH_EL);
 CONTROLS.appendChild(LANG_EL); CONTROLS.appendChild(USER_BTN); CONTROLS.appendChild(USER_POP);
-APPBAR.appendChild(BACK_EL); APPBAR.appendChild(TITLE_EL); APPBAR.appendChild(CONTROLS);
-const MAIN = mkEl('main'); MAIN.className = 'main';
+APPBAR.appendChild(BACK_EL); APPBAR.appendChild(TITLE_EL);
+const MAIN = mkEl('main'); MAIN.className = 'main'; MAIN.setAttribute('data-region', 'content');
 MAIN.appendChild(APPBAR); MAIN.appendChild(VIEW_ROOT);
-const ASIDE = shellEl('aside', null, 'sidebar');
-ASIDE.appendChild(shellEl('div', null, 'brand-sub'));
+// SHELL_TESTS_DEPT_TOPNAV_V1 — полоса разделов: знак и имя клиники, вкладки,
+// органы управления (переехали из строки экрана), кнопка выдвижной колонки.
+const DEPTBAR = shellEl('header', null, 'deptbar'); DEPTBAR.setAttribute('data-region', 'departments');
+const BRAND = shellEl('div', null, 'deptbar-brand');
+const BRAND_TXT = shellEl('div', null, 'brand-text');
+BRAND_TXT.appendChild(shellEl('div', null, 'brand-sub')); BRAND_TXT.appendChild(shellEl('div', null, 'brand-name'));
+BRAND.appendChild(shellEl('div', 'sidebar-logo', 'brand-mark')); BRAND.appendChild(BRAND_TXT);
+DEPTBAR.appendChild(BRAND); DEPTBAR.appendChild(DEPT_NAV); DEPTBAR.appendChild(CONTROLS); DEPTBAR.appendChild(RAIL_OPEN);
+// Колонка функций раздела — со своей шапкой.
+const ASIDE = shellEl('aside', 'app-rail', 'sidebar'); ASIDE.setAttribute('data-region', 'rail');
+const RAIL_HEAD = shellEl('div', null, 'rail-head');
+RAIL_HEAD.appendChild(RAIL_TITLE); RAIL_HEAD.appendChild(shellEl('button', 'sidebar-toggle', 'sidebar-toggle'));
+ASIDE.appendChild(RAIL_HEAD);
 ASIDE.appendChild(SIDEBAR);
+const SCRIM = shellEl('div', 'rail-scrim', 'rail-scrim'); SCRIM.hidden = true;
+APP.appendChild(DEPTBAR);
 APP.appendChild(ASIDE);
+APP.appendChild(SCRIM);
 APP.appendChild(MAIN);
 
 const byId = (id) => descendants(BODY).find((n) => n.attrs.id === id) || null;
@@ -1080,6 +1105,14 @@ test('FIX_318_V1: ни один модуль приложения не берё�
     assert.deepEqual(bad, [], 'второй экземпляр словаря — второй текущий язык:\n  ' + bad.join('\n  '));
 });
 
+// SHELL_TESTS_DEPT_TOPNAV_V1 (2026-11-23) — «меню» теперь два этажа
+// (DEPT_TOPNAV_V1): вкладки разделов в полосе сверху и функции ОДНОГО раздела
+// в колонке. Прежний тест искал «Patients» в колонке, стоя на «Настройках», —
+// а колонка «Настроек» теперь показывает группы хаба (SETTINGS_SUBNAV_V1), и
+// «Пациенты» живут в разделе «Регистрация» (REGISTRATION_DEPT_V1). Дух прежний:
+// одна кнопка языка переводит ВСЁ сразу — вкладки разделов, шапку и функции
+// колонки, подписи для читалки, имя экрана и сам открытый экран, — без
+// перезагрузки и без единой русской буквы на английском.
 test('FIX_318_V1: кнопка языка вверху переводит и меню, и открытый экран — без перезагрузки', async () => {
     await perms_setFull();
     await go('settings');
@@ -1089,19 +1122,49 @@ test('FIX_318_V1: кнопка языка вверху переводит и м�
     const menuLabels = () => descendants(SIDEBAR)
         .filter((n) => hasCls(n, 'nav-item') || hasCls(n, 'nav-section-title') || (hasCls(n, 'nav-section') && !hasCls(n, 'nav-section--toggle')))
         .map(labelOf);
+    const tabs = () => DEPT_NAV.children.filter((n) => hasCls(n, 'dept-tab'));
+    const tabLabels = () => tabs().map(labelOf);
+    const activeTab = () => tabs().filter((n) => hasCls(n, 'active')).map(labelOf);
+    // Подписи для читалки и подсказки — тоже текст, который человек получает.
+    const chromeLabels = () => [
+        DEPT_NAV.getAttribute('aria-label'), ASIDE.getAttribute('aria-label'),
+        RAIL_OPEN.getAttribute('aria-label'), RAIL_OPEN.title,
+        byId('sidebar-toggle').getAttribute('aria-label'),
+    ];
     const paneText = () => labelOf(shownPane());
     try {
+        assert.ok(tabs().length >= 5, 'вкладок разделов в полосе ' + tabs().length + ' — стенд не видит полосу разделов');
+        assert.ok(tabLabels().includes('Регистрация') && tabLabels().includes('Настройки'), 'подготовка: ' + tabLabels().join(' | '));
+
         await press('en');
+        assert.deepEqual(tabLabels().filter((l) => CYR.test(l)), [], 'вкладки разделов после EN остались русскими: ' + tabLabels().join(' | '));
+        assert.ok(tabLabels().includes('Registration'), 'раздел «Регистрация» (там «Пациенты») не перевёлся: ' + tabLabels().join(' | '));
+        assert.deepEqual(activeTab(), ['Settings'], 'открытый раздел на вкладке не перевёлся или потерял выделение');
+        assert.equal(RAIL_TITLE.textContent, 'Settings', 'шапка колонки не перевелась');
         const mixed = menuLabels().filter((l) => CYR.test(l));
-        assert.deepEqual(mixed, [], 'меню после EN осталось смешанным');
-        assert.ok(menuLabels().includes('Patients'), 'пункт «Пациенты» не перевёлся: ' + menuLabels().join(' | '));
+        assert.deepEqual(mixed, [], 'колонка функций после EN осталась смешанной');
+        assert.ok(menuLabels().length >= 3, 'колонка «Настроек» пуста — проверять перевод не на чем: ' + menuLabels().join(' | '));
+        assert.deepEqual(chromeLabels().filter((l) => !l || CYR.test(l)), [], 'подписи полосы и колонки для читалки остались русскими: ' + chromeLabels().join(' | '));
         assert.equal(TITLE_EL.textContent, 'Settings', 'заголовок раздела не перевёлся');
         assert.ok(paneText().includes('Employees'), 'плитки «Настроек» остались на прежнем языке');
         assert.ok(!paneText().includes('Сотрудники'), 'на экране «Настроек» осталась русская плитка');
         assert.ok(String(btn('en').className).includes('on'), 'переключатель не отметил EN');
 
+        // Пункт «Пациенты» — в колонке своего раздела.
+        await go('patients');
+        assert.deepEqual(activeTab(), ['Registration']);
+        assert.equal(RAIL_TITLE.textContent, 'Registration', 'шапка колонки «Регистрации» на английском не перевелась');
+        assert.ok(menuLabels().some((l) => l.startsWith('Patients')), 'пункт «Пациенты» не перевёлся: ' + menuLabels().join(' | '));
+        assert.deepEqual(menuLabels().filter((l) => CYR.test(l)), [], 'колонка «Регистрации» на английском смешанная');
+
         await press('ru');
-        assert.ok(menuLabels().includes('Пациенты'), 'обратно на русский меню не вернулось');
+        assert.ok(tabLabels().includes('Регистрация') && tabLabels().includes('Настройки'), 'вкладки разделов обратно на русский не вернулись: ' + tabLabels().join(' | '));
+        assert.deepEqual(activeTab(), ['Регистрация']);
+        assert.equal(RAIL_TITLE.textContent, 'Регистрация', 'шапка колонки обратно на русский не вернулась');
+        assert.ok(menuLabels().some((l) => l.startsWith('Пациенты')), 'обратно на русский меню не вернулось');
+        assert.equal(DEPT_NAV.getAttribute('aria-label'), 'Разделы');
+        // Экран «Настроек» ждал в кэше — перерисован на русском без перехода в него.
+        await go('settings');
         assert.ok(paneText().includes('Сотрудники'), 'обратно на русский экран не вернулся');
         assert.equal(TITLE_EL.textContent, 'Настройки');
     } finally {
@@ -1196,27 +1259,39 @@ test('FIX_318_V1: скрыли «Закупки» — плитка «Товар�
 });
 
 // ===========================================================================
-// 15. FIX_318_V1 (B2, B6) — МЕНЮ НА КОРОТКОМ ОКНЕ И СЧЁТЧИКИ СВЁРНУТЫХ ГРУПП.
+// 15. FIX_318_V1 (B2, B6) — МЕНЮ НА КОРОТКОМ ОКНЕ И СЧЁТЧИКИ.
 //
 // B2: все группы раскрыты (NAV_UNFOLDED_V1), а на ноутбуке 1366×768 меню
-// прокручивалось. Теперь, если раскрытое меню не входит в окно, группы без
-// открытого экрана свёрнуты; щелчок человека сильнее умолчания.
-// B6: свёрнутая «Операции» прятала красные счётчики (просроченные задачи CRM,
-// неоплаченные счета, чат), а бейдж обновления на «Настройках» уходил в
-// свёрнутую группу. Теперь заголовок свёрнутой группы несёт их сумму.
-// Раскладки в fake-DOM нет — высоту колонки считаем сами: заголовок 23px,
-// строка 29px, часы 50px; окно — clientHeight.
+// прокручивалось. B6: свёрнутая «Операции» прятала красные счётчики
+// (просроченные задачи CRM, неоплаченные счета, чат).
+//
+// SHELL_TESTS_DEPT_TOPNAV_V1 (2026-11-23) — оба решения заменены по замыслу.
+// Свёрнутых групп больше нет (DEPT_TOPNAV_V1, комментарий у navDepartments в
+// admin.js): колонка показывает функции ОДНОГО раздела вместо всего меню,
+// без свёртки и без «щелчок сильнее умолчания».
+// Сумму счётчиков DEPT_TOPNAV_V1 сперва перенёс на вкладку раздела, но
+// владелец её снял (DEPT_TAB_NO_BADGE_V1: «no numbers should be seen here»):
+// счётчики стоят на самих функциях в колонке открытого раздела. Поэтому здесь:
+//   B2 → ни в одном разделе в колонке нет свёрнутых групп и нет функций
+//        чужого раздела; каждая вкладка открывает свой раздел; выбор человека
+//        переживает переходы — вкладка раздела возвращает на функцию, где он
+//        был. (Пиксельного бюджета нет: колонка «Отчётов» с перечнем отчётов —
+//        REPORTS_RAIL_V1 — длиннее прочих, и модель высоты без раскладки
+//        браузера честно не скажет, прокручивается ли она.)
+//   B6 → красный счётчик кассы — на её функции в колонке, а на вкладках
+//        разделов чисел нет ни в одном разделе.
 // ===========================================================================
-test('FIX_318_V1: короткое окно — группы без открытого экрана свёрнуты, щелчок сильнее умолчания, у свёрнутой группы — сумма счётчиков', async () => {
+test('FIX_318_V1 → DEPT_TOPNAV_V1: колонка — функции одного раздела без свёрнутых групп; вкладка помнит функцию; счётчики на функциях, на вкладках чисел нет', async () => {
     await perms_setFull();
-    const head = (title) => descendants(SIDEBAR).find((n) => hasCls(n, 'nav-section--toggle') && labelOf(n).startsWith(title));
-    const folded = (title) => hasCls(head(title), 'nav-section--folded');
-    const badgeOf = (title) => descendants(head(title)).find((n) => hasCls(n, 'nav-section-badge')) || null;
-    const height = () => SIDEBAR.children.reduce((n, c) => n + (hasCls(c, 'nav-section') ? 23
-        : hasCls(c, 'nav') ? (hasCls(c, 'nav--folded') ? 0 : c.children.length * 29) : 50), 0);
-    let client = 500;
-    Object.defineProperty(SIDEBAR, 'clientHeight', { get: () => client, configurable: true });
-    Object.defineProperty(SIDEBAR, 'scrollHeight', { get: height, configurable: true });
+    const tabs = () => DEPT_NAV.children.filter((n) => hasCls(n, 'dept-tab'));
+    const tabFor = (label) => tabs().find((n) => labelOf(n) === label);
+    const activeTab = () => tabs().filter((n) => hasCls(n, 'active')).map(labelOf);
+    const numberedTabs = () => tabs()
+        .filter((n) => /\d/.test(labelOf(n)) || descendants(n).some((c) => hasCls(c, 'dept-tab-badge') || hasCls(c, 'nav-badge')))
+        .map(labelOf);
+    const foldLeftovers = () => descendants(SIDEBAR)
+        .filter((n) => ['nav-section--toggle', 'nav--folded', 'nav-section--folded', 'nav-section-badge'].some((c) => hasCls(n, c)));
+    const badgeIn = (el) => descendants(el).find((n) => hasCls(n, 'nav-badge')) || null;
     const prevFetch = globalThis.fetch;
     globalThis.fetch = async (url, opts = {}) => {
         const u = String(url);
@@ -1233,48 +1308,54 @@ test('FIX_318_V1: короткое окно — группы без открыт
         assert.equal(typeof shell().refreshNav, 'function', 'экраны зовут window.easymed.refreshNav после действий — оболочка его потеряла');
         await go('labs'); await settle(80);
         await go('patients'); await settle(80);
-        assert.equal(folded('Касса'), true, 'меню не входит в окно — «Операции» без открытого экрана должны быть свёрнуты');
-        assert.equal(folded('Настройки'), true);
-        assert.equal(folded('Отчёты'), true);
-        assert.ok(height() <= client, 'свернули, а меню всё равно не входит: ' + height() + ' > ' + client);
 
-        // B6 — сумма счётчиков на заголовке свёрнутой группы.
-        const ops = badgeOf('Касса');
-        assert.ok(ops, 'у свёрнутых «Операций» нет бейджа — красные счётчики спрятаны');
-        // CHATS_TO_COMMERCE_V1 — чат ушёл из «Операций» на «Коммерческие
-        // инструменты» (группа «Настройки»): здесь остаётся касса.
-        assert.equal(labelOf(ops), '2', 'касса 2');
-        assert.ok(hasCls(ops, 'alert'), 'сумма красных счётчиков — красная');
-        const upd = badgeOf('Настройки');
-        assert.ok(upd && hasCls(upd, 'alert'), 'бейдж обновления ушёл в свёрнутые «Настройки»');
-        assert.equal(labelOf(upd), '4', 'обновление 1 + непрочитанные чаты 3 на «Коммерческих инструментах»');
-        assert.equal(badgeOf('Отчёты'), null, 'у группы без счётчиков бейджа нет');
+        // B2 — одна колонка, один раздел: ни свёрнутых групп, ни чужих функций.
+        assert.deepEqual(activeTab(), ['Регистрация'], 'вкладка открытого раздела не та');
+        assert.equal(RAIL_TITLE.textContent, 'Регистрация', 'шапка колонки называет не тот раздел');
+        assert.deepEqual(foldLeftovers().map(labelOf), [], 'в колонке вернулись свёрнутые группы');
+        for (const other of ['Касса', 'Старший кассир', 'Лаборатория'])
+            assert.equal(navItemFor(other), undefined, 'функция чужого раздела «' + other + '» стоит в колонке «Регистрации»');
 
-        // Группа открытого экрана раскрыта.
-        await go('cashier-shifts');
-        assert.equal(folded('Касса'), false, 'экран кассы открыт, а его группа свёрнута');
-        assert.equal(folded('Отчёты'), true);
+        // B6 — счётчики не прячутся и не суммируются на вкладках: чисел на вкладках нет…
+        assert.deepEqual(numberedTabs(), [], 'на вкладках разделов снова числа (владелец: «no numbers should be seen here»)');
+        // …а красный счётчик кассы — на её функции, как только открыт её раздел.
+        await go('cashier-shifts'); await settle(80);
+        assert.deepEqual(activeTab(), ['Касса']);
+        const cash = navItemFor('Касса');
+        assert.ok(cash && hasCls(cash, 'active'), 'функция «Касса» не выделена в колонке своего раздела');
+        const cashBadge = badgeIn(cash);
+        assert.ok(cashBadge, 'красный счётчик кассы пропал с её функции — неоплаченные счета спрятаны');
+        assert.equal(labelOf(cashBadge), '2', 'касса 2');
+        assert.ok(hasCls(cashBadge, 'alert'), 'счётчик неоплаченных — не красный');
+        assert.deepEqual(numberedTabs(), [], 'открыли кассу — число появилось на вкладке');
 
-        // Щелчок человека сильнее умолчания — и переживает переходы.
-        head('Отчёты').click();
-        assert.equal(folded('Отчёты'), false);
+        // Выбор человека сильнее умолчания и переживает переходы: вкладка раздела
+        // возвращает на ту функцию, где он был, а не на первую.
+        await go('cashier-head');
         await go('patients');
-        assert.equal(folded('Отчёты'), false, 'раскрытая щелчком группа свернулась сама при переходе');
-        assert.equal(folded('Касса'), true);
+        tabFor('Касса').click();
+        await settle(80);
+        assert.equal(shell().state.view, 'cashier-head', 'вкладка «Касса» открыла не ту функцию, где человек был');
+        assert.deepEqual(activeTab(), ['Касса']);
 
-        // Окно выросло — всё раскрыто, кроме свёрнутого щелчком.
-        head('Отчёты').click();
-        client = 2000;
-        await go('labs');
-        assert.equal(folded('Касса'), false, 'меню входит в окно — группы раскрыты (NAV_UNFOLDED_V1)');
-        assert.equal(folded('Настройки'), false);
-        assert.equal(folded('Отчёты'), true, 'свёрнутая щелчком группа раскрылась сама');
-        head('Отчёты').click();
-        assert.equal(folded('Отчёты'), false);
+        // КАЖДАЯ вкладка открывает свой раздел, и ни в одной колонке нет
+        // свёрнутых групп. «Клиника» — вкладка-список (DEPT_DROPDOWN_V1): её
+        // функции в выпадающем списке, а колонка держит одну открытую —
+        // открываем её маршрутом.
+        assert.ok(tabs().length >= 5, 'вкладок разделов ' + tabs().length + ' — обходить нечего');
+        const bad = [];
+        for (const label of tabs().map(labelOf)) {
+            const btn = tabFor(label);
+            if (btn.getAttribute('aria-haspopup') === 'menu') await go('labs');
+            else { btn.click(); await settle(80); }
+            if (activeTab().join(' | ') !== label) bad.push(label + ': открыт раздел «' + activeTab().join(' | ') + '»');
+            // Пункты меню или кнопки экрана (RAIL_TOOLS_V1: режимы лаборатории — .tab).
+            if (!descendants(SIDEBAR).some((n) => n.tagName === 'BUTTON')) bad.push(label + ': колонка пуста');
+            if (foldLeftovers().length) bad.push(label + ': свёрнутые группы в колонке');
+        }
+        assert.deepEqual(bad, [], 'разделы открываются не так:\n  ' + bad.join('\n  '));
     } finally {
         globalThis.fetch = prevFetch;
-        delete SIDEBAR.clientHeight;
-        delete SIDEBAR.scrollHeight;
         await go('patients');
     }
 });

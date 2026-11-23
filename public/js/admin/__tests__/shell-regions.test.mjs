@@ -33,6 +33,13 @@
 //      САМЫЙ узел верхней строки, на том же месте, со всеми органами
 //      управления и ровно одним именем раздела — и ни одной второй полосы
 //      хрома внутри экрана.
+//
+// SHELL_TESTS_DEPT_TOPNAV_V1 (2026-11-23) — после DEPT_TOPNAV_V1 (2026-11-21)
+// областей ТРИ: полоса разделов сверху (знак клиники, вкладки, органы
+// управления), колонка функций одного раздела и область содержимого. Четыре
+// утверждения выше остались, изменилось только, О ЧЁМ они: двойник разметки,
+// число областей, угол области содержимого (сверху его держит полоса разделов)
+// и выравнивание через границу (шапка колонки и строка экрана).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -159,21 +166,36 @@ globalThis.Node = FakeNode;
 // ---- The real shell markup, rebuilt from public/admin.html --------------
 // Not hand-invented: the ids and classes below are asserted against the real
 // file in the «app bar» test, so this harness cannot drift away from the page.
+//
+// SHELL_TESTS_DEPT_TOPNAV_V1 (2026-11-23) — двойник повторяет admin.html после
+// DEPT_TOPNAV_V1 / CONTROLS_IN_DEPTBAR_V1 (2026-11-21): сверху полоса разделов
+// (знак и имя клиники, вкладки #dept-nav, органы управления, кнопка выдвижной
+// колонки #rail-open), под ней колонка функций #app-rail со своей шапкой
+// (#rail-title, стрелка сворачивания), подложка #rail-scrim и область
+// содержимого, в строке экрана которой остались «назад» и имя. Прежний
+// двойник держал органы управления в строке экрана, а знак клиники — в
+// колонке: обход маршрутов ниже проверял их там, где их на странице уже нет.
 const BODY = mkEl('body');
 const APP  = mkEl('div'); APP.className = 'app'; BODY.appendChild(APP);
 function shellEl(tag, id, cls) { const e = mkEl(tag); if (id) e.setAttribute('id', id); if (cls) e.className = cls; return e; }
-const SIDEBAR   = shellEl('nav', 'sidebar-body', 'sidebar-body');
-const APPBAR    = shellEl('header', 'topbar', 'appbar');
-const TITLE_EL  = shellEl('h1', 'section-title', 'appbar-title');
+// Полоса разделов.
+const DEPTBAR   = shellEl('header', null, 'deptbar');
+const BRAND     = shellEl('div', null, 'deptbar-brand');
+const BRAND_TXT = shellEl('div', null, 'brand-text');
+BRAND_TXT.appendChild(shellEl('div', null, 'brand-sub'));
+BRAND_TXT.appendChild(shellEl('div', null, 'brand-name'));
+BRAND.appendChild(shellEl('div', 'sidebar-logo', 'brand-mark'));
+BRAND.appendChild(BRAND_TXT);
+const DEPT_NAV  = shellEl('nav', 'dept-nav', 'dept-nav');
 const CONTROLS  = shellEl('div', null, 'appbar-controls');
 const RELOAD_EL = shellEl('button', 'topbar-reload', 'appbar-reload');
 const BELL_EL   = shellEl('div', 'topbar-bell', 'topbar-bell');
 const BRANCH_EL = shellEl('div', 'branch-picker', 'branch-picker');
 const LANG_EL   = shellEl('div', 'topbar-lang', 'topbar-lang');
 for (const code of ['uz', 'ru', 'en']) { const b = mkEl('button'); b.dataset.lang = code; b.setAttribute('data-lang', code); LANG_EL.appendChild(b); }
+const USER_WRAP = shellEl('div', 'user-card-wrap', 'user-card-wrap');
 const USER_BTN  = shellEl('button', 'user-card-btn', 'user-card user-card--topbar');
 const USER_POP  = shellEl('div', 'user-popover', 'user-popover'); USER_POP.hidden = true;
-const VIEW_ROOT = shellEl('div', 'view-root');
 // paintUserCard() writes into these three; without them boot() throws before
 // it ever reaches the app shell — and a shell test that never booted is worse
 // than no test at all.
@@ -181,15 +203,30 @@ const AVATAR_EL = shellEl('div', 'user-avatar', 'avatar');
 const UNAME_EL  = shellEl('div', 'user-name', 'user-name');
 const UROLE_EL  = shellEl('div', 'user-role', 'user-role');
 USER_BTN.appendChild(AVATAR_EL); USER_BTN.appendChild(UNAME_EL); USER_BTN.appendChild(UROLE_EL);
+USER_WRAP.appendChild(USER_BTN); USER_WRAP.appendChild(USER_POP);
 CONTROLS.appendChild(RELOAD_EL); CONTROLS.appendChild(BELL_EL); CONTROLS.appendChild(BRANCH_EL);
-CONTROLS.appendChild(LANG_EL); CONTROLS.appendChild(USER_BTN); CONTROLS.appendChild(USER_POP);
-APPBAR.appendChild(TITLE_EL); APPBAR.appendChild(CONTROLS);
+CONTROLS.appendChild(LANG_EL); CONTROLS.appendChild(USER_WRAP);
+const RAIL_OPEN = shellEl('button', 'rail-open', 'deptbar-menu');
+DEPTBAR.appendChild(BRAND); DEPTBAR.appendChild(DEPT_NAV); DEPTBAR.appendChild(CONTROLS); DEPTBAR.appendChild(RAIL_OPEN);
+// Колонка функций раздела.
+const ASIDE     = shellEl('aside', 'app-rail', 'sidebar');
+const RAIL_HEAD = shellEl('div', null, 'rail-head');
+RAIL_HEAD.appendChild(shellEl('h2', 'rail-title', 'rail-title'));
+RAIL_HEAD.appendChild(shellEl('button', 'sidebar-toggle', 'sidebar-toggle'));
+const SIDEBAR   = shellEl('nav', 'sidebar-body', 'sidebar-body');
+ASIDE.appendChild(RAIL_HEAD); ASIDE.appendChild(SIDEBAR);
+const SCRIM     = shellEl('div', 'rail-scrim', 'rail-scrim'); SCRIM.hidden = true;
+// Область содержимого: строка экрана («назад» + имя) и экран.
+const APPBAR    = shellEl('header', 'topbar', 'appbar');
+const BACK_EL   = shellEl('button', 'section-back', 'appbar-back'); BACK_EL.hidden = true;
+const TITLE_EL  = shellEl('h1', 'section-title', 'appbar-title');
+APPBAR.appendChild(BACK_EL); APPBAR.appendChild(TITLE_EL);
+const VIEW_ROOT = shellEl('div', 'view-root');
 const MAIN = mkEl('main'); MAIN.className = 'main';
 MAIN.appendChild(APPBAR); MAIN.appendChild(VIEW_ROOT);
-const ASIDE = shellEl('aside', null, 'sidebar');
-ASIDE.appendChild(shellEl('div', null, 'brand-sub'));
-ASIDE.appendChild(SIDEBAR);
+APP.appendChild(DEPTBAR);
 APP.appendChild(ASIDE);
+APP.appendChild(SCRIM);
 APP.appendChild(MAIN);
 
 const byId = (id) => descendants(BODY).find((n) => n.attrs.id === id) || null;
@@ -307,6 +344,8 @@ async function perms_setFull() { (await import('../permissions.js')).setFullAcce
 // Разметка-двойник в этом файле обязана совпадать с настоящей: три атрибута
 // областей и класс экрана появились вместе с SHELL_REGIONS_V1, и тест
 // «двойник не разошёлся с admin.html» ниже сверяет их с файлом.
+// SHELL_TESTS_DEPT_TOPNAV_V1 — четвёртый атрибут: полоса разделов (DEPT_TOPNAV_V1).
+DEPTBAR.setAttribute('data-region', 'departments');
 ASIDE.setAttribute('data-region', 'rail');
 MAIN.setAttribute('data-region', 'content');
 APPBAR.setAttribute('data-region-part', 'head');
@@ -366,16 +405,40 @@ const BAR_NODE = (() => {
     return b[0];
 })();
 
-test('оболочка — это ДВЕ области: колонка и содержимое, и они названы вслух', () => {
+// SHELL_TESTS_DEPT_TOPNAV_V1 (2026-11-23) — областей стало ТРИ (DEPT_TOPNAV_V1,
+// 2026-11-21, владелец: разделы сверху, функции слева): полоса разделов во всю
+// ширину, под ней колонка функций ОДНОГО раздела и область содержимого.
+// Четвёртый ребёнок .app — подложка выдвижной колонки узкого экрана
+// (#rail-scrim): не область, а затемнение поверх экрана, скрытое по умолчанию.
+// Прежнее «ровно два ребёнка» описывало оболочку до полосы разделов; дух
+// проверки тот же — у каждой области есть имя, и безымянных этажей нет.
+const regionNode = (name) => APP_NODE.children.find((n) => n.attrs['data-region'] === name) || null;
+
+test('оболочка — это ТРИ области: разделы, колонка и содержимое, и они названы вслух', () => {
     const kids = APP_NODE.children;
-    assert.equal(kids.length, 2,
-        'у оболочки не две области, а ' + kids.length + ': ' + kids.map(nameOf).join(', '));
-    const [rail, content] = kids;
+    const named = kids.filter((n) => n.attrs['data-region']);
+    // Порядок узлов — порядок клавиатуры: разделы, функции, экран. Картинку
+    // раскладывает grid-template-areas (admin.css), а не порядок узлов.
+    assert.deepEqual(named.map((n) => n.attrs['data-region']), ['departments', 'rail', 'content'],
+        'области оболочки: ' + kids.map((n) => nameOf(n) + '[' + (n.attrs['data-region'] || '—') + ']').join(', '));
+    const unnamed = kids.filter((n) => !n.attrs['data-region']);
+    assert.deepEqual(unnamed.map(nameOf), ['div#rail-scrim.rail-scrim'],
+        'у оболочки появился безымянный этаж: ' + unnamed.map(nameOf).join(', '));
+    assert.match(HTML, /<div\b[^>]*\bid="rail-scrim"[^>]*\shidden[\s>=]/,
+        'подложка выдвижной колонки видна по умолчанию — она затемнила бы экран на любом окне');
+
+    const [dept, rail, content] = named;
+    assert.equal(dept.tag, 'header', 'полоса разделов перестала быть <header>');
+    assert.ok(clsOf(dept).includes('deptbar'), 'полоса разделов потеряла класс .deptbar');
 
     assert.equal(rail.tag, 'aside', 'левая область перестала быть <aside>');
     assert.ok(clsOf(rail).includes('sidebar'), 'левая область потеряла класс .sidebar');
     assert.equal(rail.attrs['data-region'], 'rail',
         'у левой колонки пропал data-region="rail" — области снова безымянные, и утверждать о них нечего');
+    // Кнопка выдвижной панели и стрелка сворачивания управляют ЭТОЙ колонкой.
+    assert.equal(rail.attrs.id, 'app-rail', 'колонка потеряла id="app-rail"');
+    for (const id of ['rail-open', 'sidebar-toggle'])
+        assert.equal((nodesWithId(id)[0] || { attrs: {} }).attrs['aria-controls'], 'app-rail', '#' + id + ' управляет не колонкой');
 
     assert.equal(content.tag, 'main', 'область содержимого перестала быть <main>');
     assert.ok(clsOf(content).includes('main'), 'область содержимого потеряла класс .main');
@@ -384,12 +447,15 @@ test('оболочка — это ДВЕ области: колонка и со�
 });
 
 test('верхняя строка принадлежит области СОДЕРЖИМОГО, а не колонке', () => {
-    const [rail, content] = APP_NODE.children;
+    const dept = regionNode('departments'), rail = regionNode('rail'), content = regionNode('content');
+    assert.ok(dept && rail && content, 'области оболочки не найдены по data-region');
     assert.equal(BAR_NODE.attrs.id, 'topbar', 'верхняя строка потеряла id="topbar" — её органы управления монтируются по id');
     assert.equal(BAR_NODE.parent, content,
         'верхняя строка висит в ' + nameOf(BAR_NODE.parent) + ', а обязана лежать в области содержимого');
     assert.ok(!under(rail, BAR_NODE),
         'верхняя строка внутри колонки меню — это ровно та одна полоса, на которую жаловался владелец');
+    assert.ok(!under(dept, BAR_NODE),
+        'строка экрана слилась с полосой разделов — имя экрана снова стоит в общей полосе');
     assert.equal(content.children[0], BAR_NODE,
         'верхняя строка не первая в области содержимого: перед ней ' + nameOf(content.children[0]));
 
@@ -400,17 +466,32 @@ test('верхняя строка принадлежит области СОДЕ
     assert.equal(content.children.length, 2,
         'в области содержимого появился третий этаж хрома: ' + content.children.map(nameOf).join(', '));
 
-    // Знак клиники остаётся наверху КОЛОНКИ — он её шапка, а не общая.
-    const brand = nodesWithClass('sidebar-brand');
-    assert.equal(brand.length, 1, 'шапок колонки в разметке ' + brand.length);
-    assert.ok(under(rail, brand[0]) && !under(content, brand[0]),
-        'знак клиники уехал из колонки в область содержимого — обе области снова слиплись бы наверху');
-    // И порядок внутри неё прежний (BRAND_PLATE_V1): имя клиники, потом поставщик.
+    // SHELL_TESTS_DEPT_TOPNAV_V1 — знак клиники больше не шапка колонки
+    // (.sidebar-brand снята): он переехал в полосу разделов (.deptbar-brand),
+    // слева от вкладок, и остаётся ОДИН на странице — ни в колонке, ни в
+    // области содержимого второго нет.
+    const brand = nodesWithClass('deptbar-brand');
+    assert.equal(brand.length, 1, 'знаков клиники в разметке ' + brand.length);
+    assert.equal(brand[0].parent, dept, 'знак клиники висит в ' + nameOf(brand[0].parent) + ', а не в полосе разделов');
+    assert.equal(nodesWithClass('brand-mark').length, 1, 'знак Easy-Med нарисован дважды');
+    assert.ok(!under(rail, nodesWithClass('brand-mark')[0]) && !under(content, nodesWithClass('brand-mark')[0]),
+        'знак клиники уехал из полосы разделов — колонка и содержимое снова слиплись бы с ним наверху');
+    const deptKids = dept.children;
+    assert.ok(deptKids.indexOf(brand[0]) < deptKids.findIndex((n) => n.attrs.id === 'dept-nav'),
+        'знак клиники обязан стоять слева от вкладок разделов');
+    // И порядок внутри него прежний (BRAND_PLATE_V1): имя клиники, потом поставщик.
     const bi = tree(brand[0]);
     const iClinic = bi.findIndex((n) => clsOf(n).includes('brand-sub'));
     const iVendor = bi.findIndex((n) => clsOf(n).includes('brand-name'));
     assert.ok(iClinic > -1 && iVendor > -1 && iClinic < iVendor,
-        'порядок строк в шапке колонки перевёрнут обратно: имя клиники обязано идти первым');
+        'порядок строк в знаке клиники перевёрнут обратно: имя клиники обязано идти первым');
+
+    // У колонки своя шапка — имя открытого раздела, — а под ней функции.
+    const railTitle = nodesWithId('rail-title')[0];
+    const railBody = nodesWithId('sidebar-body')[0];
+    assert.ok(railTitle && under(rail, railTitle), 'имя раздела в колонке пропало или уехало из колонки');
+    assert.ok(railBody && railBody.parent === rail, 'список функций #sidebar-body уехал из колонки');
+    assert.ok(tree(rail).indexOf(railTitle) < tree(rail).indexOf(railBody), 'шапка колонки обязана стоять над функциями');
 });
 
 test('в строке экрана — имя раздела; все пять органов управления — справа в полосе разделов', () => {
@@ -455,10 +536,25 @@ test('в строке экрана — имя раздела; все пять о
         assert.ok(tree(controls).some((n) => n.attrs.id === id), 'орган управления ' + id + ' уехал из полосы разделов');
 });
 
+// SHELL_TESTS_DEPT_TOPNAV_V1 (2026-11-23) — сверяем ВСЕ четыре узла оболочки
+// (полоса разделов, колонка, подложка, содержимое) по порядку, и для каждого
+// id настоящей области — что двойник держит его В ТОЙ ЖЕ области: органы
+// управления, переехавшие в полосу разделов, иначе остались бы в двойнике там,
+// где их на странице уже нет, и обход маршрутов ниже проверял бы не то.
+const twinName = (n) => n.tagName.toLowerCase() + (n.attrs.id ? '#' + n.attrs.id : '')
+    + String(n.className || '').split(/\s+/).filter(Boolean).map((c) => '.' + c).join('');
 test('двойник оболочки в этом файле не разошёлся с admin.html', () => {
-    const [rail, content] = APP_NODE.children;
-    assert.equal(ASIDE.getAttribute('data-region'), rail.attrs['data-region']);
-    assert.equal(MAIN.getAttribute('data-region'), content.attrs['data-region']);
+    const real = APP_NODE.children;
+    assert.deepEqual(APP.children.map(twinName), real.map(nameOf), 'узлы оболочки в двойнике и в admin.html разные');
+    assert.deepEqual(APP.children.map((n) => n.getAttribute('data-region')), real.map((n) => n.attrs['data-region'] ?? null));
+    const twinOf = { departments: DEPTBAR, rail: ASIDE, content: MAIN };
+    for (const [region, twin] of Object.entries(twinOf)) {
+        const want = tree(regionNode(region)).map((n) => n.attrs.id).filter(Boolean);
+        const have = new Set(descendants(twin).map((n) => n.attrs.id).filter(Boolean));
+        const lost = want.filter((id) => !have.has(id));
+        assert.deepEqual(lost, [], 'в двойнике области «' + region + '» нет узлов, которые в admin.html лежат в ней: ' + lost.join(', '));
+    }
+    const content = regionNode('content');
     assert.equal(String(MAIN.className), clsOf(content).join(' '));
     assert.equal(String(APPBAR.className), clsOf(BAR_NODE).join(' '));
     assert.equal(MAIN.children[0], APPBAR, 'в двойнике верхняя строка не первая — обход маршрутов проверял бы не то');
@@ -648,16 +744,39 @@ test('между колонкой и содержимым — настоящий
         'ширину колонки задаёт больше не --sidebar-w — свёрнутая рейка перестанет работать');
 });
 
-test('у области содержимого свой край и свой верхний левый угол — тот, на который жаловались', () => {
+// SHELL_TESTS_DEPT_TOPNAV_V1 (2026-11-23) — верхнего поля у области
+// содержимого больше нет, и это не потеря угла: сверху её теперь держит
+// полоса разделов (DEPT_TOPNAV_V1: «сверху область содержимого держит полоса
+// разделов … свой зазор — справа и снизу»), а воздух между полосой и
+// областями — row-gap оболочки, тот же --shell-gap, что column-gap между
+// колонкой и содержимым (DEPTBAR_GAP_V1, владелец: «they are touching each
+// other with line»). Верхний левый угол области — по-прежнему на грунте со
+// всех сторон, только верхний зазор теперь общий для колонки и содержимого.
+test('у области содержимого свой край и свой верхний левый угол — под полосой разделов, через тот же зазор грунта', () => {
     const main = ruleOf('.main');
-    const gap = px(ruleOf('.app')['column-gap']);
+    const app = ruleOf('.app');
+    const gap = px(app['column-gap']);
+
+    // Угол стоит в своей ячейке сетки: полоса разделов — строкой выше, во всю ширину.
+    assert.match(String(app['grid-template-areas']), /"dept dept"\s*"rail main"/,
+        'раскладка оболочки больше не «полоса разделов над колонкой и содержимым»: ' + app['grid-template-areas']);
+    assert.equal(main['grid-area'], 'main', 'область содержимого не в своей ячейке сетки');
+    assert.equal(ruleOf('.deptbar')['grid-area'], 'dept', 'полоса разделов не в своей ячейке сетки');
+    assert.equal(ruleOf('.app > .sidebar')['grid-area'], 'rail', 'колонка не в своей ячейке сетки');
+    assert.ok(app['row-gap'], 'между полосой разделов и областями пропал зазор — полоса снова легла на их края');
+    assert.equal(px(app['row-gap']), gap, 'зазор под полосой разделов (' + app['row-gap'] + ') разошёлся с зазором между колонкой и содержимым');
 
     const m = String(main.margin || '').split(/\s+/);
     assert.equal(m.length, 4, 'поля области содержимого заданы не четырьмя числами: ' + main.margin);
+    assert.equal(px(m[0]), 0, 'у области содержимого снова верхнее поле — к зазору под полосой разделов добавится второй');
     assert.equal(px(m[3]), 0, 'у области содержимого появилось левое поле — зазор от колонки удвоится');
-    for (const [i, side] of [[0, 'сверху'], [1, 'справа'], [2, 'снизу']])
+    for (const [i, side] of [[1, 'справа'], [2, 'снизу']])
         assert.equal(px(m[i]), gap, 'зазор ' + side + ' (' + m[i] + ') разошёлся с зазором между областями');
 
+    // NO_NESTED_FRAME_V1 (2026-11-21) — в оболочке край области прозрачный
+    // (.app > .main): рамкой остаётся карточка экрана. Ниже — базовое правило
+    // .main: толщина края и радиус по-прежнему задают геометрию угла, а цвет
+    // края — тот, что появится, если рамку вернут.
     const edge = String(main.border || '').match(/var\(--[a-z0-9-]+\)|#[0-9a-fA-F]{3,8}/);
     assert.ok(edge, 'у области содержимого пропал край: ' + main.border);
     const onGround = ratio(edge[0], GROUND);
@@ -673,6 +792,11 @@ test('у области содержимого свой край и свой в�
     assert.equal(hex(main.background), hex(GROUND),
         'область содержимого получила собственную подложку — все посчитанные контрасты карточек внутри поехали');
     assert.equal(hex(ruleOf('body.admin').background), hex(GROUND));
+    // SHELL_TESTS_DEPT_TOPNAV_V1 — и на НАСТОЯЩЕЙ цепочке предков (.app > .main
+    // сильнее .main): кто бы ни выиграл каскад, своей краски у области нет.
+    const bgWin = winner('background', chainOf(regionNode('content')));
+    assert.ok(bgWin && (/^transparent$/.test(bgWin.value) || hex(bgWin.value) === hex(GROUND)),
+        'область содержимого перекрашена правилом «' + (bgWin && bgWin.sel) + '» → ' + (bgWin && bgWin.value));
 });
 
 test('колонка осталась бесшовной — её отдельной делает содержимое, а не подложка', () => {
@@ -748,24 +872,38 @@ test('липкость держит: строка непрозрачна и ле
             assert.ok(!(k in ruleOf(sel)), 'у ' + sel + ' появился ' + k + ' — липкая строка отвяжется от окна');
 });
 
-test('имя раздела и знак клиники стоят на одной высоте — через границу, а не в одной полосе', () => {
-    const gap = px(ruleOf('.app')['column-gap']);
-    const edge = px(String(ruleOf('.main').border).split(/\s+/)[0]);
-    const barCenter = gap + edge + lengthToken('--topbar-h') / 2;
-
-    const brand = ruleOf('.sidebar-brand');
-    const padTop = px(brand.padding.split(/\s+/)[0]);
-    // Высота двух строк шапки: имя клиники + отступ + имя поставщика.
-    const sub = ruleOf('.brand-sub'), name = ruleOf('.brand-name');
-    const textH = px(sub['font-size']) * parseFloat(sub['line-height'])
-        + px(name['margin-top'])
-        + px(name['font-size']) * parseFloat(name['line-height']);
-    const markH = px(ruleOf('.brand-mark').height);
-    const brandCenter = padTop + Math.max(textH, markH) / 2;
-
-    assert.ok(Math.abs(brandCenter - barCenter) <= 2,
-        'знак клиники на ' + brandCenter.toFixed(1) + 'px, имя раздела на ' + barCenter.toFixed(1) + 'px: '
+// SHELL_TESTS_DEPT_TOPNAV_V1 (2026-11-23) — шапки колонки .sidebar-brand
+// больше нет: знак клиники переехал в полосу разделов (DEPT_TOPNAV_V1) и стоит
+// там в одной полосе с вкладками — это и есть замысел, а не прежняя «одна
+// полоса, меняющая цвет». Выравнивание ЧЕРЕЗ границу живёт дальше одним
+// этажом ниже: у колонки своя шапка (.rail-head — имя открытого раздела), и
+// admin.css задаёт ей высоту строки экрана, «чтобы обе шапки стояли на одной
+// линии». Её и меряем: имя раздела в колонке и имя экрана справа — на одной
+// высоте. Знак клиники — по центру полосы разделов, с воздухом сверху и снизу
+// (DEPTBAR_COMPACT_V1: «по 9–10px воздуха»).
+test('имя раздела в колонке и имя экрана стоят на одной высоте — через границу; знак клиники — по центру полосы разделов', () => {
+    const lead = (sel) => {   // верхнее поле + верхний край: откуда начинается содержимое области
+        const r = ruleOf(sel);
+        const top = r.margin ? px(String(r.margin).split(/\s+/)[0]) : 0;
+        return top + (r.border ? px(String(r.border).split(/\s+/)[0]) : 0);
+    };
+    // Обе области начинаются в ОДНОЙ строке сетки («rail main»), под row-gap.
+    const railCenter = lead('.app > .sidebar') + px(ruleOf('.rail-head')['min-height']) / 2;
+    const barCenter  = lead('.main') + px(winner('min-height').value) / 2;
+    assert.ok(Math.abs(railCenter - barCenter) <= 2,
+        'имя раздела в колонке на ' + railCenter.toFixed(1) + 'px, имя экрана на ' + barCenter.toFixed(1) + 'px: '
         + 'через видимую границу выравнивание читается как порядок, а промах в несколько пикселей — как небрежность');
+    // Шапка колонки — первая в колонке, как строка экрана — первая в содержимом.
+    assert.equal(regionNode('rail').children[0], nodesWithClass('rail-head')[0], 'над шапкой колонки что-то вклинилось — линия съедет');
+
+    const band = lengthToken('--deptbar-h');
+    const deptbar = ruleOf('.deptbar');
+    assert.equal(deptbar['align-items'], 'center', 'знак клиники и вкладки больше не по центру полосы разделов');
+    assert.equal(deptbar['min-height'], 'var(--deptbar-h)', 'высота полосы разделов перестала быть общей');
+    for (const sel of ['.deptbar .brand-mark', '.deptbar .dept-tab']) {
+        const air = (band - px(ruleOf(sel).height)) / 2;
+        assert.ok(air >= 8, sel + ': воздуха сверху и снизу ' + air + 'px — полоса разделов снова тесная');
+    }
 });
 
 test('свёрнутая рейка ничего не ломает: граница читается той же', () => {
@@ -841,8 +979,12 @@ test('ОБХОД NAV: на каждом маршруте это ОДНА И ТА
         // ТА ЖЕ строка, В ТОЙ ЖЕ области, НА ТОМ ЖЕ месте.
         if (APPBAR._parent !== MAIN || MAIN.children[0] !== APPBAR) moved.push(view);
         if (!String(TITLE_EL.textContent || '').trim()) nameless.push(view);
-        const ids = descendants(APPBAR).map((n) => n.attrs.id).filter(Boolean);
-        for (const id of ['section-title', 'topbar-reload', 'topbar-bell', 'branch-picker', 'topbar-lang', 'user-card-btn'])
+        // SHELL_TESTS_DEPT_TOPNAV_V1 — имя экрана — в строке экрана, органы
+        // управления — в полосе разделов (CONTROLS_IN_DEPTBAR_V1); и то и
+        // другое на каждом маршруте на своём месте.
+        if (!descendants(APPBAR).some((n) => n.attrs.id === 'section-title')) lostControls.push(view + ' → section-title');
+        const ids = descendants(DEPTBAR).map((n) => n.attrs.id).filter(Boolean);
+        for (const id of ['topbar-reload', 'topbar-bell', 'branch-picker', 'topbar-lang', 'user-card-btn'])
             if (!ids.includes(id)) lostControls.push(view + ' → ' + id);
 
         // И ни одной ВТОРОЙ полосы хрома внутри экрана.

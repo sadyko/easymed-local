@@ -348,44 +348,71 @@ test('раздел зовётся так же, как пункт меню, — �
     assert.deepEqual(bad, [], 'человек щёлкает одно имя, а попадает на другое:\n  ' + bad.join('\n  '));
 });
 
+// SHELL_TESTS_DEPT_TOPNAV_V1 (2026-11-23) — «Стационар» перестал быть образцом
+// «подзаголовок + кнопки»: владелец снял у него подзаголовок
+// (INPATIENT_NO_SUBTITLE_V1) и кнопку «Обновить» (INPATIENT_HEAD_LEFT_V1,
+// «remove reload button»), в шапке осталась одна «Заявка на госпитализацию».
+// Поэтому полный образец — «Мои запасы»: заголовок, подзаголовок и кнопки
+// «Запросить» / «Обновить» в одной шапке PageHead. «Стационар» остаётся
+// проверкой того, что его единственная кнопка пережила снятие заголовка.
+const headOf = (pane) => descendants(pane).find((n) => hasClass(n, 'page-head')) || null;
+const buttonIn = (el, label) => descendants(el).find((n) => n.tagName === 'BUTTON' && labelOf(n).includes(label)) || null;
+
 test('снят ЗАГОЛОВОК, а не шапка: подзаголовок и кнопки экрана остались на месте', async () => {
     await perms_setFull();
-    await go('admissions');
-    const pane = activePane();
-    const text = descendants(pane).map((n) => n._text || '').join(' ');
-    assert.equal(TITLE_EL.textContent, 'Стационар', 'верхняя панель обязана называть раздел так же, как меню');
-    assert.deepEqual(titlesIn(pane).map((n) => n.textContent), [], '«Стационар» напечатан второй раз внутри экрана');
-    // INPATIENT_NO_SUBTITLE_V1 (2026-11-21) — подзаголовка у «Стационара» больше нет (решение владельца).
-    assert.ok(!text.includes('Заявки на госпитализацию и размещение на койках'), 'поясняющий подзаголовок вернулся');
-    const btns = descendants(pane).filter((n) => n.tagName === 'BUTTON').map((n) => labelOf(n));
-    assert.ok(btns.some((b) => b.includes('Заявка на госпитализацию')), 'кнопка действия уехала вместе с заголовком');
-    assert.ok(btns.some((b) => b.includes('Обновить')), 'кнопка «Обновить» уехала вместе с заголовком');
+    await go('my-stock');
+    let pane = activePane();
+    const text = () => descendants(activePane()).map((n) => n._text || '').join(' ');
+    assert.equal(TITLE_EL.textContent, 'Мои запасы', 'верхняя панель обязана называть раздел так же, как меню');
+    assert.deepEqual(titlesIn(pane).map((n) => n.textContent), [], '«Мои запасы» напечатаны второй раз внутри экрана');
+    assert.ok(text().includes('Что выдали вам и когда'), 'подзаголовок уехал вместе с заголовком');
 
     // И ОСТАЛИСЬ ТАМ, ГДЕ ИХ ЖДУТ — справа. `.page-head` разложен как
     // `justify-content: space-between`; убери оболочка опустевшую левую
     // коробку от заголовка, и единственным ребёнком остались бы кнопки, а
     // space-between прижал бы их ВЛЕВО, через весь экран.
-    const head = descendants(pane).find((n) => hasClass(n, 'page-head'));
+    let head = headOf(pane);
     assert.ok(head, 'шапку экрана снесли целиком вместе с подзаголовком и кнопками');
-    const headKids = (head.children || []).filter((c) => c && c.nodeType !== 3);
+    let headKids = (head.children || []).filter((c) => c && c.nodeType !== 3);
     assert.ok(headKids.length >= 2,
         'в шапке остался один ребёнок: кнопки уедут влево — снимали заголовок, а сломали органы управления');
-    assert.ok(descendants(head).some((n) => n.tagName === 'BUTTON' && labelOf(n).includes('Обновить')),
-        'кнопки выпали из шапки');
+    for (const label of ['Запросить', 'Обновить'])
+        assert.ok(buttonIn(head, label), 'кнопка «' + label + '» выпала из шапки вместе с заголовком');
+
+    // «Стационар»: подзаголовка нет по решению владельца, кнопка действия — на месте.
+    await go('admissions');
+    pane = activePane();
+    assert.equal(TITLE_EL.textContent, 'Стационар', 'верхняя панель обязана называть раздел так же, как меню');
+    assert.deepEqual(titlesIn(pane).map((n) => n.textContent), [], '«Стационар» напечатан второй раз внутри экрана');
+    // INPATIENT_NO_SUBTITLE_V1 (2026-11-21) — подзаголовка у «Стационара» больше нет (решение владельца).
+    assert.ok(!text().includes('Заявки на госпитализацию и размещение на койках'), 'поясняющий подзаголовок вернулся');
+    head = headOf(pane);
+    assert.ok(head, 'шапку «Стационара» снесли целиком вместе с кнопкой');
+    headKids = (head.children || []).filter((c) => c && c.nodeType !== 3);
+    assert.ok(headKids.length >= 2, 'в шапке «Стационара» от заголовка не осталось коробки — раскладку кнопки решает уже не CSS');
+    assert.ok(buttonIn(head, 'Заявка на госпитализацию'), 'кнопка действия уехала вместе с заголовком');
 });
 
+// SHELL_TESTS_DEPT_TOPNAV_V1 — образец перерисовки — «Мои запасы»: их «Обновить»
+// перерисовывает экран ЦЕЛИКОМ, вместе с шапкой и её h1 (paint → pageHead()),
+// то есть приносит дубль заново — ровно тот случай, который стережёт наблюдатель.
+// У «Стационара» кнопки «Обновить» больше нет (INPATIENT_HEAD_LEFT_V1).
 test('дубль не возвращается, когда экран перерисовывает себя сам', async () => {
     await perms_setFull();
-    await go('admissions');
-    const pane = activePane();
+    await go('my-stock');
+    const before = headOf(activePane());
+    assert.ok(before, 'у «Моих запасов» нет шапки — образец перерисовки пропал');
     // Так экран перерисовывается в жизни: человек нажимает «Обновить».
-    const refresh = descendants(pane).filter((n) => n.tagName === 'BUTTON').find((n) => labelOf(n).includes('Обновить'));
+    const refresh = buttonIn(activePane(), 'Обновить');
     assert.ok(refresh, 'на экране нет кнопки «Обновить» — перерисовку нечем вызвать');
     refresh.click();
     await settle(120);
+    const after = headOf(activePane());
+    assert.ok(after && after !== before, '«Обновить» не перерисовал шапку — проверка ничего не доказала бы');
     assert.deepEqual(titlesIn(activePane()).map((n) => n.textContent), [],
         'после перерисовки экран снова написал своё имя: наблюдатель за #view-root не работает');
-    assert.equal(TITLE_EL.textContent, 'Стационар');
+    assert.ok(buttonIn(after, 'Обновить'), 'после перерисовки кнопки выпали из шапки');
+    assert.equal(TITLE_EL.textContent, 'Мои запасы');
 });
 
 // РАЗБОР ШАПКИ ПООТДЕЛЬНОСТИ. Экраны продукта почти все носят подзаголовок,

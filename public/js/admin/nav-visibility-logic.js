@@ -23,8 +23,9 @@ const ID_RE = /^[a-z][a-z0-9-]{0,40}$/;
 // nav-visibility-shell.test.mjs требует, чтобы он совпадал с NAV оболочки.
 export const NAV_IDS = Object.freeze([
     // REPORTS_DASHBOARD_V1 — 'dashboard' переехал в «Отчёты», перед 'reports-hub'.
-    'patients', 'consultation', 'queue', 'labs', 'procedures', 'admissions',
-    'mar-nurse', 'kitchen-sheet', 'discharge', 'patient-documents',
+    // INPATIENT_DEPT_V1 (ветка партнёра) — «Документы» подняты над стационарными пунктами, как в NAV.
+    'patients', 'consultation', 'queue', 'labs', 'procedures', 'patient-documents', 'admissions',
+    'mar-nurse', 'kitchen-sheet', 'discharge',
     // CHATS_TO_COMMERCE_V1 — 'telegram-chat' и 'meta-chat' больше не пункты меню:
     // они прячутся вместе с 'commerce' (PARENT_OF оболочки).
     // REFERRALS_TO_COMMERCE_V1 — 'referrals' тоже ушёл на витрину.
