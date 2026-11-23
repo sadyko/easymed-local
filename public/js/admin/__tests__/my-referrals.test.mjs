@@ -192,5 +192,5 @@ test('MY_REFERRALS_V1: вкладка — только врачу (флаг ил
   const src = fs.readFileSync(path.join(HERE, '..', 'views', 'consultation.js'), 'utf8');
   assert.match(src, /canSeeMyReferrals\(\) \? topTab\('referrals', 'Мои направления', 'Send'\) : null/);
   assert.match(src, /state\.tab === 'referrals' \? myReferralsView\(/);
-  assert.match(src, /if \(state\.tab === 'referrals' && !canSeeMyReferrals\(\)\) state\.tab = 'dashboard';/);
+  assert.match(src, /if \(state\.tab === 'referrals' && !canSeeMyReferrals\(\)\) state\.tab = defaultTab\(\);/);   // CABINET_APPOINTMENTS_FIRST_V1 — на вкладку по умолчанию
 });

@@ -240,7 +240,7 @@ const visitsReads = () => dbCalls.filter((t) => t === 'visits').length;
 test('«Мой день»: изменение для кабинета перечитывает дашборд (визиты дня)', async () => {
   await pause();
   dash = mk('div');
-  await cabinet.renderConsultation(dash, { onNavigate() {}, tabId: 'consultation', payload: {} });
+  await cabinet.renderConsultation(dash, { onNavigate() {}, tabId: 'consultation', payload: { sub: 'dashboard' } });   // CABINET_APPOINTMENTS_FIRST_V1 — дашборд теперь по своему адресу
   await tick(80);
   assert.equal(client.status().subscribers, 2, 'новое открытие кабинета — снова две подписки, не четыре');
   const visitsBefore = visitsReads();

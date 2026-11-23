@@ -736,40 +736,52 @@ test('пустой день (08:00, записей ещё нет) говорит
   assert.ok(txt.includes('За две недели завершённых услуг нет'), 'частоту не выдумываем');
 });
 
-test('кабинет ОТКРЫВАЕТСЯ дашбордом, рабочий список — в один щелчок и по своему адресу', async () => {
+// CABINET_APPOINTMENTS_FIRST_V1 (владелец, 2026-11-23: «window should be my appointments
+// then dashboard») — кабинет открывается «Моими приёмами», они же первые в ряду;
+// дашборд — вторым, по своему адресу '#consultation/dashboard'.
+test('кабинет ОТКРЫВАЕТСЯ «Моими приёмами» (первая вкладка), дашборд — вторым и по своему адресу', async () => {
   reset();
   loginAs(DOCTOR_A);
   const root = mk('div');
   await renderConsultation(root, { tabId: 'consultation', payload: null });
-  await tick();
+  await tick(60);
 
   const dashTab = buttonByText(root, /Дашборд/);
   const workTab = buttonByText(root, /Мои приёмы/);
   assert.ok(dashTab && workTab, 'обе вкладки в шапке');
+  const tabs = allButtons(root).filter((n) => n.attrs && n.attrs.role === 'tab');
+  assert.ok(tabs.indexOf(workTab) < tabs.indexOf(dashTab), '«Мои приёмы» — перед дашбордом');
   // CABINET_TABS_SYSTEM_V1 — это вкладки (.tab, role=tab), а не переключатели:
   // открытую называет aria-selected, как и во всех остальных разделах.
-  assert.strictEqual(dashTab.attrs['aria-selected'], 'true', 'по умолчанию открыт дашборд');
-  assert.strictEqual(workTab.attrs['aria-selected'], 'false');
-  assert.ok(hasClass(dashTab, 'tab') && hasClass(dashTab, 'on'),
+  assert.strictEqual(workTab.attrs['aria-selected'], 'true', 'по умолчанию открыты «Мои приёмы»');
+  assert.strictEqual(dashTab.attrs['aria-selected'], 'false');
+  assert.ok(hasClass(workTab, 'tab') && hasClass(workTab, 'on'),
     'открытая вкладка не помечена системными классами .tab.on');
-  assert.ok(textOf(root).includes('Мой день'), 'дашборд действительно нарисован');
-
-  workTab.click();
-  await tick(60);
-  assert.strictEqual(lastHistoryUrl, '#consultation/work', 'адрес называет открытую вкладку');
-  assert.deepStrictEqual(tabSubCalls.at(-1), ['consultation', 'work'],
-    'оболочке сообщено, иначе navigate() перепишет хеш обратно');
   const workText = textOf(root);
   assert.ok(workText.includes('Показано'), 'рабочий список открыт: ' + workText.slice(0, 300));
   assert.ok(workText.includes('Иванов Пётр'), 'и в нём настоящие строки очереди');
   assert.ok(workText.includes('Сегодня') && workText.includes('Неделя'),
     'фильтр периода очереди никуда не делся');
 
-  // Возврат на дашборд обнуляет хвост адреса — кабинет открывается им.
-  buttonByText(root, /Дашборд/).click();
-  await tick();
-  assert.strictEqual(lastHistoryUrl, '#consultation');
-  assert.deepStrictEqual(tabSubCalls.at(-1), ['consultation', null]);
+  dashTab.click();
+  await tick(60);
+  assert.strictEqual(lastHistoryUrl, '#consultation/dashboard', 'адрес называет открытую вкладку');
+  assert.deepStrictEqual(tabSubCalls.at(-1), ['consultation', 'dashboard'],
+    'оболочке сообщено, иначе navigate() перепишет хеш обратно');
+  assert.ok(textOf(root).includes('Мой день'), 'дашборд действительно нарисован');
+
+  buttonByText(root, /Мои приёмы/).click();
+  await tick(60);
+  assert.strictEqual(lastHistoryUrl, '#consultation/work');
+  assert.deepStrictEqual(tabSubCalls.at(-1), ['consultation', 'work']);
+
+  // По адресу дашборда — сразу дашборд (F5 на '#consultation/dashboard').
+  reset();
+  const root2 = mk('div');
+  await renderConsultation(root2, { tabId: 'consultation', payload: { sub: 'dashboard' } });
+  await tick(60);
+  assert.strictEqual(buttonByText(root2, /Дашборд/).attrs['aria-selected'], 'true');
+  assert.ok(textOf(root2).includes('Мой день'));
 });
 
 test('#consultation/work переживает перезагрузку: адрес открывает рабочий список сразу', async () => {

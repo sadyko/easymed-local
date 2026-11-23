@@ -323,7 +323,7 @@ test('широкий взгляд на стационар не расширяе�
   loginAs(HEAD);
   CAPS = HEAD_CAPS;
   const host = mk('div');
-  await renderConsultation(host, { onNavigate: () => {}, payload: null });   // дашборд
+  await renderConsultation(host, { onNavigate: () => {}, payload: { sub: 'dashboard' } });   // CABINET_APPOINTMENTS_FIRST_V1 — дашборд теперь по своему адресу
   await tick(80);
 
   const scoped = dbCalls.filter((c) => ['users', 'visits', 'visit_services'].includes(c.table));
@@ -366,7 +366,7 @@ test('у палатного врача полосы главного врача 
   loginAs(WARD);
   CAPS = WARD_CAPS;
   const host = mk('div');
-  await renderConsultation(host, { onNavigate: () => {}, payload: null });
+  await renderConsultation(host, { onNavigate: () => {}, payload: { sub: 'dashboard' } });   // CABINET_APPOINTMENTS_FIRST_V1 — дашборд теперь по своему адресу
   await tick(80);
   const txt = textOf(host);
   assert.ok(!txt.includes('Стационар отделения'), 'полоса — только у того, кому сервер сказал «all»');

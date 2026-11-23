@@ -93,7 +93,10 @@ const state = {
     // Page-level tabs. DOCTOR_DASHBOARD_V1 — кабинет ОТКРЫВАЕТСЯ дашбордом
     // (владелец: «in the doctors cabinet make dashboard first»); рабочий список
     // — соседняя вкладка в один щелчок и по своему адресу '#consultation/work'.
-    tab:          'dashboard',
+    // CABINET_APPOINTMENTS_FIRST_V1 (владелец, 2026-11-23: «window should be my
+    // appointments then dashboard») — теперь кабинет открывается «Моими приёмами»,
+    // дашборд — вторая вкладка ('#consultation/dashboard').
+    tab:          'appointments',
     // INPATIENT_TAB_V1 — «Стационар»: this doctor's active admissions (admins see
     // all). Lazy-loaded on first open. Inpatients live in admissions/admission_*
     // tables, so they never appear in «Мои приёмы» (visit_services-based).
@@ -161,8 +164,15 @@ const LINE_NOTES = new Map();   // id строки → { status, seq }
 // зарплата — нижняя часть той же страницы, что дашборд. Адрес
 // '#consultation/pay' из закладок и ссылок продолжает работать: он открывает
 // эту страницу и прокручивает к зарплате (state.scrollToPay).
-const SUB_TO_TAB = { work: 'appointments', inpatients: 'inpatients', pay: 'dashboard', profile: 'profile', referrals: 'referrals' };   // MY_REFERRALS_V1 — '#consultation/referrals'
-const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', profile: 'profile', referrals: 'referrals' };
+// CABINET_APPOINTMENTS_FIRST_V1 — голый '#consultation' теперь «Мои приёмы»;
+// у дашборда свой адрес '#consultation/dashboard'. '#consultation/work' — как был.
+const SUB_TO_TAB = { work: 'appointments', dashboard: 'dashboard', inpatients: 'inpatients', pay: 'dashboard', profile: 'profile', referrals: 'referrals' };   // MY_REFERRALS_V1 — '#consultation/referrals'
+const TAB_TO_SUB = { appointments: 'work', dashboard: 'dashboard', inpatients: 'inpatients', profile: 'profile', referrals: 'referrals' };
+
+/** CABINET_APPOINTMENTS_FIRST_V1 — вкладка по умолчанию: «Мои приёмы»; закрыты роли — дашборд. */
+function defaultTab() {
+    return grantAllows(TAB_GRANT.appointments, 'view') ? 'appointments' : 'dashboard';
+}
 
 export async function renderConsultation(container, { onNavigate, payload, tabId, onPayload, onShow } = {}) {
     stopAutoFresh();   // DIAG_ROUTE_V1 (D6) — новый экран — свой таймер (один на модуль)
@@ -172,10 +182,11 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     onNavigateRef = onNavigate || null;
     tabIdRef = tabId || null;
     // Адрес решает, что открыто: '#consultation/work' переживает F5 и
-    // пересылку ссылки, а голый '#consultation' открывает дашборд.
+    // пересылку ссылки, а голый '#consultation' открывает «Мои приёмы»
+    // (CABINET_APPOINTMENTS_FIRST_V1; раньше — дашборд).
     const sub = payload && typeof payload.sub === 'string' ? payload.sub : null;
-    state.tab = SUB_TO_TAB[sub] || 'dashboard';
-    if (state.tab === 'referrals' && !canSeeMyReferrals()) state.tab = 'dashboard';   // MY_REFERRALS_V1 — вкладка только врачу
+    state.tab = SUB_TO_TAB[sub] || defaultTab();
+    if (state.tab === 'referrals' && !canSeeMyReferrals()) state.tab = defaultTab();   // MY_REFERRALS_V1 — вкладка только врачу
     resetMyReferrals();   // MY_REFERRALS_V1 — каждое открытие кабинета: последние 30 дней, без фильтров
     state.scrollToPay = sub === 'pay';   // CABINET_DASH_PAY_ONE_V1 — старый адрес зарплаты
     if (cabinetHero) cabinetHero.stop();
@@ -848,10 +859,11 @@ function paint() {
         // подчёркнутый ряд, каким разделы переключаются во всём остальном
         // приложении.
         cabinetTabs(h('div', { class: 'tabs', role: 'tablist', style: { marginBottom: '16px', flexWrap: 'wrap' } },
-            // DOCTOR_DASHBOARD_V1 — дашборд ПЕРВЫМ и открыт ПО УМОЛЧАНИЮ.
-            // CABINET_DASH_PAY_ONE_V1 — и зарплата на нём же, ниже: одна вкладка.
-            topTab('dashboard',    'Дашборд · Зарплата', 'Dashboard'),
+            // CABINET_APPOINTMENTS_FIRST_V1 (владелец, 2026-11-23) — «Мои приёмы»
+            // ПЕРВЫМИ и открыты по умолчанию, дашборд — вторым (было наоборот,
+            // DOCTOR_DASHBOARD_V1). CABINET_DASH_PAY_ONE_V1 — зарплата на дашборде, ниже.
             topTab('appointments', 'Мои приёмы',  'Activity'),
+            topTab('dashboard',    'Дашборд · Зарплата', 'Dashboard'),
             topTab('inpatients',   'Стационар',    'Bed', inpatientWaiting()),   // INPATIENT_TAB_V1 / ADMITTING_DOCTOR_CABINET_V1
             canSeeMyReferrals() ? topTab('referrals', 'Мои направления', 'Send') : null,   // MY_REFERRALS_V1
             topTab('profile',      'Мой профиль',  'User'),

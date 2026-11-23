@@ -359,7 +359,7 @@ test('дашборд: загрузчик спрашивает refunded_lines о�
   ASKED.length = 0;
   DASH_SVC_LOADS = 0;
   const root = mk('div');
-  await cabinet.renderConsultation(root, { onNavigate: () => {}, tabId: 'consultation', payload: {} });
+  await cabinet.renderConsultation(root, { onNavigate: () => {}, tabId: 'consultation', payload: { sub: 'dashboard' } });   // CABINET_APPOINTMENTS_FIRST_V1 — дашборд теперь по своему адресу
   await tick(120);
   // Один вопрос на каждую загрузку услуг дашборда (сколько раз дашборд себя
   // перечитывает при открытии кабинета — его дело, не этого теста), не по строке.
