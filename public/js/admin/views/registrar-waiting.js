@@ -44,6 +44,7 @@ import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';
 import { supabase } from '../../supabase.js';
 import { loadPatientById } from '../data.js';
+import { moneyDisplay } from '../../shared/money-input.js';   // CRM_BOOKING_LOG_V1 — сумма скидки
 
 /** Стойка — администратор и регистратура (зеркало сервера: rpc/registrar-waiting.js WAITING_ROLES). */
 export const WAITING_ROLES = Object.freeze(['admin', 'registrar']);
@@ -412,7 +413,18 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
         list.appendChild(h('div', { class: 'rwait-list', role: 'list' }, ...items));
     }
 
+    // CRM_BOOKING_LOG_V1 — «Скидка: 10 000 сум — Группа «Ветераны» −10% · дал(а): Регистратура».
+    function discountLine(d) {
+        if (!d || !(Number(d.amount) > 0)) return null;
+        const parts = [trf('Скидка: {amount} сум', { amount: moneyDisplay(Math.round(Number(d.amount))) })];
+        if ((d.notes || []).length) parts.push(' — ' + d.notes.join('; '));
+        if ((d.by || []).length) parts.push(' · ' + trf('дал(а): {names}', { names: d.by.join(', ') }));
+        return h('div', { class: 'rwait-sub2 rwait-discount', 'data-rwait-discount': '' }, Icon('Coins', { size: 12 }), ' ', parts.join(''));
+    }
+
     function rowEl(r) {
+        const analyses = r.analyses || [];
+        const plainServices = (r.services || []).filter((n) => !analyses.includes(n));
         const sources = (r.sources || []).map((s) => {
             const t = sourceText(s);
             return h('span', { class: 'tag ' + (SOURCE_TAG[s.kind] || ''), 'data-rwait-source': s.kind }, Icon(SOURCE_ICON[s.kind] || 'Calendar', { size: 12 }), trf(t.template, t.params));
@@ -435,12 +447,17 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
                 meta ? h('div', { class: 'rwait-meta' }, meta) : null,
                 h('div', { class: 'rwait-tags' }, ...sources)),
             h('div', { class: 'rwait-what' },
-                (r.services || []).length ? h('div', { class: 'rwait-svc' }, Icon('Stethoscope', { size: 12 }), ' ', r.services.join(', ')) : null,
+                // CRM_BOOKING_LOG_V1 — услуги и анализы отдельными строками (анализы — services.is_lab, сервер).
+                plainServices.length ? h('div', { class: 'rwait-svc' }, Icon('Stethoscope', { size: 12 }), ' ', plainServices.join(', ')) : null,
+                analyses.length ? h('div', { class: 'rwait-svc', 'data-rwait-analyses': '' }, Icon('Flask', { size: 12 }), ' ', trf('Анализы: {names}', { names: analyses.join(', ') })) : null,
                 // WAIT_REG_V1 (ревью, решение владельца) — запись календаря без услуги: услугу выберет регистратор.
                 noService ? h('div', { class: 'rwait-svc rwait-nosvc', 'data-rwait-no-service': '' }, Icon('Warning', { size: 12 }), ' ', tr('услуга не выбрана')) : null,
                 billedNote ? h('div', { class: 'rwait-svc rwait-tocash', 'data-rwait-to-cashier': '' }, Icon('Receipt', { size: 12 }), ' ', tr('Направил врач — счёт выставлен, к кассе')) : null,
                 (r.doctors || []).length ? h('div', { class: 'rwait-sub2' }, trf('Врач: {names}', { names: r.doctors.join(', ') })) : null,
                 (r.booked_by || []).length ? h('div', { class: 'rwait-sub2' }, trf('Записал(а): {names}', { names: r.booked_by.join(', ') })) : null,
+                // CRM_BOOKING_LOG_V1 — кто оформил визит и какая скидка дана (сколько, почему, кем).
+                (r.registered_by || []).length ? h('div', { class: 'rwait-sub2', 'data-rwait-registered-by': '' }, trf('Оформил(а): {names}', { names: r.registered_by.join(', ') })) : null,
+                discountLine(r.discount),
                 (r.reasons || []).length ? h('div', { class: 'rwait-sub2 rwait-reason' }, trf('Причина: {reason}', { reason: r.reasons.join('; ') })) : null),
             h('div', { class: 'rwait-act' },
                 h('span', { class: 'tag rwait-status ' + chip.tag, 'data-rwait-status-chip': status }, Icon(chip.icon, { size: 12 }), tr(chip.label)),

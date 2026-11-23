@@ -403,3 +403,29 @@ test('CRM_BOOKINGS_TAB_V1 (направления до оплаты): «Откр
   assert.match(view, /openVisitWindow\(/, '«Открыть визит» — не дверь кассы');
   assert.match(read('../views/cashier-desk.js'), /export async function openVisitWindow\(/, 'касса не отдаёт свою дверь «Открыть визит»');
 });
+
+// CRM_BOOKING_LOG_V1 (2026-11-23, владелец: «add a log … which user sends, applied discount what service and
+// what analyses should be performed») — строка называет оператора («Записал(а)»), оформившего, скидку
+// (сумма, причина, кто дал) и анализы отдельной строкой; без скидки и без оформления — этих строк нет.
+test('CRM_BOOKING_LOG_V1: «Записал(а)», «Оформил(а)», «Скидка … дал(а)» и «Анализы» отдельно от услуг', async () => {
+  const rows = [
+    ROW(1, { status: 'registered', services: ['Консультация терапевта', 'Анализ крови'], analyses: ['Анализ крови'],
+      registered_by: ['Регистратура'], discount: { amount: 10000, base: 100000, notes: ['Группа «Ветераны» −10%'], by: ['Регистратура'] } }),
+    ROW(2),
+  ];
+  const f = fakeLoad(rows);
+  const host = mk('div');
+  await renderRegistrarWaiting(host, {}, { load: f.load });
+  const one = byAttr(host, 'data-rwait-row', 1);
+  const t1 = textOf(one);
+  assert.match(t1, /Записал\(а\): Оператор А/);
+  assert.match(t1, /Оформил\(а\): Регистратура/);
+  assert.match(textOf(walk(one).find((n) => n.attrs && 'data-rwait-discount' in n.attrs)), /Скидка: 10 000 сум — Группа «Ветераны» −10% · дал\(а\): Регистратура/);
+  assert.match(textOf(walk(one).find((n) => n.attrs && 'data-rwait-analyses' in n.attrs)), /Анализы: Анализ крови/);
+  const svc = walk(one).find((n) => n.attrs && n.className === 'rwait-svc' && !('data-rwait-analyses' in n.attrs));
+  assert.ok(svc && textOf(svc).includes('Консультация терапевта') && !textOf(svc).includes('Анализ крови'), 'анализ повторён в строке услуг');
+  const two = byAttr(host, 'data-rwait-row', 2);
+  for (const k of ['data-rwait-discount', 'data-rwait-registered-by', 'data-rwait-analyses']) {
+    assert.equal(walk(two).some((n) => n.attrs && k in n.attrs), false, 'у строки без скидки/оформления/анализов есть ' + k);
+  }
+});

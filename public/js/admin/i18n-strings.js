@@ -14247,6 +14247,10 @@ export const STRINGS = {
   "за день": {"en":"any time today","ru":"за день","uz":"kun davomida"},   // WAIT_REG_V1
   "Врач: {names}": {"en":"Doctor: {names}","ru":"Врач: {names}","uz":"Shifokor: {names}"},   // WAIT_REG_V1
   "Записал(а): {names}": {"en":"Booked by: {names}","ru":"Записал(а): {names}","uz":"Yozgan: {names}"},   // WAIT_REG_V1
+  "Анализы: {names}": {"en":"Tests: {names}","ru":"Анализы: {names}","uz":"Tahlillar: {names}"},   // CRM_BOOKING_LOG_V1
+  "Оформил(а): {names}": {"en":"Registered by: {names}","ru":"Оформил(а): {names}","uz":"Rasmiylashtirgan: {names}"},   // CRM_BOOKING_LOG_V1
+  "Скидка: {amount} сум": {"en":"Discount: {amount} UZS","ru":"Скидка: {amount} сум","uz":"Chegirma: {amount} so‘m"},   // CRM_BOOKING_LOG_V1
+  "дал(а): {names}": {"en":"given by: {names}","ru":"дал(а): {names}","uz":"bergan: {names}"},   // CRM_BOOKING_LOG_V1
   "Оформить по записи": {"en":"Register booking","ru":"Оформить по записи","uz":"Yozuv bo‘yicha rasmiylashtirish"},   // WAIT_REG_V1
   "Не удалось открыть окно визита.": {"en":"Could not open the visit window.","ru":"Не удалось открыть окно визита.","uz":"Tashrif oynasini ochib bo‘lmadi."},   // WAIT_REG_V1
   "Убрать услугу из записи": {"en":"Remove a booked service","ru":"Убрать услугу из записи","uz":"Xizmatni yozuvdan olib tashlash"},   // WAIT_REG_V1

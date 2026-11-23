@@ -295,6 +295,52 @@ function visitFacts(db, visitIds, explain = false, out = new Map()) {
   return out;
 }
 
+/**
+ * CRM_BOOKING_LOG_V1 (2026-11-23, владелец: «we need to add a log. for reviewing the which user sends,
+ * applied discount what service and what analyses should be performed») — у строки «Записей CRM»:
+ *   • registered_by — кто оформил визит: создатель живого счёта визита и отметка «оформлен» журнала;
+ *   • discount — скидка живых счетов визита: сумма, база, причина (discount_note: группа, вручную,
+ *     промокод) и кто её дал (кто выставил счёт со скидкой, кто правил скидку на кассе — журнал);
+ *     нет скидки — null;
+ *   • analyses — анализы строки (services.is_lab) отдельно; services по-прежнему называет всё.
+ * «Записал(а)» (booked_by) — как было. Три запроса на всю выдачу, визиты — по индексам visit_id.
+ */
+function bookingLog(db, rows, users) {
+  const visitIds = [...new Set(rows.map((r) => r.visit_id).filter((v) => v != null).map(Number))];
+  if (!visitIds.length) return;
+  const name = (id, fallback = '') => nameOfUser(users.get(Number(id))) || fallback || '';
+  const byVisit = new Map(visitIds.map((id) => [id, { by: [], amount: 0, base: 0, notes: [], givers: [] }]));
+  const add = (list, v) => { if (v && !list.includes(v)) list.push(v); };
+  const invoices = db.prepare(`SELECT i.visit_id, i.created_by, i.subtotal, i.discount_amount, i.discount_note
+                                FROM invoices i WHERE ${IN_IDS('i.visit_id')} AND COALESCE(i.status, '') <> 'void' ORDER BY i.id`).all(idList(visitIds));
+  for (const i of invoices) {
+    const v = byVisit.get(Number(i.visit_id)); if (!v) continue;
+    add(v.by, name(i.created_by));
+    const d = Number(i.discount_amount) || 0;
+    if (d > 0) {
+      v.amount += d; v.base += Number(i.subtotal) || 0;
+      add(v.notes, String(i.discount_note || '').trim());
+      add(v.givers, name(i.created_by));
+    }
+  }
+  const journal = db.prepare(`SELECT a.visit_id, a.action, a.actor_user_id, a.actor_name FROM invoice_audit_log a
+                               WHERE ${IN_IDS('a.visit_id')} AND a.action IN ('visit_registered', 'discount', 'discount_change') ORDER BY a.id`).all(idList(visitIds));
+  for (const a of journal) {
+    const v = byVisit.get(Number(a.visit_id)); if (!v) continue;
+    const who = name(a.actor_user_id, a.actor_name);
+    if (a.action === 'visit_registered') add(v.by, who);
+    else if (v.amount > 0) add(v.givers, who);
+  }
+  for (const r of rows) {
+    const v = r.visit_id != null ? byVisit.get(Number(r.visit_id)) : null;
+    if (!v) continue;
+    r.registered_by = v.by.slice();
+    r.discount = v.amount > 0
+      ? { amount: Math.round(v.amount * 100) / 100, base: Math.round(v.base * 100) / 100, notes: v.notes.slice(), by: v.givers.slice() }
+      : null;
+  }
+}
+
 /** Пациенты, у которых СВОЙ визит дня уже оформлен (для записей соседнего здания, ревью M5) — ключи «пациент|день». */
 function ownRegistered(db, from, to, patientIds) {
   if (!patientIds.length) return new Set();
@@ -574,7 +620,11 @@ export function registrarWaiting(db, args, user) {
   const named = !countOnly;
   const svcIds = named ? [...lines, ...settledLines.map((x) => x.l), ...allWishes].map((x) => x.service_id).filter((v) => v != null) : [];
   const ctIds = named ? [...lines, ...settledLines.map((x) => x.l), ...allWishes].filter((x) => x.service_id == null).map((x) => x.consultation_type_id).filter((v) => v != null) : [];
-  const services = new Map(svcIds.length ? db.prepare(`SELECT id, name FROM services WHERE ${IN_IDS('id')}`).all(idList(svcIds)).map((s) => [Number(s.id), s.name || '']) : []);
+  const svcRows = svcIds.length ? db.prepare(`SELECT id, name, is_lab FROM services WHERE ${IN_IDS('id')}`).all(idList(svcIds)) : [];
+  const services = new Map(svcRows.map((s) => [Number(s.id), s.name || '']));
+  // CRM_BOOKING_LOG_V1 — анализы строки называются отдельно от услуг («Анализы: …»).
+  const labServiceIds = new Set(svcRows.filter((s) => Number(s.is_lab) === 1).map((s) => Number(s.id)));
+  const addAnalysis = (r, serviceId, name) => { if (serviceId != null && labServiceIds.has(Number(serviceId))) addUnique(r.analyses, name); };
   const consults = new Map(ctIds.length ? db.prepare(`SELECT id, COALESCE(name_ru, name) AS name FROM consultation_types WHERE ${IN_IDS('id')}`).all(idList(ctIds)).map((s) => [Number(s.id), s.name || '']) : []);
   const reqIds = (named || f.sources) ? [...new Set(allWishes.map((w) => Number(w.request_id)))] : [];
   const partnerOfCard = new Map();
@@ -597,7 +647,8 @@ export function registrarWaiting(db, args, user) {
     let r = rows.get(key);
     if (!r) {
       r = { patient_id: id, patient_name: '', mrn: '', phone: '', day, status,
-        time: null, visit_id: null, visit_status: null, no_service: false, to_cashier: false, sources: [], doctors: [], services: [], booked_by: [], lines: [], reasons: [] };
+        time: null, visit_id: null, visit_status: null, no_service: false, to_cashier: false, sources: [], doctors: [], services: [], booked_by: [], lines: [], reasons: [],
+        analyses: [], registered_by: [], discount: null };   // CRM_BOOKING_LOG_V1
       rows.set(key, r);
       doctorIdsOf.set(r, new Set());
     }
@@ -634,6 +685,7 @@ export function registrarWaiting(db, args, user) {
     const lineDoctor = l.line_doctor_id ?? (l.visit_origin != null ? l.visit_doctor_id : null);
     const doctorName = nameOfUser(users.get(Number(lineDoctor)));
     addUnique(r.services, name);
+    addAnalysis(r, l.service_id, name);   // CRM_BOOKING_LOG_V1
     addUnique(r.doctors, doctorName);
     addDoctor(r, lineDoctor);
     addUnique(r.booked_by, doctor ? nameOfUser(users.get(Number(l.line_created_by)))
@@ -672,6 +724,7 @@ export function registrarWaiting(db, args, user) {
     const name = lineName(w);
     const doctorName = w.doctor_id != null ? nameOfUser(users.get(Number(w.doctor_id))) : '';
     addUnique(r.services, name);
+    addAnalysis(r, w.service_id, name);   // CRM_BOOKING_LOG_V1
     addUnique(r.doctors, doctorName);
     addDoctor(r, w.doctor_id);
     addUnique(r.booked_by, nameOfUser(users.get(Number(w.assigned_to != null ? w.assigned_to : w.card_created_by))));
@@ -716,6 +769,7 @@ export function registrarWaiting(db, args, user) {
     r.to_cashier = r.status === 'waiting' && r.lines.length > 0 && r.lines.every((l) => l.to_cashier === true);
     if (r.visit_status == null && r.visit_id != null) r.visit_status = visitStatus.get(Number(r.visit_id)) ?? null;
   }
+  bookingLog(db, out, users);   // CRM_BOOKING_LOG_V1
   const byName = new Intl.Collator('ru');   // ревью M6 — один сборщик на сортировку, а не localeCompare(…, 'ru') на каждое сравнение
   out.sort((x, y) => {
     if (x.day !== y.day) return x.day < y.day ? -1 : 1;   // CRM_BOOKINGS_TAB_V1 — по дню
