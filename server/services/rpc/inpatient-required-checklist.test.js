@@ -371,3 +371,43 @@ test('(ревью) эпикриз: переключатель включён —
   assert.equal(st.discharge_gate.blocked, false, 'гейт держит только переключатель');
   ctx.db.close();
 });
+
+// INPATIENT_REQUIRED_V1 (ревью) — спека §3: документ «по желанию» не входит в прогресс —
+// и его черновик тоже (progress.draft считал его, а done/total — нет).
+test('(ревью) progress.draft: черновик документа «по желанию» не считается; обязательного — считается, как раньше', () => {
+  const ctx = seed();
+  inpatientSettingsSave(ctx.db, { docs: [{ kind: 'head_review', required: false }] }, admin);
+  const a = inBed(ctx, 1);
+  const before = docs(ctx, a).progress.draft;
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'head_review', objective: '<p>черновик</p>' }, head);
+  let st = docs(ctx, a);
+  assert.equal(item(st, 'head_review').state, 'draft');
+  assert.equal(st.progress.draft, before, 'черновик «по желанию» в прогресс не входит');
+  // Обязательный документ с черновиком — в прогрессе, как раньше.
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'rationale', objective: '<p>черновик</p>' }, head);
+  st = docs(ctx, a);
+  assert.equal(item(st, 'rationale').state, 'draft');
+  assert.equal(st.progress.draft, before + 1);
+  assert.equal(st.progress.draft, st.items.filter((i) => !i.optional && (i.state === 'draft' || i.state === 'next')).length);
+  ctx.db.close();
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — выключили «лечащий врач только после осмотра», назначили
+// лечащего с койки, включили обратно: первичный осмотр публикуется (документом), и строка
+// чек-листа перестаёт быть просроченной — раньше отказ держал её красной навсегда.
+test('(ревью) выключили → назначили с койки → включили: первичный осмотр опубликован — строка больше не просрочена', () => {
+  const ctx = seed();
+  inpatientSettingsSave(ctx.db, { intake_before_attending: 0 }, admin);
+  const a = inBed(ctx, 100);
+  admissionSetAttending(ctx.db, { admission_id: a.id, doctor_id: 4 }, head);
+  inpatientSettingsSave(ctx.db, { intake_before_attending: 1 }, admin);
+  let st = docs(ctx, a);
+  assert.equal(item(st, 'primary').state, 'overdue');
+  const overdueBefore = st.progress.overdue;
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.9', publish: true }, head);
+  st = docs(ctx, a);
+  assert.equal(item(st, 'primary').state, 'published');
+  assert.equal(st.progress.overdue, overdueBefore - 1);
+  assert.equal(st.status, 'active');
+  ctx.db.close();
+});

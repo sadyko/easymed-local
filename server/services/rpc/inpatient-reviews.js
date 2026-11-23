@@ -521,7 +521,12 @@ export function admissionReviewSave(db, args, user) {
         // маршрут, потом назначили лечащего) второй первичный во время лечения заменил бы
         // тот, что закрыл маршрут, — сегодня это отказ, и при выключенном переключателе
         // тоже. Первичный, принятый документом, исправляют так же — записью обхода.
-        const asDocument = adm.status === 'active' && !loadInpatientSettings(db).intake_before_attending
+        // INPATIENT_REQUIRED_V1 (ревью) — решает история ЭТОЙ госпитализации, а не
+        // сегодняшний переключатель: лечащего назначили с койки (attending_without_exam
+        // = 1, миграция 299) — осмотр принимают документом и после того, как клиника
+        // включила переключатель обратно (иначе пациент застревал: отказ «уже закрыт
+        // назначением» — а осмотра не было). Обычный путь и строки 091 (0) — как сегодня.
+        const asDocument = adm.status === 'active' && adm.attending_without_exam === 1
           && !db.prepare(`SELECT 1 FROM admission_reviews
                            WHERE admission_id = ? AND COALESCE(type_kind, kind) = 'primary' AND published_at IS NOT NULL
                            LIMIT 1`).get(adm.id);
@@ -637,8 +642,11 @@ export function admissionReviewSave(db, args, user) {
       // проведён» рядом с опубликованным осмотром. COALESCE — первую подпись не
       // переписываем. 'discharging' — тот же пациент после заявки на выписку: осмотр
       // приёмного врача в открытую историю подшивают и тогда (первичный там отказан выше).
+      // INPATIENT_REQUIRED_V1 (ревью) — по истории госпитализации (attending_without_exam,
+      // миграция 299), а не по сегодняшнему переключателю: клиника включила его обратно —
+      // осмотр у назначенного с койки всё равно записывается. Обычный путь и строки 091 — нет.
       if ((kind === 'primary' || kind === 'intake') && (adm.status === 'active' || adm.status === 'discharging')
-          && !loadInpatientSettings(db).intake_before_attending) {
+          && adm.attending_without_exam === 1) {
         db.prepare('UPDATE admissions SET examined_at = COALESCE(examined_at, ?), examined_by = COALESCE(examined_by, ?) WHERE id = ?')
           .run(at, (user && user.id) || null, adm.id);
       }
@@ -732,6 +740,12 @@ export function admissionSetAttending(db, args, user) {
     db.prepare(
       'UPDATE admissions SET attending_doctor_id = ?, doctor_id = COALESCE(doctor_id, ?) WHERE id = ?',
     ).run(doctorId, doctorId, adm.id);
+    // INPATIENT_REQUIRED_V1 (ревью) — госпитализация запоминает, что лечащего назначили
+    // без осмотра (миграция 299): осмотр, написанный потом, принимается документом и
+    // записывает, кто осмотрел, при любом будущем положении переключателя. Ставится
+    // ровно на этом пути; обычный путь колонку не трогает (0). До шага маршрута — чтобы
+    // строка, которую он вернёт, уже несла отметку (всё в одной транзакции).
+    if (withoutExam) db.prepare('UPDATE admissions SET attending_without_exam = 1 WHERE id = ?').run(adm.id);
     const res = admissionTransition(db, { admission_id: adm.id, to: 'active' }, user, { admittingDoctorOk: asAdmitting, withoutExam });   // INPATIENT_REQUIRED_V1
 
     return { admission: res.admission, attending: { id: u.id, full_name: u.full_name, specialty: u.specialty || '' } };
@@ -1405,7 +1419,9 @@ export function admissionCaseDocs(db, args, user) {
     done: allItems.filter((it) => it.required && it.state === 'published').length,
     total: allItems.filter((it) => it.required).length,
     overdue: allItems.filter((it) => it.state === 'overdue').length,
-    draft: allItems.filter((it) => it.state === 'draft' || it.state === 'next').length,
+    // INPATIENT_REQUIRED_V1 (ревью) — документ «по желанию» в прогресс не входит (спека
+    // §3): его черновик не считается и здесь, как не считается в done/total.
+    draft: allItems.filter((it) => !it.optional && (it.state === 'draft' || it.state === 'next')).length,
   };
 
   // ─── ГЕЙТ ВЫПИСКИ, КОТОРЫЙ УЖЕ СУЩЕСТВУЕТ ────────────────────────────────

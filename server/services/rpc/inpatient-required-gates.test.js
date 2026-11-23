@@ -33,6 +33,15 @@ function placed(ctx, extra = {}) {
 }
 const off = (db, key) => inpatientSettingsSave(db, { [key]: 0 }, admin);
 const status = (db, id) => db.prepare('SELECT status, attending_doctor_id, examined_at, examined_by FROM admissions WHERE id = ?').get(id);
+// INPATIENT_REQUIRED_V1 (ревью) — назначен ли лечащий с койки (миграция 299).
+const withoutExamOf = (db, id) => db.prepare('SELECT attending_without_exam FROM admissions WHERE id = ?').get(id).attending_without_exam;
+// INPATIENT_REQUIRED_V1 (ревью) — строка, какой её переносит 091: лежит, лечащий есть,
+// examined_* пусты, отметки «с койки без осмотра» нет (0).
+function legacyActive(ctx, extra = {}) {
+  const a = placed(ctx, extra);
+  ctx.db.prepare("UPDATE admissions SET status = 'active', attending_doctor_id = 6, examined_at = NULL, examined_by = NULL WHERE id = ?").run(a.id);
+  return a;
+}
 // База клиники, которая не дошла до 298: ни строки настроек, ни журнала, ни колонок набора.
 function dropTo297(db) {
   db.exec('DROP TABLE inpatient_settings_log; DROP TABLE inpatient_settings;');
@@ -159,7 +168,7 @@ test('выключено: первичный осмотр на койке по-�
   ctx.db.close();
 });
 
-test('осмотр приёмного врача во время лечения: выключено — подпись осмотра ставится один раз (COALESCE); включено — как раньше, не ставится', () => {
+test('осмотр приёмного врача во время лечения: назначен с койки — подпись осмотра ставится один раз (COALESCE); лечащийся без осмотра из 091 — как раньше, не ставится', () => {
   const ctx = seed();
   off(ctx.db, 'intake_before_attending');
   const a = placed(ctx, { admitting_doctor_id: 5 });
@@ -174,12 +183,11 @@ test('осмотр приёмного врача во время лечения:
   admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.9', publish: true }, head);
   assert.deepEqual({ ...status(ctx.db, a.id) }, { status: 'active', attending_doctor_id: 6, examined_at: '2026-01-01T00:00:00Z', examined_by: 5 });
 
-  // Переключатель включён: осмотр приёмного врача у лечащегося без осмотра — документ, подписи шага нет (как до правки).
+  // INPATIENT_REQUIRED_V1 (ревью) — подпись решает история госпитализации, не переключатель:
+  // лечащийся без осмотра, перенесённый 091 (attending_without_exam = 0), осмотр приёмного
+  // врача получает документом, подписи шага нет — как до правки (переключатель включён).
   const ctx2 = seed();
-  off(ctx2.db, 'intake_before_attending');
-  const b = placed(ctx2, { admitting_doctor_id: 5 });
-  admissionSetAttending(ctx2.db, { admission_id: b.id, doctor_id: 6 }, head);
-  inpatientSettingsSave(ctx2.db, { intake_before_attending: 1 }, admin);
+  const b = legacyActive(ctx2, { admitting_doctor_id: 5 });
   admissionReviewSave(ctx2.db, { admission_id: b.id, kind: 'intake', objective: '<p>ясно</p>', publish: true }, admitting);
   assert.deepEqual({ ...status(ctx2.db, b.id) }, { status: 'active', attending_doctor_id: 6, examined_at: null, examined_by: null });
   ctx.db.close();
@@ -298,4 +306,90 @@ test('(ревью) смена лечащего до назначения: вык
     (e) => e.status === 400 && e.message === 'Лечащего врача ещё не назначали — назначьте его через «Назначить лечащего врача».');
   assert.equal(status(ctx.db, a.id).attending_doctor_id, null, 'отказ ничего не записал');
   ctx.db.close();
+});
+
+// ─── INPATIENT_REQUIRED_V1 (ревью): осмотр решает история госпитализации, не переключатель ──
+// Выключили «лечащий врач только после осмотра», назначили лечащего с койки, включили обратно —
+// пациент не застревает: первичный осмотр принимается документом, подпись осмотра ставится.
+
+test('(ревью) выключили → назначили с койки → включили: первичный осмотр — документ, маршрут на месте, подпись осмотра один раз', () => {
+  const ctx = seed();
+  off(ctx.db, 'intake_before_attending');
+  const a = placed(ctx, { admitting_doctor_id: 5 });
+  const res = admissionSetAttending(ctx.db, { admission_id: a.id, doctor_id: 6 }, head);
+  assert.equal(res.admission.attending_without_exam, 1, 'строка, которую вернул шаг, уже несёт отметку');
+  assert.equal(withoutExamOf(ctx.db, a.id), 1);
+  assert.deepEqual({ ...status(ctx.db, a.id) }, { status: 'active', attending_doctor_id: 6, examined_at: null, examined_by: null });
+  inpatientSettingsSave(ctx.db, { intake_before_attending: 1 }, admin);
+  const r = admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.9', publish: true }, head);
+  assert.ok(r.review.published_at, 'принят документом, а не отказ «уже закрыт назначением»');
+  const s = status(ctx.db, a.id);
+  assert.equal(s.status, 'active', 'маршрут не двигается');
+  assert.equal(s.examined_by, 4);
+  assert.ok(s.examined_at);
+  // Второй осмотр первую подпись не переписывает (COALESCE).
+  ctx.db.prepare("UPDATE admissions SET examined_at = '2026-01-01T00:00:00Z' WHERE id = ?").run(a.id);
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'intake', objective: '<p>ясно</p>', publish: true }, admitting);
+  assert.deepEqual({ ...status(ctx.db, a.id) }, { status: 'active', attending_doctor_id: 6, examined_at: '2026-01-01T00:00:00Z', examined_by: 4 });
+  // Первичный уже опубликован — второй во время лечения, как и раньше, отказ.
+  assert.throws(() => admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.0', publish: true }, head),
+    (e) => e.status === 400 && /закрыт назначением лечащего врача/.test(e.message));
+  ctx.db.close();
+});
+
+test('(ревью) выключили → назначили с койки → включили: осмотр приёмного врача записывает, кто осмотрел (подписи ещё не было)', () => {
+  const ctx = seed();
+  off(ctx.db, 'intake_before_attending');
+  const a = placed(ctx, { admitting_doctor_id: 5 });
+  admissionSetAttending(ctx.db, { admission_id: a.id, doctor_id: 6 }, head);
+  inpatientSettingsSave(ctx.db, { intake_before_attending: 1 }, admin);
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'intake', objective: '<p>ясно</p>', publish: true }, admitting);
+  const s = status(ctx.db, a.id);
+  assert.equal(s.status, 'active');
+  assert.equal(s.examined_by, 5);
+  assert.ok(s.examined_at);
+  ctx.db.close();
+});
+
+test('(ревью) переключатель включён всё время — как сегодня: обычный путь отметки не ставит, второй первичный — отказ, подпись шага прежняя', () => {
+  const ctx = seed();
+  const a = placed(ctx, { admitting_doctor_id: 5 });
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.9', publish: true }, head);
+  const examined = status(ctx.db, a.id);
+  assert.equal(examined.status, 'examined');
+  admissionSetAttending(ctx.db, { admission_id: a.id, doctor_id: 6 }, head);
+  assert.equal(withoutExamOf(ctx.db, a.id), 0);
+  assert.throws(() => admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.0', publish: true }, head),
+    (e) => e.status === 400 && e.message === 'Первичный осмотр уже закрыт назначением лечащего врача — исправление вносят записью обхода.');
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'intake', objective: '<p>ясно</p>', publish: true }, admitting);
+  const s = status(ctx.db, a.id);
+  assert.equal(s.examined_at, examined.examined_at);
+  assert.equal(s.examined_by, 4);
+  ctx.db.close();
+});
+
+test('(ревью) выключено, но пациента осмотрели до назначения — отметки «без осмотра» нет', () => {
+  const ctx = seed();
+  off(ctx.db, 'intake_before_attending');
+  const a = placed(ctx, { admitting_doctor_id: 5 });
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'intake', objective: '<p>ясно</p>', publish: true }, admitting);
+  assert.equal(status(ctx.db, a.id).status, 'examined');
+  admissionSetAttending(ctx.db, { admission_id: a.id, doctor_id: 6 }, head);
+  assert.equal(status(ctx.db, a.id).status, 'active');
+  assert.equal(withoutExamOf(ctx.db, a.id), 0);
+  ctx.db.close();
+});
+
+test('(ревью) лечащийся без осмотра из 091 (отметки нет) — как сегодня при любом положении переключателя: первичный — отказ прежними словами, подписи нет', () => {
+  for (const on of [1, 0]) {
+    const ctx = seed();
+    const a = legacyActive(ctx, { admitting_doctor_id: 5 });
+    inpatientSettingsSave(ctx.db, { intake_before_attending: on }, admin);
+    assert.equal(withoutExamOf(ctx.db, a.id), 0);
+    assert.throws(() => admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.9', publish: true }, head),
+      (e) => e.status === 400 && e.message === 'Первичный осмотр уже закрыт назначением лечащего врача — исправление вносят записью обхода.', 'переключатель ' + on);
+    admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'intake', objective: '<p>ясно</p>', publish: true }, admitting);
+    assert.deepEqual({ ...status(ctx.db, a.id) }, { status: 'active', attending_doctor_id: 6, examined_at: null, examined_by: null }, 'переключатель ' + on);
+    ctx.db.close();
+  }
 });
