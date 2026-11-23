@@ -1153,6 +1153,11 @@ const STAFF_HISTORY_REFS = [
   { table: 'stock_settings_log',      columns: ['changed_by'],                label: 'журнал переключателя «Только со своих полок»' },
   // Ревью F6 (та же мигр. 226) — кто ввёл дозу «не списано со склада» и кто её списал.
   { table: 'stock_pending_writeoffs', columns: ['given_by', 'settled_by'],    label: '«не списано со склада»' },
+  // INPATIENT_REQUIRED_V1 (мигр. 298) — кто менял «Настройки → Стационар» (журнал «Кто менял» и
+  // «изменено кем»). Внешние ключи и так держали удаление (staffHistoryFkRefs), но называли
+  // запись именем таблицы — здесь она названа словами.
+  { table: 'inpatient_settings',      columns: ['updated_by'],                label: 'настройки стационара' },
+  { table: 'inpatient_settings_log',  columns: ['user_id'],                   label: 'журнал настроек стационара' },
 ];
 
 // V3120_FIX — ЛЮБАЯ ССЫЛКА НА СОТРУДНИКА ИЗ СХЕМЫ. Список выше — с понятными

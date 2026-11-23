@@ -587,11 +587,13 @@ export const CAPABILITY_TRANSITION = Object.freeze({
 });
 
 /**
- * Ничего не меняет и ничего не читает из базы — только роль запрашивающего.
+ * Ничего не меняет — только роль запрашивающего. INPATIENT_REQUIRED_V1 — и читает
+ * строку настроек стационара (required: положение переключателей для экранов-списков),
+ * поэтому db больше не «_db».
  * Стоит в READ_ONLY_RPCS (control/gate.js): заблокированная клиника обязана
  * видеть свои экраны.
  *
- * @returns {{roles:string[], can:Object<string,boolean>}}
+ * @returns {{roles:string[], can:Object<string,boolean>, required:Object<string,boolean>}}
  */
 export function inpatientCapabilities(db, _args, user) {
   const roles = effectiveRoles(user);

@@ -109,6 +109,7 @@ async function load() {
     // связями. Отдельного RPC для карточки не существует — я сперва позвал
     // несуществующий `admission_card`, и шапка молча осталась бы без имени
     // пациента, а редактор — без его данных.
+    // INPATIENT_REQUIRED_V1 — четвёртым читаются правила клиники (rules, см. ниже).
     const [{ data: docs, error: docsErr }, { data: adm }, { data: ov }, rules] = await Promise.all([
         supabase.rpc('admission_case_docs', { admission_id: state.admissionId }),
         supabase.from('admissions')

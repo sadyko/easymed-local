@@ -915,11 +915,11 @@ test('INPATIENT_REQUIRED_V1: без обязательного осмотра л
 
 test('INPATIENT_REQUIRED_V1: приёмный врач без обязательного осмотра назначает лечащего сам', async () => {
     const savedRows = admissionsRows; const savedCaps = capsAnswer;
-    globalThis.window.easymed = { navigate() {}, state: { user: { id: 77, role: 'doctor', full_name: 'Юсупов А.' } } };
+    globalThis.window.easymed = { navigate() {}, state: { user: { id: 77, role: 'doctor', full_name: 'Сотрудник doc77' } } };
     try {
         capsAnswer = { examine: false, set_attending: false, admit: false };
         requiredAnswer = { intake_before_attending: false };
-        admissionsRows = [{ ...IN_BED, admitting_doctor_id: 77, admitting: { full_name: 'Юсупов А.' } }];
+        admissionsRows = [{ ...IN_BED, admitting_doctor_id: 77, admitting: { full_name: 'Сотрудник doc77' } }];
         const root = await renderScreen({ only: 'patients' });
         assert.ok(findBtn(root, 'Назначить лечащего врача'), 'сервер пускает приёмного врача этого пациента по имени');
         assert.equal(findBtn(root, 'Осмотр приёмного врача'), undefined);

@@ -249,3 +249,18 @@ test('deleting an unknown employee is a 404, not a silent success', async (t) =>
   assert.equal((await call(base, cookie, '/999999', 'DELETE')).status, 404);
   assert.equal((await call(base, cookie, '/999999/delete-check')).status, 404);
 });
+
+// INPATIENT_REQUIRED_V1 — сотрудник, менявший «Настройки → Стационар», назван в журнале «Кто менял»
+// и в «изменено кем»: удалить его нельзя, и отказ называет эти записи словами, а не именем таблицы
+// («другие записи (inpatient_settings_log)»), — как у переключателя «Только со своих полок».
+test('an employee who changed inpatient settings cannot be deleted — the refusal names the inpatient settings and their log', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const id = db.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('head5', 'x', 'Сотрудник head5', 'doctor')").run().lastInsertRowid;
+  db.prepare("INSERT INTO inpatient_settings_log (user_id, field, old_value, new_value) VALUES (?, 'intake_before_attending', '1', '0')").run(id);
+  db.prepare('UPDATE inpatient_settings SET updated_by = ? WHERE id = 1').run(id);
+  const g = staffDeleteGuard(db, db.prepare('SELECT * FROM users WHERE id = ?').get(id), { id: 999 });
+  assert.equal(g.ok, false);
+  assert.deepEqual(g.blocking.map((b) => b.label).sort(), ['журнал настроек стационара', 'настройки стационара']);
+  db.close();
+});

@@ -477,7 +477,7 @@ function wardTable({ rows, can, withoutExam = false, reload, onNavigate }) {
         }
         if (a.status === 'examined') {
             return (can.set_attending || isAdmitting(a))
-                ? attendingBtn(a)
+                ? attendingBtn(a)   // INPATIENT_REQUIRED_V1 — та же кнопка, что у лежащего без осмотра
                 : Tag(tr('Ждёт лечащего врача'), { kind: 'warn', dot: true });
         }
         // V3120_CLEANUP — лист назначений закрыт этой роли: кнопки нет (вела в «Нет доступа»).

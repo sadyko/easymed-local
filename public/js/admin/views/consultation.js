@@ -1103,7 +1103,7 @@ function inpatientRow(r, onChange) {
                     : Tag('Ждёт главного врача', { kind: 'warn', dot: true })));
     } else if (r.status === 'examined') {
         right.push((state.inpt.can.set_attending || mine)
-            ? attendingBtn()
+            ? attendingBtn()   // INPATIENT_REQUIRED_V1 — та же кнопка, что у поступившего без осмотра
             : Tag('Ждёт лечащего врача', { kind: 'warn', dot: true }));
     } else {
         right.push(Tag(admissionStatusLabel(r.status), { kind: 'ok' }));

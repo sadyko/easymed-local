@@ -441,7 +441,8 @@ test('INPATIENT_REQUIRED_V1: переключатель выключен — л�
     inpatient.admissionAdmit(db, { admission_id: admission.id, bed_id: 1 }, NURSE);
     assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(admission.id).status, 'admitted');
     modals.openAdmissionAttendingModal({
-        admission: Object.assign({}, admission, { status: 'admitted', patients: { mrn: 'P-26-70125', full_name: 'Шодибоева Замира' } }),
+        // INPATIENT_REQUIRED_V1 (ревью) — подставные данные: репозиторий открытый.
+        admission: Object.assign({}, admission, { status: 'admitted', patients: { mrn: 'T-0001', full_name: 'Тестов Пациент' } }),
     });
     await settle();
     const overlay = topOverlay();

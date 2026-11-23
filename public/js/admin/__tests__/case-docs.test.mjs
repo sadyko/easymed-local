@@ -827,7 +827,7 @@ test('INPATIENT_REQUIRED_V1: пробел — жёлтой строкой под
     const el = render({ items: [
         { kind: TITLE_KIND, group: 'nurse', applies: true, required: true, optional: false, state: 'draft', due_rule: 'clock', due_at: null,
           started: true, missing: ['height_cm', 'pulse_bpm'], missing_sections: [], revisions: [], revision_count: 0 },
-        D('primary', { state: 'published', review_id: 7, published_at: '2026-06-09T08:20:00Z', author_name: 'Юсупов А.', optional: false, missing_sections: ['diagnosis'] }),
+        D('primary', { state: 'published', review_id: 7, published_at: '2026-06-09T08:20:00Z', author_name: 'Сотрудник doc5', optional: false, missing_sections: ['diagnosis'] }),
     ] });
     const gaps = byCls(el, 'cd-row-gap');
     assert.deepEqual(gaps.map((g) => textOfAll(g).trim()), ['не заполнено: Рост, Пульс', 'пустые разделы: Диагноз']);
