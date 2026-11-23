@@ -65,6 +65,7 @@ import { requireGrant } from '../grants.js';
 import { titleSheetCaseItem, sheetView } from './title-sheet.js';   // TITLE_SHEET_V1
 import { sanitizeStoredHtml, htmlToText } from '../../../public/js/shared/rich-text.js';   // CASE_DOC_A4_V1
 import { refuseSignWhileActing } from '../act-as-sign.js';   // ADMIN_ACT_AS_V1 (R3)
+import { parseRequiredSections } from '../../../public/js/shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1
 
 export { RpcError };
 
@@ -170,10 +171,17 @@ export function loadCaseDocTitles(db) {
   } catch (e) { return new Map(); }   // база старше миграции 115
 }
 
+// INPATIENT_REQUIRED_V1 — колонки 298: обязательный ли документ и его обязательные разделы.
+// База 115–297 их не знает — тогда читается прежний запрос (документы обязательны, как были).
+const DOC_SET_SQL_V2 = 'SELECT kind, title, due_rule, due_hours, block, required, required_sections FROM case_doc_types WHERE active = 1 ORDER BY sort_order, id';
+
 export function loadCaseDocSet(db) {
   let rows = null;
-  try { rows = db.prepare(DOC_SET_SQL).all(); }
-  catch (e) { rows = null; }   // база старше миграции 115
+  try { rows = db.prepare(DOC_SET_SQL_V2).all(); }
+  catch (e) {
+    try { rows = db.prepare(DOC_SET_SQL).all(); }   // база старше миграции 298
+    catch (e2) { rows = null; }                      // база старше миграции 115
+  }
   if (!rows || !rows.length) return CASE_DOC_SET;
   return rows.map((r) => Object.freeze({
     kind: r.kind,
@@ -181,6 +189,9 @@ export function loadCaseDocSet(db) {
     due: r.due_rule,
     hours: r.due_hours === null || r.due_hours === undefined ? null : Number(r.due_hours),
     block: r.block || undefined,
+    // INPATIENT_REQUIRED_V1 — без колонки (база старше 298) r.required === undefined → обязательный.
+    required: r.required !== 0,
+    requiredSections: Object.freeze(parseRequiredSections(r.required_sections, r.kind)),
   }));
 }
 

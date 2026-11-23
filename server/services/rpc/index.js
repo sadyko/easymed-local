@@ -45,6 +45,7 @@ import { admissionTitleSheetGet, admissionTitleSheetSave } from './title-sheet.j
 import { admissionOverview } from './case-overview.js';   // CASE_OVERVIEW_V1
 import { admissionVitalsAdd, admissionVitalsList, admissionVitalsDelete } from './vitals.js';   // VITALS_NEWS_V1
 import { caseDocTypesList, caseDocTypeSave, caseDocTypeSetActive, caseDocTypeDelete, caseDocTypesReorder } from './case-doc-types.js';   // CASE_DOC_SET_V2
+import { inpatientSettingsGet, inpatientSettingsSave } from './inpatient-settings.js';   // INPATIENT_REQUIRED_V1 — «Настройки → Стационар»
 import { admissionCharges, admissionChargeSetBillable, admissionServiceAdd, admissionServiceDone } from './admission-charges.js';   // ACT_OF_WORKS_V1 / ACT_ADD_SERVICE_V1
 import { admissionDocSources } from './case-doc-sources.js';   // CASE_DOC_A4_V1
 import { admissionsRegister } from './admissions-register.js';   // ADMISSIONS_REGISTER_V1
@@ -628,6 +629,8 @@ export const RPC = {
   case_doc_type_set_active:       (db, args, user) => caseDocTypeSetActive(db, args, user),
   case_doc_type_delete:           (db, args, user) => caseDocTypeDelete(db, args, user),
   case_doc_types_reorder:         (db, args, user) => caseDocTypesReorder(db, args, user),
+  inpatient_settings_get:         (db, args, user) => inpatientSettingsGet(db, args, user),    // INPATIENT_REQUIRED_V1 — чтение (READ_ONLY_RPCS)
+  inpatient_settings_save:        (db, args, user) => inpatientSettingsSave(db, args, user),   // INPATIENT_REQUIRED_V1 — главный врач, администратор
   admission_case_file:            (db, args, user) => admissionCaseFile(db, args, user),
   // CASE_FILE_SAVE_V1 — та же сборка, но подшитая в документы пациента.
   admission_case_file_save:       (db, args, user) => admissionCaseFileSave(db, args, user),

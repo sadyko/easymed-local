@@ -3,6 +3,17 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // INPATIENT_REQUIRED_V1 — «Настройки → Стационар»: отказы сервера (rpc/inpatient-settings.js, case_doc_type_save)
+  "Настройки стационара — недоступно вашей роли.": {"en":"Inpatient settings are not available to your role.","ru":"Настройки стационара — недоступно вашей роли.","uz":"Statsionar sozlamalari sizning rolingiz uchun mavjud emas."},   // INPATIENT_REQUIRED_V1
+  "Настройки стационара меняет главный врач или администратор.": {"en":"Inpatient settings can be changed only by the head doctor or an administrator.","ru":"Настройки стационара меняет главный врач или администратор.","uz":"Statsionar sozlamalarini bosh shifokor yoki administrator o‘zgartiradi."},   // INPATIENT_REQUIRED_V1
+  "Неизвестная настройка стационара: {key}.": {"en":"Unknown inpatient setting: {key}.","ru":"Неизвестная настройка стационара: {key}.","uz":"Statsionarning noma’lum sozlamasi: {key}."},   // INPATIENT_REQUIRED_V1
+  "Неизвестное поле титульного листа: {key}.": {"en":"Unknown title sheet field: {key}.","ru":"Неизвестное поле титульного листа: {key}.","uz":"Titul varag‘ining noma’lum maydoni: {key}."},   // INPATIENT_REQUIRED_V1
+  "Обязательные поля титульного листа — список.": {"en":"Required title sheet fields must be sent as a list.","ru":"Обязательные поля титульного листа — список.","uz":"Titul varag‘ining majburiy maydonlari ro‘yxat sifatida yuborilishi kerak."},   // INPATIENT_REQUIRED_V1
+  "Список документов передан неверно.": {"en":"The document list was sent incorrectly.","ru":"Список документов передан неверно.","uz":"Hujjatlar ro‘yxati noto‘g‘ri yuborilgan."},   // INPATIENT_REQUIRED_V1
+  "Такого документа в наборе нет: {kind}.": {"en":"This document is not in the set: {kind}.","ru":"Такого документа в наборе нет: {kind}.","uz":"To‘plamda bunday hujjat yo‘q: {kind}."},   // INPATIENT_REQUIRED_V1
+  "У этого документа нет раздела: {section}.": {"en":"This document has no such section: {section}.","ru":"У этого документа нет раздела: {section}.","uz":"Bu hujjatda bunday bo‘lim yo‘q: {section}."},   // INPATIENT_REQUIRED_V1
+  "Обязательные разделы документа — список.": {"en":"Required document sections must be sent as a list.","ru":"Обязательные разделы документа — список.","uz":"Hujjatning majburiy bo‘limlari ro‘yxat sifatida yuborilishi kerak."},   // INPATIENT_REQUIRED_V1
+  "Настройка {key}: нужно «да» или «нет».": {"en":"Setting {key}: the value must be «yes» or «no».","ru":"Настройка {key}: нужно «да» или «нет».","uz":"{key} sozlamasi: «ha» yoki «yo‘q» bo‘lishi kerak."},   // INPATIENT_REQUIRED_V1
   // DOC_HISTORY_V1 — версии документа приёма неизменяемы: отказ триггеров миграции 289
   "История изменений документа не меняется.": {"en":"The document’s change history cannot be modified.","ru":"История изменений документа не меняется.","uz":"Hujjat o‘zgarishlari tarixini o‘zgartirib bo‘lmaydi."},   // DOC_HISTORY_V1
   "История изменений документа не удаляется.": {"en":"The document’s change history cannot be deleted.","ru":"История изменений документа не удаляется.","uz":"Hujjat o‘zgarishlari tarixini o‘chirib bo‘lmaydi."},   // DOC_HISTORY_V1

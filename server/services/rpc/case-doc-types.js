@@ -26,6 +26,9 @@
 import { RpcError } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
 import { loadCaseDocSet } from './inpatient-reviews.js';
+import { applyDocRequired } from './inpatient-settings.js';   // INPATIENT_REQUIRED_V1
+import { parseRequiredSections } from '../../../public/js/shared/inpatient-required.js';   // INPATIENT_REQUIRED_V1
+import { sectionsFor } from '../../../public/js/shared/case-doc-sections.js';   // INPATIENT_REQUIRED_V1
 
 /** Кто правит состав: тот же круг, что назначает лечащего врача. */
 export const DOC_TYPE_WRITE_ROLES = ['admin', 'head_doctor'];
@@ -106,6 +109,12 @@ export function caseDocTypesList(db, args, user) {
       active: !!r.active,
       locked: LOCKED_KINDS.includes(r.kind),
       used: usedCount(db, r.kind),
+      // INPATIENT_REQUIRED_V1 — обязательный ли документ, его обязательные разделы и
+      // все разделы, из которых их выбирают. База старше 298 колонок не знает:
+      // r.required === undefined → обязательный, разделов нет — как было.
+      required: r.required !== 0,
+      required_sections: parseRequiredSections(r.required_sections, r.kind),
+      sections: sectionsFor(r.kind),
     })),
     due_rules: DUE_RULES,
   };
@@ -176,18 +185,37 @@ export function caseDocTypeSave(db, args, user) {
   const isNew = !existing;
   const fields = parse(a, { isNew, existing });
 
-  if (isNew) {
-    const own = nextKind(db);
-    const last = db.prepare('SELECT COALESCE(MAX(sort_order), 0) m FROM case_doc_types').get().m;
-    db.prepare(`INSERT INTO case_doc_types (kind, title, due_rule, due_hours, block, sort_order, builtin, active)
-                VALUES (?, ?, ?, ?, ?, ?, 0, 1)`)
-      .run(own, fields.title, fields.due_rule, fields.due_hours, fields.block, Number(last) + 10);
-    return { type: caseDocTypesList(db, {}, user).types.find((t) => t.kind === own) || null };
-  }
+  // INPATIENT_REQUIRED_V1 — обязательность документа и его обязательные разделы
+  // пишет та же функция, что и страница «Настройки → Стационар» (applyDocRequired),
+  // с той же строкой журнала. Строка документа и его обязательность — одна
+  // транзакция: неверный раздел не оставляет ни нового документа, ни правки срока.
+  // Что не прислали, то не меняется (CASE_DOC_RENAME_V1): без этих полей
+  // applyDocRequired не зовётся вовсе — и база старше 298 сохраняет как раньше.
+  const docRequired = { required: a.required, required_sections: a.required_sections };
+  const touchesRequired = (a.required !== undefined && a.required !== null)
+    || (a.required_sections !== undefined && a.required_sections !== null);
 
-  db.prepare('UPDATE case_doc_types SET title = ?, due_rule = ?, due_hours = ?, block = ? WHERE kind = ?')
-    .run(fields.title, fields.due_rule, fields.due_hours, fields.block, kind);
-  return { type: caseDocTypesList(db, {}, user).types.find((t) => t.kind === kind) || null };
+  const written = db.transaction(() => {
+    if (isNew) {
+      const own = nextKind(db);
+      const last = db.prepare('SELECT COALESCE(MAX(sort_order), 0) m FROM case_doc_types').get().m;
+      db.prepare(`INSERT INTO case_doc_types (kind, title, due_rule, due_hours, block, sort_order, builtin, active)
+                  VALUES (?, ?, ?, ?, ?, ?, 0, 1)`)
+        .run(own, fields.title, fields.due_rule, fields.due_hours, fields.block, Number(last) + 10);
+      if (touchesRequired) applyDocRequired(db, own, docRequired, user, nowUtc(db));
+      return own;
+    }
+    db.prepare('UPDATE case_doc_types SET title = ?, due_rule = ?, due_hours = ?, block = ? WHERE kind = ?')
+      .run(fields.title, fields.due_rule, fields.due_hours, fields.block, kind);
+    if (touchesRequired) applyDocRequired(db, kind, docRequired, user, nowUtc(db));
+    return kind;
+  })();
+  return { type: caseDocTypesList(db, {}, user).types.find((t) => t.kind === written) || null };
+}
+
+// INPATIENT_REQUIRED_V1 — время строки журнала в том же виде, что у inpatient-settings.js.
+function nowUtc(db) {
+  return db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') t").get().t;
 }
 
 /**
