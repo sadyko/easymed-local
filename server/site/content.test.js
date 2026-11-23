@@ -1,11 +1,14 @@
 // WEBSITE_V1 — content.js: врачи и услуги сайта — это показанные в профиле.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { seedDoctor, seedService } from './test-seed.js';
 import { publishedDoctors, doctorBySlug, publishedServices, serviceBySlug, departmentDoctors,
-  departmentServices, invalidateContentCache } from './content.js';
+  departmentServices, invalidateContentCache, configureContent } from './content.js';
 import { pickContent } from './i18n.js';
 
 function fresh() { invalidateContentCache(); const db = openDb(':memory:'); migrate(db); return db; }
@@ -95,4 +98,28 @@ test('пустое поле языка не затирает запасной я
   const [d] = publishedDoctors(db);
   assert.equal(pickContent(d.content, 'uz').bio, 'Опыт врача');
   db.close();
+});
+
+// WEBSITE_V1 — photo_url есть, а файла нет (стёрли с диска): photo_path пуст,
+// иначе страница покажет сломанную картинку вместо аватара с инициалами.
+test('photo_path — только если файл фото на диске; без файла пусто (аватар)', () => {
+  const db = fresh();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'easymed-content-'));
+  try {
+    const id = seedDoctor(db, { ru: 'Фото Врач' });
+    db.prepare('UPDATE users SET photo_url = ? WHERE id = ?').run('/api/storage/doctor-photos/doctors/' + id + '/face.jpg', id);
+    configureContent({ storageDir: tmp });
+    assert.equal(publishedDoctors(db)[0].photo_path, '', 'файла нет — пути нет');
+    const dir = path.join(tmp, 'doctor-photos', 'doctors', String(id));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'face.jpg'), 'x');
+    configureContent({ storageDir: tmp });   // сброс кэша
+    assert.equal(publishedDoctors(db)[0].photo_path, 'doctor/' + id);
+    configureContent({});
+    assert.equal(publishedDoctors(db)[0].photo_path, 'doctor/' + id, 'без настройки каталога — по photo_url');
+  } finally {
+    configureContent({});
+    fs.rmSync(tmp, { recursive: true, force: true });
+    db.close();
+  }
 });

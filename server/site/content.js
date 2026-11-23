@@ -11,8 +11,9 @@
 // toService). Из users наружу идут только публичные поля профиля — те же, что
 // уходят партнёрам; пароль, роль, телефон, логин сюда не попадают никогда.
 // Форма строк — та же, что у Chilla, поэтому рендеры перенесены без правок.
+import fs from 'node:fs';
 import { LANGS, DEFAULT_LANG } from './i18n.js';
-import { publicDoctors, profileEntries } from '../services/api/snapshot.js';
+import { publicDoctors, profileEntries, photoFile } from '../services/api/snapshot.js';
 import { readLanguages, shownPracticeSince, experienceYears } from '../../public/js/shared/doctor-public.js';
 import { servicePublicState, serviceNames } from '../../public/js/shared/service-public.js';
 
@@ -21,6 +22,17 @@ let cache = new Map();
 
 export function invalidateContentCache() {
   cache = new Map();
+}
+
+// WEBSITE_V1 — каталог хранилища (тот же, что у /api/storage), нужен, чтобы
+// проверить, что файл фото врача и правда лежит на диске: иначе страница
+// получила бы photo_path и показала сломанную картинку вместо аватара с
+// инициалами. Не настроен (тесты без диска) — прежнее поведение: photo_url
+// непуст — photo_path есть. Смена каталога сбрасывает кэш врачей.
+let storageDir = null;
+export function configureContent({ storageDir: dir } = {}) {
+  storageDir = dir || null;
+  invalidateContentCache();
 }
 
 function cached(key, fn) {
@@ -125,6 +137,13 @@ function educationText(raw, lang) {
   }).filter(Boolean).join('\n');
 }
 
+function hasPhoto(u) {
+  if (!u.photo_url) return false;
+  if (!storageDir) return true;
+  const file = photoFile(storageDir, u.photo_url, u.id);
+  try { return !!file && fs.statSync(file).isFile(); } catch { return false; }
+}
+
 function toDoctor(u, specs, extra, now) {
   const content = {};
   for (const lang of LANGS) {
@@ -142,7 +161,8 @@ function toDoctor(u, specs, extra, now) {
   return {
     id: u.id,
     slug: slugOf(u.id, text(u.full_name_en) || text(u.full_name_uz)),
-    photo_path: u.photo_url ? `doctor/${u.id}` : '',   // раздаёт media.js только для показанного врача
+    // раздаёт media.js только для показанного врача; нет файла на диске — нет и пути (аватар)
+    photo_path: hasPhoto(u) ? `doctor/${u.id}` : '',
     experience_years: since == null ? null : experienceYears(since, now),
     langs_spoken: readLanguages(u.languages).join(','),
     sort_order: extra ? Number(extra.sort_order) || 0 : 0,

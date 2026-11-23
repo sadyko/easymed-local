@@ -39,7 +39,7 @@ import { actAsRecheck } from '../services/act-as.js';   // ADMIN_ACT_AS_V1 (ре
 // пациента не покидает клинику).
 //
 // CLINIC_PROFILE_V1 — `clinic-logos`: два логотипа клиники («Компания»).
-const BUCKETS = new Set(['clinic-docs', 'telegram-media', 'patient-photos', 'doctor-photos', LOGO_BUCKET]);   // CLINIC_PROFILE_V1
+const BUCKETS = new Set(['clinic-docs', 'telegram-media', 'patient-photos', 'doctor-photos', LOGO_BUCKET, 'website']);   // CLINIC_PROFILE_V1; WEBSITE_V1 — картинки сайта
 
 // V3120_FIX (M6) — ЧТО ОТДАЁТСЯ «ВНУТРИ СТРАНИЦЫ». Файл из хранилища открыт
 // тем же адресом, что и само приложение, и SVG или HTML, отданные как есть,
