@@ -308,6 +308,8 @@ export const TABLE_PLAN = Object.freeze({
   payment_providers: keep('settings'),
   stock_settings: keep('settings'),
   stock_settings_log: keep('settings'),
+  inpatient_settings: keep('settings'),       // INPATIENT_REQUIRED_V1 — что обязательно в стационаре (мигр. 298)
+  inpatient_settings_log: keep('settings'),   // INPATIENT_REQUIRED_V1 — кто менял настройки стационара
   stock_minimums: keep('settings'),
   lab_devices: keep('settings'),
   api_connections: keep('settings'),
