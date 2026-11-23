@@ -5,7 +5,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { admissionOrderCreate, admissionAdmit, admissionDischargeRequest } from './inpatient.js';
 import { admissionReviewSave, admissionSetAttending } from './inpatient-reviews.js';
-import { admissionTransition, assertCanPrescribe, admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';
+import { admissionTransition, assertCanPrescribe, admissionFlowState, inpatientCapabilities, assertAdmissionAtLeast } from './inpatient-flow.js';
 import { inpatientSettingsSave } from './inpatient-settings.js';
 
 const admin     = { id: 1, role: 'admin' };
@@ -232,5 +232,54 @@ test('база старше 298 — всё как сегодня: с койки 
   admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.9', publish: true }, head);
   admissionSetAttending(ctx.db, { admission_id: a.id, doctor_id: 5 }, head);
   assert.throws(() => admissionDischargeRequest(ctx.db, { admission_id: a.id, outcome: 'home' }, head), /Выписной эпикриз не написан/);
+  ctx.db.close();
+});
+
+// ─── INPATIENT_REQUIRED_V1 (ревью) ───────────────────────────────────────────
+
+test('(ревью) «дошёл ли до лечения»: выключено — лежащий на койке ждёт лечащего врача, а не осмотра; включено — как раньше', () => {
+  const ctx = seed();
+  const a = placed(ctx);
+  // Умолчание: отказ называет осмотр (стол, склад, назначения — тот же вопрос).
+  assert.throws(() => assertAdmissionAtLeast(ctx.db, a.id, 'active'), (e) => e.message === 'Пациент ещё не осмотрен главным врачом.');
+  assert.throws(() => assertAdmissionAtLeast(ctx.db, a.id, 'discharging'), (e) => e.message === 'Пациент ещё не осмотрен главным врачом.');
+  off(ctx.db, 'intake_before_attending');
+  assert.throws(() => assertAdmissionAtLeast(ctx.db, a.id, 'active'),
+    (e) => e.status === 400 && e.message === 'Лечащий врач ещё не назначен — назначения недоступны.');
+  assert.throws(() => assertAdmissionAtLeast(ctx.db, a.id, 'discharging'), /Лечащий врач ещё не назначен/);
+  // Об осмотре спросили прямо — осмотра действительно нет, ответ прежний.
+  assert.throws(() => assertAdmissionAtLeast(ctx.db, a.id, 'examined'), (e) => e.message === 'Пациент ещё не осмотрен главным врачом.');
+  assert.equal(assertAdmissionAtLeast(ctx.db, a.id, 'admitted').id, a.id);
+  // Заявка, ещё не размещённая, — по-прежнему «позовите медсестру» (второй пациент: первый уже лежит).
+  const pid2 = ctx.db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Тестова Пациентка','T-0003')").run().lastInsertRowid;
+  const { admission } = admissionOrderCreate(ctx.db, { patient_id: pid2, department: 'Терапия' }, registrar);
+  assert.throws(() => assertAdmissionAtLeast(ctx.db, admission.id, 'active'), /не размещён на койке/);
+  ctx.db.close();
+});
+
+test('(ревью) выключено: второй первичный осмотр у обычно осмотренного и уже лечащегося — отказ, как сегодня', () => {
+  const ctx = seed();
+  const a = placed(ctx);
+  const first = admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.9', publish: true }, head).review;
+  admissionSetAttending(ctx.db, { admission_id: a.id, doctor_id: 5 }, head);
+  off(ctx.db, 'intake_before_attending');
+  assert.throws(() => admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.0', publish: true }, head),
+    (e) => e.status === 400 && /закрыт назначением лечащего врача/.test(e.message));
+  const rows = ctx.db.prepare("SELECT id, superseded_by FROM admission_reviews WHERE admission_id = ? AND kind = 'primary' AND published_at IS NOT NULL").all(a.id);
+  assert.deepEqual(rows.map((r) => ({ ...r })), [{ id: first.id, superseded_by: null }], 'осмотр, закрывший маршрут, остаётся действующим');
+  ctx.db.close();
+});
+
+test('(ревью) выключено: лечащего назначили с койки — первичный во время лечения принимается один раз, второй — отказ', () => {
+  const ctx = seed();
+  off(ctx.db, 'intake_before_attending');
+  const a = placed(ctx);
+  admissionSetAttending(ctx.db, { admission_id: a.id, doctor_id: 5 }, head);
+  // Черновик первичного осмотра ничего не закрывает: публикация после него принимается.
+  const draft = admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.9' }, head).review;
+  const r = admissionReviewSave(ctx.db, { admission_id: a.id, review_id: draft.id, kind: 'primary', diagnosis: 'J18.9', publish: true }, head);
+  assert.ok(r.review.published_at);
+  assert.throws(() => admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.0', publish: true }, head),
+    /закрыт назначением лечащего врача/);
   ctx.db.close();
 });

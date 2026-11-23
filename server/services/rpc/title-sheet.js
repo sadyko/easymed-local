@@ -127,7 +127,13 @@ export function sheetView(db, adm) {
   // Лист не обязателен — не обязательно ни одно поле (решение 2 плана).
   const settings = loadInpatientSettings(db);
   const keys = titleRequiredKeys(settings);
-  const { complete, missing } = sheetCompleteness(sheet, keys, patient);
+  const filled = sheetCompleteness(sheet, keys, patient);
+  const missing = filled.missing;
+  // INPATIENT_REQUIRED_V1 (ревью) — листа НЕТ — он не полон, даже когда в списке клиники
+  // нет ни одного поля листа (только поля карточки, уже заполненные, или лист «по
+  // желанию»): иначе экран говорил «заполнен», а строка чек-листа рядом — «просрочен» с
+  // пустым списком пропусков. Умолчания: без листа пусты все восемь полей — как раньше.
+  const complete = !!sheet && filled.complete;
   // FORM_003_V1 — строка 10 бланка («Қабулхонада қўйилган ташҳис») — диагноз
   // опубликованного первичного осмотра; «кун ётиб даволанган» — дни на койке.
   const primary = db.prepare(`
@@ -228,7 +234,11 @@ export function saveTitleSheet(db, adm, input, user) {
   // INPATIENT_REQUIRED_V1 — «заполнен целиком» — по списку клиники: лист, карточка
   // (уже с исправлениями выше) и отметки бумаг.
   const keys = titleRequiredKeys(loadInpatientSettings(db));
-  const { complete } = sheetCompleteness(next, keys, loadPatientForSheet(db, adm.patient_id));
+  // INPATIENT_REQUIRED_V1 (ревью) — подпись «заполнил» ставится, только когда клиника
+  // требует хоть одно поле и все они заполнены. Пустой список (лист «по желанию» или
+  // поля сняты) пустот не знает, и первое же сохранение — даже пустого листа —
+  // подписывало бы «заполнил целиком». Умолчания (восемь полей) — как раньше.
+  const complete = keys.length > 0 && sheetCompleteness(next, keys, loadPatientForSheet(db, adm.patient_id)).complete;
   // Подпись — кто ВПЕРВЫЕ заполнил лист целиком; дальше не переписывается.
   const filledBy = existing && existing.filled_at ? existing.filled_by : (complete ? ((user && user.id) || null) : null);
   const filledAt = existing && existing.filled_at ? existing.filled_at : (complete ? now : null);
@@ -309,6 +319,10 @@ export function titleSheetCaseItem(db, adm, baseMs, nowMs, settings = loadInpati
     author_name: row && complete ? (row.filled_by_name || '') : '',
     revisions: [], revision_count: 0,
     draft_id: null, has_draft: !!row && !complete,
+    // INPATIENT_REQUIRED_V1 (ревью) — начат ли лист вообще. Список клиники может не
+    // содержать ни одного поля листа (только заполненные поля карточки): тогда строка
+    // без листа просрочена при пустом missing, и экран по started говорит «не начат».
+    started: !!row,
     missing,
     required_fields: keys,   // INPATIENT_REQUIRED_V1 — по какому списку считали полноту
     missing_sections: [],    // INPATIENT_REQUIRED_V1 — у листа разделов нет (форма строки чек-листа одна)

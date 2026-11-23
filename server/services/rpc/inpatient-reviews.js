@@ -516,7 +516,15 @@ export function admissionReviewSave(db, args, user) {
         //    тоже пускаем — это исправление уже опубликованного осмотра.
         // INPATIENT_REQUIRED_V1 — лечащего назначили без осмотра (переключатель
         // выключен): первичный осмотр во время лечения — документ, маршрут не двигает.
-        const asDocument = adm.status === 'active' && !loadInpatientSettings(db).intake_before_attending;
+        // INPATIENT_REQUIRED_V1 (ревью) — и только пока у ЭТОЙ госпитализации нет ни одного
+        // опубликованного первичного осмотра. Осмотренного обычным путём (осмотр закрыл
+        // маршрут, потом назначили лечащего) второй первичный во время лечения заменил бы
+        // тот, что закрыл маршрут, — сегодня это отказ, и при выключенном переключателе
+        // тоже. Первичный, принятый документом, исправляют так же — записью обхода.
+        const asDocument = adm.status === 'active' && !loadInpatientSettings(db).intake_before_attending
+          && !db.prepare(`SELECT 1 FROM admission_reviews
+                           WHERE admission_id = ? AND COALESCE(type_kind, kind) = 'primary' AND published_at IS NOT NULL
+                           LIMIT 1`).get(adm.id);
         if (adm.status !== 'admitted' && adm.status !== 'examined' && !asDocument) {
           throw new RpcError(primaryStateRefusal(db, adm), 400);
         }
@@ -1186,6 +1194,16 @@ export function admissionCaseDocs(db, args, user) {
     let state;
     let periodsMissing = 0;
 
+    // INPATIENT_REQUIRED_V1 — документ «по желанию»: стоит в наборе, но никогда не
+    // просрочен, не «следующий шаг», не в прогрессе и не в «не оформлено».
+    // INPATIENT_REQUIRED_V1 (ревью) — выписной эпикриз при включённом «Выписка — только
+    // с выписным эпикризом» обязателен ВСЕГДА, что бы ни стояло у самого документа:
+    // заявку на выписку без него сервер не примет (admission_discharge_request), и
+    // строка «по желанию», которая держит выписку, обманывала бы врача. Решает
+    // переключатель; выключен — решает флаг документа.
+    const epicrisisBySwitch = def.kind === 'discharge' && !!settings.discharge_needs_epicrisis;
+    const optional = def.required === false && !epicrisisBySwitch;
+
     // CASE_DOC_SET_V2 — часы приходят из набора и могут быть пустыми: у правил
     // «при выписке» и «без срока» их не бывает, а у остальных пустое число
     // значит «срок не задан», а не «просрочено немедленно».
@@ -1204,7 +1222,12 @@ export function admissionCaseDocs(db, args, user) {
       // (10 суток) закрылся: требовать его от пациента, лежащего второй день, —
       // значит выдумать нарушение там, где его нет.
       required = def.kind === 'round' ? true : (p.index >= 1 || p.missing.length > 0);
-      if (p.missing.length) state = 'overdue';
+      // INPATIENT_REQUIRED_V1 (ревью) — «по желанию» состояние считается так же, как у
+      // обязательного, только без «просрочен»: сегодняшняя запись опубликована при
+      // пропущенных прошлых сутках — «оформлен», черновик — «черновик». Раньше
+      // просрочку у такого документа заменяли на «ожидается» уже после подсчёта, и
+      // «оформлен» и «черновик» терялись.
+      if (p.missing.length && !optional) state = 'overdue';
       else if (p.covered) state = 'published';
       else if (draft) state = 'draft';
       else state = 'pending';
@@ -1212,7 +1235,7 @@ export function admissionCaseDocs(db, args, user) {
 
     if (state === undefined) {
       if (chain) state = 'published';
-      else if (dueAt !== null && now > dueAt) state = 'overdue';
+      else if (dueAt !== null && now > dueAt && !optional) state = 'overdue';   // INPATIENT_REQUIRED_V1 (ревью)
       else if (draft) state = 'draft';
       else state = 'pending';
     }
@@ -1220,13 +1243,8 @@ export function admissionCaseDocs(db, args, user) {
     // «Без срока» — тем более: клиника завела документ в набор, но часов ему
     // не назначила, и выдумывать их за неё нельзя.
     if ((def.due === 'at_discharge' || def.due === 'none') && state === 'overdue') state = 'pending';
-    // INPATIENT_REQUIRED_V1 — документ «по желанию»: стоит в наборе, но никогда не
-    // просрочен, не «следующий шаг», не в прогрессе и не в «не оформлено».
-    const optional = def.required === false;
-    if (optional) {
-      periodsMissing = 0;
-      if (state === 'overdue') state = 'pending';
-    }
+    // INPATIENT_REQUIRED_V1 — пропущенных периодов у документа «по желанию» нет.
+    if (optional) periodsMissing = 0;
 
     const tail = chain ? chain[chain.length - 1] : null;
     // INPATIENT_REQUIRED_V1 — пустые обязательные разделы: в действующей редакции,

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { admissionOrderCreate, admissionAdmit } from './inpatient.js';
-import { admissionReviewSave, admissionCaseDocs } from './inpatient-reviews.js';
+import { admissionReviewSave, admissionCaseDocs, admissionSetAttending } from './inpatient-reviews.js';
 import { admissionTitleSheetGet, admissionTitleSheetSave } from './title-sheet.js';
 import { inpatientSettingsSave } from './inpatient-settings.js';
 import { admissionOverview } from './case-overview.js';
@@ -214,5 +214,160 @@ test('база старше 298 — чек-лист и лист как сего�
   const v = admissionTitleSheetSave(ctx.db, { admission_id: a.id, sheet: { height_cm: '172' } }, nurse);
   assert.equal(v.missing.length, 7);
   assert.equal(v.complete, false);
+  ctx.db.close();
+});
+
+// ─── INPATIENT_REQUIRED_V1 (ревью) ───────────────────────────────────────────
+
+test('(ревью) листа нет — он не полон; строка чек-листа несёт started, чтобы экран сказал «не начат»', () => {
+  const ctx = seed();
+  // В списке клиники только телефон карточки, и он заполнен; самого листа нет.
+  inpatientSettingsSave(ctx.db, { title_required_fields: ['phone'] }, admin);
+  const a = inBed(ctx, 30);
+  const v = admissionTitleSheetGet(ctx.db, { admission_id: a.id }, head);
+  assert.equal(v.sheet, null);
+  assert.equal(v.complete, false, 'листа нет — лист не полон');
+  let t = item(docs(ctx, a), 'title');
+  assert.equal(t.started, false);
+  assert.equal(t.state, 'overdue');
+  assert.deepEqual(t.missing, []);
+  // Лист начали — пустот нет: полон, оформлен.
+  const s = admissionTitleSheetSave(ctx.db, { admission_id: a.id, sheet: { note: 'заметка' } }, nurse);
+  assert.equal(s.complete, true);
+  t = item(docs(ctx, a), 'title');
+  assert.equal(t.started, true);
+  assert.equal(t.state, 'published');
+  ctx.db.close();
+});
+
+test('(ревью) лист «по желанию» и листа нет — не полон и «не начат», но не просрочен', () => {
+  const ctx = seed();
+  inpatientSettingsSave(ctx.db, { title_required: 0 }, admin);
+  const a = inBed(ctx, 30);
+  assert.equal(admissionTitleSheetGet(ctx.db, { admission_id: a.id }, head).complete, false);
+  assert.equal(admissionOverview(ctx.db, { admission_id: a.id }, head).title_sheet.complete, false);
+  const t = item(docs(ctx, a), 'title');
+  assert.equal(t.started, false);
+  assert.equal(t.state, 'pending');
+  ctx.db.close();
+});
+
+test('(ревью) умолчания: строка листа как сегодня, только с полем started', () => {
+  const ctx = seed();
+  const a = inBed(ctx, 30);
+  let t = item(docs(ctx, a), 'title');
+  assert.equal(t.started, false);
+  assert.equal(t.state, 'overdue');
+  assert.equal(t.required, true);
+  assert.equal(t.missing.length, 8);
+  assert.equal(admissionTitleSheetGet(ctx.db, { admission_id: a.id }, head).complete, false);
+  admissionTitleSheetSave(ctx.db, { admission_id: a.id, sheet: { height_cm: '172' } }, nurse);
+  t = item(docs(ctx, a), 'title');
+  assert.equal(t.started, true);
+  assert.equal(t.state, 'overdue', 'неполный лист после срока — просрочен, как раньше');
+  assert.equal(t.has_draft, true);
+  assert.equal(t.missing.length, 7);
+  ctx.db.close();
+});
+
+test('(ревью) пустой список полей: первое сохранение подписи «заполнил» не ставит', () => {
+  for (const setting of [{ title_required: 0 }, { title_required_fields: [] }]) {
+    const label = JSON.stringify(setting);
+    const ctx = seed();
+    inpatientSettingsSave(ctx.db, setting, admin);
+    const a = inBed(ctx, 1);
+    const v = admissionTitleSheetSave(ctx.db, { admission_id: a.id, sheet: {} }, nurse);
+    assert.ok(v.sheet, label);
+    assert.equal(v.sheet.filled_at, null, label);
+    assert.equal(v.sheet.filled_by, null, label);
+    // Строка чек-листа: оформлен (пустот нет), время — последней правки, автора нет.
+    const t = item(docs(ctx, a), 'title');
+    assert.equal(t.state, 'published', label);
+    assert.ok(t.published_at, label);
+    assert.equal(t.author_name, '', label);
+    ctx.db.close();
+  }
+});
+
+test('(ревью) умолчания: полный лист подписывается при первом полном сохранении, как раньше', () => {
+  const ctx = seed();
+  const a = inBed(ctx, 1);
+  const full = { height_cm: '172', weight_kg: '70', temp_c: '36.6', bp_sys: '120', bp_dia: '80', pulse_bpm: '70', pediculosis: 'none', sanitation: 'full' };
+  const v = admissionTitleSheetSave(ctx.db, { admission_id: a.id, sheet: full }, nurse);
+  assert.equal(v.complete, true);
+  assert.ok(v.sheet.filled_at);
+  assert.equal(v.sheet.filled_by, 3);
+  ctx.db.close();
+});
+
+test('(ревью) документ «по желанию» с черновиком после срока — «черновик», а не «ожидается»', () => {
+  const ctx = seed();
+  inpatientSettingsSave(ctx.db, { docs: [{ kind: 'head_review', required: false }] }, admin);
+  const a = inBed(ctx, 100);
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'head_review', objective: '<p>черновик</p>' }, head);
+  const it = item(docs(ctx, a), 'head_review');
+  assert.equal(it.optional, true);
+  assert.equal(it.state, 'draft');
+  ctx.db.close();
+});
+
+test('(ревью) повторяющийся «по желанию»: сегодняшняя запись есть, прошлых дней нет — «оформлен»; без неё, с черновиком — «черновик»', () => {
+  const ctx = seed();
+  inpatientSettingsSave(ctx.db, { docs: [{ kind: 'round', required: false }] }, admin);
+  const a = inBed(ctx, 100);
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.9', publish: true }, head);
+  admissionSetAttending(ctx.db, { admission_id: a.id, doctor_id: 4 }, head);
+  // Черновик дневника — прошлые сутки пропущены, сегодняшних нет.
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'round', objective: '<p>черновик</p>' }, head);
+  let it = item(docs(ctx, a), 'round');
+  assert.equal(it.state, 'draft');
+  assert.equal(it.periods_missing, 0);
+  // Запись за сегодня опубликована — прошлые сутки по-прежнему пропущены.
+  admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'round', objective: '<p>сегодня</p>', entry_date: '2026-11-23', publish: true }, head);
+  it = item(docs(ctx, a), 'round');
+  assert.equal(it.state, 'published');
+  assert.equal(it.periods_missing, 0);
+  assert.equal(it.required, false);
+  ctx.db.close();
+});
+
+test('(ревью) «по желанию» без документа — «ожидается», не «просрочен»; обязательный рядом — просрочен, как раньше', () => {
+  const ctx = seed();
+  inpatientSettingsSave(ctx.db, { docs: [{ kind: 'head_review', required: false }] }, admin);
+  const st = docs(ctx, inBed(ctx, 100));
+  assert.equal(item(st, 'head_review').state, 'pending');
+  assert.equal(item(st, 'rationale').state, 'overdue');
+  ctx.db.close();
+});
+
+test('(ревью) эпикриз: переключатель включён — строка обязательна, даже если документ «по желанию»; выключен — решает документ', () => {
+  const ctx = seed();
+  inpatientSettingsSave(ctx.db, { docs: [{ kind: 'discharge', required: false }] }, admin);
+  const a = inBed(ctx, 1);
+  let st = docs(ctx, a);
+  let ep = item(st, 'discharge');
+  assert.equal(ep.optional, false);
+  assert.equal(ep.required, true);
+  assert.ok(st.discharge_gate.incomplete.includes('discharge'));
+  assert.equal(st.discharge_gate.blocked, true);
+  assert.equal(st.progress.total, st.items.filter((i) => i.required).length);
+
+  // Переключатель выключен: документ «по желанию» — строка по желанию.
+  inpatientSettingsSave(ctx.db, { discharge_needs_epicrisis: 0 }, admin);
+  st = docs(ctx, a);
+  ep = item(st, 'discharge');
+  assert.equal(ep.optional, true);
+  assert.equal(ep.required, false);
+  assert.ok(!st.discharge_gate.incomplete.includes('discharge'));
+  assert.equal(st.discharge_gate.blocked, false);
+
+  // Переключатель выключен, документ обязательный — строка обязательна (флаг документа).
+  inpatientSettingsSave(ctx.db, { docs: [{ kind: 'discharge', required: true }] }, admin);
+  st = docs(ctx, a);
+  ep = item(st, 'discharge');
+  assert.equal(ep.optional, false);
+  assert.equal(ep.required, true);
+  assert.ok(st.discharge_gate.incomplete.includes('discharge'));
+  assert.equal(st.discharge_gate.blocked, false, 'гейт держит только переключатель');
   ctx.db.close();
 });
