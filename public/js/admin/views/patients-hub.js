@@ -48,7 +48,6 @@ import { grantAllows, isRouteAllowed, hasActorRole, actorRoleCodes } from '../pe
 // модуля. Разошедшийся ?v= развёл бы состояние экрана на две копии.
 import { renderPatients, duplicatesRailButton, duplicatesOn, setDuplicatesMode } from './patients.js?v=regfit2';   // DUP_TO_RAIL_V1
 import { renderQueue } from './queue.js?v=q7';
-import { renderBookingDay } from './booking-day.js';   // BOOKING_DAY_V1 — «Бронирование»: день одного врача
 import { renderRegistrarWaiting, loadRegistrarWaiting, WAITING_ROLES, BADGE_ARGS } from './registrar-waiting.js';   // WAIT_REG_V1 — «Ждут регистрации»; CRM_BOOKINGS_TAB_V1 — «Записи CRM», счётчик по фильтру по умолчанию
 import { watchScreen, shownOnScreen } from '../live.js';   // WAIT_REG_V1 — счётчик вкладки свежий без «Обновить»; ревью M6 — спрятанный раздел не опрашивается
 // MOTION_REVEAL_V1 — переход между вкладками: панель проявляется, полоса
@@ -61,10 +60,11 @@ const TABS = [
     { id: 'list',     sub: null,       label: 'Пациенты', icon: 'Patients' },
     { id: 'queue',    sub: 'queue',    label: 'Очередь', icon: 'Clock'    },
     { id: 'calendar', sub: 'calendar', label: 'Записи',  icon: 'Calendar' },
-    // BOOKING_DAY_V1 (2026-11-13, владелец: «add Бронирование section also») —
-    // день ОДНОГО врача: фильтры, дата (сегодня), поиск врача, время приёма и
-    // записанные пациенты (views/booking-day.js).
-    { id: 'booking',  sub: 'booking',  label: 'Бронирование', icon: 'Stethoscope' },
+    // BOOKING_TAB_REMOVED_V1 (2026-11-23, владелец: «there is tab called booking in the patients
+    // list, it is the same as CRM bookings. we need to remove the booking list. and leave only the
+    // CRM booking tab») — вкладки «Бронирование» (BOOKING_DAY_V1, views/booking-day.js) больше нет:
+    // записи ведут «Записи» (календарь) и «Записи CRM». Старый адрес #patients/booking открывает
+    // «Записи CRM» (SUB_TO_TAB), а кому они закрыты — список.
     // WAIT_REG_V1 (2026-11-17, владелец: «in the registrator window we should show the patients
     // that were sent and patients for which we created a booking so registrators won't be
     // confused») — кого сегодня ждёт стойка: записи, анализы «на дату», направления врача
@@ -75,7 +75,7 @@ const TABS = [
     // (фильтр вкладки по умолчанию, BADGE_ARGS), а не то, что открыто в фильтрах сейчас.
     { id: 'waiting',  sub: 'waiting',  label: 'Записи CRM', icon: 'Headset' },
 ];
-const SUB_TO_TAB = { list: 'list', queue: 'queue', calendar: 'calendar', booking: 'booking', waiting: 'waiting', duplicates: 'list' };   // list: WAIT_REG_V1 (ревью) — у регистратуры «Список» не первый; duplicates: DUP_OWN_VIEW_V1
+const SUB_TO_TAB = { list: 'list', queue: 'queue', calendar: 'calendar', booking: 'waiting', waiting: 'waiting', duplicates: 'list' };   // list: WAIT_REG_V1 (ревью) — у регистратуры «Список» не первый; duplicates: DUP_OWN_VIEW_V1
 // WAIT_REG_V1 — вкладку видит стойка (администратор, регистратура): сервер отдаёт список только
 // ей (rpc/registrar-waiting.js WAITING_ROLES) — вкладка, за которой сервер откажет, не рисуется
 // (V3120_FIX). Своего ключа прав нет: стойка — роль, а не окно матрицы.
@@ -213,16 +213,14 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     const hosts = {};
     // GRANTS_V1 — «Очередь» и «Записи» можно закрыть роли в «Настройки → Роли».
     // Ненастроенный ключ = вкладка видна, как и была.
-    // BOOKING_DAY_V1 — «Бронирование» показывает то же расписание, что «Записи»:
-    // одно право и одна дверь (calendar_slots закрыт BOOK_ROLES).
-    const TAB_GRANT = { queue: 'patients.queue', calendar: 'patients.calendar', booking: 'patients.calendar' };
+    const TAB_GRANT = { queue: 'patients.queue', calendar: 'patients.calendar' };
     // V3120_FIX — ВКЛАДКА, ЗА КОТОРОЙ СЕРВЕР ОТКАЖЕТ, НЕ РИСУЕТСЯ. «Записи»
     // показывались медсестре, кассиру и лаборанту, а сетку календаря сервер
     // отдаёт только BOOK_ROLES (rpc/calendar.js) — вкладка открывалась стеной
     // отказов. «Очередь» — та же история с разделом `queue` (rpc/queue.js
     // queueBoard). Правило — то же, что у отдельных адресов #appointments и
     // #queue (permissions.js): одна дверь, один ответ.
-    const TAB_ROUTE = { queue: 'queue', calendar: 'appointments', booking: 'appointments' };
+    const TAB_ROUTE = { queue: 'queue', calendar: 'appointments' };
     // ROLE_QUEUE_V1 — и «Видимость разделов»: скрытая у клиники «Очередь»
     // (пункт меню и #queue) не живёт и вкладкой «Пациентов». Правило —
     // оболочки (window.easymed.isNavHidden), как у меню и плиток «Настроек».
@@ -295,7 +293,7 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     // Вкладка монтируется при первом показе и дальше ЖИВЁТ: прокрутка списка,
     // страница пагинации и наполовину введённый поиск переживают уход на
     // соседнюю вкладку — ровно как панели переживают уход на соседний экран.
-    const mounted = { list: false, queue: false, calendar: false, booking: false, waiting: false };
+    const mounted = { list: false, queue: false, calendar: false, waiting: false };
     let queue = null;        // пульт доски очереди (views/queue.js)
     let waiting = null;      // WAIT_REG_V1 — пульт списка «Ждут регистрации» (views/registrar-waiting.js)
     let active = SUB_TO_TAB[sub] || (deskFirst ? 'waiting' : 'list');   // WAIT_REG_V1 (ревью) — регистратуре по умолчанию «Ждут регистрации»
@@ -377,12 +375,6 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             // Вернулись на вкладку: доска могла простоять минуты, поэтому
             // сначала свежее чтение, потом снова опрос.
             if (queue) await queue.start();
-            return;
-        }
-        if (id === 'booking') {   // BOOKING_DAY_V1
-            if (mounted.booking) return;
-            mounted.booking = true;
-            await renderBookingDay(hosts.booking, { onNavigate: ctx.onNavigate });
             return;
         }
         if (id === 'waiting') {   // WAIT_REG_V1

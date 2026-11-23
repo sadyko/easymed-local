@@ -3,12 +3,11 @@
 // Пациент записан на 09:00 к врачу А, «Добавить в этот визит» положило в тот же визит
 // строку врача Б на 15:00. Сервер теперь считает это время занятым (rpc/calendar.js,
 // SLOT_BUSY_LINES_V1); здесь — что это видят экраны записи:
-//   • «Бронирование» врача Б: 15:00 — строка «записан» с пациентом, а не «Свободно»;
-//     корзины «Отменить запись» у неё нет — она отменила бы ВЕСЬ визит пациента у врача А;
+//   (вкладки «Бронирование» больше нет — BOOKING_TAB_REMOVED_V1, 2026-11-23 — её проверки ушли с ней);
 //   • календарь «Записи»: в колонке врача Б — блок строки на 15:00–15:30 с пациентом и
 //     услугой; щелчок по клетке 15:00 врача Б говорит «занято», а не открывает запись.
 //
-// Стенд НАСТОЯЩИЙ (как booking-day-join.test.mjs): фальшивый fetch пропускает вызовы
+// Стенд НАСТОЯЩИЙ: фальшивый fetch пропускает вызовы
 // экрана через настоящий реестр RPC, компилятор /api/db и SQLite в памяти после
 // миграций. День — ближайший будний через два дня.
 import { test } from 'node:test';
@@ -142,7 +141,6 @@ globalThis.fetch = async (url, opts) => {
 
 const { setFullAccess } = await import('../permissions.js');
 const SPM = await import('../views/service-picker-modal.js?v=ownrep4');
-const { renderBookingDay } = await import('../views/booking-day.js');
 const { renderRoomCalendar } = await import('../views/room-calendar.js');
 
 // ─── посев ──────────────────────────────────────────────────────────────────
@@ -191,62 +189,6 @@ async function seed() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-test('SLOT_BUSY_LINES_V1: «Бронирование» врача Б — 15:00 занято строкой визита пациента, не «Свободно»; корзины у неё нет', async () => {
-  const { dayIso } = await seed();
-  const host = mk('div');
-  const api = await renderBookingDay(host, { onNavigate() {} }, { today: dayIso });
-  api.pickDoctor(api.state.doctors.find((d) => d.id === DOC_B));
-  await wait(200);
-  const free = byData(host, 'data-bkd-free').map((n) => n.attrs['data-bkd-free']);
-  assert.ok(!free.includes('15:00'), '15:00 врача Б — «Свободно», хотя её держит строка визита: ' + free.join(' '));
-  assert.ok(free.includes('14:30') && free.includes('15:30'), 'стыки 14:30 и 15:30 пропали: ' + free.join(' '));
-  const row = byData(host, 'data-bkd-busy').find((n) => n.attrs['data-bkd-busy'] === '15:00');
-  assert.ok(row, 'строки «записан» на 15:00 нет');
-  assert.ok(textOf(row).includes('Иванов Иван'), 'строка 15:00 не называет пациента: ' + textOf(row));
-  // Услуга строки — её, а не все услуги визита у врача А.
-  assert.ok(textOf(row).includes('Консультация кардиолога') && !textOf(row).includes('Консультация терапевта'),
-    'строка 15:00 называет не свою услугу: ' + textOf(row));
-  assert.equal(byData(row, 'data-bkd-cancel').length, 0, 'у строки визита к другому врачу есть «Отменить запись» — она отменила бы весь визит');
-  const eleven = byData(host, 'data-bkd-busy').find((n) => n.attrs['data-bkd-busy'] === '11:00');
-  assert.ok(eleven && byData(eleven, 'data-bkd-cancel').length === 1, 'у обычной записи 11:00 пропала корзина');
-});
-
-test('SLOT_BUSY_LINES_V1: «Добавить в этот визит» в «Бронировании» — время врача Б заняли между проверкой и строкой: сервер отказывает, строки нет, сказано «занято»', async () => {
-  const { day, dayIso } = await seed();
-  const S = 6, T = 7;
-  DB.prepare("INSERT INTO patients (id, full_name, last_name, first_name) VALUES (?, 'Сидорова Мария', 'Сидорова', 'Мария')").run(S);
-  DB.prepare("INSERT INTO patients (id, full_name, last_name, first_name) VALUES (?, 'Пятый Пациент', 'Пятый', 'Пациент')").run(T);
-  const book = getRpc('calendar_book');
-  const sVisit = (await book(DB, { patient_id: S, doctor_id: DOC_C, service_id: 21, line: { service_id: 21 }, start: at(day, 10), status: 'scheduled' }, USER)).visit;
-  const { bookVisit } = await import('../views/visit-booking.js');
-  // Гонка: другой регистратор записал к врачу Б на 16:00, пока «Бронирование» брало визит дня.
-  const racing = async (args) => {
-    if (args && args.add_to_day_visit) await book(DB, { patient_id: T, doctor_id: DOC_B, service_id: 22, start: at(day, 16), status: 'scheduled' }, USER);
-    return bookVisit(args);
-  };
-  const host = mk('div');
-  const api = await renderBookingDay(host, { onNavigate() {} }, { today: dayIso, bookVisit: racing, askAddToDayVisit: async () => true });
-  api.pickDoctor(api.state.doctors.find((d) => d.id === DOC_B));
-  await wait(200);
-  const row = byData(host, 'data-bkd-book').find((n) => n.attrs['data-bkd-book'] === '16:00');
-  assert.ok(row, 'нет свободной строки 16:00');
-  row.click();
-  await wait(20);
-  const search = byData(host, 'data-bkd-book-search')[0];
-  search.value = 'Сидор';
-  search.dispatchEvent({ type: 'input' });
-  await wait(450);
-  const hit = walk(host).find((n) => n.tagName === 'BUTTON' && String(n.className).includes('mg-search-opt'));
-  assert.ok(hit, 'пациент не найден в строке записи');
-  TOASTS.length = 0;
-  hit.click();
-  await wait(400);
-  const lines = DB.prepare('SELECT doctor_id, scheduled_at FROM visit_services WHERE visit_id = ? ORDER BY id').all(sVisit.id);
-  assert.deepEqual(lines.map((l) => l.doctor_id), [DOC_C], 'строка врача Б легла на занятое время 16:00: ' + JSON.stringify(lines));
-  assert.ok(TOASTS.some((x) => x === 'Это время занято: у врача Каримов Бахтиёр уже есть приём 16:00–16:30. Выберите другое время.'),
-    'отказ не сказан шаблоном «занято»: ' + JSON.stringify(TOASTS));
-});
-
 test('SLOT_BUSY_LINES_V1: календарь «Записи» — в колонке врача Б блок строки 15:00–15:30 с пациентом; клетка 15:00 — «занято»', async () => {
   const { dayIso, visitId } = await seed();
   const box = mk('div');
