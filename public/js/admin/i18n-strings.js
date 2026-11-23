@@ -14,6 +14,7 @@ export const STRINGS = {
   "У этого документа нет раздела: {section}.": {"en":"This document has no such section: {section}.","ru":"У этого документа нет раздела: {section}.","uz":"Bu hujjatda bunday bo‘lim yo‘q: {section}."},   // INPATIENT_REQUIRED_V1
   "Обязательные разделы документа — список.": {"en":"Required document sections must be sent as a list.","ru":"Обязательные разделы документа — список.","uz":"Hujjatning majburiy bo‘limlari ro‘yxat sifatida yuborilishi kerak."},   // INPATIENT_REQUIRED_V1
   "Настройка {key}: нужно «да» или «нет».": {"en":"Setting {key}: the value must be «yes» or «no».","ru":"Настройка {key}: нужно «да» или «нет».","uz":"{key} sozlamasi: «ha» yoki «yo‘q» bo‘lishi kerak."},   // INPATIENT_REQUIRED_V1
+  "Лечащего врача ещё не назначали — назначьте его через «Назначить лечащего врача».": {"en":"No attending doctor has been assigned yet — assign one with «Assign an attending doctor».","ru":"Лечащего врача ещё не назначали — назначьте его через «Назначить лечащего врача».","uz":"Davolovchi shifokor hali tayinlanmagan — uni «Davolovchi shifokorni tayinlash» orqali tayinlang."},   // INPATIENT_REQUIRED_V1
   // INPATIENT_REQUIRED_V1 — отметки обязательных полей и окно «Заполнено не всё» (views/required-marks.js)
   "Не заполнено": {"en":"Not filled in","ru":"Не заполнено","uz":"To‘ldirilmagan"},   // INPATIENT_REQUIRED_V1
   "Не заполнено:": {"en":"Not filled in:","ru":"Не заполнено:","uz":"To‘ldirilmagan:"},   // INPATIENT_REQUIRED_V1

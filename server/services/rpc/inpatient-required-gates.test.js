@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { admissionOrderCreate, admissionAdmit, admissionDischargeRequest } from './inpatient.js';
-import { admissionReviewSave, admissionSetAttending } from './inpatient-reviews.js';
+import { admissionReviewSave, admissionSetAttending, admissionChangeAttending } from './inpatient-reviews.js';
 import { admissionTransition, assertCanPrescribe, admissionFlowState, inpatientCapabilities, assertAdmissionAtLeast } from './inpatient-flow.js';
 import { inpatientSettingsSave } from './inpatient-settings.js';
 
@@ -281,5 +281,21 @@ test('(ревью) выключено: лечащего назначили с к
   assert.ok(r.review.published_at);
   assert.throws(() => admissionReviewSave(ctx.db, { admission_id: a.id, kind: 'primary', diagnosis: 'J18.0', publish: true }, head),
     /закрыт назначением лечащего врача/);
+  ctx.db.close();
+});
+
+// INPATIENT_REQUIRED_V1 (ревью) — «Сменить лечащего врача» у лежащего без лечащего: отказ
+// называет тот шаг, который при этом положении переключателя и правда есть. Выключено —
+// лечащего назначают прямо с койки кнопкой «Назначить лечащего врача», и ссылка на
+// первичный осмотр главного врача вела бы человека к шагу, которого клиника не требует.
+test('(ревью) смена лечащего до назначения: выключено — отказ ведёт к «Назначить лечащего врача»; включено — как раньше, к первичному осмотру', () => {
+  const ctx = seed();
+  const a = placed(ctx);
+  assert.throws(() => admissionChangeAttending(ctx.db, { admission_id: a.id, doctor_id: 5 }, head),
+    (e) => e.status === 400 && /вместе с первичным осмотром/.test(e.message));
+  off(ctx.db, 'intake_before_attending');
+  assert.throws(() => admissionChangeAttending(ctx.db, { admission_id: a.id, doctor_id: 5 }, head),
+    (e) => e.status === 400 && e.message === 'Лечащего врача ещё не назначали — назначьте его через «Назначить лечащего врача».');
+  assert.equal(status(ctx.db, a.id).attending_doctor_id, null, 'отказ ничего не записал');
   ctx.db.close();
 });
