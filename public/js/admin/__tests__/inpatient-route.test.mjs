@@ -107,8 +107,9 @@ const lastToast = () => {
 };
 const settle = () => new Promise((r) => setTimeout(r, 30));
 // INPATIENT_REQUIRED_V1 — пустой лист спрашивает «Сохранить как есть»; эти проверки — про размещение.
+// Окно вопроса ищем по data-dialog: его класс не обязан быть ровно 'modal'.
 async function saveAnyway() {
-    const top = topOverlay();
+    const top = BODY.children.filter((c) => c.attrs && c.attrs['data-dialog'] === 'required-missing').pop() || null;
     if (top && textOf(top).includes('Заполнено не всё')) { findBtn(top, 'Сохранить как есть').click(); await settle(); }
 }
 

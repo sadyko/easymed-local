@@ -81,6 +81,11 @@ import { dietTitle, mealsTitle, MEAL_FREQUENCIES } from './kitchen-sheet.js';
 // документ») — здесь, список и сборка — там. Обратный импорт замкнул бы две
 // половины одного экрана в круг.
 import { caseDocsPanel, caseDocTitle, assembleCaseFile } from './case-docs.js?v=case1';
+// INPATIENT_REQUIRED_V1 — отметки обязательных разделов и «Сохранить как есть»; правила
+// клиники; пуст ли раздел — то же правило, что у сервера. Модули без ?v=.
+import { requiredMarks, askSaveAnyway, loadInpatientRules } from './required-marks.js';
+import { DEFAULT_RULES, requiredSectionsOf } from '../../shared/inpatient-required.js';
+import { richIsEmpty, textIsBlank } from '../../shared/rich-text.js';
 
 const ADMISSION_TYPES = [['planned', 'Плановая'], ['emergency', 'Экстренная']];
 const STAY_MODES = [['round', 'Круглосуточно'], ['day', 'Дневной стационар']];
@@ -900,13 +905,19 @@ function todayIso() {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
-export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', reviewId = null, docTitle = '', periodic = false, onDone } = {}) {
+export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', reviewId = null, docTitle = '', periodic = false, rules: rulesIn = DEFAULT_RULES, onDone } = {}) {
     if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return null; }
     const p = admission.patients || {};
     const isPrimary = kind === 'primary';
     const isDischarge = kind === 'discharge';
     const isCorrection = mode === 'correct';
     const isView = mode === 'view';
+    // INPATIENT_REQUIRED_V1 — что клиника требует от ЭТОГО документа. Обязательные
+    // разделы (только те, что у документа есть) открыты и не убираются; диагноз
+    // первичного осмотра при включённом переключателе — жёсткий запрет. Чтение
+    // редакции ничего не требует.
+    const rules = rulesIn || DEFAULT_RULES;
+    const dxHard = isPrimary && rules.primaryNeedsDiagnosis && !isView;
 
     // CASE_DOC_A4_V1 — документ пишется РАЗДЕЛАМИ ЛИСТА, а не полями формы:
     // те же классы и та же панель форматирования, что в кабинете врача. Набор
@@ -914,6 +925,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // текст, дневник — жалобы, объективно, план), а диагноз остаётся одной
     // строкой простого текста: он едет в обзор, в журнал и в списки.
     const secKeys = sectionsFor(kind);
+    const reqSecs = isView ? [] : requiredSectionsOf(rules, kind).filter((k) => secKeys.includes(k));   // INPATIENT_REQUIRED_V1
     const rich = {};
     const loaded = { complaints: '', objective: '', diagnosis: '', plan: '', body: '' };
     const diagnosis = h('input', { type: 'text', class: 'cd-dx', placeholder: tr('Диагноз при поступлении') });
@@ -949,6 +961,13 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // — и черновик, и бланк клиники (см. загрузку ниже).
     const secOn = new Set();
     const madeSecs = {};
+    // INPATIENT_REQUIRED_V1 — обязательный раздел открыт сразу и не сворачивается
+    // никогда: ни крестиком, ни раскладкой черновика (см. fill). Подпись раздела
+    // (madeTags) несёт звезду.
+    const reqRich = reqSecs.filter((k) => ALL_SECS.includes(k));
+    for (const k of reqRich) secOn.add(k);
+    const madeTags = {};
+    let remark = () => {};   // перерисовать отметки (подписи переименовали); настоящая — ниже
     // CASE_TPL_OVER_BLANK_V1 (2026-09-14) — что в разделе лежит БЛАНК КЛИНИКИ,
     // а не текст врача. Владелец: «we cannot use templates … in the
     // stationary. the templates can be saved. but not be used». Причина: новый
@@ -963,12 +982,15 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         const made = richSection(kind, key, {
             onRename: readOnly ? null : (k, title) => {
                 if (title) secTitles[k] = title; else delete secTitles[k];
+                remark();   // INPATIENT_REQUIRED_V1 — строка «Не заполнено» называет раздел новым именем
             },
             onAdd: readOnly ? null : () => { secOn.add(key); syncSecs(); },
-            onRemove: readOnly ? null : () => { secOn.delete(key); syncSecs(); },
+            // INPATIENT_REQUIRED_V1 — обязательный раздел крестика не получает.
+            onRemove: readOnly || reqRich.includes(key) ? null : () => { secOn.delete(key); syncSecs(); },
         });
         rich[key] = made.input;
         madeSecs[key] = made.sec;
+        madeTags[key] = made.tag;   // INPATIENT_REQUIRED_V1
         return made.sec;
     });
 
@@ -1013,6 +1035,38 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
 
     const sheet = h('div', { class: 'cd-sheet' }, ...sectionEls, freeHost, addBtn);
     syncSecs();
+
+    // INPATIENT_REQUIRED_V1 — ОТМЕТКИ ОБЯЗАТЕЛЬНОГО: красная рамка пустого раздела,
+    // звезда на подписи, строка «Не заполнено: …» над листом (topNote). Пуст ли раздел —
+    // то же правило, что у сервера (missingSections): richIsEmpty на той разметке, что
+    // ушла бы сейчас (readRich), диагноз — textIsBlank. Отметки живые: раздел пишется в
+    // contenteditable, и его input пересчитывает их.
+    //
+    // Диагноз живёт не на листе: его рисует карточка слева (рабочий экран) или поле окна
+    // (dxEditor), а здесь — лишь поле-носитель без места на экране. Владелец карточки
+    // сообщает её рамку и поле ввода через bindDiagnosis — туда ляжет рамка и туда же
+    // поставит курсор «Дописать». Диагноз в списке первым: на экране он выше листа.
+    const dxNeeded = dxHard || reqSecs.includes('diagnosis');
+    let dxTarget = { el: diagnosis, box: null, labelEl: null };
+    const markLabel = (key) => secTitles[key] || tr(sectionLabel(kind, key));
+    const markFields = () => [
+        dxNeeded ? {
+            key: 'diagnosis', label: markLabel('diagnosis'),
+            el: dxTarget.el || diagnosis, box: dxTarget.box, labelEl: dxTarget.labelEl, watch: [diagnosis],
+            isEmpty: () => textIsBlank(diagnosis.value),
+        } : null,
+        ...reqRich.map((key) => ({
+            key, label: markLabel(key), el: rich[key], box: madeSecs[key], labelEl: madeTags[key],
+            isEmpty: () => richIsEmpty(readRich(rich[key])),
+        })),
+    ].filter(Boolean);
+    const marks = requiredMarks({ fields: markFields() });
+    remark = () => marks.setFields(markFields());
+    /** Карточка диагноза: её рамка, поле ввода и подпись получают отметки диагноза. */
+    const bindDiagnosis = ({ box = null, el = null, labelEl = null } = {}) => {
+        dxTarget = { el: el || diagnosis, box, labelEl };
+        remark();
+    };
     // CASE_DOC_ACTIONS_V1 (2026-09-10) — НАД ЛИСТОМ ДЕЙСТВИЯ, А НЕ ФОРМАТИРОВАНИЕ.
     //
     // Владелец: «remove this, and please add template, print, draft, save
@@ -1065,8 +1119,12 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
                 addFree((item && item.title) || '', (item && item.html) || '');
             }
         } catch (e) { /* испорченный JSON — документ откроется без своих разделов */ }
+        // INPATIENT_REQUIRED_V1 — раскладка черновика не сворачивает обязательный раздел.
+        for (const k of reqRich) secOn.add(k);
+        syncSecs();
         diagnosis.value = r.diagnosis || '';
         fireInput(diagnosis);   // CASE_DX_LIST_V1 — карточка диагнозов перерисует список
+        remark();   // INPATIENT_REQUIRED_V1 — текст подставлен кодом, подписи могли смениться
     };
     (async () => {
         const { data } = await supabase.rpc('admission_reviews_list', { admission_id: admission.id });
@@ -1101,6 +1159,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
                 }
             }
             syncSecs();
+            marks.refresh();   // INPATIENT_REQUIRED_V1 — бланк подставлен кодом: input не было
         }
         if (isView) {
             for (const f of freeSecs) {
@@ -1231,7 +1290,8 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // Черновик эпикриза заявку на выписку НЕ ПРОПУСКАЕТ, и сказать это
         // нужно здесь, до того как врач закроет окно кнопкой «Сохранить
         // черновик» и вернётся к отказу, которого не ждал.
-        isDischarge
+        // INPATIENT_REQUIRED_V1 — только когда клиника и правда требует эпикриз для выписки.
+        isDischarge && rules.dischargeNeedsEpicrisis
             ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 tr('Заявку на выписку принимают только по ОПУБЛИКОВАННОМУ эпикризу: черновик — не документ.'))
             : null,
@@ -1253,7 +1313,21 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // потом спрашиваем, есть ли диагноз: иначе осмотр отклонялся бы у врача,
         // который диагноз написал, но не нажал «Добавить свой».
         if (diagnosis && typeof diagnosis.dxCommit === 'function') diagnosis.dxCommit();
-        if (isPrimary && !diagnosis.value.trim()) { toast(tr('Укажите диагноз.'), 'fail'); return false; }
+        // INPATIENT_REQUIRED_V1 — пустые обязательные разделы: спрашиваем «Сохранить как
+        // есть». Диагноз первичного осмотра при включённом переключателе — жёсткий запрет:
+        // окно называет только его и предлагает лишь «Дописать»; мягкие разделы спросятся
+        // следующим нажатием. Черновик (secondary) не спрашивает никогда.
+        const missing = marks.missing();
+        if (missing.length) {
+            const hardOnes = dxHard ? missing.filter((m) => m.key === 'diagnosis') : [];
+            if (hardOnes.length) {
+                await askSaveAnyway({ missing: hardOnes.map((m) => m.label), hard: true });
+                marks.focusFirst();   // диагноз — первым в списке отметок
+                return false;
+            }
+            const ans = await askSaveAnyway({ missing: missing.map((m) => m.label) });
+            if (ans !== 'save') { marks.focusFirst(); return false; }
+        }
         const { data, error } = await supabase.rpc('admission_review_save', payload(true));
         if (error) { toast((error.message) || tr('Не удалось сохранить осмотр.'), 'fail'); return false; }
         toast(isPrimary ? tr('Первичный осмотр проведён.') : tr('Запись сохранена.'), 'ok');
@@ -1319,6 +1393,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
                 put += 1;
             }
             syncSecs();
+            marks.refresh();   // INPATIENT_REQUIRED_V1 — шаблон вставлен кодом: input не было
             toast(put
                 ? (kept ? trf('Шаблон вставлен: разделов — {n}. Разделы с вашим текстом оставлены как есть.', { n: put })
                         : trf('Шаблон вставлен: разделов — {n}.', { n: put }))
@@ -1369,14 +1444,19 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // НАРУЖУ: рабочий экран ставит панель НАД листом, а правая панель
         // «Вставить в документ» кладёт блок туда, где стоит курсор.
         toolbar: toolbar.bar,
-        insert: (html) => insertBlock(toolbar, html),
+        // INPATIENT_REQUIRED_V1 — вставка без execCommand не рождает input: пересчитать отметки.
+        insert: (html) => { const done = insertBlock(toolbar, html); marks.refresh(); return done; },
         // DIARY_ENTRY_DATE_V1 — поле дня отдаётся наружу: его место в полосе
         // действий над листом, рядом с «Печатью» и «Сохранить».
         entryDateInput,
         // CASE_DX_PICK_V1 — поле диагноза отдаётся налево: карточка «Диагноз»
         // рисует его сама, а редактор остаётся владельцем значения.
         diagnosisInput: secKeys.includes('diagnosis') ? diagnosis : null,
-        diagnosisRequired: isPrimary,
+        // INPATIENT_REQUIRED_V1 — «диагноз обязателен» говорит карточка диагноза только при
+        // включённом переключателе; отметки диагноза ложатся на неё через bindDiagnosis.
+        diagnosisRequired: dxHard,
+        bindDiagnosis,
+        topNote: marks.summary,   // INPATIENT_REQUIRED_V1 — «Не заполнено: …» над листом / первой в окне
         title: reviewTitle(kind, mode, docTitle),
         icon: isDischarge || !REVIEW_TITLE[kind] ? 'Doc' : 'Stethoscope',
         // CASE_DOC_PATIENT_ONCE_V1 — карточку ставит тот, у кого нет шапки
@@ -1394,21 +1474,47 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     };
 }
 
+/**
+ * INPATIENT_REQUIRED_V1 — поле ввода карточки диагноза (dxEditor отдаёт только коробку):
+ * туда ставит курсор «Дописать», когда пуст обязательный диагноз.
+ */
+export function dxTypeIn(box) {
+    if (!box) return null;
+    if (typeof box.querySelector === 'function') {
+        const q = box.querySelector('.dx-type-in');
+        if (q) return q;
+    }
+    const stack = [box];
+    while (stack.length) {
+        const n = stack.shift();
+        if (String((n && n.className) || '').split(/\s+/).includes('dx-type-in')) return n;
+        for (const c of (n && n.children) || []) stack.push(c);
+    }
+    return null;
+}
+
 /** Тот же редактор — окном поверх карточки (как открывали до сих пор). */
-export function openAdmissionReviewModal(opts = {}) {
-    const ed = buildReviewEditor(opts);
+export async function openAdmissionReviewModal(opts = {}) {
+    // INPATIENT_REQUIRED_V1 — правила клиники: переданы (рабочий экран их уже читал)
+    // или читаются здесь; сбой — сегодняшние правила.
+    const rules = opts.rules || await loadInpatientRules();
+    const ed = buildReviewEditor(Object.assign({}, opts, { rules }));
     if (!ed) return;
     // CASE_DOC_A4_V1 — панель форматирования над листом и в окне тоже.
     // CASE_DX_PICK_V1 — на рабочем экране диагноз живёт в карточке слева, а в
     // ОКНЕ левой карточки нет: поле возвращается сюда, с теми же подсказками
     // МКБ-10. Иначе окно осмотра осталось бы без диагноза вовсе.
-    const dxField = ed.diagnosisInput
-        ? field(tr('Диагноз'), dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }), { required: ed.diagnosisRequired })
-        : null;
+    // INPATIENT_REQUIRED_V1 — звезду «Диагноз» ставят отметки (только когда диагноз
+    // обязателен), рамка пустого диагноза — на карточке, курсор «Дописать» — в её поле.
+    const dxBox = ed.diagnosisInput ? dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }) : null;
+    const dxField = dxBox ? field(tr('Диагноз'), dxBox) : null;
+    if (dxBox && ed.bindDiagnosis) {
+        ed.bindDiagnosis({ box: dxBox, el: dxTypeIn(dxBox), labelEl: (dxField.children && dxField.children[0]) || null });
+    }
     // CASE_DOC_ACTIONS_V1 — в окне тот же ряд действий, что на рабочем экране;
     // «Сохранить» и «Черновик» остаются и в подвале окна — это его собственные
     // кнопки, и убирать их у окна нельзя.
-    modal(ed.title, ed.icon, [ed.patientCard, docActionsBar({ applyTemplate: ed.applyTemplate, print: ed.print }), dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
+    modal(ed.title, ed.icon, [ed.topNote, ed.patientCard, docActionsBar({ applyTemplate: ed.applyTemplate, print: ed.print }), dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
         width: 720,
         secondaryLabel: ed.secondaryLabel,
         onSecondary: ed.secondary,

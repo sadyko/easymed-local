@@ -267,9 +267,10 @@ const btns = (root, label) => walk(root).filter((n) => n.tagName === 'BUTTON' &&
 const topOverlay = () => BODY.children.filter((c) => c.className === 'modal').pop() || null;
 // INPATIENT_REQUIRED_V1 — пустой лист спрашивает «Сохранить как есть»; эти проверки — про размещение.
 // remove() здесь ничего не делает: отвеченное окно остаётся последним .modal, поэтому окно
-// листа берут до нажатия «Положить».
+// листа берут до нажатия «Положить». Окно вопроса ищем по data-dialog: его класс не
+// обязан быть ровно 'modal'; ответ на уже отвеченное окно ничего не делает.
 async function saveAnyway(ms = 80) {
-    const top = topOverlay();
+    const top = BODY.children.filter((c) => c.attrs && c.attrs['data-dialog'] === 'required-missing').pop() || null;
     if (top && textOf(top).includes('Заполнено не всё')) { btns(top, 'Сохранить как есть')[0].click(); await settle(ms); }
 }
 const lastToast = () => {

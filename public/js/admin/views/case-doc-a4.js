@@ -263,7 +263,10 @@ export function richSection(kind, key, { title = '', onRename = null, onAdd = nu
             field.focus();
         });
     }
-    return { sec, input };
+    // INPATIENT_REQUIRED_V1 — и подпись: на ней отметки ставят звезду и скрытое
+    // «обязательно» (views/required-marks.js), а у коробки первым ребёнком бывает
+    // свёрнутая строка «+ Добавить», не подпись.
+    return { sec, input, tag };
 }
 
 /**

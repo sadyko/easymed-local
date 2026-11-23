@@ -30,7 +30,7 @@ import { tr, trf } from '../i18n.js';
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocSetAdd,
     caseDocSetRestore, caseDocSetRename, caseDocSetDelete, loadDocTypeSet } from './case-docs.js?v=cw1';
-import { buildReviewEditor } from './admission-modal.js?v=inp2';
+import { buildReviewEditor, dxTypeIn } from './admission-modal.js?v=inp2';   // INPATIENT_REQUIRED_V1 — dxTypeIn: поле карточки диагноза
 import { docActionsBar, docHeadIds, docHeadFields } from './case-doc-a4.js';   // CASE_DOC_ACTIONS_V1 / A4_LETTERHEAD_V2
 import { CASE_TABS, caseTabsBar, caseExamsPanel, caseSurgeryPanel, caseActPanel,
     actPrintBody, caseMealsPanel, caseInvoicesPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1 / ACT_OF_WORKS_V1
@@ -465,13 +465,17 @@ function paintAside(aside) {
 function diagnosisCard() {
     const dg = (state.overview && state.overview.diagnosis) || {};
     const ed = state.editor;
-    const card = h('section', { class: 'card cw-dx', 'aria-label': tr('Диагноз') },
-        h('div', { class: 'cw-dx-h' }, Icon('Stethoscope', { size: 14 }), ' ', tr('Диагноз')));
+    const head = h('div', { class: 'cw-dx-h' }, Icon('Stethoscope', { size: 14 }), ' ', tr('Диагноз'));
+    const card = h('section', { class: 'card cw-dx', 'aria-label': tr('Диагноз') }, head);
 
     if (ed && ed.diagnosisInput) {
         // CASE_DX_LIST_V1 — поле редактора хранит строку, карточка показывает
         // список: чипы с ролью, справочник МКБ-10 и «свой диагноз».
-        card.appendChild(dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }));
+        const dxBox = dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired });
+        card.appendChild(dxBox);
+        // INPATIENT_REQUIRED_V1 — обязательный диагноз: рамка на этой карточке, звезда на её
+        // заголовке, курсор «Дописать» и строки «Не заполнено» — в её поле ввода.
+        if (ed.bindDiagnosis) ed.bindDiagnosis({ box: dxBox, el: dxTypeIn(dxBox), labelEl: head });
     }
 
     const refs = [

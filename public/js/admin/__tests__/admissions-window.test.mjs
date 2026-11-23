@@ -436,9 +436,16 @@ test('осмотр публикуется одним запросом, а чер
     }
 
     // Без диагноза первичный осмотр не публикуется — и на сервер не уходит.
+    // INPATIENT_REQUIRED_V1 — отказ говорит окно «Заполнено не всё» (а не всплывашка):
+    // диагноз обязателен по умолчанию, поэтому окно жёсткое — только «Дописать».
     findBtn(overlay, 'Опубликовать осмотр').click();
     await settle();
-    assert.match(lastToast(), /диагноз/i);
+    const ask = BODY.children[BODY.children.length - 1];
+    assert.equal(ask.attrs['data-dialog'], 'required-missing', 'без диагноза не спросили');
+    assert.match(textOf(ask), /Диагноз/);
+    assert.equal(findBtn(ask, 'Сохранить как есть'), undefined, 'диагноз первичного осмотра можно обойти');
+    findBtn(ask, 'Дописать').click();
+    await settle();
     assert.equal(rpcCalls.filter((c) => c.name === 'admission_review_save').length, 0);
 
     // Черновик — отдельный запрос, publish:false, окно НЕ закрывается.
