@@ -289,6 +289,12 @@ export const CATALOG = [
   // Строка управляет ПЕРЕКЛЮЧАТЕЛЕМ «ИИ отвечает в чатах»; отвечает ИИ от имени
   // клиники, а не от имени сотрудника. Правило перехода — «только администратор».
   { key: 'commerce_ai', block: 'Коммерческие инструменты', label: 'ИИ-помощник', desc: 'Сам отвечает пациентам в Telegram, Facebook и Instagram и заводит заявки в CRM.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит, включён ли ИИ, и чаты, переданные операторам.', edit: 'Включает и выключает ИИ в чатах.' }, windows: [], actions: [], adminDefault: true, enforced: 'rpc:ai_settings_save' },
+  // WEBSITE_V1 (2026-11-24, этап 2) — редактор публичного сайта клиники
+  // (docs/superpowers/specs/2026-11-23-website-module-design.md §5). Как
+  // commerce_ai: раздел с adminDefault (пока роль строку не настраивала —
+  // только администратор), сервер проверяет её в rpc/website.js и в корзине
+  // `website` хранилища (routes/storage.js).
+  { key: 'commerce_website', block: 'Коммерческие инструменты', label: 'Веб-сайт', desc: 'Редактор публичного сайта клиники: включение сайта, главная страница, врачи и услуги на сайте, отделения, отзывы, вопросы и новости.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит настройки и содержимое сайта.', edit: 'Включает и выключает сайт, правит тексты и картинки, публикует и снимает материалы.' }, windows: [], actions: [], adminDefault: true, enforced: 'rpc:website_settings_save' },
   // CASHIER_HEAD_V1 (2026-09-28) — владелец: «fix in the roles for the cashier,
   // so it can change service and provider for appointed + add service, and if
   // created invoice. It should be switchable in the roles so cashier either

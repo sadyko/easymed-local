@@ -172,12 +172,21 @@ function toDoctor(u, specs, extra, now) {
   };
 }
 
+// WEBSITE_V1, этап 2 — ПРАВИЛО ПОКАЗА В ОДНОМ МЕСТЕ. Редактор «Веб-сайт»
+// (rpc/website-content.js) ставит метку «На сайте» / «Скрыт» по ЭТИМ же
+// функциям: свою копию правила там не держим, иначе метка в редакторе и сайт
+// однажды разошлись бы (врач «На сайте» в редакторе, но не на сайте, или наоборот).
+// Без кэша — редактор хочет видеть правку профиля сразу.
+export const siteDoctorProfiles = (db) => publicDoctors(db).filter((u) => Number(u.is_active) === 1);
+export const siteServiceRows = (db) => db.prepare('SELECT * FROM services WHERE active = 1 ORDER BY id').all()
+  .filter((s) => servicePublicState(s) === 'shown');
+
 function shownDoctors(db) {
   return cached('doctors:all', () => {
     const now = new Date();
     const specs = db.prepare('SELECT user_id, name_ru, name_uz FROM user_specialties ORDER BY is_primary DESC, id').all();
     const extras = new Map(db.prepare('SELECT user_id, sort_order, featured FROM website_doctors').all().map((r) => [r.user_id, r]));
-    return publicDoctors(db).filter((u) => Number(u.is_active) === 1).map((u) => ({
+    return siteDoctorProfiles(db).map((u) => ({
       row: toDoctor(u, specs.filter((s) => s.user_id === u.id), extras.get(u.id), now),
       user_id: u.id, department_id: u.department_id == null ? null : Number(u.department_id),
     })).sort((a, b) => a.row.sort_order - b.row.sort_order || a.row.id - b.row.id);
@@ -201,8 +210,7 @@ function shownServices(db) {
   return cached('services:all', () => {
     const extras = new Map(db.prepare('SELECT service_id, sort_order, featured, image_path, content FROM website_services').all().map((r) => [r.service_id, r]));
     const types = new Map(db.prepare('SELECT id, name FROM service_types').all().map((t) => [t.id, t.name]));
-    return db.prepare('SELECT * FROM services WHERE active = 1 ORDER BY id').all()
-      .filter((s) => servicePublicState(s) === 'shown')
+    return siteServiceRows(db)
       .map((s) => {
         const x = extras.get(s.id);
         const extra = jsonObj(x && x.content);

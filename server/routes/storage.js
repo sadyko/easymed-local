@@ -13,6 +13,7 @@ import { LOGO_BUCKET, LOGO_KINDS, logoRefusal } from '../../public/js/shared/cli
 import { readIdentity } from '../services/branch-sync/identity.js';   // CLINIC_PROFILE_V1
 import { tableWriteAllowed } from '../db/write-grant.js';   // CLINIC_PROFILE_V1 — логотип пишет тот, кто вправе записать doc_settings
 import { actAsRecheck } from '../services/act-as.js';   // ADMIN_ACT_AS_V1 (ревью, LOW 7)
+import { hasWebsiteModule } from '../services/rpc/website.js';   // WEBSITE_V1, этап 2 — корзина сайта по модулю лицензии
 
 // Local file storage — the offline stand-in for Supabase Storage. Objects live
 // on disk under <storageDir>/<bucket>/<path>. Buckets are an allow-list; every
@@ -68,8 +69,14 @@ const BUCKET_EXT = {
   'patient-photos': new Set(ALLOWED_PHOTO_EXT),
   'doctor-photos': new Set(ALLOWED_PHOTO_EXT),
   [LOGO_BUCKET]: new Set(['.png']),   // CLINIC_PROFILE_V1
+  // WEBSITE_V1, этап 2 — картинки сайта. Только то, что сайт отдаёт посетителю
+  // (site/media.js): SVG нет — это документ со скриптами, а не картинка.
+  website: new Set(['.jpg', '.jpeg', '.png', '.webp']),
 };
 const TYPE_REFUSED = 'Файлы такого типа в хранилище не кладутся. Подойдут картинки (JPG, PNG), PDF, документы Word и Excel, обычный текст.';
+const WEBSITE_TYPE_REFUSED = 'На сайт загружаются только картинки JPG, PNG и WEBP.';   // WEBSITE_V1
+const WEBSITE_DENIED = 'Картинки сайта меняет тот, у кого «Веб-сайт: Изменение». Права выдаёт администратор в «Настройки → Роли».';   // WEBSITE_V1
+const WEBSITE_NO_MODULE = 'Модуль «Веб-сайт» не подключён. Обратитесь к менеджеру Easy-Med.';   // WEBSITE_V1 — тот же текст, что у rpc/website.js
 
 // V3120_FIX (M8) — имена, которые Windows не создаст или создаст не тем
 // файлом: зарезервированные устройства (CON, AUX, NUL, COM1…), двоеточие
@@ -359,6 +366,24 @@ export function storageRoutes(storageDir, db = null) {
     return { status: 403, code: 'forbidden', message: LOGO_DENIED };
   }
 
+  // WEBSITE_V1, этап 2 — кто кладёт и удаляет картинки сайта: тот же замок,
+  // что у сохранения содержимого (rpc/website.js requireWebsite) — модуль
+  // лицензии `website` и «Веб-сайт: Изменение». Иначе корзина была бы обходом
+  // редактора: картинку на публичную страницу подменял бы любой вошедший.
+  // Чтение не закрыто — как у clinic-docs: картинки и так уходят на публичный сайт.
+  function websiteDenial(req) {
+    const user = req.user;
+    if (!user) return { status: 401, code: 'unauthorized', message: 'Требуется вход.' };
+    if (!db) return { status: 403, code: 'forbidden', message: WEBSITE_DENIED };
+    let licensed = false;
+    try { licensed = req.control && typeof req.control.has === 'function' ? req.control.has('website') : hasWebsiteModule(db); }
+    catch { licensed = false; }
+    if (!licensed) return { status: 402, code: 'module_missing', message: WEBSITE_NO_MODULE };
+    try { if (grantAllowsAdminOr(db, user, 'commerce_website', 'edit')) return null; }
+    catch { /* права не прочитались — отказ */ }
+    return { status: 403, code: 'forbidden', message: WEBSITE_DENIED };
+  }
+
   // Одна дверь для обеих фотокорзин: форма пути → право. Возвращает false
   // (можно продолжать) либо уже отправленный ответ.
   function photoGate(req, res, { write }) {
@@ -414,6 +439,15 @@ export function storageRoutes(storageDir, db = null) {
       if (bad) {
         return res.status(bad.code === 'file_too_large' ? 413 : 415)
           .json({ error: { code: bad.code, message: refusalText(bad), template: bad.template, params: bad.params } });
+      }
+    }
+    // WEBSITE_V1, этап 2 — корзина сайта: сначала право (чужому — не
+    // рассказываем, какие файлы подошли бы), потом тип своим текстом.
+    if (req.params.bucket === 'website') {
+      const d = websiteDenial(req);
+      if (d) return refuse(res, d.status, d.code, d.message);
+      if (!BUCKET_EXT.website.has(path.extname(abs).toLowerCase())) {
+        return refuse(res, 415, 'file_type_not_allowed', WEBSITE_TYPE_REFUSED);
       }
     }
     // V3120_FIX (M8) — расширение по корзине. Фото проверяет photoRefusal
@@ -609,6 +643,10 @@ export function storageRoutes(storageDir, db = null) {
     if (req.params.bucket === 'clinic-docs') {
       const denial = clinicFilesDenial(req);
       if (denial) return refuse(res, 403, 'forbidden', denial);
+    }
+    if (req.params.bucket === 'website') {   // WEBSITE_V1, этап 2 — тот же замок, что у загрузки
+      const d = websiteDenial(req);
+      if (d) return refuse(res, d.status, d.code, d.message);
     }
     try { fs.unlinkSync(abs); } catch { /* already gone */ }
     return res.json({ data: {} });

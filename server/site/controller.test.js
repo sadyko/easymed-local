@@ -39,3 +39,26 @@ test('контроллер поднимает, закрывает и снова 
   db.prepare('UPDATE website_settings SET settings = ? WHERE id = 1').run(JSON.stringify({ enabled: false }));
   assert.equal(c.refresh(), 0); assert.equal(opened[1].closed, true, '«Сайт включён» снят — закрыт');
 });
+
+// WEBSITE_V1, этап 2 — реестр: сохранение настроек (rpc/website.js) дёргает
+// requestSiteRefresh(), не зная про index.js.
+test('реестр контроллера: без регистрации — тихий no-op; с регистрацией — refresh и состояние', async () => {
+  const { registerSiteController, requestSiteRefresh, siteRunning } = await import('./controller.js');
+  registerSiteController(null);
+  assert.equal(requestSiteRefresh(), 0, 'контроллера нет — ничего не делает и не бросает');
+  assert.deepEqual(siteRunning(), { running: false, port: 0 });
+
+  const db = fresh(false);
+  const fake = () => { const s = { close() {}, on() { return s; } }; return s; };
+  const c = registerSiteController(createSiteController(db, { env: {}, hasModule: yes, listen: fake }));
+  assert.equal(requestSiteRefresh(), 0);
+  assert.deepEqual(siteRunning(), { running: false, port: 0 });
+  db.prepare('UPDATE website_settings SET settings = ? WHERE id = 1').run(JSON.stringify({ enabled: true }));
+  assert.equal(requestSiteRefresh(), 8001, 'включили — поднят сразу, без минутного таймера');
+  assert.deepEqual(siteRunning(), { running: true, port: 8001 });
+  assert.equal(c.port, 8001);
+
+  registerSiteController({ refresh() { throw new Error('boom'); }, port: 0 });
+  assert.equal(requestSiteRefresh(), 0, 'сломанный контроллер не роняет вызывающего');
+  registerSiteController(null);
+});

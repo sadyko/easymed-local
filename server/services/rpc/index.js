@@ -99,6 +99,8 @@ import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramBroadcastOptions, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
 import { aiSettingsGet, aiSettingsSave, aiFlags, aiKeySave, aiKeyClear, aiCallGet, aiCallScores } from './ai.js';   // AI_CHAT_V1
+import { websiteSettingsGet, websiteSettingsSave } from './website.js';   // WEBSITE_V1, этап 2 — настройки сайта
+import { websitePickLists, websiteContentList, websiteContentSave, websiteContentPublish, websiteContentDelete, websiteContentReorder } from './website-content.js';   // WEBSITE_V1, этап 2
 import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions,
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
          telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording,
@@ -756,6 +758,17 @@ export const RPC = {
   ai_call_get:    (db, args, user) => aiCallGet(db, args, user),      // AI_CALLS_V1 — разбор звонка (расшифровка)
   ai_call_scores: (db, args, user) => aiCallScores(db, args, user),   // AI_CALLS_V1 — оценки операторов
   ai_flags:                       (db, args, user) => aiFlags(db, args, user),
+  // WEBSITE_V1, этап 2 — редактор «Веб-сайт». Все: модуль лицензии website
+  // (402 module_missing) и строка прав «Веб-сайт» (commerce_website). Чтения —
+  // в READ_ONLY_RPCS (control/gate.js).
+  website_settings_get:    (db, args, user) => websiteSettingsGet(db, args, user),
+  website_settings_save:   (db, args, user) => websiteSettingsSave(db, args, user),
+  website_pick_lists:      (db, args, user) => websitePickLists(db, args, user),
+  website_content_list:    (db, args, user) => websiteContentList(db, args, user),
+  website_content_save:    (db, args, user) => websiteContentSave(db, args, user),
+  website_content_publish: (db, args, user) => websiteContentPublish(db, args, user),
+  website_content_delete:  (db, args, user) => websiteContentDelete(db, args, user),
+  website_content_reorder: (db, args, user) => websiteContentReorder(db, args, user),
   telegram_chat_messages:         (db, args, user) => telegramChatMessages(db, args, user),
   telegram_chat_unread:           (db, args, user) => telegramChatUnread(db, args, user),
   telegram_chat_link:       (db, args, user) => telegramChatLink(db, args, user),   // TELEGRAM_ORPHAN_CHAT_V1

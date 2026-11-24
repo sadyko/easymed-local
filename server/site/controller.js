@@ -53,3 +53,33 @@ export function createSiteController(db, { env = process.env, hasModule, listen,
     get port() { return port; },
   };
 }
+
+// WEBSITE_V1, этап 2 — РЕЕСТР ЖИВОГО КОНТРОЛЛЕРА.
+//
+// Контроллер создаёт index.js, а сохранение настроек приходит через RPC
+// (rpc/website.js), у которого нет ни req, ни ссылки на index.js. Без этого
+// реестра «Сайт включён» срабатывал бы только на следующем минутном refresh(),
+// и администратор, нажавший «Сохранить», видел бы «сайт не запущен» до минуты.
+// Один процесс — один сайт, поэтому реестр — одна переменная модуля.
+//
+// requestSiteRefresh() НЕ БРОСАЕТ и ничего не делает без контроллера: в тестах
+// RPC и в утилитах контроллера нет вовсе, а сохранение настроек не должно
+// падать из-за того, что слушатель не поднялся (порт занят и т.п.) — это
+// отдельная беда, её видно в site.running у website_settings_get.
+let registered = null;
+
+export function registerSiteController(c) {
+  registered = c || null;
+  return registered;
+}
+
+export function requestSiteRefresh() {
+  if (!registered) return 0;
+  try { return registered.refresh(); } catch { return 0; }
+}
+
+/** Слушатель сайта поднят: { running, port }. Без контроллера — не поднят. */
+export function siteRunning() {
+  const port = registered ? Number(registered.port) || 0 : 0;
+  return { running: port > 0, port };
+}

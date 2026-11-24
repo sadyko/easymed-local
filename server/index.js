@@ -43,7 +43,7 @@ import { schedulePublicSync } from './services/api/public-sync.js';   // PUBLIC_
 import { startLanAddress } from './services/lan/index.js';   // LAN_ADDRESS_V1
 import { scheduleLivePull } from './services/telephony/live.js';   // CALL_RING_V1 — длинный опрос живых событий станции, пока панели «Телефон» спрашивают
 import { applyPendingTestDataWipe } from './services/test-data-wipe.js';   // TEST_DATA_WIPE_V1
-import { createSiteController } from './site/controller.js';   // WEBSITE_V1 — публичный сайт на втором порту
+import { createSiteController, registerSiteController } from './site/controller.js';   // WEBSITE_V1 — публичный сайт на втором порту
 import { pruneWebsiteAnalytics } from './site/analytics.js';    // WEBSITE_V1 — чистка сырых просмотров
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -424,6 +424,7 @@ if (isMain) {
   // в настройках (server/site/controller.js). Раз в минуту — пересчёт: выдача
   // модуля через check-in и «Сайт включён» действуют без перезапуска.
   const website = createSiteController(db, { appOptions: { storageDir: path.join(DATA_DIR, 'storage') } });
+  registerSiteController(website);   // WEBSITE_V1, этап 2 — сохранение настроек поднимает/закрывает сайт сразу
   website.refresh();
   setInterval(() => website.refresh(), 60 * 1000).unref();
 
