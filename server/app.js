@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { attachUser, requireAuth, requirePasswordChanged } from './middleware/auth.js';   // FIRST_RUN_PASSWORD_V1
-import { compress } from './middleware/compress.js';   // PERF_GZIP_V1
+import { compress, markStaticFile } from './middleware/compress.js';   // PERF_GZIP_V1 · markStaticFile: LOCAL_SPEED_V1
 import { slowLog } from './middleware/slow-log.js';   // PERF_SLOWLOG_V1
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
@@ -224,9 +224,10 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {} } =
   const FONT = /\.(?:woff2?|ttf|otf)$/i;
   app.use(express.static(path.join(ROOT, 'public'), {
     extensions: ['html'],
-    setHeaders: (res, filePath) => {
+    setHeaders: (res, filePath, stat) => {
       if (REVALIDATE.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
       else if (FONT.test(filePath)) res.setHeader('Cache-Control', 'public, max-age=2592000');
+      markStaticFile(res, filePath, stat);   // LOCAL_SPEED_V1 — compress() сожмёт этот файл один раз и дальше отдаёт из памяти
     },
   }));
 
