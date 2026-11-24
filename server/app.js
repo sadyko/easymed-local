@@ -20,6 +20,8 @@ import { lisProxyRoutes } from './routes/lisproxy.js';   // LIS_PROXY_V1
 import { actAsEndedGuard, actAsRouterGuard } from './middleware/act-as.js';   // ADMIN_ACT_AS_V1
 import { createLiveBus, liveEnabled } from './services/live/bus.js';   // LIVE_REFRESH_V1 — шина изменений для живых экранов; liveEnabled — выключатель (ревью M6)
 import { liveRoutes } from './routes/live.js';   // LIVE_REFRESH_V1 — GET /api/live (SSE) и /api/live/version
+import { buildOf, staticImmutable } from './services/build-id.js';   // LOCAL_SPEED_V1 — номер сборки клиента
+import { versionedStatic, versionedPages } from './middleware/versioned-static.js';   // LOCAL_SPEED_V1 — /v/<сборка>/… и страницы
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -33,7 +35,9 @@ const CABINET_ARCHIVE_ROUTE = /^\/api\/rpc\/visit_document_archive(\/|\?|$)/;   
 // 385 файлов на каждое открытие экрана.
 const API_PATH = /^\/api(?:\/|$)/i;   // LOCAL_SPEED_V1
 
-export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {} } = {}) {
+// LOCAL_SPEED_V1 — publicDir: папка клиента (тесты подставляют свою); warmBuild: посчитать
+// номер сборки сразу (server/index.js), а не при первом запросе страницы.
+export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {}, publicDir = path.join(ROOT, 'public'), warmBuild = false } = {}) {
   setDataDir(dataDir);   // LICENCE_CORE_V1 — RPC handlers get no `req`; they read it from here.
   // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — шина изменений этой базы: маршруты
   // записи сообщают ей «записано», поток /api/live разносит это экранам. Одна на базу —
@@ -229,7 +233,26 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {} } =
   // не требуя дисциплины «новое имя файла на каждую замену». ETag остаётся:
   // по истечении срока обновление — это 304, не полная перекачка.
   const FONT = /\.(?:woff2?|ttf|otf)$/i;
-  app.use(express.static(path.join(ROOT, 'public'), {
+  // LOCAL_SPEED_V1 — КОД ХРАНИТСЯ В БРАУЗЕРЕ ДО СЛЕДУЮЩЕГО ОБНОВЛЕНИЯ.
+  //
+  // no-cache выше честен, но дорог: каждое открытие экрана — 385 условных
+  // запросов к главному компьютеру клиники. Поэтому страницы ссылаются на свой
+  // код по адресу /v/<номер сборки>/…, а он отдаётся «на год, не переспрашивая»
+  // (immutable). Номер — отпечаток СОДЕРЖИМОГО public/ (services/build-id.js),
+  // руками его никто не поднимает: обновление меняет файл → номер → адреса.
+  // Сама страница остаётся no-cache с ETag — она и приносит новые адреса.
+  // Обычное открытие — страница (304) и данные; запросов кода нет вовсе.
+  //
+  // Свежесть NO_STALE_CODE_V1 не теряется: под чужим номером (вкладка, открытая
+  // до обновления) файл отдаётся текущий и с no-cache; старые адреса /js/…,
+  // /css/… ниже работают как прежде. EASYMED_STATIC_IMMUTABLE=0 — те же адреса,
+  // но no-cache (разработка: правка файла видна без перезапуска сервера).
+  // Оба обработчика — не под /api: сессию и лицензию они не читают.
+  const build = () => buildOf(publicDir);
+  if (warmBuild) build();
+  app.use(versionedPages({ root: publicDir, build, mark: markStaticFile }));
+  app.use('/v/:build', versionedStatic({ root: publicDir, build, immutable: staticImmutable(process.env), mark: markStaticFile }));
+  app.use(express.static(publicDir, {
     extensions: ['html'],
     setHeaders: (res, filePath, stat) => {
       if (REVALIDATE.test(filePath)) res.setHeader('Cache-Control', 'no-cache');

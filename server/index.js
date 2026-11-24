@@ -338,7 +338,7 @@ if (isMain) {
   // этому же файлу), чтобы годовой отчёт не останавливал регистратуру и кассу.
   // База не в WAL или поток не поднялся — отчёты идут по-старому, здесь же.
   configureReportPool({ db, dbFile: path.join(DATA_DIR, 'easymed.db'), dataDir: DATA_DIR });
-  const server = createApp(db, { dataDir: DATA_DIR }).listen(PORT, '0.0.0.0', () => {
+  const server = createApp(db, { dataDir: DATA_DIR, warmBuild: true }).listen(PORT, '0.0.0.0', () => {
     // OPS_EVENTS_V1 — recorded here, not earlier: this callback only fires
     // once the port is actually bound, i.e. the clinic really did start (as
     // opposed to migrate()/bootstrapAdmin() completing but EADDRINUSE
