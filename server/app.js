@@ -26,6 +26,11 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CABINET_BODY_LIMIT = '8mb';   // CABINET_FIX_V1_R5
 const CABINET_DOC_ROUTE = /^\/api\/(db|rpc\/visit_document_archive)(\/|\?|$)/;   // CABINET_FIX_V1_R5
 const CABINET_ARCHIVE_ROUTE = /^\/api\/rpc\/visit_document_archive(\/|\?|$)/;   // CABINET_FIX_V1_R6
+// LOCAL_SPEED_V1 — запрос к API (без учёта регистра — так сопоставляет пути express:
+// /API/db доходит до маршрута /api/db). Сессия и лицензия нужны только ему; файлы
+// статики их не читают, а платили за них ≈1,4 мс единственного потока на файл —
+// 385 файлов на каждое открытие экрана.
+const API_PATH = /^\/api(?:\/|$)/i;   // LOCAL_SPEED_V1
 
 export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {} } = {}) {
   setDataDir(dataDir);   // LICENCE_CORE_V1 — RPC handlers get no `req`; they read it from here.
@@ -128,13 +133,19 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {} } =
     }
     res.json({ ok: true });
   });
-  app.use((req, res, next) => (req.__userAttached ? next() : attachUserOnce(req, res, next)));   // CABINET_FIX_V1_R6 — уже положен (двери кабинета выше) — не перечитывать
+  // LOCAL_SPEED_V1 — только для /api. Проверка пути здесь, на общем уровне, а НЕ
+  // монтирование на '/api': монтирование срезало бы /api с req.path, и LIVE_PATH в
+  // middleware/auth.js (поток /api/live — всегда фон) перестал бы узнавать свой путь.
+  // Статика req.user/req.control не читает никогда (все читатели — маршруты /api);
+  // в строке [slow] у файла просто не будет user= — и не нужно.
+  app.use((req, res, next) => (req.__userAttached || !API_PATH.test(req.path) ? next() : attachUserOnce(req, res, next)));   // CABINET_FIX_V1_R6 — уже положен (двери кабинета выше) — не перечитывать · LOCAL_SPEED_V1
   // ADMIN_ACT_AS_V1 — сразу после пользователя: 409 act_as_ended после авто-конца
   // на всём /api, кроме /api/auth (middleware/act-as.js). Монтирование на /api,
   // а не сравнение строк: express сопоставляет пути без учёта регистра, и /API/DB
   // проходит здесь так же, как /api/db (ревью безопасности, HIGH 1).
   app.use('/api', actAsEndedGuard());
-  app.use(attachControl(db, dataDir));   // LICENCE_CORE_V1
+  const attachControlOnce = attachControl(db, dataDir);   // LICENCE_CORE_V1
+  app.use((req, res, next) => (API_PATH.test(req.path) ? attachControlOnce(req, res, next) : next()));   // LOCAL_SPEED_V1 — лицензия тоже только для /api
   app.use('/api/auth', authRoutes(db));
   // TELEPHONY_V1 — Binotel's webhook receivers, in /api/auth's slot: BEFORE
   // requirePasswordChanged and carrying no requireAuth, because Binotel sends
