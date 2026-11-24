@@ -16,7 +16,7 @@ import { gw } from '../gateway.js';
 const PERM = 'settings:clinic_items';
 
 // SheetJS, self-hosted (site CSP blocks the CDN). Served as .js (ES module).
-const SHEETJS_URL = '/js/vendor/xlsx-0.20.3.js';
+const SHEETJS_URL = '../../vendor/xlsx-0.20.3.js';   // LOCAL_SPEED_V1 — относительно модуля: наследует /v/<сборка>/
 let _xlsxPromise = null;
 function loadXlsx() {
     if (!_xlsxPromise) _xlsxPromise = import(/* @vite-ignore */ SHEETJS_URL)

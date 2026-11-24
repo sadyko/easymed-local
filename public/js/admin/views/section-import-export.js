@@ -97,7 +97,7 @@ function _downloadBuffer(buf, filename) {
 // SheetJS community can't write data validation, so post-process the xlsx zip
 // (fflate) and inject <dataValidations> right after </sheetData>. SERVICE_GROUP_ROUTING_V1.
 async function _injectDataValidations(buf, cfg, XLSX) {
-    const { unzipSync, zipSync, strToU8, strFromU8 } = await import('/js/vendor/fflate.js');
+    const { unzipSync, zipSync, strToU8, strFromU8 } = await import('../../vendor/fflate.js');   // LOCAL_SPEED_V1 — относительно модуля: наследует /v/<сборка>/
     const files = unzipSync(new Uint8Array(buf));
     const path = Object.keys(files).find(k => /worksheets\/sheet1\.xml$/.test(k));
     if (!path) return buf;
@@ -171,7 +171,7 @@ function visitTierProblem(t) {
 // SheetJS CDN is NOT in the site CSP, so the external import was blocked and
 // Sample/Import/Export failed. Normalise default/named exports so XLSX.utils
 // resolves regardless of the module namespace shape.
-const SHEETJS_URL = '/js/vendor/xlsx-0.20.3.js';
+const SHEETJS_URL = '../../vendor/xlsx-0.20.3.js';   // LOCAL_SPEED_V1 — относительно модуля: наследует /v/<сборка>/
 let _xlsxPromise = null;
 function loadXlsx() {
     if (!_xlsxPromise) _xlsxPromise = import(/* @vite-ignore */ SHEETJS_URL)
