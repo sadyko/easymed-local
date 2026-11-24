@@ -616,6 +616,8 @@ async function performCheckin(db, dataDir, {
         writeAtomic(identityPath, JSON.stringify({ ...identity, subscription: body.subscription }), { writeFileSync, renameSync });
       } catch (e) {
         console.warn('[checkin] could not store the reported subscription:', e && e.message);
+      } finally {
+        invalidateControlCache();   // LOCAL_SPEED_V1 (ревью) — control.json переписан: controlState перечитает его на следующем запросе
       }
     }
 

@@ -14,12 +14,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { canonical } from './canonical.js';
 import { controlState, invalidateControlCache, __setPublicKeyForTests } from './state.js';
+import { runCheckin, __setPublicKeyForTests as __setCheckinKey } from './checkin.js';   // LOCAL_SPEED_V1 (ревью)
+import { enrollWithCode, __setPublicKeyForTests as __setEnrollKey } from './enroll.js';   // LOCAL_SPEED_V1 (ревью)
 import { tmpDir } from '../../test-helpers/tmpdir.js';
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -198,16 +199,84 @@ test('смена ключа проверки (тесты) сбрасывает �
   assert.equal(controlState(db, dir, NOW).locked, false);
 });
 
-test('писатели файлов (активация и check-in) сбрасывают память сразу после записи', () => {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  for (const [file, writes] of [['enroll.js', ['control.json', 'licence.dat']], ['checkin.js', ['licence.dat']]]) {
-    const src = fs.readFileSync(path.join(here, file), 'utf8');
-    assert.match(src, /import \{ invalidateControlCache \} from '\.\/state\.js'/, file + ': импорт');
-    for (const w of writes) {
-      const at = src.indexOf("writeAtomic(path.join(dataDir, '" + w + "')");
-      assert.ok(at > 0, file + ': запись ' + w + ' найдена');
-      const after = src.slice(at, at + 900);
-      assert.match(after, /finally \{[\s\S]*?invalidateControlCache\(\)/, file + ': после записи ' + w + ' — invalidateControlCache() в finally');
-    }
-  }
+// LOCAL_SPEED_V1 (ревью) — ПИСАТЕЛИ ФАЙЛОВ СБРАСЫВАЮТ ПАМЯТЬ: поведение, а не текст кода.
+//
+// Худший случай для кэша по (время, размер): файл переписан тем же размером, и
+// время изменения у него то же (шаг часов файловой системы; здесь — нарочно
+// возвращено прежнее). По отпечатку файл «не менялся» — новое содержимое видно
+// только потому, что писатель сам сбросил память. Так проверяется каждая запись:
+// активация (control.json + licence.dat) и обе записи check-in (licence.dat и
+// control.json со словом подписки).
+
+/** Подмена для writeAtomic: файл переписывается, а его время изменения остаётся прежним. */
+function sameStampWriters() {
+  return {
+    writeFileSync: fs.writeFileSync,
+    renameSync: (tmp, dest) => {
+      const old = fs.statSync(dest, { throwIfNoEntry: false });
+      fs.renameSync(tmp, dest);
+      if (old) fs.utimesSync(dest, old.atime, old.mtime);
+    },
+  };
+}
+const stamp = (dir, name) => { const s = fs.statSync(path.join(dir, name)); return s.mtimeMs + ':' + s.size; };
+const answer = (body) => async () => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+const ENDPOINT = 'http://127.0.0.1:9';   // сеть не трогаем: fetchImpl — свой
+
+const AFTER_EXPIRY = new Date('2026-09-05T00:00:00Z');   // лицензия (до 03.09) истекла: видно слово подписки
+const FULL_IDENTITY = (subscription) => JSON.stringify({
+  clinic_id: 'c-000047', clinic_name: 'Тестовая клиника', install_token: 'tok-1', unlock_secret: 's3cret', subscription,
+});
+
+/** Прогреть память и убедиться, что она работает: второй вызов файлов не читает. */
+function prime(db, dir) {
+  invalidateControlCache();
+  const first = controlState(db, dir, NOW);
+  assert.deepEqual(countReads(() => controlState(db, dir, NOW)).reads, [], 'до записи ответ — из памяти');
+  return first;
+}
+
+test('check-in записал новую лицензию (тот же размер и время файла) — следующий controlState уже с ней', async () => {
+  __setCheckinKey(publicKey);
+  const { dir, db } = workspace({ identity: FULL_IDENTITY('active'), licence: issue({ modules: ['crm'] }) });
+  assert.deepEqual(prime(db, dir).modules, ['crm']);
+  const before = stamp(dir, 'licence.dat');
+  await runCheckin(db, dir, {
+    endpoint: ENDPOINT, fetchImpl: answer({ licence: JSON.parse(issue({ modules: ['abc'] })) }),
+    buildStatsPayload: () => ({}), ...sameStampWriters(),
+  });
+  assert.equal(stamp(dir, 'licence.dat'), before, 'по времени и размеру файл «не менялся»');
+  assert.deepEqual(controlState(db, dir, NOW).modules, ['abc'], 'а ответ — уже по новому файлу');
+});
+
+test('check-in записал слово подписки в control.json (тот же размер и время) — следующий controlState уже с ним', async () => {
+  __setCheckinKey(publicKey);
+  const { dir, db } = workspace({ identity: FULL_IDENTITY('active') });
+  prime(db, dir);
+  const before = stamp(dir, 'control.json');
+  await runCheckin(db, dir, {
+    endpoint: ENDPOINT, fetchImpl: answer({ subscription: 'unpaid' }),   // без лицензии: пишется только control.json
+    buildStatsPayload: () => ({}), ...sameStampWriters(),
+  });
+  assert.equal(stamp(dir, 'control.json'), before, 'по времени и размеру файл «не менялся»');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'control.json'), 'utf8')).subscription, 'unpaid', 'запись состоялась');
+  assert.equal(controlState(db, dir, AFTER_EXPIRY).reason, 'unpaid', 'причина — уже по новому слову подписки');
+});
+
+test('активация поверх прежней записала оба файла (тот же размер и время) — следующий controlState уже с ними', async () => {
+  __setEnrollKey(publicKey);
+  const { dir, db } = workspace({ identity: FULL_IDENTITY('active'), licence: issue({ modules: ['crm'] }) });
+  assert.deepEqual(prime(db, dir).modules, ['crm']);
+  const before = [stamp(dir, 'control.json'), stamp(dir, 'licence.dat')];
+  const result = await enrollWithCode(dir, 'ABCD-1234', {
+    endpoint: ENDPOINT, replace: true, ...sameStampWriters(),
+    fetchImpl: answer({
+      clinic_id: 'c-000047', clinic_name: 'Тестовая клиника', install_token: 'tok-2', unlock_secret: 's3cre7',
+      subscription: 'unpaid', licence: JSON.parse(issue({ modules: ['abc'] })),
+    }),
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual([stamp(dir, 'control.json'), stamp(dir, 'licence.dat')], before, 'по времени и размеру файлы «не менялись»');
+  assert.deepEqual(controlState(db, dir, NOW).modules, ['abc'], 'лицензия — новая');
+  assert.equal(controlState(db, dir, AFTER_EXPIRY).reason, 'unpaid', 'и слово подписки — новое');
 });

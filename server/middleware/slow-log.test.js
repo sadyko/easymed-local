@@ -203,3 +203,17 @@ test('LOCAL_SPEED_V1: файл хранилища — только корзин�
   assert.match(lines[0], /  GET \/api\/storage\/clinic-docs  status=404$/, lines[0]);
   assert.doesNotMatch(lines[0], /Testov|patients\/5/);
 });
+
+test('LOCAL_SPEED_V1 (ревью): секрет адреса вебхука станции в строку [slow] не попадает', async () => {
+  const lines = [];
+  const app = express();
+  app.use(slowLog(freshDb(), { thresholdMs: 1, log: (l) => lines.push(l) }));
+  const pbx = express.Router();
+  pbx.post('/:token', (req, res) => setTimeout(() => res.json({ ok: true }), 15));
+  app.use('/api/telephony/pbx', pbx);
+  const { srv, base } = await serve(app);
+  await (await postJson(base + '/api/telephony/pbx/s3cr3tTOKENvalue0123456789?event=call_start', {})).json();
+  srv.close();
+  assert.match(lines[0], /^\[slow\] \d+ms  POST \/api\/telephony\/pbx\/:token  status=200$/, lines[0]);
+  assert.doesNotMatch(lines[0], /s3cr3t|call_start/);
+});

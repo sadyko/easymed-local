@@ -114,3 +114,67 @@ test('EASYMED_STATIC_IMMUTABLE: выключает только «0»', () => {
   assert.equal(staticImmutable({ EASYMED_STATIC_IMMUTABLE: '0' }), false);
   assert.equal(staticImmutable({ EASYMED_STATIC_IMMUTABLE: ' 0 ' }), false);
 });
+
+// LOCAL_SPEED_V1 (ревью) — файл, который при старте не прочитать (антивирус
+// держит: EBUSY/EPERM), не должен выпасть из сборки: иначе страница оставит его
+// ссылку без /v/<номер>/, и общие модули загрузятся по двум адресам — дважды.
+
+/** Читатель, отказывающий на одном файле: первые `times` раз (Infinity — всегда). */
+function busyReader(rel, times, code = 'EBUSY') {
+  const calls = { n: 0 };
+  const readFile = (abs, ...rest) => {
+    if (abs.split(path.sep).join('/').endsWith('/' + rel)) {
+      calls.n += 1;
+      if (calls.n <= times) throw Object.assign(new Error(code + ': resource busy or locked, open \'' + abs + '\''), { code });
+    }
+    return fs.readFileSync(abs, ...rest);
+  };
+  return { readFile, calls };
+}
+
+test('LOCAL_SPEED_V1 (ревью): нечитаемый файл остаётся в сборке с меткой — три попытки, одна строка в журнале', (t) => {
+  const root = tree(t, BASE);
+  const healthy = computeBuild(root);
+  const warned = [];
+  const pauses = [];
+  const { readFile, calls } = busyReader('js/app.js', Infinity);
+  const b = computeBuild(root, { readFile, warn: (l) => warned.push(String(l)), pause: (ms) => pauses.push(ms) });
+  assert.equal(calls.n, 3, 'три попытки чтения');
+  assert.equal(pauses.length, 2, 'между попытками — пауза');
+  assert.deepEqual([...b.files.keys()], buildFiles(root), 'состав сборки — полный');
+  assert.deepEqual(b.files.get('js/app.js'), { mtimeMs: -1, size: -1 });
+  assert.deepEqual(b.files.get('css/app.css'), healthy.files.get('css/app.css'), 'остальные — как обычно');
+  assert.match(b.id, /^[0-9a-f]{10}$/);
+  assert.notEqual(b.id, healthy.id, 'номер — не тот, что у целой сборки');
+  assert.equal(isBuildFile(b, 'js/app.js', fs.statSync(path.join(root, 'js', 'app.js'))), false, '«навсегда» такой файл не получит');
+  assert.equal(warned.length, 1, warned.join(' | '));
+  assert.ok(warned[0].includes('js/app.js'), warned[0]);
+  assert.ok(!warned[0].includes(root) && !warned[0].includes(path.basename(root)), 'только относительный путь: ' + warned[0]);
+  assert.doesNotMatch(warned[0], /resource busy|open '/, 'текст ошибки системы (с полным путём) не печатается');
+});
+
+test('LOCAL_SPEED_V1 (ревью): файл прочитался со второй-третьей попытки — сборка та же, что без сбоя, и тишина', (t) => {
+  const root = tree(t, BASE);
+  const healthy = computeBuild(root);
+  const warned = [];
+  const { readFile, calls } = busyReader('js/app.js', 2, 'EPERM');
+  const b = computeBuild(root, { readFile, warn: (l) => warned.push(l), pause: () => {} });
+  assert.equal(calls.n, 3);
+  assert.equal(b.id, healthy.id);
+  assert.deepEqual(b.files.get('js/app.js'), healthy.files.get('js/app.js'));
+  assert.deepEqual(warned, []);
+});
+
+test('LOCAL_SPEED_V1 (ревью): два разных нечитаемых файла — два разных номера; исчезнувший файл — мимо, без повторов', (t) => {
+  const root = tree(t, BASE);
+  const quiet = { warn: () => {}, pause: () => {} };
+  const a = computeBuild(root, { readFile: busyReader('js/app.js', Infinity).readFile, ...quiet });
+  const b = computeBuild(root, { readFile: busyReader('js/admin/view.js', Infinity).readFile, ...quiet });
+  assert.notEqual(a.id, b.id);
+  const gone = busyReader('js/app.js', Infinity, 'ENOENT');
+  const warned = [];
+  const c = computeBuild(root, { readFile: gone.readFile, warn: (l) => warned.push(l), pause: () => {} });
+  assert.equal(gone.calls.n, 1, 'файла нет — ждать нечего');
+  assert.equal(c.files.has('js/app.js'), false, 'удалённого между обходом и чтением файла в сборке нет');
+  assert.deepEqual(warned, []);
+});

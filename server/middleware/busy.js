@@ -56,7 +56,34 @@ export function requestLabel(req) {
   if (API_DB.test(p)) return dbLabel(req.body);
   const storage = API_STORAGE.exec(p);
   if (storage) return '/api/storage/' + codeName(storage[1]);
+  const open = openEntryLabel(p);   // LOCAL_SPEED_V1 (ревью)
+  if (open) return open;
   return p;
+}
+
+// LOCAL_SPEED_V1 (ревью) — ВХОДЫ БЕЗ СЕССИИ: в пути не должно печататься ничего,
+// кроме известного адреса. /api/telephony/pbx/<секрет> — секрет вебхука станции
+// прямо в пути (services/telephony/ring-webhook.js, маршрут «/:token»): в строке
+// [slow] он печатался целиком, а консоль клиники фотографируют и шлют в поддержку.
+// Теперь — «/api/telephony/pbx/:token». У остальных входов без сессии секрет не в
+// пути (Binotel — тело и адрес отправителя, LIS Proxy — ключ в строке запроса,
+// справочник филиалу — подпись в заголовках), но дописать к их адресу можно что
+// угодно, поэтому печатается только сам вход и его известные маршруты.
+const OPEN_ENTRIES = [
+  { mount: '/api/telephony/pbx', tail: () => '/:token' },
+  { mount: '/api/telephony/binotel', tail: () => '' },
+  { mount: '/api/lisproxy', tail: () => '' },
+  { mount: '/api/branch-sync', tail: (seg) => (seg === 'catalogue' ? '/catalogue' : '') },
+];
+
+function openEntryLabel(p) {
+  const lower = p.toLowerCase();
+  for (const e of OPEN_ENTRIES) {
+    if (lower !== e.mount && !lower.startsWith(e.mount + '/')) continue;
+    const seg = lower.slice(e.mount.length + 1).split('/')[0];
+    return e.mount + (seg ? e.tail(seg) : '');
+  }
+  return null;
 }
 
 // --- [busy] -------------------------------------------------------------------
@@ -103,9 +130,16 @@ export function busyTimer({ env = process.env, log = (line) => console.warn(line
 // --- [stall] ------------------------------------------------------------------
 // Таймер раз в 200 мс сверяет, сколько прошло на самом деле. Опоздал больше чем
 // на секунду — цикл событий стоял: «[stall] 4700ms» и, если с прошлого тика
-// отработал отмеренный обработчик, «after: <самый долгий из них>». Если
-// синхронная часть виновника коротка, а остановка длинная — держало то, что он
-// делал после (например, отправка огромного ответа).
+// отработал отмеренный обработчик, «after: <самый долгий из них> (<его мс>ms)».
+//
+// LOCAL_SPEED_V1 (ревью) — НЕ НАЗЫВАТЬ НЕВИНОВНОГО. Раньше в «after:» попадал
+// любой отмеренный обработчик, даже отработавший за 0 мс, — и строка указывала на
+// запрос, который ни при чём. Теперь рядом с именем — его отмеренное время, а
+// обработчик быстрее порога [busy] (EASYMED_BUSY_MS; [busy] выключен — обычные
+// 150 мс) не называется вовсе: строка остаётся «[stall] 4700ms» — остановку
+// устроил кто-то неотмеренный. Время в скобках меньше остановки — виновник занял
+// поток лишь на эту часть, остальное — то, что шло после (например, отправка
+// огромного ответа).
 //
 // Детектор один на процесс (createApp создаётся в тестах сотни раз — интервал не
 // множится), и unref(): он никогда не держит процесс живым.
@@ -123,8 +157,9 @@ export function stallWatchAllowed(env = process.env) {
   return !(env && env.NODE_TEST_CONTEXT) || String(env.EASYMED_STALL_WATCH || '') === '1';
 }
 
-export function startStallWatch({ log = (line) => console.warn(line), everyMs = 200, stallMs = 1000 } = {}) {
+export function startStallWatch({ log = (line) => console.warn(line), everyMs = 200, stallMs = 1000, env = process.env } = {}) {
   if (stallTimer) return;
+  const nameFromMs = busyLimitMs(env) || DEFAULT_BUSY_MS;   // LOCAL_SPEED_V1 (ревью) — быстрее этого в «after:» не попадает
   let last = process.hrtime.bigint();
   windowTop = null;
   stallTimer = setInterval(() => {
@@ -134,7 +169,9 @@ export function startStallWatch({ log = (line) => console.warn(line), everyMs = 
     const top = windowTop;
     windowTop = null;
     if (late > stallMs) {
-      try { log('[stall] ' + late.toFixed(0) + 'ms' + (top ? ' after: ' + top.label : '')); } catch { /* см. выше */ }
+      // LOCAL_SPEED_V1 (ревью) — имя только с отмеренным временем и только не быстрее порога [busy].
+      const after = top && top.ms >= nameFromMs ? ' after: ' + top.label + ' (' + top.ms.toFixed(0) + 'ms)' : '';
+      try { log('[stall] ' + late.toFixed(0) + 'ms' + after); } catch { /* см. выше */ }
     }
   }, everyMs);
   if (typeof stallTimer.unref === 'function') stallTimer.unref();

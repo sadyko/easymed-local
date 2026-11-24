@@ -52,17 +52,64 @@ export function buildFiles(root) {
   return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
+// LOCAL_SPEED_V1 (ревью) — ФАЙЛ, КОТОРЫЙ НЕ ПРОЧИТАТЬ ПРИ СТАРТЕ. Антивирус клиники
+// может держать файл в момент подсчёта (EBUSY/EPERM). Молча пропустить его нельзя:
+// страница оставила бы его ссылку без /v/<номер>/ (src="js/admin.js?v=…") рядом с
+// /v/<номер>/… у остальных, и общие модули загрузились бы по двум адресам — в двух
+// экземплярах. Поэтому: несколько попыток с короткой паузой, а если не вышло —
+// файл остаётся в сборке с меткой UNREAD. Время и размер у метки невозможные, так
+// что isBuildFile для него всегда «нет»: под /v/<номер>/ он отдаётся с no-cache,
+// «навсегда» — никогда (его содержимого в номере нет).
+const UNREAD = Object.freeze({ mtimeMs: -1, size: -1 });
+const READ_TRIES = 3;
+const READ_PAUSE_MS = 60;        // перед 2-й попыткой; перед 3-й — вдвое больше
+const PAUSE_BUDGET_MS = 1500;    // на весь подсчёт: недоступная целиком папка не задержит старт на минуты
+
+/** Синхронная пауза: подсчёт идёт один раз при старте, до приёма запросов. */
+function pauseSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* нет паузы — просто следующая попытка */ }
+}
+
 /**
  * Посчитать сборку папки: { id, files }.
- * id — 10 hex; files — Map «путь → { mtimeMs, size }» на момент подсчёта.
+ * id — 10 hex; files — Map «путь → { mtimeMs, size }» на момент подсчёта
+ * (нечитаемый файл — { mtimeMs: -1, size: -1 }, см. выше).
+ * Второй аргумент — для тестов: readFile/statFile (чтение), pause (пауза между
+ * попытками), warn (строка в журнал).
  */
-export function computeBuild(root) {
+export function computeBuild(root, {
+  readFile = fs.readFileSync,
+  statFile = fs.statSync,
+  pause = pauseSync,
+  warn = (line) => console.warn(line),
+} = {}) {
   const hash = createHash('sha1');
   const files = new Map();
+  let budget = PAUSE_BUDGET_MS;
   for (const rel of buildFiles(root)) {
     const abs = path.join(root, rel);
-    let body, stat;
-    try { body = fs.readFileSync(abs); stat = fs.statSync(abs); } catch { continue; }
+    let body = null, stat = null, gone = false;
+    for (let attempt = 1; attempt <= READ_TRIES; attempt++) {
+      try { body = readFile(abs); stat = statFile(abs); break; }
+      catch (e) {
+        body = null; stat = null;
+        // Файла уже нет (удалён между обходом и чтением) — ждать нечего, в сборке его нет.
+        if (e && e.code === 'ENOENT') { gone = true; break; }
+        const wait = READ_PAUSE_MS * attempt;
+        if (attempt < READ_TRIES && budget >= wait) { budget -= wait; pause(wait); }
+        else if (attempt < READ_TRIES) continue;   // время на паузы вышло — попытки без ожидания
+      }
+    }
+    if (gone) continue;
+    if (!body || !stat) {
+      // LOCAL_SPEED_V1 (ревью) — путь и метка вместо длины и содержимого: номер
+      // такой сборки не совпадёт с номером целой (у целой здесь стоит число).
+      hash.update(rel + '\0unread\0');
+      files.set(rel, UNREAD);
+      // Только относительный путь: в тексте ошибки системы — полный путь папки.
+      try { warn('[build] файл не прочитан при старте, отдаётся без долгого хранения: ' + rel); } catch { /* журнал — не повод не стартовать */ }
+      continue;
+    }
     // Путь, длина и содержимое — раздельно: два файла не склеятся в один и тот же поток байтов.
     hash.update(rel + '\0' + body.length + '\0');
     hash.update(body);

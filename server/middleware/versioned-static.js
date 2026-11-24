@@ -73,6 +73,9 @@ export function rewritePage(html, build) {
     let p = value.replace(/[?#].*$/, '');
     if (p.startsWith('./')) p = p.slice(2);
     else if (p.startsWith('/')) p = p.slice(1);   // страницы лежат в корне: «/js/x» и «js/x» — один файл
+    // LOCAL_SPEED_V1 (ревью) — файл, не прочитанный при старте (антивирус), в
+    // build.files есть (с меткой, build-id.js): его ссылка тоже уходит под
+    // /v/<id>/ — иначе у общих модулей было бы два адреса и два экземпляра.
     if (!build.files.has(p)) return whole;
     return `${attr}=${q}/v/${build.id}/${p}${q}`;
   });
