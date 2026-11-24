@@ -1,6 +1,6 @@
 /* ==========================================================================
    Easy-Med public website — design system
-   Premium, trustworthy, modern medical. Brand teal #167873.
+   Premium, trustworthy, modern medical. Brand: Easy-Med system blue #3d5c8c (SITE_SYSTEM_BLUE_V1).
 
    MOBILE FIRST IS NOT A STYLE CHOICE HERE — ~90% of visitors arrive on a
    phone. Everything outside a media query IS the phone layout. Desktop only
@@ -55,20 +55,18 @@
    Tokens
    -------------------------------------------------------------------------- */
 :root {
-  /* BRAND_MEDICAL_BLUE_V1 — основной цвет сайта #005EB8.
-     Это NHS Blue: цвет британской системы здравоохранения, отобранный и
-     проверенный на доступность именно для медицины. Пациент читает его как
-     больничный, а не как корпоративный.
-
-     Третий вариант по счёту, и единственный, который работает И фоном,
-     И акцентом. Предыдущие два были слишком тёмными: #1D2733 давал против
-     чернил 1.09:1, #0c3468 — 1.34:1, то есть акцент сливался с обычным
-     текстом, и приходилось заводить второй цвет. У #005EB8 — 2.59:1, и
-     отдельный акцентный токен больше не нужен: цвет на сайте один. */
-  --brand: #005EB8;
-  --brand-600: #004f9b;        /* наведение */
-  --brand-700: #00407d;        /* нажатие */
-  --brand-050: #ebf2f9;        /* мягкая подложка */
+  /* SITE_SYSTEM_BLUE_V1 (2026-11-24, владелец: «use in a website system blue») —
+     сайт в синем самой программы Easy-Med, а не в отдельном «медицинском»
+     #005EB8 (BRAND_MEDICAL_BLUE_V1, до него — бирюза #167873). Шкала — ровно
+     --primary-* из public/css/admin.css: кнопки программы идут градиентом
+     500 -> 600, поэтому основной цвет сайта — 500, наведение — 600.
+     #3d5c8c на белом — 7.1:1 (текст ссылок и кнопок читается), против
+     чернил #132125 — 2.3:1: акцент по-прежнему отличим от обычного текста,
+     второй цвет не нужен. */
+  --brand: #3d5c8c;
+  --brand-600: #24426f;        /* наведение */
+  --brand-700: #1c355b;        /* нажатие */
+  --brand-050: #eef2f8;        /* мягкая подложка */
 
   --ink: #132125;
   --ink-2: #3f565b;
@@ -284,7 +282,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
 .btn-primary {
   background: var(--brand);
   color: #fff;
-  box-shadow: 0 6px 18px rgba(22, 120, 115, .26);
+  box-shadow: 0 6px 18px rgba(61, 92, 140, .26);
 }
 .btn-primary:hover { background: var(--brand-600); color: #fff; }
 
@@ -433,8 +431,8 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
 .value-card__icon {
   width: 46px; height: 46px; border-radius: 14px;
   display: inline-grid; place-items: center;
-  background: var(--accent-soft, #eef5f4);
-  color: var(--accent, #167873);
+  background: var(--accent-soft, var(--brand-050));
+  color: var(--accent, var(--brand));
   flex: 0 0 auto;
 }
 .value-card__icon svg { width: 24px; height: 24px; }
@@ -486,7 +484,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
      он и «подныривает» при первом же движении колёсика. */
   padding-block: clamp(3rem, 2rem + 4vw, 6rem) clamp(2rem, 1.4rem + 3vw, 4.5rem);
   background:
-    radial-gradient(120% 90% at 100% 0%, var(--brand-050) 0%, rgba(232, 244, 242, 0) 60%),
+    radial-gradient(120% 90% at 100% 0%, var(--brand-050) 0%, rgba(238, 242, 248, 0) 60%),
     var(--bg-soft);
   overflow: hidden;
 }
@@ -532,7 +530,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   /* Тёплая кремовая подложка — только полоса героя; сама страница остаётся
      на --bg. Бирюзовое пятно в правом верхнем углу — из общего .hero. */
   background:
-    radial-gradient(115% 85% at 96% 0%, var(--brand-050) 0%, rgba(232, 244, 242, 0) 52%),
+    radial-gradient(115% 85% at 96% 0%, var(--brand-050) 0%, rgba(238, 242, 248, 0) 52%),
     linear-gradient(168deg, var(--hero-tint-1) 0%, var(--hero-tint-2) 100%);
 }
 
@@ -973,7 +971,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   justify-content: center;
   width: 100%;
   height: 100%;
-  background: linear-gradient(135deg, var(--brand-050) 0%, #d5e9e6 100%);
+  background: linear-gradient(135deg, var(--brand-050) 0%, #d9e1ee 100%);
   color: var(--brand-600);
 }
 .doctor-card__avatar svg, .doc-hero__avatar svg {
@@ -1031,7 +1029,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
   justify-content: center;
   width: 100%;
   height: 100%;
-  background: linear-gradient(135deg, var(--brand-050) 0%, #d5e9e6 100%);
+  background: linear-gradient(135deg, var(--brand-050) 0%, #d9e1ee 100%);
   color: var(--brand-600);
 }
 .doc-hero__body { text-align: center; }

@@ -291,7 +291,7 @@ export function page({ db, lang, path, title, description, body, jsonLd, noindex
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(docTitle)}</title>
-${desc ? `<meta name="description" content="${esc(desc)}">\n` : ''}<meta name="theme-color" content="#167873">
+${desc ? `<meta name="description" content="${esc(desc)}">\n` : ''}<meta name="theme-color" content="#3d5c8c">
 ${noindex ? '<meta name="robots" content="noindex, follow">\n' : ''}<meta property="og:type" content="website">
 <meta property="og:site_name" content="${esc(siteName)}">
 <meta property="og:title" content="${esc(docTitle)}">
