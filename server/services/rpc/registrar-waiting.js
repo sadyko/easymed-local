@@ -121,6 +121,7 @@ import { searchArg } from './page-args.js';                   // CRM_BOOKINGS_TA
 import { patientMatchSql } from './cashier.js';               // CRM_BOOKINGS_TAB_V1 — поиск пациента правилом кассы
 import { parseWishReleaseNotes } from './registrar-desk.js';  // CRM_BOOKINGS_TAB_V1 — отпущенный стойкой анализ (журнал)
 import { outstandingWhere } from '../domain/money.js';         // CRM_BOOKINGS_TAB_V1 (направления до оплаты) — «ещё должны», как у кассы
+import { visitRegisteredBy, nameOfUser } from '../domain/visit-registrar.js';   // PATIENT_LIST_REGISTRAR_V1 — «кто оформил визит»: одно правило
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -303,19 +304,22 @@ function visitFacts(db, visitIds, explain = false, out = new Map()) {
  *     промокод) и кто её дал (кто выставил счёт со скидкой, кто правил скидку на кассе — журнал);
  *     нет скидки — null;
  *   • analyses — анализы строки (services.is_lab) отдельно; services по-прежнему называет всё.
- * «Записал(а)» (booked_by) — как было. Три запроса на всю выдачу, визиты — по индексам visit_id.
+ * «Записал(а)» (booked_by) — как было. Запросы — на всю выдачу, визиты — по индексам visit_id.
+ * PATIENT_LIST_REGISTRAR_V1 — правило registered_by вынесено в domain/visit-registrar.js
+ * (visitRegisteredBy): им же картотека подписывает колонку «Регистратор». Здесь остались
+ * только чтения скидки; порядок и состав registered_by прежние.
  */
 function bookingLog(db, rows, users) {
   const visitIds = [...new Set(rows.map((r) => r.visit_id).filter((v) => v != null).map(Number))];
   if (!visitIds.length) return;
   const name = (id, fallback = '') => nameOfUser(users.get(Number(id))) || fallback || '';
-  const byVisit = new Map(visitIds.map((id) => [id, { by: [], amount: 0, base: 0, notes: [], givers: [] }]));
+  const registeredBy = visitRegisteredBy(db, visitIds, { users });   // PATIENT_LIST_REGISTRAR_V1
+  const byVisit = new Map(visitIds.map((id) => [id, { amount: 0, base: 0, notes: [], givers: [] }]));
   const add = (list, v) => { if (v && !list.includes(v)) list.push(v); };
   const invoices = db.prepare(`SELECT i.visit_id, i.created_by, i.subtotal, i.discount_amount, i.discount_note
                                 FROM invoices i WHERE ${IN_IDS('i.visit_id')} AND COALESCE(i.status, '') <> 'void' ORDER BY i.id`).all(idList(visitIds));
   for (const i of invoices) {
     const v = byVisit.get(Number(i.visit_id)); if (!v) continue;
-    add(v.by, name(i.created_by));
     const d = Number(i.discount_amount) || 0;
     if (d > 0) {
       v.amount += d; v.base += Number(i.subtotal) || 0;
@@ -324,17 +328,15 @@ function bookingLog(db, rows, users) {
     }
   }
   const journal = db.prepare(`SELECT a.visit_id, a.action, a.actor_user_id, a.actor_name FROM invoice_audit_log a
-                               WHERE ${IN_IDS('a.visit_id')} AND a.action IN ('visit_registered', 'discount', 'discount_change') ORDER BY a.id`).all(idList(visitIds));
+                               WHERE ${IN_IDS('a.visit_id')} AND a.action IN ('discount', 'discount_change') ORDER BY a.id`).all(idList(visitIds));
   for (const a of journal) {
     const v = byVisit.get(Number(a.visit_id)); if (!v) continue;
-    const who = name(a.actor_user_id, a.actor_name);
-    if (a.action === 'visit_registered') add(v.by, who);
-    else if (v.amount > 0) add(v.givers, who);
+    if (v.amount > 0) add(v.givers, name(a.actor_user_id, a.actor_name));
   }
   for (const r of rows) {
     const v = r.visit_id != null ? byVisit.get(Number(r.visit_id)) : null;
     if (!v) continue;
-    r.registered_by = v.by.slice();
+    r.registered_by = (registeredBy.get(Number(r.visit_id)) || []).slice();
     r.discount = v.amount > 0
       ? { amount: Math.round(v.amount * 100) / 100, base: Math.round(v.base * 100) / 100, notes: v.notes.slice(), by: v.givers.slice() }
       : null;
@@ -444,7 +446,7 @@ function parseRoles(raw) {
   try { const p = JSON.parse(raw || '[]'); return Array.isArray(p) ? p : []; } catch { return []; }
 }
 
-const nameOfUser = (u) => (u ? (String(u.full_name || '').trim() || u.username || '') : '');
+// PATIENT_LIST_REGISTRAR_V1 — nameOfUser переехал в domain/visit-registrar.js (одно определение имени).
 
 /**
  * WAIT_REG_V1 (ревью M6) — ПЛАНЫ ЗАПРОСОВ СПИСКА (EXPLAIN QUERY PLAN тех же текстов, что выполняются):

@@ -57,7 +57,8 @@ const empty = () => ({ visit_count: 0, last_visit: null, last_visit_day: null, n
 /**
  * PATIENT_LIST_LAST_VISIT_V1 — правило «состоялся» одним SQL-фрагментом: визиты
  * (не отменённые и не «не пришёл»), у каждого — pid, jd (julianday), d (местный
- * день) и ok (1 — состоялся по правилу выше). Им пользуются эта сводка и
+ * день), vid (id визита — PATIENT_LIST_REGISTRAR_V1) и ok (1 — состоялся по
+ * правилу выше). Им пользуются эта сводка и
  * картотека (rpc/patient-list.js: сортировка и отбор по последнему визиту) —
  * одно определение, а не две копии, которые разойдутся с первой же правкой.
  *
@@ -69,7 +70,7 @@ export function visitsWithHappenedSql(where = '1=1') {
   const local = localDate('v.visit_date');
   const gone = NOT_HAPPENED_STATUSES.map((s) => `'${s}'`).join(', ');
   const worked = WORKED_LINE_STATUSES.map((s) => `'${s}'`).join(', ');
-  return `SELECT v.patient_id AS pid, julianday(v.visit_date) AS jd, ${local} AS d,
+  return `SELECT v.patient_id AS pid, v.id AS vid, julianday(v.visit_date) AS jd, ${local} AS d,
                  CASE WHEN ${local} = ? THEN 1
                       WHEN ${local} > ? THEN 0
                       WHEN v.status = 'arrived' THEN 1
@@ -93,8 +94,12 @@ export function visitsWithHappenedSql(where = '1=1') {
  * @returns {Map<number, { visit_count: number, last_visit: string|null,
  *   last_visit_day: string|null, next_visit: string|null, next_visit_day: string|null }>}
  *   ключ — id пациента; у пациента без визитов — нули и null.
+ *   PATIENT_LIST_REGISTRAR_V1 — с opts.withLastVisitId у каждого ещё last_visit_id:
+ *   id того самого визита, чьё время — last_visit (при равном времени — больший id);
+ *   нет состоявшихся — null. Одно дополнительное чтение на пачку, по тому же
+ *   фрагменту и индексу idx_visits_patient; без опции его нет.
  */
-export function patientVisitSummary(db, patientIds, { today = null } = {}) {
+export function patientVisitSummary(db, patientIds, { today = null, withLastVisitId = false } = {}) {
   const ids = [...new Set((Array.isArray(patientIds) ? patientIds : []).map(Number)
     .filter((n) => Number.isInteger(n) && n > 0))];
   const out = new Map(ids.map((id) => [id, empty()]));
@@ -130,8 +135,29 @@ export function patientVisitSummary(db, patientIds, { today = null } = {}) {
         last_visit_day: r.last_visit_day || null,
         next_visit: r.next_visit || null,
         next_visit_day: r.next_visit_day || null,
+        ...(withLastVisitId ? { last_visit_id: null } : {}),
       });
     }
+    if (withLastVisitId) {
+      // PATIENT_LIST_REGISTRAR_V1 — строки идут по возрастанию времени и id:
+      // последняя строка пациента и есть его последний состоявшийся визит.
+      for (const r of db.prepare(lastVisitIdSql(part.length)).all(day, day, ...part)) {
+        const o = out.get(Number(r.pid));
+        if (o) o.last_visit_id = Number(r.vid);
+      }
+    }
   }
+  if (withLastVisitId) for (const o of out.values()) if (!('last_visit_id' in o)) o.last_visit_id = null;
   return out;
+}
+
+// PATIENT_LIST_REGISTRAR_V1 — id состоявшихся визитов пачки пациентов, по времени.
+const lastVisitIdSql = (n) => `SELECT pid, vid FROM (${visitsWithHappenedSql(`v.patient_id IN (${Array.from({ length: n }, () => '?').join(', ')})`)})
+                                WHERE ok = 1 ORDER BY jd, vid`;
+
+/** PATIENT_LIST_REGISTRAR_V1 — план чтения last_visit_id (EXPLAIN QUERY PLAN того же текста) для теста плана. */
+export function lastVisitIdPlan(db, patientIds = [1]) {
+  const ids = (patientIds || []).map(Number);
+  const day = clinicToday(db);
+  return db.prepare('EXPLAIN QUERY PLAN ' + lastVisitIdSql(ids.length)).all(day, day, ...ids).map((r) => String(r.detail));
 }

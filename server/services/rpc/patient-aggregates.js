@@ -30,13 +30,26 @@
 //     прежняя знаковая цифра (баланс минус долг) для экранов, которые ещё
 //     рисуют одно число;
 //   • страховка и её вид — из справочника плательщиков по patients.payer_id;
-//   • регистратор — ФИО того, кто завёл карту (users.full_name по created_by).
+//   • регистратор — ФИО того, кто завёл карту (users.full_name по created_by);
+//   • PATIENT_LIST_REGISTRAR_V1 (2026-11-24, решение владельца) — регистратор —
+//     тот, кто ОФОРМИЛ ПОСЛЕДНИЙ ВИЗИТ пациента. У импортированных карт автора
+//     нет, и колонка говорила «Не указан» у большинства строк. «Последний
+//     визит» — тот же, чью дату показывает картотека (последний состоявшийся,
+//     domain/visit-summary.js); «оформил» — правило «Записей CRM»
+//     (domain/visit-registrar.js: создатель живого счёта визита, затем отметка
+//     журнала visit_registered). Нет состоявшегося визита или у него никто не
+//     записан — кто завёл карту, как прежде; нет и его — пустая строка (экран
+//     пишет «Не указан»). registrar — первый по правилу, registrars — все (для
+//     подсказки). Три чтения на СТРАНИЦУ (id последних визитов, счета, журнал),
+//     все по индексам — ни одного запроса на строку. Отчёт о выручке этим
+//     вызовом не пользуется и не меняется.
 import { RpcError } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
 import { walletBalance } from '../domain/wallet.js';   // V3120_FIX
 import { outstandingWhere } from '../domain/money.js';
 import { localDate } from '../domain/day.js';   // LAST_VISIT_TRUE_V1 — местный день регистрации
-import { patientVisitSummary } from '../domain/visit-summary.js';   // LAST_VISIT_TRUE_V1
+import { patientVisitSummary, lastVisitIdPlan } from '../domain/visit-summary.js';   // LAST_VISIT_TRUE_V1
+import { visitRegisteredBy, visitRegisteredByPlans } from '../domain/visit-registrar.js';   // PATIENT_LIST_REGISTRAR_V1
 
 // Кто видит картотеку, тот видит и её числа: отдельного права у них нет.
 const AGGREGATE_ROLES = ['admin', 'registrar', 'doctor', 'head_doctor', 'nurse', 'senior_nurse', 'cashier', 'lab', 'callcenter'];
@@ -52,7 +65,9 @@ export function patientBaseAggregates(db, args, user) {
   // Ограничение на всякий случай: страница картотеки — это десятки строк.
   const use = ids.slice(0, 500);
   const holes = use.map(() => '?').join(',');
-  const visitsOf = patientVisitSummary(db, use);   // LAST_VISIT_TRUE_V1
+  const visitsOf = patientVisitSummary(db, use, { withLastVisitId: true });   // LAST_VISIT_TRUE_V1
+  // PATIENT_LIST_REGISTRAR_V1 — кто оформил последний визит каждого пациента страницы.
+  const registeredBy = visitRegisteredBy(db, [...visitsOf.values()].map((v) => v.last_visit_id).filter((id) => id != null));
 
   return db.prepare(`
     SELECT p.id AS patient_id,
@@ -65,16 +80,32 @@ export function patientBaseAggregates(db, args, user) {
       FROM patients p
       LEFT JOIN payers py ON py.id = p.payer_id
       LEFT JOIN users  u  ON u.id  = p.created_by
-     WHERE p.id IN (${holes})`).all(...use).map((r) => ({
-    ...r,
+     WHERE p.id IN (${holes})`).all(...use).map((r) => {
     // LAST_VISIT_TRUE_V1 — состоявшиеся визиты и ближайшая запись (domain/visit-summary.js).
-    ...visitsOf.get(Number(r.patient_id)),
-    registration_day: r.registration_day || null,
-    balance: walletBalance(db, r.patient_id),
-    debt: round2(r.debt),
-    net_balance: round2(walletBalance(db, r.patient_id) - round2(r.debt)),
-    insurer: r.insurer || '',
-    payer_type: r.payer_type || '',
-    registrar: r.registrar || '',
-  }));
+    const { last_visit_id: lastVisitId, ...visits } = visitsOf.get(Number(r.patient_id));
+    // PATIENT_LIST_REGISTRAR_V1 — оформившие последний визит; никого — кто завёл карту.
+    const by = (lastVisitId != null && registeredBy.get(lastVisitId)) || [];
+    const registrars = by.length ? by.slice() : (r.registrar ? [r.registrar] : []);
+    return {
+      ...r,
+      ...visits,
+      registration_day: r.registration_day || null,
+      balance: walletBalance(db, r.patient_id),
+      debt: round2(r.debt),
+      net_balance: round2(walletBalance(db, r.patient_id) - round2(r.debt)),
+      insurer: r.insurer || '',
+      payer_type: r.payer_type || '',
+      registrar: registrars[0] || '',
+      registrars,
+    };
+  });
+}
+
+/**
+ * PATIENT_LIST_REGISTRAR_V1 — планы чтений регистратора страницы (EXPLAIN QUERY PLAN
+ * тех же текстов, что выполняются): их проверяет patient-aggregates.test.js.
+ * @returns {{lastVisit: string[], invoices: string[], journal: string[]}}
+ */
+export function patientRegistrarPlans(db, { patientIds = [1], visitIds = [1] } = {}) {
+  return { lastVisit: lastVisitIdPlan(db, patientIds), ...visitRegisteredByPlans(db, visitIds) };
 }

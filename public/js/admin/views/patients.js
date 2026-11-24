@@ -785,6 +785,15 @@ function paintSortChrome() {
 // обычно 2–3 разных регистратора), и запомненные имена не спрашиваем повторно.
 // Если RPC когда-нибудь появится, его ответ имеет приоритет — p.registrar
 // проверяется первым.
+//
+// PATIENT_LIST_REGISTRAR_V1 (2026-11-24) — RPC давно есть, и теперь p.registrar —
+// тот, кто ОФОРМИЛ ПОСЛЕДНИЙ ВИЗИТ пациента (решение владельца: у импортированных
+// карт автора нет, и колонка говорила «Не указан» у большинства строк). Имя
+// приезжает в том же ответе, что дата последнего визита и «визитов: N»
+// (patient_base_aggregates; правило — server/services/domain/visit-registrar.js),
+// сервер сам подставляет создателя карты, когда визита или записи о нём нет.
+// Запрос имён по created_by ниже остаётся запасным путём — на случай, когда
+// сводка страницы не ответила.
 const registrarNames = new Map();   // user id → ФИО
 
 async function resolveRegistrars(rows) {
@@ -812,6 +821,13 @@ function registrarOf(p) {
     const id = p && p.createdBy;
     if (id == null || id === '') return '';
     return registrarNames.get(String(id)) || '';
+}
+
+// PATIENT_LIST_REGISTRAR_V1 — подсказка: визит могли оформить несколько человек
+// (счёт выставил один, «оформлен» отметил другой) — в ячейке первый, здесь все.
+function registrarTitleOf(p, shown) {
+    const all = p && Array.isArray(p.registrars) ? p.registrars.filter(Boolean) : [];
+    return all.length > 1 && all[0] === shown ? all.join(', ') : shown;
 }
 
 // DEBT_FLOW_V1 — долг пациента в реестре: красная метка у имени.
@@ -1322,6 +1338,7 @@ function patientRow(p) {
     const next = fmtDay(p.nextVisit);   // LAST_VISIT_TRUE_V1 — ближайшая запись
     const visits = Number(p.visitCount || 0);
     const registrar = registrarOf(p);
+    const registrarTitle = registrarTitleOf(p, registrar);   // PATIENT_LIST_REGISTRAR_V1
 
     // data-reveal — заявка на появление; ПРЯЧЕТ строку только motion.js и
     // только когда уже может показать (см. MOTION_REVEAL_V1). Атрибут в
@@ -1396,12 +1413,13 @@ function patientRow(p) {
             ),
         ),
         // BALANCE_COL_REMOVED_V1 — ячейки «Баланс» нет (заголовок выше).
-        // 6 — Регистратор: настоящее имя того, кто завёл карту, а если его в
-        // карте нет — так и сказано словом, а не прочерком, который на каждой
-        // строке читается как «экран сломан».
+        // 6 — Регистратор. PATIENT_LIST_REGISTRAR_V1 — тот, кто оформил ПОСЛЕДНИЙ
+        // ВИЗИТ (в подсказке — все оформившие); нет визита или записи о нём —
+        // тот, кто завёл карту; а если нет и его — так и сказано словом, а не
+        // прочерком, который на каждой строке читается как «экран сломан».
         h('td', null,
             h('span', { class: 'reg-by' }, Icon('User', { size: 13 }),
-                registrar ? h('span', { class: 'pt-reg-nm', title: registrar }, registrar) : noneCell('Не указан')),
+                registrar ? h('span', { class: 'pt-reg-nm', title: registrarTitle }, registrar) : noneCell('Не указан')),
         ),
         // PATIENT_LIST_COLUMNS_V1 — выбранные дополнительные колонки.
         ...shownExtraCols().map((c) => {

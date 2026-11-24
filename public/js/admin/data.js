@@ -126,6 +126,7 @@ function shapePatient(row) {
         balance:       0,                       // computed later if invoices exist
         visitCount:    0,                       // RegBase: filled by patient_base_aggregates RPC
         registrar:     '',
+        registrars:    [],                      // PATIENT_LIST_REGISTRAR_V1 — все, кто оформил последний визит (подсказка)
         payerType:     '',
         insurance:     row.__payer_name || '',
         doctor:        row.__doctor_name || '',
@@ -354,7 +355,10 @@ async function attachBaseAggregates(rows) {
                 r.debt       = Number(a.debt || 0);
                 r.insurance  = a.insurer || '';
                 r.payerType  = a.payer_type || '';
+                // PATIENT_LIST_REGISTRAR_V1 — registrar: кто оформил ПОСЛЕДНИЙ ВИЗИТ
+                // (нет такого — кто завёл карту); registrars — все оформившие.
                 r.registrar  = a.registrar || '';
+                r.registrars = Array.isArray(a.registrars) ? a.registrars.filter(Boolean) : [];
                 // LAST_VISIT_TRUE_V1 — последний СОСТОЯВШИЙСЯ визит (местный день
                 // сервера); нет такого — местный день регистрации. Будущая запись —
                 // отдельно: «запись: 3 ноября» под датой.
