@@ -456,6 +456,11 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
             // tool integration», провайдер — «Play Mobile») — подключение, проверочное
             // SMS и журнал. Только администратор (permissions.js, rpc/sms.js).
             { label: 'SMS-информирование', desc: 'Play Mobile: подключение, проверочное SMS и журнал отправленного', icon: 'Msg', live: true, action: nav('sms-settings'), route: 'sms-settings' },
+            // WEBSITE_V1 (2026-11-24, владелец: плитка — здесь, в «Коммерческих
+            // инструментах» настроек, а не на витрине commerce-hub.js) — редактор
+            // публичного сайта. Право — строка «Веб-сайт» в «Ролях»; модуль `website`
+            // лицензии — без него маршрут показывает экран предложения.
+            { label: 'Веб-сайт', desc: 'Сайт клиники: включение, главная страница, врачи и услуги, отделения, отзывы, вопросы и новости', icon: 'Globe', live: true, action: nav('website-settings'), route: 'website-settings' },
             // MOIZVONKI_V2 ставил здесь вторую плитку — «Мои Звонки: звонки с телефонов».
             // MOIZVONKI_IN_TELEPHONY_V1 (2026-10-17): владелец, увидев «Телефонию»
             // с плитками Binotel и onlinePBX, — «all telephony stuff should be done in
