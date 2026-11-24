@@ -44,6 +44,7 @@ import { stampWriteBody, stampUpdateRefusal } from '../services/domain/package-l
 import { packageProblem, isPackageRow, packageIds, packageItems } from '../../public/js/shared/package-price.js';   // SERVICES_PACKAGES_V1
 import { onlineRuleProblem } from '../../public/js/shared/service-public.js';   // SERVICES_PACKAGES_V1 — показ услуги: RU + UZ
 import { liveWrapSync } from '../services/live/bus.js';   // LIVE_REFRESH_V1 — «записано» для живых экранов
+import { busyTimer, dbLabel } from '../middleware/busy.js';   // LOCAL_SPEED_V1 — [busy]: кто держал сервер
 import { isCallcenterOnlyUser, callcenterCategoryRefusal, CALLCENTER_DISCOUNT_REFUSAL } from '../services/domain/patient-category-guard.js';   // CALLCENTER_NO_DISCOUNT_V1
 import { recordDocRevision } from '../services/domain/doc-history.js';   // DOC_HISTORY_V1 — версия документа в транзакции записи
 import { DOC_EDIT_REFUSAL } from '../../public/js/shared/doc-history.js';   // DOC_HISTORY_V1 — документ меняет врач строки или администратор
@@ -596,12 +597,17 @@ export function dbRoutes(db, { storageDir = null } = {}) {
     setLiveColumns(liveColumnsReader(db));
     setForeignKeyColumns(foreignKeyColumnsReader(db));
   const r = Router();
+  // LOCAL_SPEED_V1 — весь обработчик синхронный (better-sqlite3): timeBusy меряет его
+  // целиком и дольше EASYMED_BUSY_MS пишет «[busy] <мс>ms db <таблица> <операция>» —
+  // таблица из реестра и операция, из тела больше ничего (middleware/busy.js).
+  const timeBusy = busyTimer();   // LOCAL_SPEED_V1
+  const timedDb = (handler) => (req, res, next) => timeBusy(dbLabel(req.body), () => handler(req, res, next));   // LOCAL_SPEED_V1
 
   // LIVE_REFRESH_V1 (3.22.0, владелец 2026-11-08) — после успешной записи (ответ < 400,
   // без исключения) шина получает имя таблицы (res.locals.liveTable ниже) и всё, что
   // база поймала внутри обработчика (зеркало CRM, отметки прихода и т. п.); отказ и
   // откат — ничего. Обработчик синхронный: «после ответа» здесь и есть «после COMMIT».
-  r.post('/', liveWrapSync(db, (req, res) => ({ tables: res.locals.liveTable ? [res.locals.liveTable] : [] }), (req, res) => {
+  r.post('/', timedDb(liveWrapSync(db, (req, res) => ({ tables: res.locals.liveTable ? [res.locals.liveTable] : [] }), (req, res) => {   // LOCAL_SPEED_V1 — timedDb
     // CABINET_FIX_V1_R5 — основа записи записей кабинета — не колонка: снимается до compile().
     const notesBase = takeNotesBase(req.body);   // CABINET_FIX_V1_R5
     const repeatReason = takeRepeatReason(req.body);   // DUP_STOP_V1 — причина повтора — не колонка
@@ -1026,7 +1032,7 @@ export function dbRoutes(db, { storageDir = null } = {}) {
       recordEvent(db, 'server_error', '/api/db/' + compiled.meta.table);
       return res.status(500).json({ error: { code: 'internal', message: 'Запрос к базе не выполнен. Повторите позже.' } });
     }
-  }));   // LIVE_REFRESH_V1 — конец liveWrapSync
+  })));   // LIVE_REFRESH_V1 — конец liveWrapSync · LOCAL_SPEED_V1 — конец timedDb
 
   return r;
 }

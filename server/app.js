@@ -3,7 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { attachUser, requireAuth, requirePasswordChanged } from './middleware/auth.js';   // FIRST_RUN_PASSWORD_V1
 import { compress, markStaticFile } from './middleware/compress.js';   // PERF_GZIP_V1 · markStaticFile: LOCAL_SPEED_V1
-import { slowLog } from './middleware/slow-log.js';   // PERF_SLOWLOG_V1
+import { slowLog, slowLogEnabled } from './middleware/slow-log.js';   // PERF_SLOWLOG_V1 · slowLogEnabled: LOCAL_SPEED_V1
+import { startStallWatch, stallWatchAllowed } from './middleware/busy.js';   // LOCAL_SPEED_V1 — [stall]
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
 import { dbRoutes } from './routes/db.js';
@@ -45,6 +46,12 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {} } =
   // PERF_SLOWLOG_V1 — самым первым: меряем полное время запроса, включая
   // разбор тела и отдачу ответа, а не только работу маршрута.
   app.use(slowLog(db));   // OPS_EVENTS_V1 — same db-first factory shape as the route modules below.
+  // LOCAL_SPEED_V1 — вместе с журналом медленных запросов (EASYMED_SLOW_MS не 0) —
+  // детектор остановок: «[stall] <мс>ms after: <кто>», если цикл событий стоял
+  // дольше секунды. Один на процесс и unref() — сколько бы приложений ни создали
+  // тесты, интервал один и процесс не держит; под node --test — только по
+  // EASYMED_STALL_WATCH=1 (middleware/busy.js).
+  if (slowLogEnabled(process.env) && stallWatchAllowed(process.env)) startStallWatch();   // LOCAL_SPEED_V1
   // PERF_GZIP_V1 — до статики и до маршрутов: сжимаем и файлы, и ответы API.
   app.use(compress());
   app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });

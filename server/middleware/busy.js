@@ -58,3 +58,89 @@ export function requestLabel(req) {
   if (storage) return '/api/storage/' + codeName(storage[1]);
   return p;
 }
+
+// --- [busy] -------------------------------------------------------------------
+// Маршрут /api/db и диспетчер RPC меряют СИНХРОННУЮ часть обработчика (до того,
+// как он вернул значение или промис): better-sqlite3 синхронен, и пока она идёт,
+// сервер не отвечает никому. Дольше EASYMED_BUSY_MS (по умолчанию 150 мс; 0 —
+// выключено) — строка «[busy] 4800ms rpc <имя>» / «[busy] 4800ms db <таблица> <операция>».
+// Это тот, кто заморозил сервер; строки [slow] вокруг — те, кто ждал.
+
+const DEFAULT_BUSY_MS = 150;
+
+/** Порог [busy] в мс; 0 — выключено (0, отрицательное, не число). */
+export function busyLimitMs(env = process.env) {
+  const v = env && env.EASYMED_BUSY_MS;
+  const n = v == null || v === '' ? DEFAULT_BUSY_MS : Number(v);
+  return n > 0 ? n : 0;
+}
+
+// Самый долгий отмеренный обработчик с прошлого тика детектора остановок —
+// кандидат в «after:» строки [stall]. Один на процесс, как и детектор.
+let windowTop = null;
+
+/**
+ * Секундомер синхронной части: time(label, fn) вызывает fn, возвращает её
+ * значение (исключение — уходит дальше) и пишет [busy], если вышло дольше порога.
+ * Порог читается один раз — при создании (маршруты создаются в createApp).
+ */
+export function busyTimer({ env = process.env, log = (line) => console.warn(line) } = {}) {
+  const limit = busyLimitMs(env);
+  return function timeBusy(label, fn) {
+    const started = process.hrtime.bigint();
+    try {
+      return fn();
+    } finally {
+      const ms = Number(process.hrtime.bigint() - started) / 1e6;
+      if (!windowTop || ms > windowTop.ms) windowTop = { label, ms };
+      if (limit > 0 && ms > limit) {
+        try { log('[busy] ' + ms.toFixed(0) + 'ms ' + label); } catch { /* журнал — не повод сломать ответ */ }
+      }
+    }
+  };
+}
+
+// --- [stall] ------------------------------------------------------------------
+// Таймер раз в 200 мс сверяет, сколько прошло на самом деле. Опоздал больше чем
+// на секунду — цикл событий стоял: «[stall] 4700ms» и, если с прошлого тика
+// отработал отмеренный обработчик, «after: <самый долгий из них>». Если
+// синхронная часть виновника коротка, а остановка длинная — держало то, что он
+// делал после (например, отправка огромного ответа).
+//
+// Детектор один на процесс (createApp создаётся в тестах сотни раз — интервал не
+// множится), и unref(): он никогда не держит процесс живым.
+
+let stallTimer = null;
+
+export function isStallWatchRunning() { return stallTimer !== null; }
+
+/**
+ * Можно ли включать детектор. Под node --test (NODE_TEST_CONTEXT) — только по
+ * EASYMED_STALL_WATCH=1: синхронный migrate() каждого теста стоит около секунды,
+ * и прогон засыпало бы строками [stall] (так же поступает lan/mdns.js).
+ */
+export function stallWatchAllowed(env = process.env) {
+  return !(env && env.NODE_TEST_CONTEXT) || String(env.EASYMED_STALL_WATCH || '') === '1';
+}
+
+export function startStallWatch({ log = (line) => console.warn(line), everyMs = 200, stallMs = 1000 } = {}) {
+  if (stallTimer) return;
+  let last = process.hrtime.bigint();
+  windowTop = null;
+  stallTimer = setInterval(() => {
+    const now = process.hrtime.bigint();
+    const late = Number(now - last) / 1e6 - everyMs;
+    last = now;
+    const top = windowTop;
+    windowTop = null;
+    if (late > stallMs) {
+      try { log('[stall] ' + late.toFixed(0) + 'ms' + (top ? ' after: ' + top.label : '')); } catch { /* см. выше */ }
+    }
+  }, everyMs);
+  if (typeof stallTimer.unref === 'function') stallTimer.unref();
+}
+
+export function stopStallWatch() {
+  if (stallTimer) clearInterval(stallTimer);
+  stallTimer = null;
+}

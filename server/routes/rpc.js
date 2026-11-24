@@ -6,9 +6,11 @@ import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody, fillTemplate } from '../services/server-message.js';   // V3120_I18N
 import { dispatchRpc } from '../services/report-pool.js';   // V3120_PERF — тяжёлые отчёты в пуле потоков
 import { actAsRecheck } from '../services/act-as.js';   // ADMIN_ACT_AS_V1 (ревью, LOW 7)
+import { busyTimer, rpcLabel } from '../middleware/busy.js';   // LOCAL_SPEED_V1 — [busy]: кто держал сервер
 
 export function rpcRoutes(db) {
   const r = Router();
+  const timeBusy = busyTimer();   // LOCAL_SPEED_V1 — порог EASYMED_BUSY_MS читается здесь, при создании
   // TELEGRAM_BOT_V1 — обработчик теперь МОЖЕТ быть асинхронным.
   //
   // Раньше здесь стоял голый вызов, и промис уходил в res.json() как `{}` —
@@ -63,7 +65,9 @@ export function rpcRoutes(db) {
       // V3120_PERF — отчёт (POOLED_RPCS) считается в потоке отчётов, если пул
       // включён при запуске; иначе — здесь же, как прежде. dispatchRpc — async:
       // синхронный обработчик выполняется целиком уже здесь, до первого await.
-      pending = dispatchRpc(db, req.params.name, handler, req.body || {}, req.user);
+      // LOCAL_SPEED_V1 — эту синхронную часть и меряет timeBusy: дольше порога —
+      // строка «[busy] <мс>ms rpc <имя>» (кто держал сервер; middleware/busy.js).
+      pending = timeBusy(rpcLabel(req.params.name), () => dispatchRpc(db, req.params.name, handler, req.body || {}, req.user));
     } finally {
       liveHeld = liveScope ? liveScope.end() : null;   // LIVE_REFRESH_V1 — синхронная часть позади
     }
