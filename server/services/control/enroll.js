@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { verifyLicence } from './licence.js';
+import { invalidateControlCache } from './state.js';   // LOCAL_SPEED_V1
 import { computeFingerprint, writeAtomic, readBounded } from './checkin.js';
 import { ensureSyncGroup } from '../branch-sync/sync-group.js';   // BRANCH_SYNC_RELAY_V1
 import { assertControlUrlIsTestSafe } from './prod-guard.js';   // PROD_GUARD_V1
@@ -191,6 +192,10 @@ export async function enrollWithCode(dataDir, code, {
   } catch (e) {
     console.warn('[enroll] could not write identity files:', e && e.message);
     return { ok: false, reason: 'write_failed' };
+  } finally {
+    // LOCAL_SPEED_V1 — controlState держит разбор этих файлов в памяти: после
+    // записи (и после половины записи — тоже) следующий запрос читает их заново.
+    invalidateControlCache();
   }
 
   // BRANCH_SYNC_RELAY_V1 — the branch-sync key is born HERE, with the install's

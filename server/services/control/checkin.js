@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { verifyLicence } from './licence.js';
+import { invalidateControlCache } from './state.js';   // LOCAL_SPEED_V1
 import { buildStatsPayload as defaultBuildStatsPayload } from './metrics.js';
 import { assertControlUrlIsTestSafe } from './prod-guard.js';   // PROD_GUARD_V1
 // PUBLIC_API_V1 — открытая половина ключа подписи клиники для публичного сервера.
@@ -586,6 +587,8 @@ async function performCheckin(db, dataDir, {
           writeAtomic(path.join(dataDir, 'licence.dat'), JSON.stringify(body.licence), { writeFileSync, renameSync });
         } catch (e) {
           console.warn('[checkin] could not write licence.dat:', e && e.message);
+        } finally {
+          invalidateControlCache();   // LOCAL_SPEED_V1 — controlState перечитает licence.dat на следующем запросе
         }
       } else {
         // NEVER overwrite a good licence with an unverifiable one — the

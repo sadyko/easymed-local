@@ -16,7 +16,7 @@ import { extensionUntil } from './unlock.js';
 
 let _testPublicKey = null;
 /** Tests inject their own throwaway key. Never called in production. */
-export function __setPublicKeyForTests(key) { _testPublicKey = key; }
+export function __setPublicKeyForTests(key) { _testPublicKey = key; invalidateControlCache(); }   // LOCAL_SPEED_V1 — другой ключ — другой ответ проверки
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
@@ -24,6 +24,84 @@ function readJson(file) {
 
 function readText(file) {
   try { return fs.readFileSync(file, 'utf8'); } catch { return null; }
+}
+
+// LOCAL_SPEED_V1 (2026-11-24) — ФАЙЛОВАЯ ЧАСТЬ В ПАМЯТИ.
+//
+// controlState спрашивают на каждом запросе API, а control.json и licence.dat
+// меняются раз в час (check-in) или при активации. Чтение обоих + разбор +
+// проверка подписи Ed25519 стоили ≈1,15 мс единственного потока на запрос (на
+// ПК клиники с антивирусом — больше: он смотрит каждое открытие файла). Теперь
+// это хранится по (mtimeMs, size) ОБОИХ файлов (нет файла — свой ключ); часть с
+// базой (effectiveNow, clockAnomaly, extensionUntil) — на каждом вызове.
+//
+// Свежий файл НЕ хранится: если файл изменён меньше RACY_MS назад, ответ берётся
+// с диска на каждом вызове, пока файл не «остынет». Время изменения у Windows
+// идёт шагами (до ~16 мс, у FAT — 2 с), и перезапись того же размера в тот же шаг
+// иначе осталась бы незамеченной (тот же приём, что «racy clean» у git). Поэтому
+// тест, пишущий файлы и сразу спрашивающий, видит ровно то же, что до кэша.
+// Писатели (enroll.js, checkin.js) после записи ещё и сбрасывают память сами.
+//
+// Содержимое файлов здесь никогда не печатается — в них секреты клиники.
+const FILE_CACHE = new Map();   // dataDir → { sig, facts }   LOCAL_SPEED_V1
+const FILE_CACHE_MAX = 16;   // LOCAL_SPEED_V1 — у сервера одна папка данных; тесты — много мелких
+const RACY_MS = 2000;   // LOCAL_SPEED_V1
+
+/** LOCAL_SPEED_V1 — забыть всё прочитанное: следующий controlState читает файлы заново. */
+export function invalidateControlCache() { FILE_CACHE.clear(); }
+
+// LOCAL_SPEED_V1 — отпечаток файла: { key, mtimeMs }; нет файла — 'none';
+// stat не удался по другой причине — null (тогда не храним вовсе, читаем как прежде).
+function fileSig(file) {
+  let st;
+  try { st = fs.statSync(file, { throwIfNoEntry: false }); } catch { return null; }
+  if (!st) return { key: 'none', mtimeMs: null };
+  return { key: st.mtimeMs + ':' + st.size, mtimeMs: st.mtimeMs };
+}
+
+// LOCAL_SPEED_V1 — то, что раньше controlState читал с диска на каждом вызове, в
+// том же порядке: control.json; если он бессмыслица — licence.dat не нужен.
+function readFacts(idFile, licFile) {
+  const identity = readJson(idFile);
+
+  // clinic_id must be a string: verifyLicence compares it with `!==` against
+  // payload.clinic_id (always a string, part of the signed document), so a
+  // JSON control.json containing a number, an array, or clinic_id:null would
+  // otherwise sail past this check and simply fail wrong_clinic below — locked
+  // either way, but for a misleading reason. Failing here as not_enrolled keeps
+  // "identity file is nonsense" and "licence doesn't match this clinic"
+  // distinct.
+  if (!identity || typeof identity !== 'object' || Array.isArray(identity) ||
+      typeof identity.clinic_id !== 'string' || !identity.clinic_id) {
+    return { identity: null, verified: null };
+  }
+  const verified = verifyLicence(readText(licFile), {
+    publicKey: _testPublicKey,
+    clinicId: identity.clinic_id,
+  });
+  return { identity, verified };
+}
+
+function fileFacts(dataDir) {   // LOCAL_SPEED_V1
+  const idFile = path.join(dataDir, 'control.json');
+  const licFile = path.join(dataDir, 'licence.dat');
+  const readAt = Date.now();
+  const a = fileSig(idFile);
+  const b = fileSig(licFile);
+  const sig = a && b ? a.key + '|' + b.key : null;
+  const hit = sig ? FILE_CACHE.get(dataDir) : null;
+  if (hit && hit.sig === sig) return hit.facts;
+
+  const facts = readFacts(idFile, licFile);
+  // Храним, только если оба файла «остыли»: изменены раньше, чем RACY_MS до чтения.
+  // Часы, ушедшие назад (время файла «в будущем»), — тоже не храним: читаем как прежде.
+  const cold = (s) => s.mtimeMs == null || s.mtimeMs + RACY_MS < readAt;
+  FILE_CACHE.delete(dataDir);
+  if (sig && cold(a) && cold(b)) {
+    if (FILE_CACHE.size >= FILE_CACHE_MAX) FILE_CACHE.delete(FILE_CACHE.keys().next().value);
+    FILE_CACHE.set(dataDir, { sig, facts });
+  }
+  return facts;
 }
 
 // A locked, reasoned answer with no modules and no identity — the shape every
@@ -50,19 +128,10 @@ export function controlState(db, dataDir, systemNow = new Date()) {
   // constructing the ARGUMENT to readJson, not inside it.
   if (typeof dataDir !== 'string') return lockedResult('not_enrolled');
 
-  const identity = readJson(path.join(dataDir, 'control.json'));
-
-  // clinic_id must be a string: verifyLicence compares it with `!==` against
-  // payload.clinic_id (always a string, part of the signed document), so a
-  // JSON control.json containing a number, an array, or clinic_id:null would
-  // otherwise sail past this check and simply fail wrong_clinic below — locked
-  // either way, but for a misleading reason. Failing here as not_enrolled keeps
-  // "identity file is nonsense" and "licence doesn't match this clinic"
-  // distinct.
-  if (!identity || typeof identity !== 'object' || Array.isArray(identity) ||
-      typeof identity.clinic_id !== 'string' || !identity.clinic_id) {
-    return lockedResult('not_enrolled');
-  }
+  // LOCAL_SPEED_V1 — файлы, их разбор и проверка подписи — из памяти, пока
+  // файлы не изменились (fileFacts выше); проверка формы control.json — там же.
+  const { identity, verified: result } = fileFacts(dataDir);
+  if (!identity) return lockedResult('not_enrolled');
 
   // effectiveNow/clockAnomaly write to control_state (INSERT..ON CONFLICT).
   // Everything else in this module reads a file; these are the only calls that
@@ -79,11 +148,8 @@ export function controlState(db, dataDir, systemNow = new Date()) {
     return lockedResult('clock_unavailable');
   }
 
-  const result = verifyLicence(readText(path.join(dataDir, 'licence.dat')), {
-    publicKey: _testPublicKey,
-    clinicId: identity.clinic_id,
-  });
-
+  // LOCAL_SPEED_V1 — `result` (verifyLicence licence.dat для этой клиники) уже
+  // получен выше из fileFacts: проверка подписи от времени не зависит.
   const licence = result.ok ? result.licence : null;
 
   // A telephone unlock cannot rewrite the signed licence, so it is recorded
