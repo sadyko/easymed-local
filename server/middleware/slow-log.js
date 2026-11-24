@@ -13,17 +13,19 @@
 // уже разобрал его, и лишней работы на быстрых запросах не делается.
 
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
+import { requestLabel } from './busy.js';   // LOCAL_SPEED_V1
 
 const DEFAULT_MS = 200;
 
-function label(req) {
-    const b = req.body;
-    if (req.path.startsWith('/api/rpc/')) return 'rpc ' + req.path.slice('/api/rpc/'.length);
-    if (req.path.startsWith('/api/db')) {
-        const t = (b && (b.table || b.from)) || (req.query && req.query.table);
-        return 'db ' + (t || '?') + (b && b.select ? '' : '');
-    }
-    return req.path;
+// LOCAL_SPEED_V1 — имя — по req.originalUrl, а не по req.path: к finish express уже
+// срезал путь монтирования, и /api/db писался как «POST /», а /api/rpc/x — как
+// «POST /x». Строка запроса не печатается никогда; из тела /api/db — только таблица
+// (из реестра) и операция; у файла хранилища — только корзина (middleware/busy.js).
+const label = requestLabel;   // LOCAL_SPEED_V1
+
+/** LOCAL_SPEED_V1 — включён ли журнал медленных запросов (EASYMED_SLOW_MS, 0 — выключен). */
+export function slowLogEnabled(env = process.env) {
+    return Number(env.EASYMED_SLOW_MS || DEFAULT_MS) > 0;
 }
 
 // OPS_EVENTS_V1 — db threaded through as the first argument, same shape as

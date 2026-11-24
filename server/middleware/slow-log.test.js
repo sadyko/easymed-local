@@ -130,3 +130,76 @@ test('a slow request on an unmatched route (no req.route) records the event with
   assert.equal(row.route, null);
   srv.close();
 });
+
+// --- LOCAL_SPEED_V1 ------------------------------------------------------------
+// К finish express уже срезал путь монтирования: /api/db писался как «POST /», а
+// /api/rpc/x — как «POST /x», и по фото консоли нельзя было понять, какая таблица
+// или какой RPC тяжёлые. Теперь имя — из req.originalUrl (только путь, без строки
+// запроса), RPC — по имени, /api/db — по таблице и операции из тела.
+
+async function mountedApp(lines) {
+  const app = express();
+  app.use(slowLog(freshDb(), { thresholdMs: 1, log: (l) => lines.push(l) }));
+  const rpc = express.Router();
+  rpc.post('/:name', (req, res) => setTimeout(() => res.json({ data: 1 }), 15));
+  const db = express.Router();
+  db.post('/', (req, res) => setTimeout(() => res.json({ data: [] }), 15));
+  const storage = express.Router();
+  storage.get('/:bucket/*rest', (req, res) => setTimeout(() => res.status(404).json({}), 15));
+  app.use('/api/rpc', express.json(), rpc);
+  app.use('/api/db', express.json(), db);
+  app.use('/api/storage', storage);
+  app.get('/plain/:id', (req, res) => setTimeout(() => res.json({}), 15));
+  return serve(app);
+}
+const postJson = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+test('LOCAL_SPEED_V1: RPC за монтированием — «rpc <имя>», а не «POST /<имя>» (и в верхнем регистре пути)', async () => {
+  const lines = [];
+  const { srv, base } = await mountedApp(lines);
+  await (await postJson(base + '/api/rpc/run_report', {})).json();
+  await (await postJson(base + '/API/RPC/queue_board', {})).json();
+  srv.close();
+  assert.match(lines[0], /^\[slow\] \d+ms  POST rpc run_report  status=200$/, lines[0]);
+  assert.match(lines[1], /  POST rpc queue_board  /, lines[1]);
+});
+
+test('LOCAL_SPEED_V1: /api/db — «db <таблица> <операция>», из тела больше ничего', async () => {
+  const lines = [];
+  const { srv, base } = await mountedApp(lines);
+  await (await postJson(base + '/api/db', { table: 'patients', op: 'insert', values: { full_name: 'Тест Тестович', phone: '+998900000000' } })).json();
+  await (await postJson(base + '/api/db', { table: 'visits', op: 'select' })).json();
+  await (await postJson(base + '/api/db', { table: 'visits' })).json();
+  await (await postJson(base + '/api/db', { table: 'Тест Тестович', op: 'drop everything' })).json();
+  srv.close();
+  assert.match(lines[0], /  POST db patients insert  status=200$/, lines[0]);
+  assert.match(lines[1], /  POST db visits select  /, lines[1]);
+  assert.match(lines[2], /  POST db visits  /, 'без операции — только таблица: ' + lines[2]);
+  assert.match(lines[3], /  POST db \?  /, 'неизвестная таблица и операция — «?»: ' + lines[3]);
+  for (const l of lines) assert.doesNotMatch(l, /Тест|998900|full_name|drop/, 'ничего из тела, кроме таблицы и операции: ' + l);
+});
+
+test('LOCAL_SPEED_V1: строка запроса в журнал не попадает никогда', async () => {
+  const lines = [];
+  const { srv, base } = await mountedApp(lines);
+  await (await postJson(base + '/api/rpc/run_report?patient=Testov&phone=998900000000', {})).json();
+  await (await postJson(base + '/api/db?table=patients&q=Testov', { table: 'patients', op: 'select' })).json();
+  await (await fetch(base + '/plain/7?name=Testov')).json();
+  srv.close();
+  assert.equal(lines.length, 3);
+  for (const l of lines) {
+    assert.doesNotMatch(l, /\?|Testov|998900|phone=|name=|q=/, 'строка запроса не печатается: ' + l);
+  }
+  assert.match(lines[0], /POST rpc run_report  /);
+  assert.match(lines[1], /POST db patients select  /);
+  assert.match(lines[2], /GET \/plain\/7  /, 'другие пути — полностью, как есть: ' + lines[2]);
+});
+
+test('LOCAL_SPEED_V1: файл хранилища — только корзина, без пути файла (в имени бывает фамилия)', async () => {
+  const lines = [];
+  const { srv, base } = await mountedApp(lines);
+  await (await fetch(base + '/api/storage/clinic-docs/patients/5/docs/Testov-analiz.pdf')).json();
+  srv.close();
+  assert.match(lines[0], /  GET \/api\/storage\/clinic-docs  status=404$/, lines[0]);
+  assert.doesNotMatch(lines[0], /Testov|patients\/5/);
+});
