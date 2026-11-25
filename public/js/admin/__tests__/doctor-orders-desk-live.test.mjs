@@ -298,24 +298,76 @@ test('DOCTOR_REFERRAL_DESK_V1 (настоящий сервер): выставл�
   } finally { t.close(); }
 });
 
-test('DOCTOR_REFERRAL_DESK_V1 (настоящий сервер): рекомендация врача — «Добавить»; после сохранения рекомендация закрыта, у строки направивший', async () => {
+// DOCTOR_RECOMMEND_V1 (2026-11-23) — рекомендация встаёт строкой САМА, отмеченной (владелец: «in
+// referral it has been already chosen, and registrar should tick the needed ones»); кнопки
+// «Добавить» у неё больше нет — галочка и «Убрать».
+test('DOCTOR_RECOMMEND_V1 (настоящий сервер): рекомендация врача сразу строкой с галочкой; после сохранения закрыта, у строки направивший', async () => {
   const t = await live(seedDoc);
   try {
     const rec = await recOf(t, { service_id: 60, notes: 'к 9:00' });
     const dlg = openFastRegistrationDialog({});
     await waitCatalog(dlg);
     await pickPatientOrders(dlg);
-    const add = node(dlg, 'data-doctor-rec-add', rec);
-    assert.ok(add, 'нет кнопки «Добавить» у рекомендации: ' + textOf(dlg.card));
-    add.click();
-    assert.ok(dlg.state.rows.some((x) => x.fromRec === rec), 'рекомендация не встала строкой');
-    assert.ok(!node(dlg, 'data-doctor-rec', rec), 'добавленная рекомендация осталась в группе');
+    await tick(30);
+    assert.ok(dlg.state.rows.some((x) => x.fromRec === rec), 'рекомендация не встала строкой сама: ' + textOf(dlg.card));
+    const tk = node(dlg, 'data-doctor-rec-tick', rec);
+    assert.ok(tk && tk.checked, 'у рекомендации нет отмеченной галочки');
+    assert.equal(node(dlg, 'data-doctor-rec-add', rec), undefined, 'осталась старая кнопка «Добавить»');
     const res = await save(dlg);
     const vs = res.lines.find((l) => Number(l.serviceId) === 60).visitServiceId;
     assert.deepEqual(t.db.prepare('SELECT status, visit_service_id FROM recommended_services WHERE id = ?').get(rec), { status: 'done', visit_service_id: vs });
     assert.equal(t.db.prepare('SELECT referred_by_source_id s FROM visit_services WHERE id = ?').get(vs).s, srcOf(t.db, 10));
     dlg.close();
   } finally { t.close(); }
+});
+
+// DOCTOR_RECOMMEND_V1 — владелец: «not ticked should still stay for the next times». Снятая галочка
+// не закрывает рекомендацию: счёт выставлен по отмеченной, снятая открыта на следующий визит.
+test('DOCTOR_RECOMMEND_V1 (настоящий сервер): снятая галочка — в счёт не идёт, рекомендация остаётся открытой', async () => {
+  const t = await live(seedDoc);
+  try {
+    const uzi = await recOf(t, { service_id: 50, service_name: 'УЗИ' });
+    const ekg = await recOf(t, { service_id: 60 });
+    const dlg = openFastRegistrationDialog({});
+    await waitCatalog(dlg);
+    await pickPatientOrders(dlg);
+    await tick(30);
+    const tk = node(dlg, 'data-doctor-rec-tick', uzi);
+    assert.ok(tk && tk.checked, 'рекомендация УЗИ не отмечена сразу');
+    tk.checked = false;
+    tk.dispatchEvent({ type: 'change', target: tk, currentTarget: tk });
+    assert.ok(!dlg.state.rows.some((x) => x.fromRec === uzi), 'снятая рекомендация осталась строкой');
+    const again = node(dlg, 'data-doctor-rec-tick', uzi);
+    assert.ok(again && !again.checked, 'снятая рекомендация пропала из группы');
+    const res = await save(dlg);
+    assert.ok(!res.lines.some((l) => Number(l.serviceId) === 50), 'снятая услуга попала в счёт');
+    assert.equal(t.db.prepare('SELECT status FROM recommended_services WHERE id = ?').get(uzi).status, 'pending', 'снятая рекомендация закрылась');
+    assert.equal(t.db.prepare('SELECT status FROM recommended_services WHERE id = ?').get(ekg).status, 'done', 'отмеченная рекомендация не закрылась счётом');
+    dlg.close();
+  } finally { t.close(); }
+});
+
+test('DOCTOR_RECOMMEND_V1 (настоящий сервер): «Убрать» с подтверждением закрывает рекомендацию без счёта и пишет журнал', async () => {
+  const t = await live(seedDoc);
+  const prev = globalThis.confirm;
+  globalThis.confirm = () => true;
+  try {
+    const rec = await recOf(t, { service_id: 60 });
+    const dlg = openFastRegistrationDialog({});
+    await waitCatalog(dlg);
+    await pickPatientOrders(dlg);
+    await tick(30);
+    const drop = node(dlg, 'data-doctor-rec-drop', rec);
+    assert.ok(drop, 'у рекомендации нет «Убрать»');
+    drop.click();
+    for (let i = 0; i < 60 && t.db.prepare('SELECT status FROM recommended_services WHERE id = ?').get(rec).status === 'pending'; i++) await tick(50);
+    assert.equal(t.db.prepare('SELECT status FROM recommended_services WHERE id = ?').get(rec).status, 'cancelled');
+    assert.ok(!dlg.state.rows.some((x) => x.fromRec === rec), 'убранная рекомендация осталась строкой');
+    assert.ok(!node(dlg, 'data-doctor-rec', rec), 'убранная рекомендация осталась в группе');
+    for (let i = 0; i < 40 && !t.db.prepare("SELECT 1 FROM patient_activity_log WHERE entity_type = 'recommendation' AND action = 'cancelled'").get(); i++) await tick(50);
+    assert.ok(t.db.prepare("SELECT 1 FROM patient_activity_log WHERE entity_type = 'recommendation' AND action = 'cancelled' AND entity_id = ?").get(rec), 'журнал не записал, кто убрал рекомендацию');
+    dlg.close();
+  } finally { globalThis.confirm = prev; t.close(); }
 });
 
 test('DOCTOR_REFERRAL_DESK_V1 (настоящий сервер): направление на другой день — в группе с подсказкой, в сегодняшнюю регистрацию не встаёт', async () => {

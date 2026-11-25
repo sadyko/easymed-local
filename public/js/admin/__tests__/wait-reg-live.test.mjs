@@ -411,7 +411,8 @@ test('CRM_BOOKINGS_TAB_V1 (настоящий сервер): «Записи CRM�
     assert.deepEqual(regIds(), ['77']);
     assert.deepEqual(counts, [1]);
     const press = async (attr, v) => {
-      walk(host).find((n) => n.attrs && n.attrs[attr] === v).click();
+      // FILTERS_DROPDOWN_V1 — день и источник — выпадающие списки
+      const sel = walk(host).find((n) => n.attrs && attr in n.attrs); sel.value = v; sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
       for (let i = 0; i < 120 && tab.state.loading; i++) await wait(25);
       await wait(100); await flush(20);   // и число вкладки (count_only) после списка
     };

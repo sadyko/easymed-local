@@ -8,7 +8,7 @@
 //     (прошлая — сразу «Не пришли»), источник, статус, врач, поиск; «Сбросить фильтры» возвращает всё;
 //   • «Оформить по записи» — только у строк «сегодня + Ждёт»; у остальных — «Открыть карту»;
 //   • счётчик вкладки — по фильтру по умолчанию, а не по текущему;
-//   • клавиатура и подписи: группы с именем, кнопки с aria-pressed, поля с подписью;
+//   • клавиатура и подписи: выпадающие списки с подписью (FILTERS_DROPDOWN_V1), поля с подписью;
 //   • ru / uz / en: подписи фильтров на языке экрана.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -102,6 +102,9 @@ function walk(e, o = []) { for (const c of e.children || []) { o.push(c); walk(c
 const textOf = (el) => [el, ...walk(el)].map((n) => n._t || '').join(' ');
 const byAttr = (host, k, v) => walk(host).find((n) => n.attrs && n.attrs[k] === (v === undefined ? n.attrs[k] : String(v)) && k in n.attrs);
 const allByAttr = (host, k) => walk(host).filter((n) => n.attrs && k in n.attrs);
+// FILTERS_DROPDOWN_V1 — день, источник и статус — выпадающие списки: выбрать пункт = значение + 'change'.
+const choose = (host, attr, v) => { const sel = byAttr(host, attr); sel.value = v; sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel }); };
+const optionsOf = (host, attr) => byAttr(host, attr).children.map((o) => [o.attrs.value, textOf(o).trim()]);
 
 /** Подмена сервера: запоминает аргументы, отвечает строками `rows`. */
 function fakeLoad(rows = [], { today = TODAY, doctors = [], count = null } = {}) {
@@ -126,10 +129,10 @@ test('CRM_BOOKINGS_TAB_V1: фильтры по умолчанию — сегод
   const host = mk('div');
   await renderRegistrarWaiting(host, {}, { load: f.load });
   assert.deepEqual(f.lists(), [{ sources: ['crm'] }]);
-  const pressed = (attr) => allByAttr(host, attr).filter((b) => b.attrs['aria-pressed'] === 'true').map((b) => b.attrs[attr]);
-  assert.deepEqual(pressed('data-rwait-day'), ['today']);
-  assert.deepEqual(pressed('data-rwait-src'), ['crm']);
-  assert.deepEqual(pressed('data-rwait-status'), ['waiting']);
+  const picked = (attr) => String(byAttr(host, attr).value);   // FILTERS_DROPDOWN_V1
+  assert.equal(picked('data-rwait-day'), 'today');
+  assert.equal(picked('data-rwait-src'), 'crm');
+  assert.equal(picked('data-rwait-status'), 'waiting');
   const sel = byAttr(host, 'data-rwait-doctor');
   assert.equal(sel.tagName, 'SELECT');
   assert.equal(String(sel.value), '');
@@ -143,7 +146,7 @@ test('CRM_BOOKINGS_TAB_V1: смена фильтра перечитывает с
   const f = fakeLoad([], { doctors: [{ id: 10, name: 'Иванов' }] });
   const host = mk('div');
   const tab = await renderRegistrarWaiting(host, {}, { load: f.load });
-  const press = async (attr, v) => { byAttr(host, attr, v).click(); await tick(); };
+  const press = async (attr, v) => { if (v === undefined) byAttr(host, attr).click(); else choose(host, attr, v); await tick(); };   // FILTERS_DROPDOWN_V1
   await press('data-rwait-day', 'tomorrow');
   assert.deepEqual(f.lists().at(-1), { day: '2026-11-18', sources: ['crm'] }, 'завтра — от дня сервера');
   await press('data-rwait-day', 'week');
@@ -158,10 +161,12 @@ test('CRM_BOOKINGS_TAB_V1: смена фильтра перечитывает с
   date.dispatchEvent({ type: 'change', target: date, currentTarget: date });
   await tick();
   assert.deepEqual(f.lists().at(-1), { day: '2026-11-15', sources: ['crm'], status: 'no_show' });
-  assert.equal(byAttr(host, 'data-rwait-status', 'no_show').attrs['aria-pressed'], 'true');
+  assert.equal(String(byAttr(host, 'data-rwait-status').value), 'no_show');
+  assert.equal(String(byAttr(host, 'data-rwait-day').value), 'date', 'выбранная дата — «Другая дата» в списке «День»');
   await press('data-rwait-day', 'today');
   await press('data-rwait-src', 'all');
-  assert.deepEqual(f.lists().at(-1), { status: 'no_show' }, '«Все» источники — без sources');
+  // REFERRALS_TAB_V1 — «Все» у «Записей CRM» — записи (CRM, календарь, сайт / партнёр), без направлений врача.
+  assert.deepEqual(f.lists().at(-1), { sources: ['crm', 'calendar', 'partner'], status: 'no_show' }, '«Все» источники — записи без направлений врача');
   await press('data-rwait-src', 'calendar');
   await press('data-rwait-status', 'registered');
   assert.deepEqual(f.lists().at(-1), { sources: ['calendar'], status: 'registered' });
@@ -184,7 +189,7 @@ test('CRM_BOOKINGS_TAB_V1: смена фильтра перечитывает с
   assert.deepEqual(f.lists().at(-1), { sources: ['crm'] });
   assert.equal(byAttr(host, 'data-rwait-q').value, '');
   assert.equal(String(byAttr(host, 'data-rwait-doctor').value), '');
-  assert.equal(byAttr(host, 'data-rwait-day', 'today').attrs['aria-pressed'], 'true');
+  assert.equal(String(byAttr(host, 'data-rwait-day').value), 'today');
 });
 
 test('CRM_BOOKINGS_TAB_V1: «Оформить по записи» — только у строк «сегодня + Ждёт»; у остальных — «Открыть карту»; статус словами, причина отмены', async () => {
@@ -224,31 +229,31 @@ test('CRM_BOOKINGS_TAB_V1: счётчик вкладки — по фильтру
   await renderRegistrarWaiting(host, { onCount: (n) => counts.push(n) }, { load: f.load });
   assert.deepEqual(counts, [2], 'при умолчаниях счётчик — не число строк списка');
   assert.equal(f.calls.filter((c) => c.countOnly).length, 0, 'при умолчаниях лишний запрос числа');
-  byAttr(host, 'data-rwait-status', 'all').click();
+  choose(host, 'data-rwait-status', 'all');
   await tick();
   const cnt = f.calls.filter((c) => c.countOnly);
   assert.deepEqual(cnt.map((c) => c.args), [{ sources: ['crm'] }], 'число спрошено не с фильтром по умолчанию');
   assert.deepEqual(counts, [2, 7], 'счётчик пошёл за текущим фильтром');
 });
 
-test('CRM_BOOKINGS_TAB_V1: клавиатура и подписи — группы с именем, кнопки с aria-pressed, поля с подписью, Enter в поиске', async () => {
+// FILTERS_DROPDOWN_V1 (владелец: «make all filter as drop down and put doctor and search also into one line») —
+// день, источник и статус — выпадающие списки с подписью; вся полоса — одной строкой.
+test('CRM_BOOKINGS_TAB_V1 · FILTERS_DROPDOWN_V1: выпадающие списки с подписью, одна строка фильтров, поля с подписью, Enter в поиске', async () => {
   const f = fakeLoad([]);
   const host = mk('div');
   await renderRegistrarWaiting(host, {}, { load: f.load });
   const bar = byAttr(host, 'data-rwait-filters');
   assert.ok(bar && bar.attrs['aria-label'], 'у полосы фильтров нет имени');
-  const groups = walk(bar).filter((n) => n.attrs && n.attrs.role === 'group').map((g) => g.attrs['aria-label']);
-  assert.deepEqual(groups, ['День', 'Источник', 'Статус']);
-  for (const attr of ['data-rwait-day', 'data-rwait-src', 'data-rwait-status']) {
-    for (const b of allByAttr(host, attr)) {
-      assert.equal(b.tagName, 'BUTTON');
-      assert.equal(b.attrs.type, 'button');
-      assert.ok(['true', 'false'].includes(b.attrs['aria-pressed']), attr + ': нет aria-pressed');
-    }
+  const rows = bar.children.filter((n) => String(n.className).includes('rwait-frow'));
+  assert.equal(rows.length, 1, 'фильтры не одной строкой');
+  for (const attr of ['data-rwait-day', 'data-rwait-src', 'data-rwait-status', 'data-rwait-doctor', 'data-rwait-q']) {
+    assert.ok(walk(rows[0]).some((n) => n.attrs && attr in n.attrs), attr + ': не в строке фильтров');
   }
-  assert.deepEqual(allByAttr(host, 'data-rwait-src').map((b) => textOf(b).trim()), ['Все', 'CRM / колл-центр', 'Календарь', 'Сайт / партнёр', 'Направил врач']);
-  assert.deepEqual(allByAttr(host, 'data-rwait-status').map((b) => textOf(b).trim()), ['Ждут', 'Оформлены', 'Не пришли', 'Отменены', 'Все']);
-  assert.deepEqual(allByAttr(host, 'data-rwait-day').map((b) => textOf(b).trim()), ['Сегодня', 'Завтра', '7 дней']);
+  assert.deepEqual(['data-rwait-day', 'data-rwait-src', 'data-rwait-status'].map((a) => [byAttr(host, a).tagName, byAttr(host, a).attrs['aria-label']]),
+    [['SELECT', 'День'], ['SELECT', 'Источник'], ['SELECT', 'Статус']]);
+  assert.deepEqual(optionsOf(host, 'data-rwait-src').map(([, t]) => t), ['Все', 'CRM / колл-центр', 'Календарь', 'Сайт / партнёр']);
+  assert.deepEqual(optionsOf(host, 'data-rwait-status').map(([, t]) => t), ['Ждут', 'Оформлены', 'Не пришли', 'Отменены', 'Все']);
+  assert.deepEqual(optionsOf(host, 'data-rwait-day').map(([, t]) => t), ['Сегодня', 'Завтра', '7 дней', 'Другая дата']);
   for (const attr of ['data-rwait-date', 'data-rwait-doctor', 'data-rwait-q']) {
     const el = byAttr(host, attr);
     assert.ok(el.attrs['aria-label'], attr + ': поле без подписи');
@@ -305,7 +310,7 @@ test('CRM_BOOKINGS_TAB_V1 (вид): перерисовка фильтров не
   await tick();
   assert.equal(has('uidate-native'), true, 'после выбора даты родное поле остаётся спрятанным');
   assert.equal(has('on'), true, 'выбранная дата отмечена');
-  await (async () => { byAttr(host, 'data-rwait-day', 'today').click(); await tick(); })();
+  await (async () => { choose(host, 'data-rwait-day', 'today'); await tick(); })();
   assert.equal(has('uidate-native'), true, 'после «Сегодня» — тоже');
   assert.equal(has('on'), false);
   assert.ok(date.attrs.placeholder, 'у поля даты есть подпись (её показывает календарь программы)');
@@ -428,4 +433,82 @@ test('CRM_BOOKING_LOG_V1: «Записал(а)», «Оформил(а)», «Ск
   for (const k of ['data-rwait-discount', 'data-rwait-registered-by', 'data-rwait-analyses']) {
     assert.equal(walk(two).some((n) => n.attrs && k in n.attrs), false, 'у строки без скидки/оформления/анализов есть ' + k);
   }
+});
+
+// DOCTOR_RECOMMEND_V1 (2026-11-24) — «Направил врач»: рекомендации врача. Владелец: «when you click to patient we
+// should land here» — имя пациента строки из одних рекомендаций открывает окно «Добавить услуги» (рекомендации там
+// отмечены), а не карту; кнопка — «Оформить рекомендации». Быструю регистрацию одни рекомендации не уводят.
+const REC = (pid) => ROW(pid, { time: null, sources: [{ kind: 'doctor', name: 'Иванов' }], doctors: [], services: ['Анализ крови'], booked_by: ['Иванов'],
+  lines: [{ kind: 'recommendation', recommendation_id: pid * 7, service_id: 40, name: 'Анализ крови', referrer_name: 'Иванов' }] });
+
+test('DOCTOR_RECOMMEND_V1: строка рекомендаций — имя пациента и «Оформить рекомендации» открывают окно визита; строка записи — имя ведёт в карту', async () => {
+  const f = fakeLoad([REC(11), ROW(12)]);
+  const opened = [];
+  const navigated = [];
+  const host = mk('div');
+  await renderRegistrarWaiting(host, { mode: 'referrals', onNavigate: (v) => navigated.push(v) }, { load: f.load,
+    openWizard: async (_s, patient) => { opened.push(patient.id); } });
+  assert.match(textOf(byAttr(host, 'data-rwait-register', 11)), /Оформить рекомендации/);
+  assert.match(textOf(byAttr(host, 'data-rwait-register', 12)), /Оформить по записи/);
+  assert.match(textOf(byAttr(host, 'data-rwait-row', 11)), /Направил врач Иванов/);
+  byAttr(host, 'data-rwait-open', 11).click();
+  await tick(30);
+  assert.deepEqual(opened, [11], 'имя пациента с рекомендациями не открыло окно «Добавить услуги»');
+  assert.deepEqual(navigated, []);
+  byAttr(host, 'data-rwait-register', 11).click();
+  await tick(30);
+  assert.deepEqual(opened, [11, 11]);
+});
+
+test('DOCTOR_RECOMMEND_V1: быстрая регистрация — одни рекомендации врача пациента не уводят (patientWaitsToday)', async () => {
+  try {
+    RPC_REPLY = { today: TODAY, count: 1, rows: [REC(6)] };
+    assert.equal(await patientWaitsToday(6), false);
+    RPC_REPLY = { today: TODAY, count: 1, rows: [ROW(6, { lines: [...ROW(6).lines, ...REC(6).lines] })] };
+    assert.equal(await patientWaitsToday(6), true, 'запись рядом с рекомендацией — ждёт');
+  } finally { RPC_REPLY = null; }
+});
+
+// REFERRALS_TAB_V1 (2026-11-24, владелец: «Put referal separately from Записи CRM, put it in block separately») —
+// «Направления врача» — тот же список в режиме 'referrals': источник закреплён (полосы «Источник» нет), заголовок
+// свой, первый запрос — { sources: ['doctor'] }, «Сбросить фильтры» возвращает к направлениям, а не к CRM.
+test('REFERRALS_TAB_V1: режим «Направления врача» — источник закреплён, свой заголовок, сброс — к направлениям', async () => {
+  const f = fakeLoad([REC(21)]);
+  const host = mk('div');
+  await renderRegistrarWaiting(host, { mode: 'referrals' }, { load: f.load });
+  assert.deepEqual(f.lists(), [{ sources: ['doctor'] }]);
+  assert.equal(allByAttr(host, 'data-rwait-src').length, 0, 'у направлений осталась полоса «Источник»');
+  assert.match(textOf(host), /Направления врача/);
+  assert.doesNotMatch(textOf(host), /Записи CRM/);
+  choose(host, 'data-rwait-status', 'registered');
+  await tick();
+  assert.deepEqual(f.lists().at(-1), { sources: ['doctor'], status: 'registered' });
+  byAttr(host, 'data-rwait-reset').click();
+  await tick();
+  assert.deepEqual(f.lists().at(-1), { sources: ['doctor'] });
+  const { REFERRAL_BADGE_ARGS } = await import('../views/registrar-waiting.js');
+  assert.deepEqual({ ...REFERRAL_BADGE_ARGS }, { sources: ['doctor'] });
+});
+
+// FILTERS_DROPDOWN_V1 — «Другая дата» в списке «День»: сначала появляется поле даты (список не перечитывается),
+// выбрали дату — список за этот день; «Сегодня» прячет поле снова.
+test('FILTERS_DROPDOWN_V1: «Другая дата» открывает поле даты; дата выбрана — список за этот день', async () => {
+  const f = fakeLoad([]);
+  const host = mk('div');
+  await renderRegistrarWaiting(host, {}, { load: f.load });
+  const wrap = byAttr(host, 'data-rwait-date-wrap');
+  assert.equal(wrap.style.display, 'none', 'поле даты видно без «Другой даты»');
+  choose(host, 'data-rwait-day', 'date');
+  await tick();
+  assert.equal(wrap.style.display, '', 'поле даты не появилось');
+  assert.equal(f.lists().length, 1, '«Другая дата» без даты перечитала список');
+  const date = byAttr(host, 'data-rwait-date');
+  date.value = '2026-11-20';
+  date.dispatchEvent({ type: 'change', target: date, currentTarget: date });
+  await tick();
+  assert.deepEqual(f.lists().at(-1), { day: '2026-11-20', sources: ['crm'] });
+  choose(host, 'data-rwait-day', 'today');
+  await tick();
+  assert.equal(wrap.style.display, 'none');
+  assert.deepEqual(f.lists().at(-1), { sources: ['crm'] });
 });

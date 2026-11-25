@@ -26,6 +26,33 @@ export async function loadDoctorOrders(patientId) {
 }
 
 /**
+ * DOCTOR_RECOMMEND_V1 (2026-11-23) — «Убрать» рекомендацию врача: пациент отказался или она
+ * больше не нужна. Только так рекомендация закрывается без счёта — снятая галочка в смете её
+ * НЕ закрывает (владелец: «not ticked should still stay for the next times»). Кто и когда
+ * убрал — в журнал действий пациента: врач должен видеть, почему его рекомендация не оформлена.
+ * Журнал грузится лениво — этот модуль без DOM (doctor-orders.test.mjs), а журнал тянет ui.js.
+ * Бросает при отказе сервера.
+ */
+export async function dismissRecommendation(rec, patientId) {
+    const id = Number(rec && rec.recommendation_id);
+    if (!Number.isInteger(id) || id <= 0) throw new Error('no recommendation id');
+    const { error } = await supabase.from('recommended_services')
+        .update({ status: 'cancelled', closed_at: new Date().toISOString() })
+        .eq('id', id);
+    if (error) throw new Error(error.message || String(error));
+    try {
+        const { logPatientActivity } = await import('./views/activity-log.js');
+        await logPatientActivity({
+            patientId, entityType: 'recommendation', entityId: id, entityLabel: rec.name || null,
+            action: 'cancelled',
+            // i18n-exempt: журнал действий (БД) — хранимая запись
+            summary: 'Рекомендация врача убрана регистратурой: ' + (rec.name || '—') + (rec.referrer_name ? ' (' + rec.referrer_name + ')' : ''),
+            detail: { referrer: rec.referrer_name || null },
+        });
+    } catch (_) { /* рекомендация уже закрыта; журнал — вежливость, не условие */ }
+}
+
+/**
  * Вид строки для стойки: 'ready' — сегодня и без счёта (окно оформляет её само, второй строки
  * нет); 'future' — без счёта, другой день; 'billed' — в счёте, ждёт кассу; 'paid' — оплачено.
  */

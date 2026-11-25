@@ -66,13 +66,18 @@ const DAY_CHOICES = [
     { id: 'tomorrow', label: 'Завтра' },
     { id: 'week', label: '7 дней' },
 ];
+// REFERRALS_TAB_V1 (2026-11-24, владелец: «Put referal separately from Записи CRM, put it in block separately») —
+// направления врача — свой пункт колонки «Направления врача» (тот же список, режим 'referrals', источник
+// закреплён — 'doctor'); у «Записей CRM» источника «Направил врач» больше нет, и «Все» — это записи
+// (CRM, календарь, сайт / партнёр), без направлений врача.
 const SOURCE_CHOICES = [
     { id: 'all', label: 'Все' },
     { id: 'crm', label: 'CRM / колл-центр' },
     { id: 'calendar', label: 'Календарь' },
     { id: 'partner', label: 'Сайт / партнёр' },
-    { id: 'doctor', label: 'Направил врач' },
 ];
+/** REFERRALS_TAB_V1 — «Все» у «Записей CRM»: источники записей, без направлений врача. */
+export const CRM_SOURCES = Object.freeze(['crm', 'calendar', 'partner']);
 const STATUS_CHOICES = [
     { id: 'waiting', label: 'Ждут' },
     { id: 'registered', label: 'Оформлены' },
@@ -90,6 +95,8 @@ const STATUS_CHIP = {
 
 /** Фильтры по умолчанию (решение владельца): сегодня, CRM / колл-центр, «Ждут», все врачи, без поиска. */
 export const DEFAULT_FILTER = Object.freeze({ day: 'today', date: '', source: 'crm', status: 'waiting', doctorId: '', q: '' });
+/** REFERRALS_TAB_V1 — «Направления врача»: те же умолчания, источник — «Направил врач» (и не меняется). */
+export const REFERRAL_FILTER = Object.freeze({ ...DEFAULT_FILTER, source: 'doctor' });
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -105,13 +112,14 @@ export function addDays(ymd, n) {
  * Аргументы сервера по фильтру. today — день сервера (ответ today); нет — день браузера. «Сегодня» и
  * «Ждут» — умолчания сервера и не шлются.
  */
-export function filterArgs(f, today = null) {
+export function filterArgs(f, today = null, mode = 'crm') {
     const base = today && YMD.test(today) ? today : localYmd();
     const args = {};
     if (f.day === 'tomorrow') args.day = addDays(base, 1);
     else if (f.day === 'week') { args.from = base; args.to = addDays(base, 6); }
     else if (f.day === 'date' && YMD.test(String(f.date || ''))) args.day = f.date;
     if (f.source && f.source !== 'all') args.sources = [f.source];
+    else if (mode === 'crm') args.sources = [...CRM_SOURCES];   // REFERRALS_TAB_V1 — «Все» записи, без направлений врача
     if (f.status && f.status !== 'waiting') args.status = f.status;
     if (f.doctorId !== '' && f.doctorId != null && Number(f.doctorId) > 0) args.doctor_id = Number(f.doctorId);
     const q = String(f.q || '').trim();
@@ -121,10 +129,12 @@ export function filterArgs(f, today = null) {
 
 /** Счётчик вкладки — фильтр по умолчанию (сегодня, CRM, «Ждут»): { sources: ['crm'] }. */
 export const BADGE_ARGS = Object.freeze(filterArgs(DEFAULT_FILTER));
+/** REFERRALS_TAB_V1 — счётчик «Направлений врача»: сегодня, «Ждут», источник «Направил врач». */
+export const REFERRAL_BADGE_ARGS = Object.freeze(filterArgs(REFERRAL_FILTER));
 
 /** Фильтр — по умолчанию? (тогда число строк списка — и есть счётчик вкладки). */
-export function isDefaultFilter(f) {
-    return ['day', 'source', 'status'].every((k) => f[k] === DEFAULT_FILTER[k])
+export function isDefaultFilter(f, defaults = DEFAULT_FILTER) {
+    return ['day', 'source', 'status'].every((k) => f[k] === defaults[k])
         && !(f.doctorId !== '' && f.doctorId != null) && !String(f.q || '').trim();
 }
 
@@ -133,6 +143,14 @@ export function isDefaultFilter(f) {
  * (сервер: to_cashier): регистрировать нечего, пациента ждёт касса — «Открыть визит», а не «Оформить по записи».
  */
 export function isToCashierRow(r) { return !!(r && r.to_cashier === true); }
+/**
+ * DOCTOR_RECOMMEND_V1 — строка только из рекомендаций врача (recommended_services): регистратор оформляет её в
+ * окне «Добавить услуги», где рекомендации уже отмечены. Имя пациента ведёт туда же, а не в карту.
+ */
+export function isRecommendationRow(r) {
+    const lines = (r && r.lines) || [];
+    return lines.length > 0 && lines.every((l) => l && l.kind === 'recommendation');
+}
 /** Есть ли в строке направление врача, выставленное в неоплаченный счёт (подпись «… к кассе»). */
 export function hasBilledReferral(r) {
     return isToCashierRow(r) || !!(r && (r.lines || []).some((l) => l && l.to_cashier === true));
@@ -174,7 +192,8 @@ export async function loadRegistrarWaiting({ patientId = null, countOnly = false
  * оформлять нечего: быстрая регистрация не уводит его в «Оформить по записи».
  */
 export async function patientWaitsToday(patientId) {
-    try { return (await loadRegistrarWaiting({ patientId })).rows.some((r) => !isToCashierRow(r)); } catch (_) { return false; }
+    // DOCTOR_RECOMMEND_V1 — одни рекомендации врача быструю регистрацию не уводят: она сама ставит их в таблицу.
+    try { return (await loadRegistrarWaiting({ patientId })).rows.some((r) => !isToCashierRow(r) && !isRecommendationRow(r)); } catch (_) { return false; }
 }
 
 /**
@@ -252,30 +271,39 @@ function dayLabel(ymd, today) {
  */
 export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
     clear(host);
+    // REFERRALS_TAB_V1 — режим: 'crm' («Записи CRM») или 'referrals' («Направления врача»).
+    const mode = ctx.mode === 'referrals' ? 'referrals' : 'crm';
+    const defaults = mode === 'referrals' ? REFERRAL_FILTER : DEFAULT_FILTER;
+    const badgeArgs = mode === 'referrals' ? REFERRAL_BADGE_ARGS : BADGE_ARGS;
     const state = { rows: [], today: null, from: null, to: null, doctors: [], loading: true, error: '', busy: false,
-        filter: { ...DEFAULT_FILTER, ...(deps.filter || {}) } };
+        filter: { ...defaults, ...(deps.filter || {}) } };
+    if (mode === 'referrals') state.filter.source = 'doctor';
     const load = deps.load || loadRegistrarWaiting;
     let token = 0;   // CRM_BOOKINGS_TAB_V1 — ответ на устаревший фильтр не рисуется
-    const root = h('div', { class: 'rwait', 'data-registrar-waiting': '' });
+    const root = h('div', { class: 'rwait', 'data-registrar-waiting': '', 'data-rwait-mode': mode });
     host.appendChild(root);
     const head = h('div', { class: 'card rwait-head' });
-    const filters = h('div', { class: 'card rwait-filters', 'data-rwait-filters': '', role: 'search', 'aria-label': 'Фильтры записей' });
+    const filters = h('div', { class: 'card rwait-filters', 'data-rwait-filters': '', role: 'search', 'aria-label': mode === 'referrals' ? 'Фильтры направлений' : 'Фильтры записей' });
     const list = h('div', { class: 'card rwait-card' });
     root.appendChild(head);
     root.appendChild(filters);
     root.appendChild(list);
 
     // ── полоса фильтров: строится ОДИН раз (фокус и набранный поиск не теряются), дальше — только отметки ──
-    const segButtons = { day: [], source: [], status: [] };
-    const segGroup = (key, label, choices, attr) => {
-        const btns = choices.map((c) => {
-            const b = h('button', { type: 'button', 'aria-pressed': 'false', [attr]: c.id, onclick: () => pick(key, c.id) }, c.label);
-            segButtons[key].push([c.id, b]);
-            return b;
-        });
-        return h('div', { class: 'rwait-f', role: 'group', 'aria-label': label },
-            h('span', { class: 'rwait-f-l', 'aria-hidden': 'true' }, label), h('div', { class: 'segmented' }, ...btns));
+    // FILTERS_DROPDOWN_V1 (2026-11-24, владелец со снимком полосы: «make all filter as drop down and put doctor
+    // and search also into one line») — день, источник и статус — выпадающие списки (подпись над полем, как у
+    // «Врача»), и вся полоса — ОДНОЙ строкой: день (и дата, когда выбрана «Другая дата»), источник, статус, врач,
+    // поиск, «Сбросить фильтры». На узком окне строка переносится.
+    const selects = {};
+    const selGroup = (key, label, choices, attr) => {
+        const sel = h('select', { class: 'rwait-sel', [attr]: '', 'aria-label': label,
+            onchange: () => pick(key, String(sel.value || '')) },
+        ...choices.map((c) => h('option', { value: c.id }, c.label)));
+        selects[key] = sel;
+        return h('label', { class: 'rwait-f' }, h('span', { class: 'rwait-f-l' }, tr(label)), sel);
     };
+    // «Другая дата» — пункт списка «День»: выбран — рядом появляется поле даты; список перечитывается, когда дату выбрали.
+    let wantDate = false;
     const dateInp = h('input', { type: 'date', class: 'rwait-date', 'data-rwait-date': '', 'aria-label': 'Дата',
         // CRM_BOOKINGS_TAB_V1 (вид) — подпись пустого поля: её показывает календарь программы (ui-datefield.js).
         placeholder: tr('Другая дата'),
@@ -288,20 +316,30 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
         oninput: () => { if (String(qInp.value || '').trim() !== String(state.filter.q || '').trim()) setFilter({ q: String(qInp.value || '') }); },
         onkeydown: (e) => { if (e && e.key === 'Enter') { if (typeof e.preventDefault === 'function') e.preventDefault(); setFilter({ q: String(qInp.value || '') }, { force: true }); } } });
     const resetBtn = h('button', { type: 'button', class: 'btn btn-sm btn-outline', 'data-rwait-reset': '',
-        onclick: () => { state.filter = { ...DEFAULT_FILTER }; qInp.value = ''; void apply(); } },
+        onclick: () => { state.filter = { ...defaults }; wantDate = false; qInp.value = ''; void apply(); } },
     Icon('Refresh', { size: 13 }), ' ', tr('Сбросить фильтры'));
+    const dateWrapEl = h('div', { class: 'rwait-f rwait-f-date', 'data-rwait-date-wrap': '' }, h('span', { class: 'rwait-f-l' }, tr('Дата')), dateInp);
     filters.appendChild(h('div', { class: 'rwait-frow' },
-        h('div', { class: 'rwait-f rwait-f-day' }, segGroup('day', 'День', DAY_CHOICES, 'data-rwait-day'), dateInp),
-        segGroup('source', 'Источник', SOURCE_CHOICES, 'data-rwait-src'),
-        segGroup('status', 'Статус', STATUS_CHOICES, 'data-rwait-status')));
-    filters.appendChild(h('div', { class: 'rwait-frow' },
+        selGroup('day', 'День', [...DAY_CHOICES, { id: 'date', label: 'Другая дата' }], 'data-rwait-day'),
+        dateWrapEl,
+        mode === 'crm' ? selGroup('source', 'Источник', SOURCE_CHOICES, 'data-rwait-src') : null,   // REFERRALS_TAB_V1
+        selGroup('status', 'Статус', STATUS_CHOICES, 'data-rwait-status'),
         h('label', { class: 'rwait-f' }, h('span', { class: 'rwait-f-l' }, tr('Врач')), doctorSel),
         h('label', { class: 'rwait-f rwait-f-q' }, h('span', { class: 'rwait-f-l' }, tr('Поиск')), qInp),
         resetBtn));
 
     function pick(key, value) {
-        if (key === 'day') setFilter({ day: value, date: '' });
-        else setFilter({ [key]: value });
+        if (key === 'day') {
+            // FILTERS_DROPDOWN_V1 — «Другая дата»: сначала поле даты, список — когда дату выбрали.
+            if (value === 'date') {
+                wantDate = true;
+                paintFilters();
+                try { if (typeof dateInp.showPicker === 'function') dateInp.showPicker(); else dateInp.focus(); } catch (_) { /* браузер не дал открыть — поле на виду */ }
+                return;
+            }
+            wantDate = false;
+            setFilter({ day: value, date: '' });
+        } else setFilter({ [key]: value });
     }
     function pickDate(value) {
         const patch = { day: 'date', date: value };
@@ -312,7 +350,7 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
     }
     function setFilter(patch, { force = false } = {}) {
         const next = { ...state.filter, ...patch };
-        const same = JSON.stringify(filterArgs(next, state.today)) === JSON.stringify(filterArgs(state.filter, state.today))
+        const same = JSON.stringify(filterArgs(next, state.today, mode)) === JSON.stringify(filterArgs(state.filter, state.today, mode))
             && next.day === state.filter.day;
         state.filter = next;
         if (same && !force) { paintFilters(); return; }
@@ -323,13 +361,10 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
     let doctorsKey = null;
     function paintFilters() {
         const f = state.filter;
-        for (const [key, btns] of Object.entries(segButtons)) {
-            for (const [id, b] of btns) {
-                const on = f[key] === id;
-                b.className = on ? 'on' : '';
-                b.setAttribute('aria-pressed', on ? 'true' : 'false');
-            }
-        }
+        // FILTERS_DROPDOWN_V1 — выпадающие списки показывают фильтр; поле даты — только при «Другой дате».
+        const showDate = f.day === 'date' || wantDate;
+        for (const [key, sel] of Object.entries(selects)) sel.value = key === 'day' && showDate ? 'date' : String(f[key] || '');
+        dateWrapEl.style.display = showDate ? '' : 'none';
         dateInp.value = f.day === 'date' ? f.date : '';
         // CRM_BOOKINGS_TAB_V1 (вид) — отметка классом, не className целиком: календарь программы
         // (ui-datefield.js) повесил на родное поле uidate-native, и затирать его значит вытащить
@@ -350,16 +385,16 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
         doctorSel.value = String(f.doctorId || '');
         if (String(qInp.value || '').trim() !== String(f.q || '').trim()) qInp.value = f.q || '';
         // ревью L5 — disabled логическим значением: h() пустую строку считает «нет».
-        if (isDefaultFilter(f)) resetBtn.setAttribute('disabled', ''); else resetBtn.removeAttribute('disabled');
+        if (isDefaultFilter(f, defaults)) resetBtn.setAttribute('disabled', ''); else resetBtn.removeAttribute('disabled');
     }
 
     async function report() {
         if (typeof ctx.onCount !== 'function') return;
         // Счётчик вкладки — по фильтру по умолчанию: при нём число строк списка — оно и есть; иначе — отдельно.
         let n = null;
-        if (isDefaultFilter(state.filter)) n = state.rows.length;
+        if (isDefaultFilter(state.filter, defaults)) n = state.rows.length;
         else {
-            try { n = (await load({ countOnly: true, args: BADGE_ARGS })).count; } catch (_) { n = null; }
+            try { n = (await load({ countOnly: true, args: badgeArgs })).count; } catch (_) { n = null; }
         }
         if (n == null) return;
         try { ctx.onCount(n); } catch (_) { /* счётчик — не повод ронять вкладку */ }
@@ -367,17 +402,23 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
 
     function paintHead() {
         clear(head);
+        const refs = mode === 'referrals';   // REFERRALS_TAB_V1
         head.appendChild(h('div', { class: 'rwait-head-text' },
-            h('div', { class: 'rwait-title' }, Icon('Headset', { size: 16 }), ' ', tr('Записи CRM'),
+            h('div', { class: 'rwait-title' }, Icon(refs ? 'Flag' : 'Headset', { size: 16 }), ' ', refs ? tr('Направления врача') : tr('Записи CRM'),
                 h('span', { class: 'rwait-count', 'data-rwait-count': String(state.rows.length) }, String(state.rows.length))),
-            h('div', { class: 'rwait-sub' },
-                tr('Записи колл-центра, календаря и сайта и направления врача. Пациент уходит из «Ждут», когда его оформили — со счётом или без; направленный врачом со счётом — когда касса приняла оплату.'))),
+            h('div', { class: 'rwait-sub' }, refs
+                ? tr('Услуги, которые рекомендовал врач. Нажмите на пациента — откроется «Добавить услуги», рекомендации уже отмечены: снимите ненужные и выставьте счёт. Снятые остаются на следующий раз.')
+                : tr('Записи колл-центра, календаря и сайта. Пациент уходит из «Ждут», когда его оформили — со счётом или без. Направления врача — в отдельном пункте «Направления врача».'))),
         h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-rwait-refresh': '', onclick: () => { void reload(); } },
             Icon('Refresh', { size: 13 }), ' ', tr('Обновить')));
     }
 
     function emptyText() {
         const f = state.filter;
+        if (mode === 'referrals') {   // REFERRALS_TAB_V1
+            if (f.day === 'today' && f.status === 'waiting' && !(f.doctorId) && !String(f.q || '').trim()) return tr('Сегодня направлений врача нет: все рекомендации оформлены.');
+            return tr('Направлений по этим фильтрам нет.');
+        }
         if (f.day === 'today' && f.status === 'waiting' && !(f.doctorId) && !String(f.q || '').trim()) {
             if (f.source === 'all') return tr('Сегодня никого не ждём: все записанные и направленные пациенты оформлены.');
             if (f.source === 'crm') return tr('Сегодня никого не ждём: все записи CRM оформлены.');
@@ -438,12 +479,15 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
         // регистрировать нечего, ведёт «Открыть визит» (окно счёта визита, как у кассы).
         const toCashier = status === 'waiting' && isToCashierRow(r) && r.visit_id != null;
         const billedNote = status === 'waiting' && hasBilledReferral(r);
+        // DOCTOR_RECOMMEND_V1 — рекомендации врача: имя пациента открывает «Добавить услуги» (рекомендации отмечены).
+        const recOnly = canRegister && isRecommendationRow(r);
         return h('div', { class: 'rwait-row', role: 'listitem', 'data-rwait-row': String(r.patient_id),
             'data-rwait-key': [r.patient_id, r.day || '', status].join('|') },
             h('div', { class: 'rwait-time' }, r.time ? h('b', null, r.time) : h('span', { class: 'muted' }, tr('за день'))),
             h('div', { class: 'rwait-who' },
-                h('button', { type: 'button', class: 'link-btn rwait-pt', 'data-rwait-open': String(r.patient_id), title: tr('Открыть карту пациента'),
-                    onclick: () => openCard(r.patient_id) }, r.patient_name || '—'),
+                h('button', { type: 'button', class: 'link-btn rwait-pt', 'data-rwait-open': String(r.patient_id),
+                    title: recOnly ? tr('Оформить рекомендации врача') : tr('Открыть карту пациента'),
+                    onclick: () => { if (recOnly) void register(r); else void openCard(r.patient_id); } }, r.patient_name || '—'),
                 meta ? h('div', { class: 'rwait-meta' }, meta) : null,
                 h('div', { class: 'rwait-tags' }, ...sources)),
             h('div', { class: 'rwait-what' },
@@ -465,7 +509,7 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
                 canRegister
                     ? h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-rwait-register': String(r.patient_id),
                         disabled: !!state.busy, onclick: () => { void register(r); } },
-                    Icon('Receipt', { size: 13 }), ' ', tr('Оформить по записи'))
+                    Icon('Receipt', { size: 13 }), ' ', recOnly ? tr('Оформить рекомендации') : tr('Оформить по записи'))
                     : toCashier
                         ? h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-rwait-visit': String(r.patient_id),
                             disabled: !!state.busy, onclick: () => { void openVisit(r); } },
@@ -543,7 +587,7 @@ export async function renderRegistrarWaiting(host, ctx = {}, deps = {}) {
         const my = ++token;
         state.loading = true;
         try {
-            const res = await load({ args: filterArgs(state.filter, state.today) });
+            const res = await load({ args: filterArgs(state.filter, state.today, mode) });
             if (my !== token) return state.rows.length;   // пока ждали, фильтр сменили — рисует следующий ответ
             state.rows = res.rows; state.today = res.today || state.today; state.error = '';
             state.from = res.from || null; state.to = res.to || null;

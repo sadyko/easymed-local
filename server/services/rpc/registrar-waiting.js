@@ -441,6 +441,36 @@ function releasedRows(db, from, to, visitIds, { noVisit = false, explain = false
      ORDER BY a.id`).all(...(noVisit ? [] : [idList(visitIds)]), ...range.params);
 }
 
+/**
+ * DOCTOR_RECOMMEND_V1 (2026-11-24) — РЕКОМЕНДАЦИИ ВРАЧА (recommended_services). Кабинет врача больше не
+ * заводит строк визита — только рекомендации; регистратура видит их под «Направил врач»:
+ *   • открытая ('pending') — «Ждёт» СЕГОДНЯ, когда бы её ни дали: рекомендация ждёт, пока её не оформят
+ *     (снятая галочкой в смете — остаётся на следующий раз, решение владельца) или не уберут. Прошлым
+ *     дням и завтра её нет: «Не пришёл» к рекомендации не бывает, срока у неё нет;
+ *   • оформленная ('done') — «Оформлены» в местный день закрытия; убранная ('cancelled') — «Отменены».
+ * Чтение — по пациенту, если он один; иначе открытые — все, закрытые — по дню закрытия (таблица мала).
+ */
+function recommendationRows(db, from, to, day0, wants, only) {
+  const out = [];
+  const pid = only != null ? ' AND r.patient_id = ?' : '';
+  const pargs = only != null ? [only] : [];
+  if (wants.has('waiting') && from <= day0 && day0 <= to) {
+    for (const x of db.prepare(`SELECT r.* FROM recommended_services r
+        WHERE r.status = 'pending' AND r.patient_id IS NOT NULL AND ${localDate('r.created_at')} <= date(?)${pid}
+        ORDER BY r.id`).all(day0, ...pargs)) out.push({ x, day: day0, status: 'waiting' });
+  }
+  const closed = [['done', 'registered'], ['cancelled', 'cancelled']].filter(([, st]) => wants.has(st));
+  if (closed.length) {
+    const range = localRangeWhere('r.closed_at', from, to);
+    for (const x of db.prepare(`SELECT r.*, ${localDate('r.closed_at')} AS closed_day FROM recommended_services r
+        WHERE r.status IN (SELECT value FROM json_each(?)) AND r.patient_id IS NOT NULL AND r.closed_at IS NOT NULL
+          AND ${range.sql}${pid} ORDER BY r.id`).all(JSON.stringify(closed.map(([s]) => s)), ...range.params, ...pargs)) {
+      out.push({ x, day: x.closed_day, status: x.status === 'done' ? 'registered' : 'cancelled' });
+    }
+  }
+  return out;
+}
+
 function parseRoles(raw) {
   if (Array.isArray(raw)) return raw;
   try { const p = JSON.parse(raw || '[]'); return Array.isArray(p) ? p : []; } catch { return []; }
@@ -611,6 +641,10 @@ export function registrarWaiting(db, args, user) {
     }
   }
 
+  // DOCTOR_RECOMMEND_V1 — рекомендации врача (открытые — сегодня; закрытые — в день закрытия).
+  // Роль, которой клиника закрыла рекомендации (ворота данных пациента), их здесь не получает — список остаётся.
+  const recs = patientDataRefusal('recommended_services', user, db) ? [] : recommendationRows(db, from, to, day0, wants, only);
+
   // ── подписи: словари одним запросом на таблицу (count_only — только то, что решает фильтр) ──
   const users = new Map(db.prepare('SELECT id, username, full_name, role, extra_roles, is_doctor, is_active FROM users').all().map((u) => [Number(u.id), u]));
   // Ревью L6 — колл-центр и по «Дополнительным ролям».
@@ -745,6 +779,18 @@ export function registrarWaiting(db, args, user) {
   for (const { l, status } of settledLines) addLine(l, status);
   for (const { b, status } of settledBare) addBare(b, status);
   for (const w of cancelledWishes) addWish(w, 'cancelled');
+  // DOCTOR_RECOMMEND_V1 — рекомендация врача: источник «Направил врач» с именем врача; строка kind 'recommendation'.
+  for (const { x, day, status } of recs) {
+    const r = rowOf(x.patient_id, day, status);
+    const referrer = nameOfUser(users.get(Number(x.recommended_by))) || String(x.recommended_by_name || '').trim();
+    addSource(r, 'doctor', referrer);
+    const name = String(x.service_name || '').trim() || (x.service_id != null ? (services.get(Number(x.service_id)) || '') : '');
+    addUnique(r.services, name);
+    addUnique(r.booked_by, referrer);
+    r.lines.push({ kind: 'recommendation', recommendation_id: Number(x.id), visit_service_id: x.visit_service_id ?? null,
+      service_id: x.service_id ?? null, consultation_type_id: null, doctor_id: null, name, doctor_name: '',
+      source: 'doctor', time: null, referrer_name: referrer, notes: x.notes || '' });
+  }
 
   // ── фильтры строки: источник (любой из), врач, поиск ──
   let out = [...rows.values()];

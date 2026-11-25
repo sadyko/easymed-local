@@ -667,7 +667,8 @@ test('ревью полировки L-1: подстановки врача «К�
 
 test('кабинет врача открывает мастер направления с врачом-направителем (его источник — у строк)', () => {
   const sw = fs.readFileSync(path.join(VIEWS, 'service-workspace.js'), 'utf8');
-  assert.match(sw, /title: 'Направить на услуги', referrerDoctorId: referringDoctorId\(ctx\)/,
+  // DOCTOR_RECOMMEND_V1 — мастер открывается в режиме рекомендации; врач-направитель по-прежнему передаётся.
+  assert.match(sw, /title: 'Направить на услуги', recommend: true, referrerDoctorId: referringDoctorId\(ctx\)/,
     '«Направить на услуги» не передаёт мастеру врача-направителя');
 });
 

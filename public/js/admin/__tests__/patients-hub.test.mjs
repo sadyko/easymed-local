@@ -236,6 +236,8 @@ const railButtons = () => ((railToolsFor('patients') || (() => []))() || []).fla
 const tabButtons = () => railButtons().filter((n) => !('data-rail-dup' in n.attrs));
 // WAIT_REG_V1 (ревью) — у регистратуры «Записи CRM» первой: вкладки ищутся по имени, а не по месту.
 const byTab = () => Object.fromEntries(tabButtons().map((b) => [b.attrs['data-tab'], b]));
+// REFERRALS_TAB_V1 — запрос не счётчика «Направлений врача» (его источник — 'doctor').
+const notRef = (b) => !(b && Array.isArray(b.sources) && b.sources.length === 1 && b.sources[0] === 'doctor');
 const tabLabel = (b) => walk(b).filter((n) => n.tagName !== 'SVG' && !(n.attrs && n.attrs['data-tab-badge'])).map((n) => n._t || '').join('').trim();
 const panelFor = (root, id) => walk(root).find((n) => n.attrs['data-tab-panel'] === id);
 const visiblePanels = (root) => walk(root).filter((n) => n.attrs['data-tab-panel'] && n.style.display !== 'none');
@@ -281,7 +283,7 @@ test('каждая вкладка показывает СВОЁ: список п
   // BOOKING_TAB_REMOVED_V1 — «Бронирования» нет.
   // WAIT_REG_V1 — пятая, у стойки: «Записи CRM» (CRM_BOOKINGS_TAB_V1). Права здесь — полные (администратор):
   // «Пациенты» первыми; у регистратуры «Записи CRM» первой (ревью, тест ниже).
-  assert.deepEqual(tabButtons(box).map(tabLabel), ['Пациенты', 'Очередь', 'Записи', 'Записи CRM'], 'полоса вкладок не та');
+  assert.deepEqual(tabButtons(box).map(tabLabel), ['Пациенты', 'Очередь', 'Записи', 'Записи CRM', 'Направления врача'], 'полоса вкладок не та');
   assert.equal(hub.activeTab(), 'list', 'по умолчанию открывается не список');
   assert.equal(visiblePanels(box).length, 1, 'видна не ровно одна вкладка');
 
@@ -319,14 +321,14 @@ test('кнопки раздела в колонке: каждая доступн
   assert.ok(btns.every((b) => b.tagName === 'BUTTON' && b.attrs.tabindex !== '-1'), 'кнопка выпала из обхода Tab');
   assert.equal(walk(box).filter((n) => n.attrs && n.attrs.role === 'tab').length, 0, 'в экране снова полоса вкладок');
   const current = () => tabButtons(box).map((b) => b.attrs['aria-current'] || null);
-  assert.deepEqual(current(), ['page', null, null, null]);
+  assert.deepEqual(current(), ['page', null, null, null, null]);
   btns[2].click(); await tick();
   assert.equal(hub.activeTab(), 'calendar');
-  assert.deepEqual(current(), [null, null, 'page', null]);
+  assert.deepEqual(current(), [null, null, 'page', null, null]);
   assert.ok(hasClass(btns[2], 'active') && !hasClass(btns[0], 'active'), 'выделена не та кнопка');
   btns[3].click(); await tick();
   assert.equal(hub.activeTab(), 'waiting');   // WAIT_REG_V1
-  assert.deepEqual(current(), [null, null, null, 'page']);
+  assert.deepEqual(current(), [null, null, null, 'page', null]);
   hub.destroy();
 });
 
@@ -343,9 +345,9 @@ test('WAIT_REG_V1 (ревью): регистратуре «Записи CRM» �
     const box = mk('div');
     const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
     const btns = tabButtons(box);
-    assert.deepEqual(btns.map((b) => b.attrs['data-tab']), ['waiting', 'list', 'queue', 'calendar']);
+    assert.deepEqual(btns.map((b) => b.attrs['data-tab']), ['waiting', 'list', 'queue', 'calendar', 'referrals']);
     assert.equal(hub.activeTab(), 'waiting', 'регистратуре по умолчанию открылись не «Записи CRM»');
-    assert.deepEqual(btns.map((b) => b.attrs['aria-current'] || null), ['page', null, null, null]);
+    assert.deepEqual(btns.map((b) => b.attrs['aria-current'] || null), ['page', null, null, null, null]);
     assert.equal(replaces, 0, 'монтирование переписало адрес');
     btns[1].click(); await tick();
     assert.equal(hub.activeTab(), 'list');
@@ -366,7 +368,7 @@ test('WAIT_REG_V1 (ревью): регистратуре «Записи CRM» �
       setEffectiveFromRole(REGISTRAR);
       const b = mk('div');
       const h2 = await renderPatientsHub(b, ctxFor(), { calendarLoader: async () => async () => {} });
-      assert.deepEqual(tabButtons(b).map((x) => x.attrs['data-tab']), ['list', 'queue', 'calendar', 'waiting'], JSON.stringify(user));
+      assert.deepEqual(tabButtons(b).map((x) => x.attrs['data-tab']), ['list', 'queue', 'calendar', 'waiting', 'referrals'], JSON.stringify(user));
       assert.equal(h2.activeTab(), 'list');
       h2.destroy();
     }
@@ -476,7 +478,7 @@ test('регистратура видит все три вкладки, и ка�
 
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-  assert.deepEqual(tabButtons(box).map(tabLabel), ['Записи CRM', 'Пациенты', 'Очередь', 'Записи'],   // CRM_BOOKINGS_TAB_V1 — имя вкладки
+  assert.deepEqual(tabButtons(box).map(tabLabel), ['Записи CRM', 'Пациенты', 'Очередь', 'Записи', 'Направления врача'],   // CRM_BOOKINGS_TAB_V1 — имя вкладки
     'регистратура недосчиталась вкладок');
   hub.destroy();
 
@@ -773,7 +775,7 @@ test('V3120_FIX: вкладки «Записи» и «Очередь» — то�
     ['nurse',     ['patients', 'queue'],        ['Пациенты', 'Очередь']],
     ['cashier',   ['patients', 'queue'],        ['Пациенты', 'Очередь']],
     ['lab',       ['patients', 'labs'],         ['Пациенты']],
-    ['registrar', ['patients', 'queue'],        ['Записи CRM', 'Пациенты', 'Очередь', 'Записи']],   // WAIT_REG_V1 — вкладка стойки первой
+    ['registrar', ['patients', 'queue'],        ['Записи CRM', 'Пациенты', 'Очередь', 'Записи', 'Направления врача']],   // WAIT_REG_V1 — вкладка стойки первой
     ['doctor',    ['patients'],                 ['Пациенты', 'Записи']],
   ];
   try {
@@ -814,13 +816,13 @@ test('ROLE_QUEUE_V1: скрытая в «Видимости разделов» �
     setEffectiveFromRole({ name: 'registrar', permissions: { sections: ['patients', 'queue'], levels: {} } });
     let box = mk('div');
     let hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
-    assert.deepEqual(tabButtons(box).map(tabLabel), ['Записи CRM', 'Пациенты', 'Очередь', 'Записи'], 'подготовка: без скрытия вкладка «Очередь» есть');   // CRM_BOOKINGS_TAB_V1 — имя
+    assert.deepEqual(tabButtons(box).map(tabLabel), ['Записи CRM', 'Пациенты', 'Очередь', 'Записи', 'Направления врача'], 'подготовка: без скрытия вкладка «Очередь» есть');   // CRM_BOOKINGS_TAB_V1 — имя
     hub.destroy();
 
     globalThis.window.easymed.isNavHidden = (id) => hidden.has(id);
     box = mk('div');
     hub = await renderPatientsHub(box, ctxFor({ sub: 'queue' }), { calendarLoader: async () => async () => {} });
-    assert.deepEqual(tabButtons(box).map(tabLabel), ['Записи CRM', 'Пациенты', 'Записи'], 'скрытая «Очередь» осталась вкладкой «Пациентов»');   // CRM_BOOKINGS_TAB_V1 — имя
+    assert.deepEqual(tabButtons(box).map(tabLabel), ['Записи CRM', 'Пациенты', 'Записи', 'Направления врача'], 'скрытая «Очередь» осталась вкладкой «Пациентов»');   // CRM_BOOKINGS_TAB_V1 — имя
     assert.equal(hub.activeTab(), 'list', 'адрес #patients/queue открыл скрытую доску');
     assert.equal(boards(box).length, 0, 'доска смонтирована, хотя раздел скрыт');
     hub.destroy();
@@ -944,7 +946,9 @@ test('WAIT_REG_V1: вкладка «Ждут регистрации» — у с�
     assert.equal('hidden' in badge.attrs, false, 'счётчик спрятан при двух ожидающих');
     assert.ok(rpcCalls.includes('registrar_waiting'), 'счётчик не спросил сервер');
     // CRM_BOOKINGS_TAB_V1 — счётчик по фильтру вкладки по умолчанию (сегодня, «CRM / колл-центр», «Ждут»).
-    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b), [{ count_only: true, sources: ['crm'] }], 'счётчик спросил весь список');
+    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b).filter(notRef), [{ count_only: true, sources: ['crm'] }], 'счётчик спросил весь список');
+    // REFERRALS_TAB_V1 — у «Направлений врача» свой счётчик — числом, по своему фильтру.
+    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b).filter((b) => !notRef(b)), [{ count_only: true, sources: ['doctor'] }]);
     // ревью L5 — имя вкладки для читалки — с числом; сам значок читалке не виден.
     assert.equal(btn.attrs['aria-label'], 'Записи CRM: 2');
     assert.equal(badge.attrs['aria-hidden'], 'true');
@@ -1024,7 +1028,7 @@ test('WAIT_REG_V1 (ревью M6): минутный опрос — только 
     assert.ok(pollId != null, 'минутного опроса нет');
     const poll = intervalFns.get(pollId);
     const root = box.children[0];
-    const calls = () => rpcCalls.filter((n) => n === 'registrar_waiting').length;
+    const calls = () => rpcArgs.filter(([n, b]) => n === 'registrar_waiting' && notRef(b)).length;   // REFERRALS_TAB_V1 — без счётчика направлений
     const before = calls();
     root.getClientRects = () => [];   // раздел спрятан (display:none у панели оболочки)
     poll(); await tick(30);
@@ -1032,8 +1036,8 @@ test('WAIT_REG_V1 (ревью M6): минутный опрос — только 
     root.getClientRects = () => [1];
     rpcArgs.length = 0;
     poll(); await tick(30);
-    assert.equal(calls(), before + 1, 'раздел на экране — опроса нет');
-    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b), [{ count_only: true, sources: ['crm'] }], 'открыт «Список», а опрос собирает весь список');   // CRM_BOOKINGS_TAB_V1 — фильтр по умолчанию
+    assert.equal(calls(), 1, 'раздел на экране — опроса нет');   // REFERRALS_TAB_V1 — rpcArgs очищен выше
+    assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b).filter(notRef), [{ count_only: true, sources: ['crm'] }], 'открыт «Список», а опрос собирает весь список');   // CRM_BOOKINGS_TAB_V1 — фильтр по умолчанию
     hub.destroy();
   } finally {
     WAITING = null;
@@ -1124,9 +1128,9 @@ test('CRM_BOOKINGS_TAB_V1: фильтры вкладки переживают п
     assert.equal(hub.activeTab(), 'waiting');
     assert.equal(tabLabel(byTab(box).waiting), 'Записи CRM');
     const panel = panelFor(box, 'waiting');
-    const calls = () => rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b);
+    const calls = () => rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b).filter(notRef);   // REFERRALS_TAB_V1 — без счётчика направлений
     assert.deepEqual(calls(), [{ sources: ['crm'] }], 'вкладка открылась не с фильтром по умолчанию');
-    walk(panel).find((n) => n.attrs && n.attrs['data-rwait-status'] === 'all').click();
+    { const sel = walk(panel).find((n) => n.attrs && 'data-rwait-status' in n.attrs); sel.value = 'all'; sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel }); }   // FILTERS_DROPDOWN_V1 — выпадающий список
     await tick(60);
     assert.deepEqual(calls().slice(1), [{ sources: ['crm'], status: 'all' }, { count_only: true, sources: ['crm'] }],
       'смена статуса — не перечитывание с фильтром или счётчик пошёл за ним');
@@ -1134,7 +1138,7 @@ test('CRM_BOOKINGS_TAB_V1: фильтры вкладки переживают п
     byTab(box).list.click(); await tick(60);
     byTab(box).waiting.click(); await tick(60);
     assert.deepEqual(calls().filter((b) => !b.count_only), [{ sources: ['crm'], status: 'all' }], 'возврат на вкладку сбросил фильтр');
-    assert.equal(walk(panel).find((n) => n.attrs && n.attrs['data-rwait-status'] === 'all').attrs['aria-pressed'], 'true');
+    assert.equal(String(walk(panel).find((n) => n.attrs && 'data-rwait-status' in n.attrs).value), 'all');
     const badge = walk(byTab().waiting).find((n) => n.attrs && n.attrs['data-tab-badge'] === 'waiting');   // PATIENTS_RAIL_V1 — счётчик на пункте колонки
     assert.equal(badge.textContent, '1');
     assert.ok(String(lastHistoryUrl).endsWith('#patients/waiting'), 'адрес вкладки сменился');
@@ -1144,4 +1148,21 @@ test('CRM_BOOKINGS_TAB_V1: фильтры вкладки переживают п
     globalThis.window.easymed.state.user = sessionUser;
     setFullAccess('Admin');
   }
+});
+
+// REFERRALS_TAB_V1 (2026-11-24, владелец: «Put referal separately from Записи CRM, put it in block separately») —
+// «Направления врача» — свой пункт колонки стойки, отдельным блоком (своя группа колонки); открывает тот же список
+// в режиме направлений (источник 'doctor'), адрес #patients/referrals; кассе — нет.
+test('REFERRALS_TAB_V1: «Направления врача» — свой пункт стойки, свой адрес и список направлений', async () => {
+  reset();
+  rpcArgs.length = 0;
+  const box = mk('div');
+  const hub = await renderPatientsHub(box, ctxFor({ sub: 'referrals' }), { calendarLoader: async () => async () => {} });
+  await tick(60);
+  assert.equal(hub.activeTab(), 'referrals', 'адрес #patients/referrals открыл не направления');
+  assert.equal(tabLabel(byTab(box).referrals), 'Направления врача');
+  const panel = panelFor(box, 'referrals');
+  assert.ok(walk(panel).some((n) => n.attrs && n.attrs['data-rwait-mode'] === 'referrals'), 'панель — не список направлений');
+  assert.deepEqual(rpcArgs.filter(([n]) => n === 'registrar_waiting').map(([, b]) => b).filter((b) => !b.count_only && !notRef(b)), [{ sources: ['doctor'] }]);
+  hub.destroy();
 });

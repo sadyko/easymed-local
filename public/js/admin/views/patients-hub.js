@@ -48,7 +48,7 @@ import { grantAllows, isRouteAllowed, hasActorRole, actorRoleCodes } from '../pe
 // модуля. Разошедшийся ?v= развёл бы состояние экрана на две копии.
 import { renderPatients, duplicatesRailButton, duplicatesOn, setDuplicatesMode } from './patients.js?v=regfit2';   // DUP_TO_RAIL_V1
 import { renderQueue } from './queue.js?v=q7';
-import { renderRegistrarWaiting, loadRegistrarWaiting, WAITING_ROLES, BADGE_ARGS } from './registrar-waiting.js';   // WAIT_REG_V1 — «Ждут регистрации»; CRM_BOOKINGS_TAB_V1 — «Записи CRM», счётчик по фильтру по умолчанию
+import { renderRegistrarWaiting, loadRegistrarWaiting, WAITING_ROLES, BADGE_ARGS, REFERRAL_BADGE_ARGS } from './registrar-waiting.js';   // WAIT_REG_V1 — «Ждут регистрации»; CRM_BOOKINGS_TAB_V1 — «Записи CRM», счётчик по фильтру по умолчанию
 import { watchScreen, shownOnScreen } from '../live.js';   // WAIT_REG_V1 — счётчик вкладки свежий без «Обновить»; ревью M6 — спрятанный раздел не опрашивается
 // MOTION_REVEAL_V1 — переход между вкладками: панель проявляется, полоса
 // вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
@@ -74,12 +74,17 @@ const TABS = [
     // (ссылки и закладки регистратуры живут), счётчик — сегодняшние записи CRM, которые ещё ждут
     // (фильтр вкладки по умолчанию, BADGE_ARGS), а не то, что открыто в фильтрах сейчас.
     { id: 'waiting',  sub: 'waiting',  label: 'Записи CRM', icon: 'Headset' },
+    // REFERRALS_TAB_V1 (2026-11-24, владелец: «Put referal separately from Записи CRM, put it in block
+    // separately») — направления врача (рекомендации) — свой пункт ОТДЕЛЬНЫМ БЛОКОМ колонки (черта между
+    // группами — admin.js fillRailTools), со своим счётчиком. Тот же список (registrar-waiting.js,
+    // режим 'referrals'), адрес #patients/referrals.
+    { id: 'referrals', sub: 'referrals', label: 'Направления врача', icon: 'Flag' },
 ];
-const SUB_TO_TAB = { list: 'list', queue: 'queue', calendar: 'calendar', booking: 'waiting', waiting: 'waiting', duplicates: 'list' };   // list: WAIT_REG_V1 (ревью) — у регистратуры «Список» не первый; duplicates: DUP_OWN_VIEW_V1
+const SUB_TO_TAB = { list: 'list', queue: 'queue', calendar: 'calendar', booking: 'waiting', waiting: 'waiting', referrals: 'referrals', duplicates: 'list' };   // list: WAIT_REG_V1 (ревью) — у регистратуры «Список» не первый; duplicates: DUP_OWN_VIEW_V1
 // WAIT_REG_V1 — вкладку видит стойка (администратор, регистратура): сервер отдаёт список только
 // ей (rpc/registrar-waiting.js WAITING_ROLES) — вкладка, за которой сервер откажет, не рисуется
 // (V3120_FIX). Своего ключа прав нет: стойка — роль, а не окно матрицы.
-const TAB_ROLES = { waiting: WAITING_ROLES };
+const TAB_ROLES = { waiting: WAITING_ROLES, referrals: WAITING_ROLES };
 // WAIT_REG_V1 — анализы «на дату» (заявки CRM) поток изменений не несёт: список перечитывается
 // и сам — раз в минуту, пока раздел на экране.
 const WAITING_POLL_MS = 60000;
@@ -242,6 +247,17 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         ? [...allowedTabs.filter((t) => t.id === 'waiting'), ...allowedTabs.filter((t) => t.id !== 'waiting')]
         : allowedTabs;
     const waitBadge = hasWaiting ? h('span', { class: 'reg-tab-badge', 'data-tab-badge': 'waiting', hidden: true, 'aria-hidden': 'true' }) : null;
+    // REFERRALS_TAB_V1 — счётчик «Направлений врача»: сегодняшние открытые направления.
+    const hasReferrals = allowedTabs.some((t) => t.id === 'referrals');
+    const refBadge = hasReferrals ? h('span', { class: 'reg-tab-badge', 'data-tab-badge': 'referrals', hidden: true, 'aria-hidden': 'true' }) : null;
+    function setReferralCount(n) {
+        if (!refBadge) return;
+        const k = Math.max(0, Number(n) || 0);
+        refBadge.textContent = k > 0 ? String(k) : '';
+        if (k > 0) refBadge.removeAttribute('hidden'); else refBadge.setAttribute('hidden', '');
+        const b = buttons.referrals;
+        if (b) b.setAttribute('aria-label', k > 0 ? trf('Направления врача: {n}', { n: k }) : tr('Направления врача'));
+    }
     function setWaitingCount(n) {
         if (!waitBadge) return;
         const k = Math.max(0, Number(n) || 0);
@@ -269,7 +285,7 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             // DUP_OWN_VIEW_V1 — любой пункт из «Дубликатов» выходит из дублей:
             // «Пациенты» — снова полный список, остальные — своя вкладка.
             onclick: () => { returnToHub(); if (dupView) setDuplicatesMode(false); select(t.id); },
-        }, h('span', { class: 'nav-icon' }, Icon(t.icon, { size: 18 })), h('span', null, t.label), t.id === 'waiting' ? waitBadge : null);   // WAIT_REG_V1 — счётчик на пункте колонки
+        }, h('span', { class: 'nav-icon' }, Icon(t.icon, { size: 18 })), h('span', null, t.label), t.id === 'waiting' ? waitBadge : (t.id === 'referrals' ? refBadge : null));   // WAIT_REG_V1 — счётчик на пункте колонки
     }
     for (const t of visibleTabs) root.appendChild(hosts[t.id]);
     // DUP_TO_RAIL_V1 — «Дубликаты» отдельной группой под вкладками (черта между
@@ -280,7 +296,11 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     // «Пациенты» НЕ выделены, адрес — #patients/duplicates (F5 и ссылка его
     // держат). Экран — тот же смонтированный список в режиме дублей (patients.js).
     let dupView = sub === 'duplicates';
-    const paintRail = () => setRailTools('patients', () => [visibleTabs.map((t) => buttons[t.id]), dupBtn ? [dupBtn] : []]);
+    // REFERRALS_TAB_V1 — «Направления врача» — отдельным блоком под вкладками.
+    const paintRail = () => setRailTools('patients', () => [
+        visibleTabs.filter((t) => t.id !== 'referrals').map((t) => buttons[t.id]),
+        hasReferrals ? [buttons.referrals] : [],
+        dupBtn ? [dupBtn] : []]);
     paintRail();
 
     // Кнопка колонки нажата не из «Пациентов» (с карты пациента): сначала
@@ -293,7 +313,8 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     // Вкладка монтируется при первом показе и дальше ЖИВЁТ: прокрутка списка,
     // страница пагинации и наполовину введённый поиск переживают уход на
     // соседнюю вкладку — ровно как панели переживают уход на соседний экран.
-    const mounted = { list: false, queue: false, calendar: false, waiting: false };
+    const mounted = { list: false, queue: false, calendar: false, waiting: false, referrals: false };
+    let referrals = null;   // REFERRALS_TAB_V1 — пульт списка «Направления врача»
     let queue = null;        // пульт доски очереди (views/queue.js)
     let waiting = null;      // WAIT_REG_V1 — пульт списка «Ждут регистрации» (views/registrar-waiting.js)
     let active = SUB_TO_TAB[sub] || (deskFirst ? 'waiting' : 'list');   // WAIT_REG_V1 (ревью) — регистратуре по умолчанию «Ждут регистрации»
@@ -377,6 +398,12 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             if (queue) await queue.start();
             return;
         }
+        if (id === 'referrals') {   // REFERRALS_TAB_V1
+            if (mounted.referrals) { if (referrals) await referrals.reload(); return; }
+            mounted.referrals = true;
+            referrals = await renderRegistrarWaiting(hosts.referrals, { mode: 'referrals', onNavigate: ctx.onNavigate, onCount: setReferralCount });
+            return;
+        }
         if (id === 'waiting') {   // WAIT_REG_V1
             if (mounted.waiting) { if (waiting) await waiting.reload(); return; }   // вернулись — свежее чтение
             mounted.waiting = true;
@@ -424,7 +451,8 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     // WAIT_REG_V1 (ревью M6) — список перечитывается целиком, только когда он ОТКРЫТ; иначе (другая
     // вкладка, вкладка ещё не открывалась) — только число (count_only: сервер не собирает подписи), а
     // смонтированный список перечитается сам при возврате на вкладку (ensureMounted).
-    async function refreshWaiting() {
+    async function refreshWaiting({ referralsToo = true } = {}) {
+        if (referralsToo) void refreshReferrals();   // REFERRALS_TAB_V1 — тем же будильником
         if (!hasWaiting) return;
         try {
             if (waiting && active === 'waiting') { await waiting.reload(); return; }   // вкладка назовёт число сама — по фильтру по умолчанию
@@ -432,8 +460,19 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             setWaitingCount(res.count);
         } catch (_) { /* число не узнали — вкладка покажет причину сама, когда её откроют */ }
     }
+    // REFERRALS_TAB_V1 — счётчик «Направлений врача»: открыт список — он назовёт число сам; иначе — только число.
+    async function refreshReferrals() {
+        if (!hasReferrals) return;
+        try {
+            if (referrals && active === 'referrals') { await referrals.reload(); return; }
+            const res = await loadRegistrarWaiting({ countOnly: true, args: REFERRAL_BADGE_ARGS });
+            setReferralCount(res.count);
+        } catch (_) { /* число не узнали — вкладка покажет причину сама */ }
+    }
     if (hasWaiting) {
-        if (active !== 'waiting') void refreshWaiting();   // открыта сама вкладка — число уже назвала она
+        // Открытая вкладка число уже назвала сама — спрашивается только счётчик другой (REFERRALS_TAB_V1).
+        if (active === 'waiting') void refreshReferrals();
+        else void refreshWaiting({ referralsToo: active !== 'referrals' });
         liveStop = watchScreen({ root, screen: 'registrar', reload: () => refreshWaiting() });
         waitingTimer = setInterval(() => {
             if (root.isConnected === false) { clearInterval(waitingTimer); waitingTimer = null; return; }

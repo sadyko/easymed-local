@@ -28,7 +28,8 @@ test('после вставки строки из рекомендации ма�
 });
 
 test('«Направления врача» — только у стойки и раньше строк «из записи»', () => {
-  assert.match(wiz, /if \(!referralMode\) await prefillFromDoctorOrders\(\);[^\n]*\n\s*await prefillFromBooking\(\);/);
+  // DOCTOR_RECOMMEND_V1 — и не в режиме рекомендации; записи и заявки — следом, тоже только у стойки.
+  assert.match(wiz, /if \(!referralMode && !recommendMode\) await prefillFromDoctorOrders\(\);[^\n]*\n\s*if \(!recommendMode\) \{[^\n]*\n\s*await prefillFromBooking\(\);/);
   assert.match(slice(wiz, 'async function prefillFromBooking() {', 1500), /wiz\.doctorOrderVsIds && wiz\.doctorOrderVsIds\.has\(Number\(r\.vsId\)\)/);
 });
 

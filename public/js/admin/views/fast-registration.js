@@ -72,7 +72,7 @@ import { openTemplatePickerModal } from './template-picker-modal.js?v=tpl1';   /
 import { resolveTemplate, cartPackage } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1; SERVICES_PACKAGES_V1 — cartPackage
 import { registerWalkIn, walkInRoleRefusal, walkInLinesRefusal } from './walk-in-booking.js?v=wib1';
 import { loadTodayBooking, bookedStatusLabel, isBookedTwin } from './booked-rows.js';   // CRM_LINK_ALL_V1 (R7a) — строки «из записи»
-import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
+import { loadDoctorOrders, orderKind, orderStateText, bonusText, orderVsIds, dismissRecommendation } from '../doctor-orders.js';   // DOCTOR_REFERRAL_DESK_V1 — «Направления врача»
 import { openRegisterByBooking, patientWaitsToday } from './registrar-waiting.js';   // WAIT_REG_V1 — «Это он» у ожидаемого пациента → «Оформить по записи»
 import { askDropReason } from './booked-drop.js';   // WAIT_REG_V1 (ревью M3) — строку записи и направление врача — только с причиной
 import { surgeryBedRefusal, isSurgeryPick, SURGERY_NEEDS_BED_TEXT } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1   // WALK_IN_BOOKING_V1
@@ -677,7 +677,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
                             row.booked.note || null])) : null,
                     // DOCTOR_REFERRAL_DESK_V1 — строка, добавленная из рекомендации врача.
                     row.fromRec ? h('div', { 'data-rec-row': String(row.fromRec), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px' } },
-                        Icon('Flag', { size: 12 }), tr('рекомендация врача')) : null,
+                        Icon('Flag', { size: 12 }), trf('Рекомендовано врачом · {name}', { name: row.fromRecName || '—' })) : null,   // DOCTOR_RECOMMEND_V1
                     // CRM_LINK_ALL_V1 (R7a) — строка уже в визите записи: подпись и статус записи.
                     row.booked && !row.booked.doctorOrder ? h('div', { 'data-booked-row': String(row.booked.vsId), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' } },
                         Icon('Calendar', { size: 12 }), tr('из записи') + ' · ' + tr(bookedStatusLabel(row.booked.status))) : null,
@@ -977,6 +977,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
             if (addOrderRow(l) === 'other-visit') otherVisit = true;
         }
         if (otherVisit) toast(tr('Направления врача из другого визита — оформите их в окне визита.'), 'warn');
+        // DOCTOR_RECOMMEND_V1 — рекомендации врача сразу строками таблицы, отмеченными; ненужные
+        // регистратор снимает галочкой — рекомендация остаётся открытой на следующий раз.
+        if (!locked()) for (const r of o.recommendations) { if (r.service_id != null) addRecRow(r, { quiet: true }); }
         paintTable();
         paintDoctorOrders();
     }
@@ -1032,7 +1035,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
         const inTable = new Set(state.rows.filter((r) => r.booked).map((r) => Number(r.booked.vsId)));
         const added = new Set(state.rows.filter((r) => r.fromRec).map((r) => Number(r.fromRec)));
         const lines = o ? o.lines.filter((l) => !inTable.has(Number(l.visit_service_id))) : [];
-        const recs = o ? o.recommendations.filter((r) => !added.has(Number(r.recommendation_id))) : [];
+        // DOCTOR_RECOMMEND_V1 — все открытые рекомендации, отмеченные (строкой в таблице) и снятые.
+        const recs = o ? o.recommendations : [];
         doctorOrdersEl.style.display = lines.length || recs.length ? '' : 'none';
         if (!lines.length && !recs.length) return;
         const rowCss = { display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '6px 0', borderTop: '1px solid var(--info-100, #dbeafe)' };
@@ -1067,27 +1071,68 @@ export function openFastRegistrationDialog({ onNavigate, onSaved, openWizard = n
         }
         for (const r of recs) {
             const bonus = bonusText(r.bonus_to, r.bonus_if_other, r.bonus_if_self);   // ревью U10 LOW-7 — рекомендатель — условием; ревью полировки L2 — и направивший визита
+            // DOCTOR_RECOMMEND_V1 — галочка вместо «Добавить»: отмечено = строка в таблице.
+            const ticked = added.has(Number(r.recommendation_id));
+            const tick = r.service_id != null ? h('input', {
+                type: 'checkbox', checked: ticked ? true : null, disabled: locked() ? true : null,
+                'data-doctor-rec-tick': String(r.recommendation_id),
+                style: { width: '15px', height: '15px', marginTop: '2px', accentColor: 'var(--primary-600)', cursor: 'pointer', flex: 'none' },
+            }) : null;
+            if (tick) {
+                tick.checked = ticked;
+                tick.addEventListener('change', () => {
+                    if (locked()) return;
+                    if (tick.checked) addRecRow(r);
+                    else untickRec(r);
+                });
+            }
             doctorOrdersEl.appendChild(h('div', { 'data-doctor-rec': String(r.recommendation_id), style: rowCss },
+                tick,
                 h('div', { style: { flex: '1 1 auto', minWidth: 0 } },
-                    h('div', { class: 'cell-strong', style: { fontSize: '13.5px' } }, r.name || '—'),
+                    h('div', { class: 'cell-strong', style: { fontSize: '13.5px', color: ticked ? null : 'var(--ink-500)' } }, r.name || '—'),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, orderMeta([
-                        trf('от врача · {name}', { name: r.referrer_name || '—' }), tr('рекомендация врача'),
+                        trf('Рекомендовано врачом · {name}', { name: r.referrer_name || '—' }),
                         bonus ? trf(bonus.template, bonus.params) : null])),
                     r.notes ? h('div', { class: 'muted', style: { fontSize: '12.5px', fontStyle: 'italic' } }, r.notes) : null),
-                r.service_id != null && !locked()
-                    ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-doctor-rec-add': String(r.recommendation_id),
-                        onclick: () => addRecRow(r) }, Icon('Plus', { size: 12 }), ' ', tr('Добавить'))
+                !locked()
+                    ? h('button', { class: 'btn btn-sm btn-ghost', type: 'button', 'data-doctor-rec-drop': String(r.recommendation_id),
+                        title: tr('Убрать рекомендацию — больше не предлагать'),
+                        onclick: () => dropRec(r) }, tr('Убрать'))
                     : null));
         }
     }
 
-    /** DOCTOR_REFERRAL_DESK_V1 — «Добавить» рекомендацию: строка таблицы, помнящая рекомендацию. */
-    function addRecRow(r) {
+    // DOCTOR_RECOMMEND_V1 — снятая галочка: строки нет, рекомендация открыта.
+    function untickRec(r) {
+        state.rows = state.rows.filter((x) => Number(x.fromRec) !== Number(r.recommendation_id));
+        paintTable();
+        paintDoctorOrders();
+    }
+
+    // DOCTOR_RECOMMEND_V1 — «Убрать» — закрыть рекомендацию без счёта, с подтверждением.
+    async function dropRec(r) {
+        if (locked()) return;
+        if (!confirm(tr('Убрать рекомендацию врача? Она больше не будет предлагаться.'))) return;
+        try { await dismissRecommendation(r, state.patient && state.patient.id); }
+        catch (e) { toast(trf('Не удалось убрать рекомендацию: {msg}', { msg: (e && e.message) || e }), 'fail'); return; }
+        if (state.doctorOrders) state.doctorOrders.recommendations = state.doctorOrders.recommendations.filter((x) => Number(x.recommendation_id) !== Number(r.recommendation_id));
+        untickRec(r);
+        toast(trf('Рекомендация «{name}» убрана.', { name: r.name || '' }), 'ok');
+    }
+
+    /**
+     * DOCTOR_REFERRAL_DESK_V1 — рекомендация: строка таблицы, помнящая рекомендацию.
+     * DOCTOR_RECOMMEND_V1 — и галочкой, и подстановкой при выборе пациента (quiet: без
+     * подсказок и без перерисовки; услуга, уже стоящая строкой, второй не встаёт).
+     */
+    function addRecRow(r, { quiet = false } = {}) {
         if (locked()) return;
         const service = (state.catalog || []).find((s) => Number(s.id) === Number(r.service_id));
-        if (!service) { toast(tr('Услуги рекомендации нет в каталоге — добавьте её вручную.'), 'warn'); return; }
+        if (!service) { if (!quiet) toast(tr('Услуги рекомендации нет в каталоге — добавьте её вручную.'), 'warn'); return; }
+        if (quiet && state.rows.some((x) => x.service && Number(x.service.id) === Number(service.id))) return;
         const row = addLine(service, null);
-        if (row && !row.booked) row.fromRec = Number(r.recommendation_id);
+        if (row && !row.booked) { row.fromRec = Number(r.recommendation_id); row.fromRecName = r.referrer_name || ''; }
+        if (quiet) return;
         paintTable();
         paintDoctorOrders();
     }
