@@ -13,6 +13,7 @@
 // Форма строк — та же, что у Chilla, поэтому рендеры перенесены без правок.
 import fs from 'node:fs';
 import { LANGS, DEFAULT_LANG } from './i18n.js';
+import { clinicLogoUrl } from './logo.js';
 import { publicDoctors, profileEntries, photoFile } from '../services/api/snapshot.js';
 import { readLanguages, shownPracticeSince, experienceYears } from '../../public/js/shared/doctor-public.js';
 import { servicePublicState, serviceNames } from '../../public/js/shared/service-public.js';
@@ -73,6 +74,7 @@ export function getSettings(db) {
       analytics: {},
       ...s,
       clinic_name: doc.clinic_name || '',
+      logo_url: clinicLogoUrl(db, storageDir),   // SITE_CLINIC_LOGO_V1 — из «Компании», не из настроек сайта
       contact: { phone: doc.phone || '', address: doc.address || '', email: doc.email || '', ...(s.contact || {}) },
     };
   });

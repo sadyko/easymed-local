@@ -9,6 +9,7 @@ import path from 'node:path';
 import { DEFAULT_LANG } from './i18n.js';
 import { doctorBySlug } from './content.js';
 import { photoFile } from '../services/api/snapshot.js';
+import { clinicLogo } from './logo.js';
 import { renderNotFound } from './render/notfound.js';
 
 function notFound(db, res) {
@@ -45,6 +46,14 @@ export function mediaRoute(mediaDir, db, { storageDir } = {}) {
     // (doctorBySlug — тот же показ, что у партнёров): скрытый врач по прямой
     // ссылке /media/doctor/<id> не находится.
     const rel = (Array.isArray(req.params.rest) ? req.params.rest : String(req.params.rest || '').split('/')).filter(Boolean).join('/');
+    // SITE_CLINIC_LOGO_V1 — логотип из «Компании»; адрес с версией (logo.js), потому час кэша не мешает замене.
+    if (rel === 'logo') {
+      const logo = db ? clinicLogo(db, storageDir) : null;
+      if (!logo) return notFound(db, res);
+      res.setHeader('Content-Type', logo.type);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      return res.end(logo.bytes);
+    }
     const m = /^doctor\/(\d{1,9})$/.exec(rel);
     if (m) {
       const d = db ? doctorBySlug(db, m[1]) : undefined;

@@ -115,7 +115,7 @@ function header(lang, path, settings, enabled, db) {
     : '';
   return `<header class="site-header">
 <div class="container site-header__inner">
-<a class="brand" href="/${lang}/"><img class="brand__mark" src="/assets/logo.webp" alt="" width="122" height="128"><span class="brand__name">${name}</span></a>
+<a class="brand" href="/${lang}/">${settings.logo_url ? `<img class="brand__mark" src="${esc(settings.logo_url)}" alt="">` : ''}<span class="brand__name">${name}</span></a>
 <nav class="site-nav" id="site-nav" aria-label="${esc(chrome(lang, 'main_nav'))}"><ul class="site-nav__list">${links}</ul>
 <div class="site-nav__foot">${phoneLink}<a class="btn btn-primary" href="/${lang}/appointment">${esc(t(lang, 'nav.appointment'))}</a></div></nav>
 <div class="header-actions">${langSwitch(lang, path, enabled)}${phoneLink}<a class="btn btn-primary header-cta" href="/${lang}/appointment">${esc(t(lang, 'cta.book'))}</a>
@@ -297,7 +297,7 @@ ${noindex ? '<meta name="robots" content="noindex, follow">\n' : ''}<meta proper
 <meta property="og:title" content="${esc(docTitle)}">
 ${desc ? `<meta property="og:description" content="${esc(desc)}">\n` : ''}<meta property="og:locale" content="${OG_LOCALE[l] || 'uz_UZ'}">
 ${baseUrl ? `<meta property="og:url" content="${esc(absUrl(baseUrl, p))}">\n<link rel="canonical" href="${esc(absUrl(baseUrl, p))}">\n` : ''}${alternates}
-<link rel="icon" type="image/webp" href="/assets/logo.webp">
+${settings.logo_url ? `<link rel="icon" href="${esc(settings.logo_url)}">` : '<link rel="icon" href="data:,">'}
 <link rel="stylesheet" href="/assets/site.css">
 ${ld}</head>
 <body data-page-type="${esc(pageType || 'other')}">
