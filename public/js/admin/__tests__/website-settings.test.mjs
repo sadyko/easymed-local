@@ -300,3 +300,47 @@ test('WEBSITE_V1: маршрут продаётся модулем `website` л�
   assert.equal(isLicensed('website-settings'), true);
   setLicence(null);
 });
+
+test('WEBSITE_PREVIEW_V1: правка уходит в просмотр до сохранения; рамка без доступа к программе', async () => {
+  asAdmin();
+  rpcCalls.length = 0;
+  rpcAnswers.website_settings_get = { settings: { hero: { ru: { title: 'Старый' } } }, updated_at: 'T1', site: { running: false, port: 0 } };
+  rpcAnswers.website_preview = { html: '<html></html>' };
+  __test.state.lang = 'ru';
+  const c = await mount('home');
+  const frame = walk(c).find((n) => n.tagName === 'IFRAME');
+  assert.equal(frame.attrs.sandbox, 'allow-scripts', 'без allow-same-origin');
+  assert.equal(byAttr(c, 'data-ws-dirty')[0].attrs['data-ws-dirty'], '0', 'открытие раздела — не правка');
+
+  const input = walk(c).find((n) => n.tagName === 'INPUT' && n.value === 'Старый');
+  input.value = 'Новый';
+  input.dispatchEvent({ type: 'input', target: input });
+  walk(c).find((n) => n.className === 'ws-body').dispatchEvent({ type: 'input' });   // всплытие: в фейковой DOM его нет
+  await tick(500);
+  assert.equal(callsOf('website_preview').at(-1).settings.hero.ru.title, 'Новый');
+  assert.equal(callsOf('website_preview').at(-1).path, '/ru/');
+  assert.equal(callsOf('website_settings_save').length, 0, 'не сохранено');
+  assert.equal(byAttr(c, 'data-ws-dirty')[0].attrs['data-ws-dirty'], '1');
+  assert.equal(byAttr(c, 'data-ws-discard').length, 1);
+});
+
+test('WEBSITE_EDITOR_V2: карточка открывается на месте формы, черновик виден в просмотре', async () => {
+  asAdmin();
+  rpcCalls.length = 0;
+  rpcAnswers.website_settings_get = { settings: {}, updated_at: 'T1', site: { running: false, port: 0 } };
+  rpcAnswers.website_content_list = { rows: [{ id: 5, published: 1, content: { ru: { q: 'Где вы?', a: 'Здесь' } } }] };
+  rpcAnswers.website_content_save = { id: 5 };
+  const c = await mount('faq');
+  walk(c).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Изменить')).click();
+  await tick(500);
+  assert.equal(byAttr(c, 'data-ws-editor').length, 1);
+  const pv = callsOf('website_preview').at(-1);
+  assert.equal(pv.row.kind, 'faq');
+  assert.equal(pv.row.row.content.ru.q, 'Где вы?');
+  byAttr(c, 'data-ws-modal-save')[0].click();
+  await tick();
+  const saved = callsOf('website_content_save').at(-1);
+  assert.equal(saved.row.id, 5);
+  assert.equal(saved.row.content.ru.a, 'Здесь');
+  assert.equal(byAttr(c, 'data-ws-editor').length, 0, 'вернулись к списку');
+});

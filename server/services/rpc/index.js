@@ -99,7 +99,7 @@ import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramBroadcastOptions, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
 import { aiSettingsGet, aiSettingsSave, aiFlags, aiKeySave, aiKeyClear, aiCallGet, aiCallScores } from './ai.js';   // AI_CHAT_V1
-import { websiteSettingsGet, websiteSettingsSave } from './website.js';   // WEBSITE_V1, этап 2 — настройки сайта
+import { websiteSettingsGet, websiteSettingsSave, websitePreview } from './website.js';   // WEBSITE_V1, этап 2 — настройки сайта
 import { websitePickLists, websiteContentList, websiteContentSave, websiteContentPublish, websiteContentDelete, websiteContentReorder } from './website-content.js';   // WEBSITE_V1, этап 2
 import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions,
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
@@ -763,6 +763,7 @@ export const RPC = {
   // в READ_ONLY_RPCS (control/gate.js).
   website_settings_get:    (db, args, user) => websiteSettingsGet(db, args, user),
   website_settings_save:   (db, args, user) => websiteSettingsSave(db, args, user),
+  website_preview:         (db, args, user) => websitePreview(db, args, user),   // WEBSITE_PREVIEW_V1
   website_pick_lists:      (db, args, user) => websitePickLists(db, args, user),
   website_content_list:    (db, args, user) => websiteContentList(db, args, user),
   website_content_save:    (db, args, user) => websiteContentSave(db, args, user),

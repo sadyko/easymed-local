@@ -18,6 +18,7 @@ import { branchSyncRoutes } from './routes/branch-sync.js';   // BRANCH_SYNC_V1
 import { lisProxyRoutes } from './routes/lisproxy.js';   // LIS_PROXY_V1
 import { actAsEndedGuard, actAsRouterGuard } from './middleware/act-as.js';   // ADMIN_ACT_AS_V1
 import { createLiveBus, liveEnabled } from './services/live/bus.js';   // LIVE_REFRESH_V1 — шина изменений для живых экранов; liveEnabled — выключатель (ревью M6)
+import { sitePreviewRoutes } from './routes/site-preview.js';   // WEBSITE_PREVIEW_V1 — стили и картинки предпросмотра сайта
 import { liveRoutes } from './routes/live.js';   // LIVE_REFRESH_V1 — GET /api/live (SSE) и /api/live/version
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -211,6 +212,7 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {} } =
   // не требуя дисциплины «новое имя файла на каждую замену». ETag остаётся:
   // по истечении срока обновление — это 304, не полная перекачка.
   const FONT = /\.(?:woff2?|ttf|otf)$/i;
+  app.use('/site-preview', sitePreviewRoutes(db, dataDir));   // WEBSITE_PREVIEW_V1 — доступ по ключу, см. site/preview.js
   app.use(express.static(path.join(ROOT, 'public'), {
     extensions: ['html'],
     setHeaders: (res, filePath) => {

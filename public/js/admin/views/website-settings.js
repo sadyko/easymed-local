@@ -31,11 +31,23 @@
 // которую экран прочитал или получил прошлым сохранением; сервер отвечает 409,
 // если между ними сохранил кто-то ещё (Chilla WEBSITE_SETTINGS_LOST_UPDATE_V1).
 
+// WEBSITE_EDITOR_V2 (2026-11-25, владелец: «looks old styled and not user friendly, can you make
+// it clear and user friendly and … on the right side … live change in website»):
+//
+//   * три колонки: разделы слева, форма посередине, справа — «Живой просмотр» настоящей
+//     страницы с несохранёнными правками (website-preview.js);
+//   * язык ОДИН на экран (и на просмотр): раньше каждое поле стояло тремя карточками подряд;
+//   * сохранение — одна полоса внизу формы, она говорит, есть ли несохранённое, и умеет
+//     отменить; правки всех разделов настроек копятся в одном объекте и сохраняются вместе;
+//   * карточка содержимого открывается на месте формы, а не окном поверх просмотра;
+//   * выключатель и состояние сайта — в шапке, видны из любого раздела.
+
 import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, clear, toast, field, checkField, Tag } from '../ui.js';
 import { commerceToolLevel } from '../permissions.js';
 import { tr, trf } from '../i18n.js';   // toast()/textContent минуют tr() внутри h() — переводим сами
 import { uploadFile } from '../storage.js';
+import { createPreview } from './website-preview.js';
 
 // Языки сайта — тот же порядок и набор, что проверяет websiteSettingsSave.
 const LANGS = [
@@ -46,17 +58,31 @@ const LANGS = [
 
 const DEFAULT_SITE_PORT = 8001;
 
-const TABS = [
-    ['general',      'Основное'],
-    ['home',         'Главная страница'],
-    ['doctors',      'Врачи'],
-    ['services',     'Услуги'],
-    ['departments',  'Отделения'],
-    ['testimonials', 'Отзывы'],
-    ['faq',          'Вопросы и ответы'],
-    ['posts',        'Новости'],
-    ['seo',          'SEO'],
+// Разделы: id, подпись, значок, страница просмотра и место на ней.
+const NAV = [
+    ['Сайт', [
+        ['general',      'Основное',            'Settings',    '/'],
+        ['contacts',     'Контакты',            'Phone',       '/contact'],
+    ]],
+    ['Страницы', [
+        ['home',         'Главная страница',    'Globe',       '/', '.home-hero'],
+        ['about',        'О клинике',           'Info',        '/about'],
+        ['legal',        'Правовые документы',  'Shield',      '/privacy'],
+    ]],
+    ['Содержимое', [
+        ['doctors',      'Врачи',               'Stethoscope', '/doctors'],
+        ['services',     'Услуги',              'Pulse',       '/services'],
+        ['departments',  'Отделения',           'Building',    '/departments'],
+        ['testimonials', 'Отзывы',              'Heart',       '/', '[class*="testimonial"],[class*="review"]'],
+        ['faq',          'Вопросы и ответы',    'Help',        '/faq'],
+        ['posts',        'Новости',             'Megaphone',   '/news'],
+    ]],
+    ['Продвижение', [
+        ['seo',          'SEO',                 'Search',      '/'],
+    ]],
 ];
+const NAV_ITEMS = NAV.flatMap(([, items]) => items);
+const navItem = (id) => NAV_ITEMS.find((n) => n[0] === id) || NAV_ITEMS[0];
 
 // Корзина хранилища сайта (server/routes/storage.js): только эти расширения —
 // SVG сайт не отдаёт. Проверяем заранее, чтобы ответить по-русски до загрузки,
@@ -66,17 +92,22 @@ const IMAGE_ACCEPT = 'image/jpeg,image/png,image/webp';
 
 const state = {
     settings:   {},
+    saved:      '{}',     // что лежит на сервере (JSON) — с ним сравнивается «не сохранено»
     site:       { running: false, port: 0 },
     updated_at: null,
     tab:        'general',
+    lang:       'ru',
     saving:     false,
+    editor:     null,     // открытая карточка содержимого
 };
 
-const refs = { root: null, body: null };
+const refs = { root: null, head: null, nav: null, langs: null, body: null, bar: null, preview: null, onChanged: null };
 
 async function rpc(name, args = {}) {
     const { data, error } = await supabase.rpc(name, args);
     if (error) throw new Error(error.message || tr('Не удалось выполнить запрос.'));
+    // Порядок, «На главной», публикация — видны на сайте сразу, значит и в просмотре.
+    if (refs.preview && /^website_content_(save|publish|delete|reorder)$/.test(name)) refs.preview.schedule();
     return data;
 }
 
@@ -85,11 +116,7 @@ const readOnly = () => commerceToolLevel('commerce_website') !== 'edit';
 
 // Ветка settings, создаваемая по требованию: открыли вкладку — объект должен
 // существовать, даже если в базе его ещё нет.
-function branch(key) {
-    const s = state.settings;
-    if (!s[key] || typeof s[key] !== 'object' || Array.isArray(s[key])) s[key] = {};
-    return s[key];
-}
+function branch(key) { return subBranch(state.settings, key); }
 // То же для массивов верхнего уровня (stats): редактор списков не работает поверх {}.
 function branchArray(key) {
     const s = state.settings;
@@ -104,6 +131,30 @@ const str = (v) => (v == null ? '' : String(v));
 const errText = (e) => String((e && e.message) || e || '');
 const publicUrl = (path) => supabase.storage.from('website').getPublicUrl(path).data.publicUrl;
 
+// Пустые ветки экран создаёт сам, открывая раздел, — правкой они не считаются.
+function pruned(v) {
+    if (Array.isArray(v)) return v.map(pruned);
+    if (v && typeof v === 'object') {
+        const out = {};
+        for (const k of Object.keys(v).sort()) {
+            const p = pruned(v[k]);
+            const empty = p == null || p === '' || (typeof p === 'object' && Object.keys(p).length === 0);
+            if (!empty) out[k] = p;
+        }
+        return out;
+    }
+    return v;
+}
+const isDirty = () => JSON.stringify(pruned(state.settings)) !== JSON.stringify(pruned(JSON.parse(state.saved)));
+const editorSnapshot = () => (state.editor ? JSON.stringify(state.editor.draft) : '');
+const editorDirty = () => !!state.editor && editorSnapshot() !== state.editor.initial;
+
+if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('beforeunload', (e) => {
+        if (refs.root && refs.root.isConnected && !readOnly() && (isDirty() || editorDirty())) { e.preventDefault(); e.returnValue = ''; }
+    });
+}
+
 function readSite(site) {
     const s = site && typeof site === 'object' ? site : {};
     return { running: s.running === true, port: Number(s.port) || 0 };
@@ -115,26 +166,22 @@ function readSite(site) {
 export async function renderWebsiteSettings(container) {
     clear(container);
     state.settings = {};
+    state.saved = '{}';
     state.saving = false;
+    state.editor = null;
+    refs.preview = null;
 
     refs.root = h('div', { class: 'fade-in ws-ed', 'data-website-settings': '' });
     container.appendChild(refs.root);
-
-    refs.root.appendChild(PageHead({
-        title: 'Веб-сайт',
-        subtitle: 'Публичный сайт клиники: включение, тексты, врачи и услуги, поисковая выдача. Сохранённые изменения посетитель видит сразу.',
-    }));
-
-    refs.body = h('div');
-    refs.root.appendChild(refs.body);
-    refs.body.appendChild(h('div', { class: 'muted', style: { padding: '24px' } }, 'Загрузка…'));
+    const loading = h('div', { class: 'muted', style: { padding: '24px' } }, 'Загрузка…');
+    refs.root.appendChild(loading);
 
     let data;
     try {
         data = await rpc('website_settings_get');
     } catch (e) {
-        clear(refs.body);
-        refs.body.appendChild(h('div', { class: 'empty', style: { padding: '30px' } },
+        clear(refs.root);
+        refs.root.appendChild(h('div', { class: 'empty', style: { padding: '30px' } },
             h('div', null, 'Не удалось загрузить настройки сайта.'),
             h('div', { class: 'muted', style: { marginTop: '6px' } }, errText(e))));
         return;
@@ -142,35 +189,151 @@ export async function renderWebsiteSettings(container) {
 
     const loaded = data && data.settings;
     state.settings   = (loaded && typeof loaded === 'object' && !Array.isArray(loaded)) ? loaded : {};
+    state.saved      = JSON.stringify(state.settings);
     state.site       = readSite(data && data.site);
     state.updated_at = (data && data.updated_at) || null;
+    const langs = siteLangs();
+    if (!langs.includes(state.lang)) state.lang = langs[0];
+
+    clear(refs.root);
+    refs.head  = h('div');
+    refs.nav   = h('nav', { class: 'ws-nav', 'aria-label': 'Разделы сайта' });
+    refs.langs = h('div', { class: 'ws-langs' });
+    refs.body  = h('div', { class: 'ws-body' });
+    refs.bar   = h('div', { class: 'ws-savebar' });
+    // Любая правка формы: поля сообщают input/change, кнопки порядка и «Убрать» — click.
+    for (const ev of ['input', 'change', 'click']) refs.body.addEventListener(ev, () => setTimeout(changed, 0));
+    refs.preview = createPreview({
+        load: async (path) => {
+            const args = { path, settings: state.settings };
+            const row = previewRow();
+            if (row) args.row = row;
+            const out = await rpc('website_preview', args);
+            return String((out && out.html) || '');
+        },
+        getLang: () => state.lang,
+        onLang: (l) => setLang(l),
+    });
+    const toggle = h('button', { type: 'button', class: 'ws-pv-toggle', 'aria-pressed': 'false', onclick: () => {
+        const on = !refs.root.classList.contains('show-preview');
+        refs.root.classList.toggle('show-preview', on);
+        toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+        toggle.textContent = tr(on ? 'Вернуться к редактору' : 'Показать сайт');
+    } }, 'Показать сайт');
+    refs.root.appendChild(refs.head);
+    refs.root.appendChild(toggle);
+    refs.root.appendChild(h('div', { class: 'ws-layout' },
+        refs.nav,
+        h('div', { class: 'ws-form' }, refs.langs, refs.body, refs.bar),
+        refs.preview.el));
 
     paint();
+    showTabPage();
+    refs.preview.refresh();
 }
 
 function paint() {
+    paintHead();
+    paintNav();
+    paintLangs();
     clear(refs.body);
-    refs.body.appendChild(tabRail());
-    const tabBody = h('div', { style: { paddingTop: '16px' } });
+    refs.onChanged = null;
+    const tabBody = h('div', { class: 'ws-cards' });
     refs.body.appendChild(tabBody);
-    const fn = TAB_RENDERERS[state.tab] || TAB_RENDERERS.general;
-    fn(tabBody);
+    if (state.editor) renderEditor(tabBody);
+    else (TAB_RENDERERS[state.tab] || TAB_RENDERERS.general)(tabBody);
+    paintBar();
 }
 
-function tabRail() {
-    return h('div', { class: 'tabs', style: { marginTop: '-4px', flexWrap: 'wrap' } },
-        ...TABS.map(([id, label]) => h('button', {
-            class: 'tab' + (state.tab === id ? ' on' : ''),
-            type: 'button',
-            'data-ws-tab': id,
-            onclick: () => { if (state.tab !== id) { state.tab = id; paint(); } },
-        }, label)));
+function showTabPage() {
+    const [, , , path, sel] = navItem(state.tab);
+    refs.preview.show(path, sel || null);
 }
 
-// Реестр вкладок: новая вкладка — функция здесь, рейка о ней не знает.
+function changed() {
+    if (!refs.root) return;
+    paintBar();
+    if (refs.onChanged) refs.onChanged();
+    const snap = JSON.stringify(state.settings) + editorSnapshot();
+    if (snap === refs.lastSnap) return;
+    refs.lastSnap = snap;
+    paintLangs();   // точка «текста ещё нет» гаснет с первой буквой
+    refs.preview.schedule();
+}
+
+function setLang(code) {
+    if (state.lang === code) return;
+    state.lang = code;
+    paint();
+    refs.preview.refresh();
+}
+
+// Уйти с открытой карточки: несохранённое в ней пропадёт — сначала спросить.
+function leaveEditor(next) {
+    if (!editorDirty() || readOnly()) { state.editor = null; next(); return; }
+    openConfirm({
+        title: 'Закрыть без сохранения?', text: 'Правки этой карточки не сохранены и пропадут.', okLabel: 'Закрыть без сохранения',
+        onOk: async () => { state.editor = null; next(); },
+    });
+}
+
+function openTab(id) {
+    if (state.tab === id && !state.editor) return;
+    leaveEditor(() => { state.tab = id; paint(); showTabPage(); refs.preview.schedule(); });
+}
+
+function paintNav() {
+    clear(refs.nav);
+    for (const [group, items] of NAV) {
+        refs.nav.appendChild(h('div', { class: 'ws-nav-group' },
+            h('div', { class: 'ws-nav-title' }, group),
+            ...items.map(([id, label, icon]) => h('button', {
+                class: 'ws-nav-item' + (state.tab === id ? ' on' : ''), type: 'button', 'data-ws-tab': id,
+                'aria-current': state.tab === id ? 'page' : null,
+                onclick: () => openTab(id),
+            }, Icon(icon, { size: 16 }), h('span', null, label)))));
+    }
+}
+
+const siteLangs = () => {
+    const l = Array.isArray(state.settings.langs) ? LANGS.map(([c]) => c).filter((c) => state.settings.langs.includes(c)) : [];
+    return l.length ? l : LANGS.map(([c]) => c);
+};
+
+// Есть ли на языке хоть один текст раздела (или карточки) — точка у языка без текста.
+const LANG_TEXTS = {
+    home:  (c) => { const x = state.settings.hero || {}; return [x[c] && x[c].title, x[c] && x[c].subtitle]; },
+    about: (c) => { const x = (state.settings.about || {})[c] || {}; return [x.title, x.body]; },
+    legal: (c) => { const x = state.settings.legal || {}; return [(x.privacy || {})[c], (x.terms || {})[c]]; },
+    seo:   (c) => { const x = state.settings.seo || {}; return [(x.title || {})[c], (x.description || {})[c]]; },
+};
+function langMissing(code) {
+    const texts = state.editor ? Object.values(state.editor.draft.content[code] || {}) : (LANG_TEXTS[state.tab] ? LANG_TEXTS[state.tab](code) : ['-']);
+    return !texts.some((v) => str(v).trim());
+}
+
+function paintLangs() {
+    clear(refs.langs);
+    const on = siteLangs();
+    refs.langs.appendChild(h('span', { class: 'ws-langs-label' }, 'Язык текста и просмотра'));
+    refs.langs.appendChild(h('div', { class: 'ws-segs' }, ...LANGS.map(([code, label]) => {
+        const empty = langMissing(code);
+        return h('button', {
+            type: 'button', class: 'ws-seg' + (state.lang === code ? ' on' : ''), 'data-ws-lang': code,
+            'aria-pressed': state.lang === code ? 'true' : 'false',
+            title: !on.includes(code) ? 'Язык выключен на сайте' : (empty ? 'На этом языке текста ещё нет' : null),
+            onclick: () => setLang(code),
+        }, label, empty && on.includes(code) ? h('span', { class: 'ws-dot', 'aria-hidden': 'true' }) : null);
+    })));
+}
+
+// Реестр вкладок: новая вкладка — функция здесь, меню о ней не знает.
 const TAB_RENDERERS = {
     general:      renderGeneralTab,
+    contacts:     renderContactsTab,
     home:         renderHomeTab,
+    about:        renderAboutTab,
+    legal:        renderLegalTab,
     doctors:      (bodyEl) => renderProfileTab('doctors', bodyEl),
     services:     (bodyEl) => renderProfileTab('services', bodyEl),
     departments:  (bodyEl) => renderContentTab('departments', bodyEl),
@@ -184,20 +347,20 @@ const TAB_RENDERERS = {
 // Общие мелочи оформления
 // ---------------------------------------------------------------------------
 function card(title, iconName, ...children) {
-    return h('div', { class: 'card', style: { marginBottom: '16px' } },
-        h('div', { class: 'card-header' }, h('h3', null, Icon(iconName, { size: 16 }), ' ', title)),
-        h('div', { style: { padding: '4px 16px 16px', display: 'flex', flexDirection: 'column' } }, ...children));
+    return h('section', { class: 'card ws-card' },
+        h('div', { class: 'ws-card-head' }, h('span', { class: 'ws-card-ico' }, Icon(iconName, { size: 16 })), h('h3', null, title)),
+        h('div', { class: 'ws-card-body' }, ...children));
 }
 
-function hint(text) {
-    return h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '-6px', marginBottom: '12px' } }, text);
+// Карточка, у которой есть место на сайте: поставили курсор в поле — просмотр
+// открывает эту страницу и прокручивается к этому месту.
+function at(el, path, sel) {
+    el.addEventListener('focusin', () => { if (refs.preview) refs.preview.show(path, sel || null); });
+    return el;
 }
 
-// Подпись группы карточек «одна на язык» — без неё три группы карточек
-// «Узбекский/Русский/Английский» подряд неотличимы.
-function subheading(text) {
-    return h('div', { style: { fontWeight: '700', fontSize: '13.5px', margin: '18px 2px 6px' } }, text);
-}
+function hint(text) { return h('p', { class: 'ws-hint' }, text); }
+function note(text) { return h('p', { class: 'ws-note' }, Icon('Info', { size: 15 }), h('span', null, text)); }
 
 // Поле, привязанное к ветке settings или черновику: пишет прямо в объект.
 function textInput(obj, key, opts = {}) {
@@ -222,10 +385,23 @@ function textArea(obj, key, rows = 4) {
 
 function moveButton(dir, disabled, onclick) {
     return h('button', {
-        class: 'btn btn-outline btn-sm', type: 'button',
+        class: 'btn btn-ghost btn-sm ws-move', type: 'button',
         title: dir < 0 ? 'Выше' : 'Ниже', 'aria-label': dir < 0 ? 'Выше' : 'Ниже',
         disabled: disabled ? true : null, onclick,
-    }, Icon(dir < 0 ? 'ArrowUp' : 'ArrowDown', { size: 13 }));
+    }, Icon(dir < 0 ? 'ArrowUp' : 'ArrowDown', { size: 14 }));
+}
+
+// Загрузка: вместо голого поля «Выберите файл» — обычная кнопка.
+function uploadButton(label, { multiple = false, onFiles }) {
+    const inp = h('input', { type: 'file', accept: IMAGE_ACCEPT, multiple: multiple ? true : null, class: 'ws-file', 'aria-label': label,
+        onchange: async (e) => {
+            const files = [].slice.call(e.target.files || []);
+            if (!files.length) return;
+            await onFiles(files);
+            e.target.value = '';
+            changed();
+        } });
+    return h('label', { class: 'btn btn-outline btn-sm ws-upload' }, Icon('Image', { size: 14 }), ' ', label, inp);
 }
 
 // Окно-подтверждение (те же классы .modal/.modal-card, что у прочих окон), не
@@ -269,7 +445,9 @@ async function saveSettings() {
     if (state.saving) return false;
     state.saving = true;
     try {
-        const out = await rpc('website_settings_save', { settings: state.settings, prev_updated_at: state.updated_at });
+        const sent = JSON.stringify(state.settings);   // правки, набранные во время запроса, — ещё не сохранены
+        const out = await rpc('website_settings_save', { settings: JSON.parse(sent), prev_updated_at: state.updated_at });
+        state.saved = sent;
         state.updated_at = (out && out.updated_at) || state.updated_at;
         if (out && out.site) state.site = readSite(out.site);
         toast(tr('Сохранено'));
@@ -282,49 +460,75 @@ async function saveSettings() {
     }
 }
 
-// Кнопка сохранения вкладки. На «Просмотре» её нет вовсе — вместо неё строка,
-// почему поля серые.
-function saveRow(validate) {
+// Полоса сохранения. На «Просмотре» кнопок нет вовсе — вместо них строка,
+// почему поля серые. При открытой карточке содержимого — её собственные кнопки.
+function paintBar() {
+    clear(refs.bar);
+    refs.bar.className = 'ws-savebar';
     if (readOnly()) {
-        return h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '4px 2px 0' } },
-            'Доступ только для чтения: менять настройки сайта нельзя.');
+        refs.bar.appendChild(h('span', { class: 'muted' }, 'Доступ только для чтения: менять настройки сайта нельзя.'));
+        if (state.editor) refs.bar.appendChild(backButton('Закрыть'));
+        return;
+    }
+    if (state.editor) { paintEditorBar(); return; }
+
+    const dirty = isDirty();
+    refs.bar.classList.toggle('is-dirty', dirty);
+    refs.bar.appendChild(h('span', { class: 'ws-savebar-text', role: 'status', 'data-ws-dirty': dirty ? '1' : '0' },
+        dirty ? 'Есть несохранённые изменения — посетители их ещё не видят'
+            : (state.updated_at
+                ? trf('Всё сохранено. Последнее изменение: {at}', { at: localTime(state.updated_at) })
+                : 'Всё сохранено')));
+    if (dirty) {
+        refs.bar.appendChild(h('button', { class: 'btn btn-outline', type: 'button', 'data-ws-discard': '', onclick: () => openConfirm({
+            title: 'Отменить изменения?', text: 'Все несохранённые правки настроек сайта пропадут.', okLabel: 'Отменить изменения',
+            onOk: async () => { state.settings = JSON.parse(state.saved); paint(); refs.preview.refresh(); },
+        }) }, 'Отменить'));
     }
     const btn = h('button', { class: 'btn btn-primary', type: 'button', 'data-ws-save': '' }, Icon('Check', { size: 14 }), ' ', 'Сохранить');
+    btn.disabled = !dirty;
     btn.addEventListener('click', async () => {
         if (state.saving) return;
-        if (validate) {
+        for (const [tab, validate] of [['general', validateGeneral], ['contacts', validateContacts], ['seo', validateSeo]]) {
             const err = validate();
-            if (err) { toast(tr(err), 'fail'); return; }
+            if (!err) continue;
+            toast(tr(err), 'fail');
+            if (state.tab !== tab) openTab(tab);
+            return;
         }
         btn.disabled = true;
-        if (await saveSettings()) { paint(); return; }
-        btn.disabled = false;
+        // Форму не перерисовываем: человек мог продолжить набирать.
+        await saveSettings();
+        paintHead();
+        paintBar();
     });
-    const row = h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', padding: '4px 2px 0' } }, btn);
-    if (state.updated_at) {
-        row.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } },
-            trf('Последнее изменение: {at}', { at: String(state.updated_at).replace('T', ' ').replace(/\.\d+Z$|Z$/, '') })));
-    }
-    return row;
+    refs.bar.appendChild(btn);
+}
+
+function localTime(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return str(iso);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 // ---------------------------------------------------------------------------
-// Вкладка «Основное»
+// Шапка: состояние сайта, выключатель, «Открыть сайт»
 // ---------------------------------------------------------------------------
 function siteUrl() {
     const lang = str(state.settings.default_lang) || 'uz';
     return `http://${location.hostname}:${state.site.port || DEFAULT_SITE_PORT}/${lang}/`;
 }
 
-// «Сайт включён» — первая карточка. Выключатель сохраняет сразу (как «ИИ
-// отвечает в чатах»): включить сайт и потом искать, какую кнопку нажать, чтобы
-// порт открылся, — лишний шаг. Уходит весь объект настроек, а значит и
-// несохранённые правки этой вкладки — подсказка под выключателем это говорит.
-function siteCard() {
+// Выключатель сохраняет сразу (как «ИИ отвечает в чатах»): включить сайт и потом
+// искать, какую кнопку нажать, чтобы порт открылся, — лишний шаг. Уходит весь
+// объект настроек, а значит и несохранённые правки — подсказка в «Основном» это говорит.
+function paintHead() {
+    clear(refs.head);
     const s = state.settings;
     const on = s.enabled === true;
     const box = h('input', {
-        type: 'checkbox', checked: on, role: 'switch', 'data-ws-enabled': '',
+        type: 'checkbox', checked: on, role: 'switch', class: 'ws-switch', 'data-ws-enabled': '',
         'aria-label': 'Сайт включён',
         disabled: readOnly() ? true : null,
     });
@@ -334,7 +538,7 @@ function siteCard() {
         // открыла бы порт), поэтому и экран другого не шлёт.
         s.enabled = box.checked === true;
         box.disabled = true;
-        if (await saveSettings()) { paint(); return; }
+        if (await saveSettings()) { paintHead(); paintBar(); return; }
         if (prev === undefined) delete s.enabled; else s.enabled = prev;
         box.checked = prev === true;
         box.disabled = false;
@@ -352,47 +556,42 @@ function siteCard() {
         status = h('span', { class: 'tag', 'data-ws-status': 'off' }, 'Сайт выключен');
     }
 
-    return card('Публичный сайт', 'Globe',
-        h('label', { class: 'row', style: { gap: '12px', alignItems: 'center', padding: '10px 0 6px', cursor: readOnly() ? 'default' : 'pointer' } },
-            box,
-            h('span', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-                h('strong', null, 'Сайт включён'),
-                h('span', null, status))),
-        on && !state.site.running
-            ? hint('Порт занят другой программой или сайт отключён на сервере. Перезапустите программу; если не поможет — обратитесь к менеджеру Easy-Med.')
-            : null,
-        state.site.running
-            ? h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap', padding: '4px 0 8px' } },
-                h('a', { class: 'btn btn-outline btn-sm', href: siteUrl(), target: '_blank', rel: 'noopener noreferrer', 'data-ws-open': '' },
-                    Icon('Globe', { size: 13 }), ' ', 'Открыть сайт'))
-            : null,
-        hint('Сайт открывается с компьютеров локальной сети по адресу этого компьютера, порт 8001. При первом запуске Windows может один раз спросить, разрешить ли программе доступ к сети, — ответьте «Разрешить» для частных сетей.'),
-        readOnly() ? null : hint('Выключатель сохраняет настройки сразу — вместе с несохранёнными правками этой вкладки.'),
-    );
+    refs.head.appendChild(PageHead({
+        title: 'Веб-сайт',
+        subtitle: 'Меняйте тексты слева — справа сразу видно, как их увидит посетитель.',
+        right: [
+            status,
+            h('label', { class: 'ws-enable' }, box, h('span', null, 'Сайт включён')),
+            state.site.running
+                ? h('a', { class: 'btn btn-outline btn-sm', href: siteUrl(), target: '_blank', rel: 'noopener noreferrer', 'data-ws-open': '' },
+                    Icon('Globe', { size: 14 }), ' ', 'Открыть сайт')
+                : null,
+        ],
+    }));
+    if (on && !state.site.running) {
+        refs.head.appendChild(h('p', { class: 'ws-alert' },
+            'Порт занят другой программой или сайт отключён на сервере. Перезапустите программу; если не поможет — обратитесь к менеджеру Easy-Med.'));
+    }
 }
 
+// ---------------------------------------------------------------------------
+// «Основное», «Контакты»
+// ---------------------------------------------------------------------------
 function renderGeneralTab(bodyEl) {
     const s = state.settings;
-    const contact = branch('contact');
-    const social  = branch('social');
-
-    bodyEl.appendChild(siteCard());
-
     const defLang = str(s.default_lang) || 'uz';
     const langSel = h('select', {
         disabled: readOnly() ? true : null,
         onchange: (e) => { s.default_lang = e.target.value; },
     }, ...LANGS.map(([code, label]) => h('option', { value: code, selected: defLang === code }, label)));
 
-    const enabled = Array.isArray(s.langs) && s.langs.length ? s.langs.slice() : LANGS.map(([c]) => c);
-    s.langs = enabled;
     const langChecks = LANGS.map(([code, label]) => {
         const box = h('input', {
             type: 'checkbox',
-            checked: enabled.includes(code),
+            checked: siteLangs().includes(code),
             disabled: readOnly() ? true : null,
             onchange: (e) => {
-                const set = new Set(s.langs || []);
+                const set = new Set(Array.isArray(s.langs) ? s.langs : siteLangs());
                 if (e.target.checked) set.add(code); else set.delete(code);
                 s.langs = LANGS.map(([c]) => c).filter((c) => set.has(c));
             },
@@ -400,42 +599,55 @@ function renderGeneralTab(bodyEl) {
         return checkField(label, box);
     });
 
-    bodyEl.appendChild(card('Языки', 'Doc',
+    bodyEl.appendChild(card('Языки сайта', 'Globe',
+        h('div', { class: 'ws-label' }, 'Доступные языки'),
+        h('div', { class: 'ws-checks' }, ...langChecks),
         field('Язык по умолчанию', langSel),
         hint('С этого языка начинает посетитель, который пришёл без указания языка.'),
-        h('div', { style: { fontWeight: '600', fontSize: '12.5px', marginBottom: '6px' } }, 'Доступные языки'),
-        ...langChecks,
     ));
-
-    bodyEl.appendChild(card('Контакты', 'Phone',
-        field('Телефон', textInput(contact, 'phone', { placeholder: '+998 71 200 00 00' })),
-        field('Email', textInput(contact, 'email', { placeholder: 'info@clinic.uz' })),
-        field('Адрес', textInput(contact, 'address')),
-        field('Ссылка на карту', textInput(contact, 'map_url', { placeholder: 'https://maps.google.com/…' })),
-        field('Карта на странице (HTML-код виджета)', textArea(contact, 'map_embed', 4)),
-        // Chilla CONTACT_HOME_V1 — кнопка «Вызвать такси» под картой; пусто — кнопки нет.
-        field('Ссылка «Вызвать такси» (Яндекс Go и т. п.)', textInput(contact, 'taxi_url', { placeholder: 'https://3.redirect.appmetrica.yandex.com/route?…' })),
-        hint('Код вставляется на сайт как есть. Политика безопасности сайта автоматически разрешает карты с google.com, maps.google.com и yandex.ru; виджет с другого источника может быть отклонён — тогда оставьте только ссылку на карту.'),
+    bodyEl.appendChild(card('Где открывается сайт', 'Link',
+        note('Сайт открывается с компьютеров локальной сети по адресу этого компьютера, порт 8001. При первом запуске Windows может один раз спросить, разрешить ли программе доступ к сети, — ответьте «Разрешить» для частных сетей.'),
+        readOnly() ? null : hint('Выключатель «Сайт включён» вверху сохраняет настройки сразу — вместе с несохранёнными правками всех разделов.'),
+        hint('Живой просмотр справа работает и при выключенном сайте.'),
     ));
-
-    bodyEl.appendChild(card('Социальные сети', 'Msg',
-        field('Instagram', textInput(social, 'instagram', { placeholder: 'https://instagram.com/…' })),
-        field('Telegram',  textInput(social, 'telegram',  { placeholder: 'https://t.me/…' })),
-        field('Facebook',  textInput(social, 'facebook',  { placeholder: 'https://facebook.com/…' })),
-        field('YouTube',   textInput(social, 'youtube',   { placeholder: 'https://youtube.com/…' })),
-        hint('Только полные адреса, начинающиеся с https://. Пустое поле — значок в подвале сайта не показывается.'),
-    ));
-
-    bodyEl.appendChild(saveRow(validateGeneral));
 }
 
 function validateGeneral() {
     const s = state.settings;
-    const langs = Array.isArray(s.langs) ? s.langs : [];
-    if (!langs.length) return 'Оставьте включённым хотя бы один язык сайта.';
-    if (s.default_lang && !langs.includes(s.default_lang)) {
+    if (Array.isArray(s.langs) && !s.langs.length) return 'Оставьте включённым хотя бы один язык сайта.';
+    if (s.default_lang && !siteLangs().includes(s.default_lang)) {
         return 'Язык по умолчанию должен быть среди доступных языков.';
     }
+    return null;
+}
+
+function renderContactsTab(bodyEl) {
+    const contact = branch('contact');
+    const social  = branch('social');
+    bodyEl.appendChild(at(card('Контакты', 'Phone',
+        h('div', { class: 'ws-grid2' },
+            field('Телефон', textInput(contact, 'phone', { placeholder: '+998 71 200 00 00' })),
+            field('Email', textInput(contact, 'email', { placeholder: 'info@clinic.uz' }))),
+        field('Адрес', textInput(contact, 'address')),
+    ), '/contact'));
+    bodyEl.appendChild(at(card('Карта и проезд', 'MapPin',
+        field('Ссылка на карту', textInput(contact, 'map_url', { placeholder: 'https://maps.google.com/…' })),
+        // Chilla CONTACT_HOME_V1 — кнопка «Вызвать такси» под картой; пусто — кнопки нет.
+        field('Ссылка «Вызвать такси» (Яндекс Go и т. п.)', textInput(contact, 'taxi_url', { placeholder: 'https://3.redirect.appmetrica.yandex.com/route?…' })),
+        field('Карта на странице (HTML-код виджета)', textArea(contact, 'map_embed', 4)),
+        hint('Код вставляется на сайт как есть. Политика безопасности сайта автоматически разрешает карты с google.com, maps.google.com и yandex.ru; виджет с другого источника может быть отклонён — тогда оставьте только ссылку на карту.'),
+    ), '/contact', '.contact-side'));
+    bodyEl.appendChild(at(card('Социальные сети', 'Msg',
+        h('div', { class: 'ws-grid2' },
+            field('Instagram', textInput(social, 'instagram', { placeholder: 'https://instagram.com/…' })),
+            field('Telegram',  textInput(social, 'telegram',  { placeholder: 'https://t.me/…' })),
+            field('Facebook',  textInput(social, 'facebook',  { placeholder: 'https://facebook.com/…' })),
+            field('YouTube',   textInput(social, 'youtube',   { placeholder: 'https://youtube.com/…' }))),
+        hint('Только полные адреса, начинающиеся с https://. Пустое поле — значок в подвале сайта не показывается.'),
+    ), '/contact', '.site-footer'));
+}
+
+function validateContacts() {
     const social = branch('social');
     for (const key of ['instagram', 'telegram', 'facebook', 'youtube']) {
         const v = str(social[key]).trim();
@@ -445,40 +657,45 @@ function validateGeneral() {
 }
 
 // ---------------------------------------------------------------------------
-// Вкладка «SEO» — форма повторяет то, что читает сайт (server/site/seo.js):
+// «SEO» — форма повторяет то, что читает сайт (server/site/seo.js):
 // seo.base_url — строка, seo.title / seo.description — {uz,ru,en}.
 // ---------------------------------------------------------------------------
 function renderSeoTab(bodyEl) {
     const seo = branch('seo');
-    if (!seo.title || typeof seo.title !== 'object' || Array.isArray(seo.title)) {
-        seo.title = typeof seo.title === 'string' ? { uz: seo.title, ru: seo.title, en: seo.title } : {};
+    for (const key of ['title', 'description']) {
+        if (typeof seo[key] === 'string') seo[key] = { uz: seo[key], ru: seo[key], en: seo[key] };
+        subBranch(seo, key);
     }
-    if (!seo.description || typeof seo.description !== 'object' || Array.isArray(seo.description)) {
-        seo.description = typeof seo.description === 'string'
-            ? { uz: seo.description, ru: seo.description, en: seo.description } : {};
-    }
+    const code = state.lang;
 
-    bodyEl.appendChild(card('Поисковая оптимизация', 'Chart',
+    const gUrl = h('div', { class: 'ws-serp-url' });
+    const gTitle = h('div', { class: 'ws-serp-title' });
+    const gDesc = h('div', { class: 'ws-serp-desc' });
+    const paintSerp = () => {
+        gUrl.textContent = (str(seo.base_url).trim().replace(/\/+$/, '') || 'https://clinic.uz') + '/' + code + '/';
+        gTitle.textContent = str(seo.title[code]).trim() || str(((state.settings.hero || {})[code] || {}).title).trim() || tr('Название клиники');
+        gDesc.textContent = str(seo.description[code]).trim() || tr('Описание клиники для поисковой выдачи.');
+    };
+    paintSerp();
+    refs.onChanged = paintSerp;
+
+    bodyEl.appendChild(card('Так сайт выглядит в поиске', 'Search',
+        h('div', { class: 'ws-serp', 'data-ws-serp': '' }, gUrl, gTitle, gDesc),
+        field('Заголовок в поиске (title)', textInput(seo.title, code)),
+        field('Описание в поиске (description)', textArea(seo.description, code, 3)),
+    ));
+    bodyEl.appendChild(card('Адрес сайта', 'Link',
         field('Базовый адрес сайта', textInput(seo, 'base_url', { placeholder: 'https://clinic.uz' })),
         hint('Пока адрес не задан, sitemap.xml и канонические ссылки не формируются: без домена абсолютный адрес страницы построить не из чего.'),
     ));
-
-    for (const [code, label] of LANGS) {
-        bodyEl.appendChild(card(label, 'Doc',
-            field('Заголовок в поиске (title)', textInput(seo.title, code)),
-            field('Описание в поиске (description)', textArea(seo.description, code, 3)),
-        ));
-    }
-
     // Код аналитики вставляется на сайт как есть (тот же уровень доверия, что
-    // «Карта на странице» в «Основном») — отсюда та же предупреждающая строка.
+    // «Карта на странице») — отсюда та же предупреждающая строка.
     const analytics = branch('analytics');
     bodyEl.appendChild(card('Аналитика', 'Chart',
         field('Код аналитики (HTML)', textArea(analytics, 'inject_snippet', 6)),
         hint('Вставляется на сайт как есть — только из доверенного источника. Политика безопасности сайта автоматически разрешает Google Tag Manager и Яндекс.Метрику; скрипты с других доменов будут заблокированы.'),
+        hint('В живом просмотре код аналитики не запускается.'),
     ));
-
-    bodyEl.appendChild(saveRow(validateSeo));
 }
 
 function validateSeo() {
@@ -488,71 +705,15 @@ function validateSeo() {
 }
 
 // ---------------------------------------------------------------------------
-// Вкладка «Главная страница» — hero / stats / about / legal, те же ветки
-// settings, что читает сайт (server/site/render/home.js, static-pages.js).
-// legal.privacy / legal.terms — «поле → язык» простой строкой, а не {title,body}.
+// «Главная страница» / «О клинике» / «Правовые документы» — те же ветки settings,
+// что читает сайт (server/site/render/home.js, static-pages.js). legal.privacy /
+// legal.terms — «поле → язык» простой строкой, а не {title,body}.
 // ---------------------------------------------------------------------------
 function renderHomeTab(bodyEl) {
-    bodyEl.appendChild(subheading('Заголовок сайта (hero)'));
     const hero = branch('hero');
-    for (const [code, label] of LANGS) {
-        const heroLang = subBranch(hero, code);
-        bodyEl.appendChild(card(label, 'Sparkles',
-            field('Заголовок', textInput(heroLang, 'title')),
-            field('Подзаголовок', textArea(heroLang, 'subtitle', 2)),
-            field('Текст кнопки записи', textInput(heroLang, 'cta', { placeholder: 'Записаться' })),
-        ));
-    }
-
-    bodyEl.appendChild(heroKickerCard(hero));
-    bodyEl.appendChild(heroPriceCard(hero));
-    bodyEl.appendChild(heroCtaCard(hero, 'cta2', 'Вторая кнопка (с обводкой)'));
-    bodyEl.appendChild(heroCtaCard(hero, 'cta3', 'Третья кнопка (мягкая)'));
-    bodyEl.appendChild(heroPhotosCard(hero));
-
-    bodyEl.appendChild(statsCard());
-    // Chilla WHY_US_REMOVED_V1 — «Почему нас выбирают» сайт больше не рисует,
-    // редактора нет; settings.why_us, если есть, остаётся в объекте нетронутым.
-
-    bodyEl.appendChild(subheading('О клинике'));
-    const about = branch('about');
-    for (const [code, label] of LANGS) {
-        const aboutLang = subBranch(about, code);
-        bodyEl.appendChild(card(label, 'Doc',
-            field('Заголовок', textInput(aboutLang, 'title')),
-            field('Текст', textArea(aboutLang, 'body', 4)),
-        ));
-    }
-
-    bodyEl.appendChild(subheading('Правовые документы'));
-    const legal = branch('legal');
-    const privacy = subBranch(legal, 'privacy');
-    const terms = subBranch(legal, 'terms');
-    for (const [code, label] of LANGS) {
-        bodyEl.appendChild(card(label, 'Doc',
-            field('Политика конфиденциальности', textArea(privacy, code, 6)),
-            field('Условия использования', textArea(terms, code, 6)),
-        ));
-    }
-    bodyEl.appendChild(hint('Пока текст не заполнен, посетитель видит заглушку страницы, помеченную noindex.'));
-
-    bodyEl.appendChild(saveRow());
-}
-
-// Надзаголовок: hero.kicker = {uz,ru,en}.
-function heroKickerCard(hero) {
-    const kicker = subBranch(hero, 'kicker');
-    return card('Строка над заголовком', 'Sparkles',
-        h('div', { class: 'row', style: { gap: '10px', flexWrap: 'wrap' } },
-            ...LANGS.map(([code, label]) => h('div', { style: { flex: '1', minWidth: '150px' } },
-                field(label, textInput(kicker, code))))),
-        hint('Короткая строка над заголовком — например, направление клиники. Пустое поле: на сайте строки нет вовсе.'),
-    );
-}
-
-// Цена: hero.price = {from, amount}; «от» и валюту сайт подставляет сам.
-function heroPriceCard(hero) {
-    const price = subBranch(hero, 'price');
+    const code = state.lang;
+    const heroLang = subBranch(hero, code);
+    const price = subBranch(hero, 'price');   // {from, amount}; «от» и валюту сайт подставляет сам
     const amount = h('input', {
         type: 'number', min: '0', step: '1',
         value: (price.amount == null || price.amount === '') ? '' : String(price.amount),
@@ -567,24 +728,51 @@ function heroPriceCard(hero) {
         type: 'checkbox', checked: !!price.from, disabled: readOnly() ? true : null,
         onchange: (e) => { price.from = e.target.checked; },
     });
-    return card('Цена в заголовке', 'Chart',
-        field('Сумма', amount),
-        checkField('Показывать слово «от»', fromCb),
-        hint('Разряды и название валюты сайт расставит сам, на языке страницы. Пустая сумма: строки с ценой на сайте нет вовсе.'),
-    );
+
+    bodyEl.appendChild(at(card('Первый экран', 'Sparkles',
+        field('Строка над заголовком', textInput(subBranch(hero, 'kicker'), code)),
+        field('Заголовок', textInput(heroLang, 'title')),
+        field('Подзаголовок', textArea(heroLang, 'subtitle', 3)),
+        h('div', { class: 'ws-grid2' },
+            field('Цена в заголовке', amount),
+            h('div', { class: 'ws-check-end' }, checkField('Показывать слово «от»', fromCb))),
+        hint('Разряды и название валюты сайт расставит сам, на языке страницы. Пустое поле — строки на сайте нет вовсе.'),
+    ), '/', '.home-hero'));
+
+    const ctaRow = (key, title) => {
+        const cta = subBranch(hero, key);
+        return h('div', { class: 'ws-sub' }, h('div', { class: 'ws-label' }, title),
+            h('div', { class: 'ws-grid2' },
+                field('Подпись', textInput(subBranch(cta, 'label'), code)),
+                field('Ссылка', textInput(cta, 'href', { placeholder: '/ru/services' }))));
+    };
+    bodyEl.appendChild(at(card('Кнопки', 'Target',
+        field('Текст кнопки записи', textInput(heroLang, 'cta', { placeholder: 'Записаться' })),
+        ctaRow('cta2', 'Вторая кнопка (с обводкой)'),
+        ctaRow('cta3', 'Третья кнопка (мягкая)'),
+        hint('Кнопка появляется на сайте, только когда заполнены и подпись, и ссылка. Годятся адрес внутри сайта («/ru/services»), полный адрес с https://, tel: и mailto:.'),
+    ), '/', '.hero__actions'));
+
+    bodyEl.appendChild(at(heroPhotosCard(hero), '/', '.home-hero'));
+    bodyEl.appendChild(at(statsCard(code), '/', '.hero__stats'));
+    // Chilla WHY_US_REMOVED_V1 — «Почему нас выбирают» сайт больше не рисует,
+    // редактора нет; settings.why_us, если есть, остаётся в объекте нетронутым.
 }
 
-// Дополнительные кнопки: hero.cta2 / hero.cta3 = {label:{uz,ru,en}, href}.
-function heroCtaCard(hero, key, title) {
-    const cta = subBranch(hero, key);
-    const label = subBranch(cta, 'label');
-    return card(title, 'Target',
-        h('div', { class: 'row', style: { gap: '10px', flexWrap: 'wrap' } },
-            ...LANGS.map(([code, lbl]) => h('div', { style: { flex: '1', minWidth: '150px' } },
-                field(lbl, textInput(label, code))))),
-        field('Ссылка', textInput(cta, 'href', { placeholder: '/ru/services' })),
-        hint('Кнопка появляется на сайте, только когда заполнены и подпись, и ссылка. Годятся адрес внутри сайта («/ru/services»), полный адрес с https://, tel: и mailto:.'),
-    );
+function renderAboutTab(bodyEl) {
+    const about = subBranch(branch('about'), state.lang);
+    bodyEl.appendChild(card('О клинике', 'Info',
+        field('Заголовок', textInput(about, 'title')),
+        field('Текст', textArea(about, 'body', 12))));
+}
+
+function renderLegalTab(bodyEl) {
+    const legal = branch('legal');
+    bodyEl.appendChild(at(card('Политика конфиденциальности', 'Shield',
+        field('Текст', textArea(subBranch(legal, 'privacy'), state.lang, 10))), '/privacy'));
+    bodyEl.appendChild(at(card('Условия использования', 'Doc',
+        field('Текст', textArea(subBranch(legal, 'terms'), state.lang, 10)),
+        hint('Пока текст не заполнен, посетитель видит заглушку страницы, помеченную noindex.')), '/terms'));
 }
 
 // Загрузка картинки в корзину сайта: расширение проверяется до отправки.
@@ -596,127 +784,95 @@ async function uploadWebsiteImage(file, prefix) {
     return path;
 }
 
-function heroPhotoField(hero, key, label) {
-    const preview = h('img', {
-        alt: '',
-        style: { maxWidth: '150px', maxHeight: '180px', borderRadius: '8px', objectFit: 'cover', marginTop: '8px' },
-    });
-    const clearBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Убрать');
-    const sync = () => {
-        const path = str(hero[key]);
-        preview.style.display = path ? '' : 'none';
-        clearBtn.style.display = (path && !readOnly()) ? '' : 'none';
-        if (path) preview.src = publicUrl(path);
-    };
-    clearBtn.addEventListener('click', () => { hero[key] = ''; sync(); });
+async function uploadAll(files, prefix, take) {
+    let ok = 0;
+    for (const f of files) {
+        try { take(await uploadWebsiteImage(f, prefix)); ok++; } catch (err) {
+            toast(trf('Не удалось загрузить изображение. {reason}', { reason: errText(err) }), 'fail');
+        }
+    }
+    if (ok) toast(tr('Изображение загружено'));
+}
 
-    const fileInp = h('input', {
-        type: 'file', accept: IMAGE_ACCEPT, disabled: readOnly() ? true : null,
-        onchange: async (e) => {
-            const f = e.target.files && e.target.files[0];
-            if (!f) return;
-            try {
-                hero[key] = await uploadWebsiteImage(f, 'hero/');
-                sync();
-                toast(tr('Изображение загружено'));
-            } catch (err) {
-                toast(trf('Не удалось загрузить изображение. {reason}', { reason: errText(err) }), 'fail');
-            }
-        },
-    });
+function photoTile(path, ...actions) {
+    return h('div', { class: 'ws-photo' }, h('img', { src: publicUrl(path), alt: '' }),
+        readOnly() ? null : h('div', { class: 'ws-photo-acts' }, ...actions));
+}
+function removeButton(onclick) {
+    return h('button', { class: 'btn btn-ghost btn-sm ws-move', type: 'button', title: 'Убрать', 'aria-label': 'Убрать', onclick }, Icon('Trash', { size: 14 }));
+}
+
+function heroPhotoField(hero, key, label) {
+    const box = h('div', { class: 'ws-sub' });
+    const sync = () => {
+        clear(box);
+        box.appendChild(h('div', { class: 'ws-label' }, label));
+        if (str(hero[key])) box.appendChild(photoTile(hero[key], removeButton(() => { hero[key] = ''; sync(); })));
+        if (!readOnly()) {
+            box.appendChild(uploadButton(str(hero[key]) ? 'Заменить' : 'Загрузить', {
+                onFiles: (files) => uploadAll(files.slice(0, 1), 'hero/', (p) => { hero[key] = p; sync(); }) }));
+        }
+    };
     sync();
-    return h('div', { style: { flex: '1', minWidth: '200px' } }, field(label, fileInp), preview, clearBtn);
+    return box;
 }
 
 // Chilla HERO_SLIDESHOW_V1 — список фото заголовка; пусто — работает пара img1/img2.
 function heroPhotosCard(hero) {
     if (!Array.isArray(hero.photos)) hero.photos = [];
     const list = hero.photos;
-    const listBody = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '10px' } });
+    const listBody = h('div', { class: 'ws-photos' });
+    const swap = (a, b) => () => { [list[a], list[b]] = [list[b], list[a]]; paintList(); };
 
     function paintList() {
         clear(listBody);
-        if (!list.length) {
-            listBody.appendChild(h('div', { class: 'empty', style: { padding: '12px' } },
-                'Фотографий нет — заголовок покажет то, что загружено ниже.'));
-        }
-        list.forEach((path, idx) => {
-            const img = h('img', {
-                src: publicUrl(path), alt: '',
-                style: { width: '120px', height: '150px', objectFit: 'cover', borderRadius: '8px', display: 'block' },
-            });
-            const left = moveButton(-1, idx === 0, () => { [list[idx - 1], list[idx]] = [list[idx], list[idx - 1]]; paintList(); });
-            const right = moveButton(1, idx === list.length - 1, () => { [list[idx + 1], list[idx]] = [list[idx], list[idx + 1]]; paintList(); });
-            const del = h('button', { class: 'btn btn-outline btn-sm', type: 'button', title: 'Убрать', 'aria-label': 'Убрать' },
-                Icon('Trash', { size: 13 }));
-            del.addEventListener('click', () => { list.splice(idx, 1); paintList(); });
-            listBody.appendChild(h('div', { class: 'card', style: { padding: '8px' } }, img,
-                readOnly() ? null : h('div', { class: 'row', style: { gap: '4px', marginTop: '6px' } }, left, right, del)));
-        });
+        if (!list.length) listBody.appendChild(h('div', { class: 'ws-empty' }, 'Фотографий нет — заголовок покажет то, что загружено ниже.'));
+        list.forEach((path, idx) => listBody.appendChild(photoTile(path,
+            moveButton(-1, idx === 0, swap(idx - 1, idx)),
+            moveButton(1, idx === list.length - 1, swap(idx, idx + 1)),
+            removeButton(() => { list.splice(idx, 1); paintList(); }))));
     }
     paintList();
 
-    const addInp = h('input', {
-        type: 'file', accept: IMAGE_ACCEPT, multiple: true, disabled: readOnly() ? true : null,
-        onchange: async (e) => {
-            const files = [].slice.call(e.target.files || []);
-            let ok = 0;
-            for (const f of files) {
-                try {
-                    list.push(await uploadWebsiteImage(f, 'hero/'));
-                    ok++;
-                } catch (err) {
-                    toast(trf('Не удалось загрузить изображение. {reason}', { reason: errText(err) }), 'fail');
-                }
-            }
-            e.target.value = '';
-            paintList();
-            if (ok) toast(tr('Изображение загружено'));
-        },
-    });
-
     return card('Фотографии в заголовке', 'Image',
         listBody,
-        readOnly() ? null : field('Добавить фотографии', addInp),
-        hint('Две и больше — заголовок меняет их каждые 5 секунд; одна — стоит неподвижно. Порядок задаётся стрелками, первая показывается первой. Пока список пуст, работают два поля ниже (коллаж). Не забудьте сохранить кнопкой внизу вкладки.'),
-        h('div', { class: 'row', style: { gap: '16px', flexWrap: 'wrap', alignItems: 'flex-start', marginTop: '10px' } },
+        readOnly() ? null : h('div', null, uploadButton('Добавить фотографии', { multiple: true, onFiles: async (files) => {
+            await uploadAll(files, 'hero/', (p) => list.push(p));
+            paintList();
+        } })),
+        hint('Две и больше — заголовок меняет их каждые 5 секунд; одна — стоит неподвижно. Порядок задаётся стрелками, первая показывается первой. Пока список пуст, работают два поля ниже (коллаж).'),
+        h('div', { class: 'ws-grid2' },
             heroPhotoField(hero, 'img1', 'Переднее фото (если список пуст)'),
             heroPhotoField(hero, 'img2', 'Второе фото (коллаж)')),
     );
 }
 
 // Цифры на главной: [{value, label:{uz,ru,en}}]; уходят той же кнопкой «Сохранить».
-function statsCard() {
+function statsCard(code) {
     const stats = branchArray('stats');
-    const listBody = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
+    const listBody = h('div', { class: 'ws-list' });
+    const swap = (a, b) => () => { [stats[a], stats[b]] = [stats[b], stats[a]]; paintList(); };
 
     function paintList() {
         clear(listBody);
-        if (!stats.length) {
-            listBody.appendChild(h('div', { class: 'empty', style: { padding: '14px' } }, 'Пока ничего не добавлено.'));
-        }
+        if (!stats.length) listBody.appendChild(h('div', { class: 'ws-empty' }, 'Пока ничего не добавлено.'));
         stats.forEach((st, idx) => {
-            subBranch(st, 'label');
-            const up = moveButton(-1, idx === 0, () => { [stats[idx - 1], stats[idx]] = [stats[idx], stats[idx - 1]]; paintList(); });
-            const down = moveButton(1, idx === stats.length - 1, () => { [stats[idx + 1], stats[idx]] = [stats[idx], stats[idx + 1]]; paintList(); });
-            const del = h('button', { class: 'btn btn-outline btn-sm', type: 'button', title: 'Убрать', 'aria-label': 'Убрать' }, Icon('Trash', { size: 13 }));
-            del.addEventListener('click', () => { stats.splice(idx, 1); paintList(); });
-
-            listBody.appendChild(h('div', { class: 'card', style: { padding: '10px', display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' } },
-                h('div', { style: { flex: '0 0 100px' } }, field('Значение', textInput(st, 'value', { placeholder: '15+' }))),
-                ...LANGS.map(([code, label]) => h('div', { style: { flex: '1', minWidth: '120px' } }, field(label, textInput(st.label, code)))),
-                readOnly() ? null : h('div', { class: 'row', style: { gap: '4px' } }, up, down, del),
-            ));
+            const label = subBranch(st, 'label');
+            listBody.appendChild(h('div', { class: 'ws-stat' },
+                field('Значение', textInput(st, 'value', { placeholder: '15+' })),
+                field('Подпись', textInput(label, code)),
+                readOnly() ? null : h('div', { class: 'row', style: { gap: '2px' } },
+                    moveButton(-1, idx === 0, swap(idx - 1, idx)),
+                    moveButton(1, idx === stats.length - 1, swap(idx, idx + 1)),
+                    removeButton(() => { stats.splice(idx, 1); paintList(); }))));
         });
     }
     paintList();
 
-    const addBtn = readOnly() ? null : h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, Icon('Plus', { size: 13 }), ' ', 'Добавить');
-    if (addBtn) addBtn.addEventListener('click', () => { stats.push({ value: '', label: { uz: '', ru: '', en: '' } }); paintList(); });
-
-    return card('Статистика (цифры на главной)', 'Chart',
-        h('div', { class: 'row', style: { justifyContent: 'flex-end', marginBottom: '10px' } }, addBtn),
-        listBody);
+    return card('Статистика (цифры на главной)', 'Chart', listBody,
+        readOnly() ? null : h('div', null, h('button', { class: 'btn btn-outline btn-sm', type: 'button',
+            onclick: () => { stats.push({ value: '', label: { uz: '', ru: '', en: '' } }); paintList(); } },
+        Icon('Plus', { size: 14 }), ' ', 'Добавить')));
 }
 
 // ---------------------------------------------------------------------------
@@ -791,7 +947,7 @@ function paintProfileTab(kind, cfg, bodyEl, rows) {
     let query = '';
     let limit = PAGE;
 
-    const listBody = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
+    const listBody = h('div', { class: 'ws-list' });
     const counterEl = h('span', { class: 'muted', style: { fontSize: '12.5px' }, 'data-ws-counter': '' });
 
     const filtered = () => {
@@ -832,7 +988,7 @@ function paintProfileTab(kind, cfg, bodyEl, rows) {
     });
 
     paintRows();
-    bodyEl.appendChild(card(cfg.title, 'Doc',
+    bodyEl.appendChild(card(cfg.title, navItem(kind)[2],
         h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '2px' } },
             searchInput, counterEl),
         h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', marginBottom: '12px' } },
@@ -893,7 +1049,7 @@ function profileRow(kind, cfg, r, shown, canMove, reload, repaint) {
     if (kind === 'services' && isShown) {
         const editBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', dataset: { viewOk: '1' }, 'data-ws-edit': String(r.id) },
             Icon(readOnly() ? 'Search' : 'Edit', { size: 13 }), ' ', readOnly() ? 'Посмотреть' : 'Изменить');
-        editBtn.addEventListener('click', () => openEditorModal('services', CONTENT_KINDS.services, { ...r }, r, reload));
+        editBtn.addEventListener('click', () => openEditor('services', CONTENT_KINDS.services, { ...r }, r));
         actions.push(editBtn);
     }
     if (r.has_extras && !readOnly()) {
@@ -916,13 +1072,13 @@ function profileRow(kind, cfg, r, shown, canMove, reload, repaint) {
     }
 
     return h('div', {
-        class: 'card', 'data-ws-row': String(r.id), 'data-ws-state': str(r.state),
-        style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', flexWrap: 'wrap', opacity: isShown ? '1' : '0.62' },
+        class: 'ws-row', 'data-ws-row': String(r.id), 'data-ws-state': str(r.state),
+        style: { opacity: isShown ? '1' : '0.62' },
     },
         kind === 'doctors' && r.photo_url
             ? h('img', { src: r.photo_url, alt: '', style: { width: '36px', height: '36px', borderRadius: '50%', objectFit: 'cover', flex: '0 0 auto' } })
             : null,
-        h('div', { style: { flex: '1 1 220px', minWidth: '0' } },
+        h('div', { class: 'ws-row-main' },
             h('div', { style: { fontWeight: '600', fontSize: '13.5px' } }, name),
             sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } }, sub) : null,
             reason ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' }, 'data-ws-reason': str(r.state) }, reason) : null),
@@ -1068,7 +1224,7 @@ async function renderContentTab(kind, bodyEl) {
 // Отзывы / FAQ / новости — самостоятельные записи.
 function paintStandaloneTab(kind, cfg, bodyEl, rows) {
     const reload = () => { clear(bodyEl); renderContentTab(kind, bodyEl); };
-    const listBody = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
+    const listBody = h('div', { class: 'ws-list' });
 
     function paintRows() {
         clear(listBody);
@@ -1082,9 +1238,9 @@ function paintStandaloneTab(kind, cfg, bodyEl, rows) {
 
     const addBtn = readOnly() ? null : h('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-ws-add': '' },
         Icon('Plus', { size: 13 }), ' ', 'Добавить');
-    if (addBtn) addBtn.addEventListener('click', () => openEditorModal(kind, cfg, freshRow(cfg, null), null, reload));
+    if (addBtn) addBtn.addEventListener('click', () => openEditor(kind, cfg, freshRow(cfg, null), null));
 
-    bodyEl.appendChild(card(cfg.tabLabel, 'Doc',
+    bodyEl.appendChild(card(cfg.tabLabel, navItem(kind)[2],
         h('div', { class: 'row', style: { justifyContent: 'flex-end', marginBottom: '10px' } }, addBtn),
         listBody,
     ));
@@ -1106,7 +1262,7 @@ function paintPickListTab(kind, cfg, bodyEl, pickArr, rows) {
         .filter((p) => !publishedFks.has(p[cfg.fk]))
         .sort((a, b) => cfg.pickLabel(a).localeCompare(cfg.pickLabel(b)));
 
-    const listBody = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
+    const listBody = h('div', { class: 'ws-list' });
     function paintRows() {
         clear(listBody);
         if (!pickArr.length) {
@@ -1120,7 +1276,7 @@ function paintPickListTab(kind, cfg, bodyEl, pickArr, rows) {
     }
     paintRows();
 
-    bodyEl.appendChild(card(cfg.tabLabel, 'Doc',
+    bodyEl.appendChild(card(cfg.tabLabel, navItem(kind)[2],
         h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '12px' } },
             'Отделения берутся из системы — отметьте, какие показать на сайте, и заполните их описание.'),
         listBody,
@@ -1138,7 +1294,7 @@ function pickListRow(kind, cfg, pick, overlay, order, reload, repaint) {
     const published = !!(overlay && overlay.published);
 
     const publishCb = h('input', {
-        type: 'checkbox', checked: published, title: 'На сайте', 'aria-label': 'На сайте',
+        type: 'checkbox', class: 'ws-switch', checked: published, title: 'На сайте', 'aria-label': 'На сайте',
         onchange: async (e) => {
             const val = e.target.checked;
             e.target.disabled = true;
@@ -1177,7 +1333,7 @@ function pickListRow(kind, cfg, pick, overlay, order, reload, repaint) {
     }
 
     const freshOrOverlay = () => (overlay ? { ...overlay } : freshRow(cfg, pick));
-    const editBtn = viewOrEditButton(() => openEditorModal(kind, cfg, freshOrOverlay(), pick, reload));
+    const editBtn = viewOrEditButton(() => openEditor(kind, cfg, freshOrOverlay(), pick));
     const delBtn = (readOnly() || !overlay) ? null : h('button', { class: 'btn btn-outline btn-sm', type: 'button' },
         Icon('Trash', { size: 13 }), ' ', 'Удалить');
     if (delBtn) delBtn.addEventListener('click', () => openDeleteConfirm(kind, overlay, name, reload));
@@ -1190,11 +1346,11 @@ function pickListRow(kind, cfg, pick, overlay, order, reload, repaint) {
     }
 
     return h('div', {
-        class: 'card', 'data-ws-row': String(pick ? pick[cfg.fk] : overlay.id),
-        style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', opacity: overlay ? '1' : '0.72' },
+        class: 'ws-row', 'data-ws-row': String(pick ? pick[cfg.fk] : overlay.id),
+        style: { opacity: overlay ? '1' : '0.72' },
     },
         readOnly() ? null : publishCb,
-        h('div', { style: { flex: '1 1 auto', minWidth: '0' } },
+        h('div', { class: 'ws-row-main' },
             h('div', { style: { fontWeight: '600', fontSize: '13.5px' } }, name),
             secondary.length ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } }, secondary.join(' · ')) : null),
         published ? Tag('На сайте', { kind: 'ok' }) : null,
@@ -1208,7 +1364,7 @@ function contentRow(kind, cfg, row, idx, rows, reload, repaint) {
     const name = (cfg.rowLabel && cfg.rowLabel(row)) || contentName(row.content) || '—';
 
     const publishCb = h('input', {
-        type: 'checkbox', checked: !!row.published, title: 'На сайте', 'aria-label': 'На сайте',
+        type: 'checkbox', class: 'ws-switch', checked: !!row.published, title: 'На сайте', 'aria-label': 'На сайте',
         onchange: async (e) => {
             const val = e.target.checked;
             e.target.disabled = true;
@@ -1243,14 +1399,14 @@ function contentRow(kind, cfg, row, idx, rows, reload, repaint) {
         moveBtns.push(moveButton(-1, idx === 0, move(-1)), moveButton(1, idx === rows.length - 1, move(1)));
     }
 
-    const editBtn = viewOrEditButton(() => openEditorModal(kind, cfg, { ...row }, null, reload));
+    const editBtn = viewOrEditButton(() => openEditor(kind, cfg, { ...row }, null));
     const delBtn = readOnly() ? null : h('button', { class: 'btn btn-outline btn-sm', type: 'button' },
         Icon('Trash', { size: 13 }), ' ', 'Удалить');
     if (delBtn) delBtn.addEventListener('click', () => openDeleteConfirm(kind, row, name, reload));
 
-    return h('div', { class: 'card', 'data-ws-row': String(row.id), style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px' } },
+    return h('div', { class: 'ws-row', 'data-ws-row': String(row.id) },
         readOnly() ? null : publishCb,
-        h('div', { style: { flex: '1', minWidth: '0' } },
+        h('div', { class: 'ws-row-main' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
                 h('span', { style: { fontWeight: '600', fontSize: '13.5px' } }, name),
                 row.published ? Tag('На сайте', { kind: 'ok' }) : null,
@@ -1270,107 +1426,97 @@ function freshRow(cfg, pick) {
     return row;
 }
 
-// Редактор карточки: языковые под-вкладки над полями content, прочие поля, фото.
-// На «Просмотре» поля серые и кнопки «Сохранить» нет.
-function openEditorModal(kind, cfg, row, pick, reload) {
+// ---------------------------------------------------------------------------
+// Редактор карточки — НА МЕСТЕ формы (WEBSITE_EDITOR_V2): раньше он был окном поверх
+// экрана и закрывал сайт. Язык полей — общий язык экрана. На «Просмотре» поля серые.
+// ---------------------------------------------------------------------------
+const PREVIEW_PAGE = {
+    services:    (d) => '/services/' + d.service_id,
+    departments: (d) => '/departments/' + (d.slug || 'draft'),
+    posts:       (d) => '/news/' + (d.slug || 'draft'),
+    faq:         () => '/faq',
+    testimonials: () => '/',
+};
+function previewRow() {
+    const ed = state.editor;
+    return ed ? { kind: ed.kind, row: ed.draft } : null;
+}
+
+function openEditor(kind, cfg, row, pick) {
     const draft = { ...row, content: { uz: {}, ru: {}, en: {} } };
     for (const lang of ['uz', 'ru', 'en']) {
         const src = row.content && row.content[lang];
         draft.content[lang] = (src && typeof src === 'object') ? { ...src } : {};
     }
-    let activeLang = 'ru';
+    const title = (pick && (cfg.pickLabel ? cfg.pickLabel(pick) : (cfg.rowLabel && cfg.rowLabel(pick))))
+        || (cfg.rowLabel && cfg.rowLabel(draft)) || contentName(draft.content) || '';
+    state.editor = { kind, cfg, draft, title, initial: JSON.stringify(draft) };
+    paint();
+    showEditorPage();
+    refs.preview.schedule();
+}
 
-    const overlay = h('div', { class: 'modal', style: { zIndex: '130' }, 'data-ws-editor': kind });
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
+function showEditorPage() {
+    const { kind, draft } = state.editor;
+    refs.preview.show(PREVIEW_PAGE[kind](draft), kind === 'testimonials' ? navItem('testimonials')[4] : null);
+}
 
-    const langTabs = h('div', { class: 'tabs', style: { marginBottom: '10px' } });
-    const fieldsWrap = h('div', { style: { display: 'flex', flexDirection: 'column' } });
-    function paintLangTabs() {
-        clear(langTabs);
-        for (const [code, label] of LANGS) {
-            const btn = h('button', { class: 'tab' + (activeLang === code ? ' on' : ''), type: 'button' }, label);
-            btn.addEventListener('click', () => { activeLang = code; paintLangTabs(); paintFields(); });
-            langTabs.appendChild(btn);
-        }
-    }
-    // Chilla WEBSITE_CONTENT_MODAL_COMPACT_V1 — короткие поля парами, длинные на
-    // всю ширину в три строки: иначе окно выше экрана.
-    const PAIR = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 14px' };
-    function paintFields() {
-        clear(fieldsWrap);
-        const langObj = draft.content[activeLang];
-        let pair = null;
-        for (const [key, label, kindF] of cfg.fields) {
-            if (kindF === 'textarea') {
-                pair = null;
-                fieldsWrap.appendChild(field(label, textArea(langObj, key, 3)));
-                continue;
-            }
-            if (!pair || pair.children.length >= 2) {
-                pair = h('div', { style: PAIR });
-                fieldsWrap.appendChild(pair);
-            }
-            pair.appendChild(field(label, textInput(langObj, key)));
-        }
-    }
-    paintLangTabs();
-    paintFields();
+const closeEditor = () => leaveEditor(() => { paint(); showTabPage(); refs.preview.schedule(); });
 
-    const scalarWrap = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 14px', marginTop: '4px' } });
-    for (const sf of cfg.scalarFields) {
-        if (sf.type === 'select') {
-            const sel = h('select', {
+function backButton(label) {
+    return h('button', { class: 'btn btn-outline', type: 'button', dataset: { viewOk: '1' }, 'data-ws-back': '', onclick: closeEditor }, label);
+}
+
+function renderEditor(bodyEl) {
+    const { kind, cfg, draft, title } = state.editor;
+    const langObj = draft.content[state.lang];
+
+    bodyEl.appendChild(h('button', { class: 'ws-back', type: 'button', onclick: closeEditor },
+        Icon('ChevronLeft', { size: 16 }), h('span', null, cfg.tabLabel)));
+
+    bodyEl.appendChild(h('div', { 'data-ws-editor': kind }, card(title || 'Новая запись', navItem(kind)[2],
+        ...cfg.fields.map(([key, label, type]) => field(label, type === 'textarea' ? textArea(langObj, key, key === 'body' || key === 'a' ? 8 : 4) : textInput(langObj, key))),
+        cfg.scalarFields.length ? h('div', { class: 'ws-grid2' }, ...cfg.scalarFields.map((sf) => {
+            if (sf.type !== 'select') return field(sf.label, textInput(draft, sf.key, { placeholder: sf.placeholder }));
+            return field(sf.label, h('select', {
                 disabled: readOnly() ? true : null,
                 onchange: (e) => { draft[sf.key] = e.target.value; },
-            }, ...sf.options.map(([val, label]) => h('option', { value: val, selected: String(draft[sf.key]) === String(val) }, label)));
-            scalarWrap.appendChild(field(sf.label, sel));
-        } else {
-            scalarWrap.appendChild(field(sf.label, textInput(draft, sf.key, { placeholder: sf.placeholder })));
-        }
-    }
+            }, ...sf.options.map(([val, label]) => h('option', { value: val, selected: String(draft[sf.key]) === String(val) }, label))));
+        })) : null)));
 
-    let photoBlock = null;
     if (cfg.photoField) {
-        const hasPhoto = !!draft[cfg.photoField];
-        const preview = h('img', {
-            alt: '',
-            style: { maxWidth: '160px', maxHeight: '160px', borderRadius: '8px', objectFit: 'cover', display: hasPhoto ? '' : 'none', marginTop: '8px' },
-        });
-        if (hasPhoto) preview.src = publicUrl(draft[cfg.photoField]);
-        const fileInp = h('input', {
-            type: 'file', accept: IMAGE_ACCEPT, disabled: readOnly() ? true : null,
-            onchange: async (e) => {
-                const f = e.target.files && e.target.files[0];
-                if (!f) return;
-                try {
-                    // Префикс от fk, у новостей — от id черновика или метки
-                    // времени: разные черновики не перезапишут друг друга.
-                    const prefix = cfg.fk ? `${kind}/${draft[cfg.fk]}-` : `${kind}/${draft.id || Date.now()}-`;
-                    const path = await uploadWebsiteImage(f, prefix);
-                    draft[cfg.photoField] = path;
-                    preview.src = publicUrl(path);
-                    preview.style.display = '';
-                    toast(tr('Изображение загружено'));
-                } catch (err) {
-                    toast(trf('Не удалось загрузить изображение. {reason}', { reason: errText(err) }), 'fail');
-                }
-            },
-        });
-        photoBlock = h('div', { style: { marginTop: '8px' } }, field(cfg.imageLabel, fileInp), preview,
-            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } }, 'Только JPG, PNG или WEBP.'));
+        const box = h('div', { class: 'ws-sub' });
+        const sync = () => {
+            clear(box);
+            const path = draft[cfg.photoField];
+            if (path) box.appendChild(photoTile(path, removeButton(() => { draft[cfg.photoField] = ''; sync(); })));
+            if (!readOnly()) {
+                // Префикс от fk, у новостей — от id черновика или метки
+                // времени: разные черновики не перезапишут друг друга.
+                const prefix = cfg.fk ? `${kind}/${draft[cfg.fk]}-` : `${kind}/${draft.id || Date.now()}-`;
+                box.appendChild(uploadButton(path ? 'Заменить' : 'Загрузить', {
+                    onFiles: (files) => uploadAll(files.slice(0, 1), prefix, (p) => { draft[cfg.photoField] = p; sync(); }) }));
+            }
+        };
+        sync();
+        bodyEl.appendChild(card(cfg.imageLabel, 'Image', box, hint('Только JPG, PNG или WEBP.')));
     }
+}
 
-    const titleName = (pick && (cfg.pickLabel ? cfg.pickLabel(pick) : (cfg.rowLabel && cfg.rowLabel(pick))))
-        || (cfg.rowLabel && cfg.rowLabel(draft)) || contentName(draft.content) || '—';
-
-    const saveBtn = readOnly() ? null : h('button', { class: 'btn btn-primary', type: 'button', 'data-ws-modal-save': '' }, Icon('Check', { size: 14 }), ' ', 'Сохранить');
-    if (saveBtn) saveBtn.addEventListener('click', async () => {
+function paintEditorBar() {
+    const ed = state.editor;
+    const dirty = editorDirty();
+    refs.bar.classList.toggle('is-dirty', dirty);
+    refs.bar.appendChild(h('span', { class: 'ws-savebar-text', role: 'status', 'data-ws-dirty': dirty ? '1' : '0' },
+        dirty ? 'Карточка изменена и ещё не сохранена' : 'Изменений в карточке нет'));
+    refs.bar.appendChild(backButton(dirty ? 'Отмена' : 'Закрыть'));
+    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button', 'data-ws-modal-save': '' }, Icon('Check', { size: 14 }), ' ', 'Сохранить');
+    saveBtn.addEventListener('click', async () => {
         saveBtn.disabled = true;
+        const { kind, cfg, draft } = ed;
         try {
             // Только то, что форма правит: сервер не трогает неприсланное, и
-            // окно услуги не сбросит её «На главной» и порядок.
+            // карточка услуги не сбросит её «На главной» и порядок.
             const payload = { content: draft.content };
             if (draft.id != null && !cfg.fk) payload.id = draft.id;
             if (cfg.fk) payload[cfg.fk] = draft[cfg.fk];
@@ -1381,27 +1527,16 @@ function openEditorModal(kind, cfg, row, pick, reload) {
             for (const sf of cfg.scalarFields) payload[sf.key] = draft[sf.key];
             await rpc('website_content_save', { kind, row: payload });
             toast(tr('Сохранено'));
-            close();
-            reload();
+            if (state.editor !== ed) return;
+            state.editor = null;
+            paint();
+            showTabPage();
         } catch (e) {
             toast(trf('Не удалось сохранить. {reason}', { reason: errText(e) }), 'fail');
             saveBtn.disabled = false;
         }
     });
-
-    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '640px', maxWidth: 'calc(100vw - 32px)' } },
-        h('header', { class: 'modal-head' },
-            h('h2', null, cfg.tabLabel, ' — ', titleName),
-            h('button', { class: 'modal-close', onclick: close }, '×')),
-        h('div', { class: 'modal-body' }, langTabs, fieldsWrap, cfg.scalarFields.length ? scalarWrap : null, photoBlock),
-        h('footer', { class: 'modal-foot' },
-            h('span', { class: 'grow' }),
-            h('button', { class: 'btn btn-outline', type: 'button', onclick: close }, readOnly() ? 'Закрыть' : 'Отмена'),
-            saveBtn),
-    ));
-    document.body.appendChild(overlay);
-    document.addEventListener('keydown', onKey);
-    return overlay;
+    refs.bar.appendChild(saveBtn);
 }
 
 function openDeleteConfirm(kind, row, name, reload) {

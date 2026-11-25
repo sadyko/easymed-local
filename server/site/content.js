@@ -21,6 +21,35 @@ import { servicePublicState, serviceNames } from '../../public/js/shared/service
 const TTL_MS = 30_000;
 let cache = new Map();
 
+// WEBSITE_PREVIEW_V1 — черновик редактора на время одного рендера (site/preview.js). Рендеры
+// синхронны, поэтому черновик не может попасть в страницу посетителя: между подменой и
+// возвратом другой запрос не выполняется. Кэш на это время — свой, пустой.
+//   settings — объект настроек вместо сохранённого;
+//   row      — { kind, row }: одна открытая в редакторе карточка содержимого.
+let draft = null;
+export function withDraft(d, fn) {
+  const prevCache = cache;
+  const prevDraft = draft;
+  cache = new Map();
+  draft = d || null;
+  try { return fn(); } finally { cache = prevCache; draft = prevDraft; }
+}
+const DRAFT_KEY = { services: 'service_id', departments: 'department_id', testimonials: 'id', faq: 'id', posts: 'id' };
+const DRAFT_SLUG = 'draft';
+const draftRow = (kind) => (draft && draft.row && draft.row.kind === kind ? draft.row.row : null);
+// Черновик встаёт на место своей строки; новый или неопубликованный — первым в списке.
+function withDraftRow(kind, rows) {
+  const d = draftRow(kind);
+  if (!d) return rows;
+  const key = DRAFT_KEY[kind];
+  const old = rows.find((r) => d[key] != null && r[key] === d[key]);
+  const merged = { id: 0, sort_order: 0, published_at: null, image_path: '', cover_path: '', author_name: '', rating: 5, ...old };
+  for (const k of ['author_name', 'rating', 'image_path', 'cover_path', 'department_id', 'service_id']) if (d[k] !== undefined) merged[k] = d[k];
+  merged.slug = String(d.slug || merged.slug || DRAFT_SLUG);
+  merged.content = JSON.stringify(d.content || {});
+  return old ? rows.map((r) => (r === old ? merged : r)) : [merged, ...rows];
+}
+
 export function invalidateContentCache() {
   cache = new Map();
 }
@@ -36,6 +65,7 @@ export function configureContent({ storageDir: dir } = {}) {
   storageDir = dir || null;
   invalidateContentCache();
 }
+export const contentConfigured = () => storageDir !== null;   // WEBSITE_PREVIEW_V1 — сайт выключен: папку задаёт предпросмотр
 
 function cached(key, fn) {
   const hit = cache.get(key);
@@ -56,6 +86,9 @@ export function getSettings(db) {
     try {
       s = JSON.parse(db.prepare('SELECT settings FROM website_settings WHERE id=1').get()?.settings || '{}');
     } catch {}
+    // WEBSITE_PREVIEW_V1 — черновик вместо сохранённого; счётчики в предпросмотре молчат.
+    if (draft && draft.settings) s = draft.settings;
+    if (draft && draft.noAnalytics) s = { ...s, analytics: {} };
     const doc = db.prepare('SELECT clinic_name, address, phone, email FROM doc_settings WHERE id=1').get() || {};
     return {
       default_lang: 'uz',
@@ -210,7 +243,7 @@ export function departmentDoctors(db, department_id) {
 
 function shownServices(db) {
   return cached('services:all', () => {
-    const extras = new Map(db.prepare('SELECT service_id, sort_order, featured, image_path, content FROM website_services').all().map((r) => [r.service_id, r]));
+    const extras = new Map(withDraftRow('services', db.prepare('SELECT service_id, sort_order, featured, image_path, content FROM website_services').all()).map((r) => [r.service_id, r]));
     const types = new Map(db.prepare('SELECT id, name FROM service_types').all().map((t) => [t.id, t.name]));
     return siteServiceRows(db)
       .map((s) => {
@@ -255,30 +288,31 @@ export function departmentServices(db, department_id) {
 }
 
 export function publishedDepartments(db) {
-  return cached('departments', () => db.prepare(`
+  return cached('departments', () => withDraftRow('departments', db.prepare(`
     SELECT id, slug, image_path, sort_order, content, department_id
       FROM website_departments WHERE published = 1
-     ORDER BY sort_order, id`).all());
+     ORDER BY sort_order, id`).all()));
 }
 
 export function departmentBySlug(db, slug) {
+  if (draftRow('departments')) { const r = publishedDepartments(db).find((x) => x.slug === slug); if (r) return r; }   // WEBSITE_PREVIEW_V1
   return cached(`department:${slug}`, () => db.prepare(`
     SELECT id, slug, image_path, sort_order, content, department_id
       FROM website_departments WHERE published = 1 AND slug = ?`).get(slug));
 }
 
 export function publishedTestimonials(db) {
-  return cached('testimonials', () => db.prepare(`
+  return cached('testimonials', () => withDraftRow('testimonials', db.prepare(`
     SELECT id, sort_order, author_name, rating, content
       FROM website_testimonials WHERE published = 1
-     ORDER BY sort_order, id`).all());
+     ORDER BY sort_order, id`).all()));
 }
 
 export function publishedFaq(db) {
-  return cached('faq', () => db.prepare(`
+  return cached('faq', () => withDraftRow('faq', db.prepare(`
     SELECT id, sort_order, content
       FROM website_faq WHERE published = 1
-     ORDER BY sort_order, id`).all());
+     ORDER BY sort_order, id`).all()));
 }
 
 // Новости (W4) — единственный оверлей с собственным слагом, но без fk на
@@ -287,15 +321,16 @@ export function publishedFaq(db) {
 // для одинаковой секунды; LIMIT 20 — тот же приём, что и у DOCTORS_LIMIT на
 // главной (home.js): лента не должна расти бесконечно на одной странице.
 export function publishedPosts(db) {
-  return cached('posts', () => db.prepare(`
+  return cached('posts', () => withDraftRow('posts', db.prepare(`
     SELECT id, slug, cover_path, published_at, content
       FROM website_posts
      WHERE published = 1
      ORDER BY published_at DESC, id DESC
-     LIMIT 20`).all());
+     LIMIT 20`).all()));
 }
 
 export function postBySlug(db, slug) {
+  if (draftRow('posts')) { const r = publishedPosts(db).find((x) => x.slug === slug); if (r) return r; }   // WEBSITE_PREVIEW_V1
   return cached(`post:${slug}`, () => db.prepare(`
     SELECT id, slug, cover_path, published_at, content
       FROM website_posts

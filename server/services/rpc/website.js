@@ -13,7 +13,9 @@
 import { grantAllowsAdminOr } from '../grants.js';
 import { controlState } from '../control/state.js';
 import { getDataDir } from '../control/config.js';
-import { invalidateContentCache } from '../../site/content.js';
+import path from 'node:path';
+import { invalidateContentCache, configureContent, contentConfigured } from '../../site/content.js';
+import { previewHtml } from '../../site/preview.js';   // WEBSITE_PREVIEW_V1
 import { requestSiteRefresh, siteRunning } from '../../site/controller.js';
 
 export class RpcError extends Error {
@@ -139,4 +141,23 @@ export function websiteSettingsSave(db, args, user, { hasModule = hasWebsiteModu
   try { refresh(); } catch { /* слушатель — отдельная беда; видна в site.running */ }
   const { updated_at } = readRow(db);
   return { ok: true, updated_at, site: siteRunning() };
+}
+
+// WEBSITE_PREVIEW_V1 — страница сайта с несохранёнными правками редактора. Чистое чтение:
+// в базу не пишет, поэтому хватает «Просмотра», и работает даже при выключенном сайте.
+const PREVIEW_KINDS = ['services', 'departments', 'testimonials', 'faq', 'posts'];
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+export function websitePreview(db, args, user, { hasModule = hasWebsiteModule } = {}) {
+  requireWebsite(db, user, 'view', hasModule);
+  const a = args || {};
+  if (a.settings !== undefined && !isObj(a.settings)) throw new RpcError('Настройки сайта должны быть объектом.', 400);
+  if (Buffer.byteLength(JSON.stringify(a.settings || {}), 'utf8') > MAX_BYTES) throw new RpcError('Настройки сайта превышают 64 КБ.', 400);
+  let row;
+  if (a.row !== undefined && a.row !== null) {
+    if (!isObj(a.row) || !PREVIEW_KINDS.includes(a.row.kind) || !isObj(a.row.row)) throw new RpcError('Неизвестный раздел содержимого сайта.', 400);
+    row = { kind: a.row.kind, row: a.row.row };
+  }
+  if (!contentConfigured()) configureContent({ storageDir: path.join(getDataDir(), 'storage') });
+  return { html: previewHtml(db, { settings: a.settings, row, path: typeof a.path === 'string' ? a.path.slice(0, 500) : '/' }) };
 }
