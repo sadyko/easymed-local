@@ -216,6 +216,24 @@ export const TABLE_PLAN = Object.freeze({
   telegram_broadcast_targets: keep('crm'),
   telegram_chat_folders: keep('crm'),
   telegram_chat_folder_items: keep('crm'),
+  // WEBSITE_V1 (мигр. 301) — публичный сайт клиники. Заявки с сайта — те же обращения, что
+  // остаются в CRM (crm_requests хранится, website_requests.crm_request_id ссылается на неё):
+  // удалить заявки, оставив карточки, значило бы оборвать связь обращения с его источником.
+  website_requests: keep('crm'),
+  // Статистика посещений сайта анонимна и не связана с учебными пациентами и визитами — это
+  // не «учебные данные», а история работы настоящего сайта; сессии и просмотры остаются вместе.
+  website_sessions: keep('crm'),
+  website_pageviews: keep('crm'),
+  website_stats_daily: keep('crm'),
+  // Настройки и содержимое сайта (врачи, услуги, отделения, отзывы, вопросы, статьи) — настройка
+  // клиники, как шаблоны и справочники: «не теряя настроек».
+  website_settings: keep('settings'),
+  website_doctors: keep('settings'),
+  website_services: keep('settings'),
+  website_departments: keep('settings'),
+  website_testimonials: keep('settings'),
+  website_faq: keep('settings'),
+  website_posts: keep('settings'),
   telegram_deeplinks: keep('crm'),
   telegram_deeplink_hits: keep('crm'),
   telegram_deeplink_leads: keep('crm'),

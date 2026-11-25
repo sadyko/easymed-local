@@ -121,12 +121,13 @@ test('плитки «Meta: заявки из рекламы» и «Ссылки 
   // провайдера в «Телефонию». TG_DEEPLINK_V1 (2026-10-26) добавил вторую плитку —
   // «Ссылки для рекламы в Telegram» (маршрут telegram-deeplinks, окно «Telegram-бот»).
   // SMS_INFORM_V1 (2026-10-30) — третья плитка «SMS-информирование» (Play Mobile).
-  assert.deepStrictEqual(rows.map((r) => r.name), ['Meta: заявки из рекламы', 'Ссылки для рекламы в Telegram', 'SMS-информирование']);
+  // WEBSITE_V1 (2026-11-24) — четвёртая плитка «Веб-сайт» (редактор сайта).
+  assert.deepStrictEqual(rows.map((r) => r.name), ['Meta: заявки из рекламы', 'Ссылки для рекламы в Telegram', 'SMS-информирование', 'Веб-сайт']);
   assert.ok(rows.every((r) => r.live), 'плитки живые, не «Скоро»');
   for (const r of rows) r.node.click();
-  assert.deepStrictEqual(nav, [['meta-settings'], ['telegram-deeplinks'], ['sms-settings']]);
+  assert.deepStrictEqual(nav, [['meta-settings'], ['telegram-deeplinks'], ['sms-settings'], ['website-settings']]);
   const items = GROUPS[GROUPS.length - 1].items;
-  assert.deepStrictEqual(items.map((i) => i.route), ['meta-settings', 'telegram-deeplinks', 'sms-settings'], 'видимость плиток — по маршруту (права роли)');
+  assert.deepStrictEqual(items.map((i) => i.route), ['meta-settings', 'telegram-deeplinks', 'sms-settings', 'website-settings'], 'видимость плиток — по маршруту (права роли)');
 });
 
 test('роли без настроенного ключа settings.meta плитка не показывается — группа исчезает целиком', async () => {

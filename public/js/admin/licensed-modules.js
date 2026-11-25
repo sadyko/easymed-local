@@ -52,6 +52,14 @@ export const LICENSED_MODULES = Object.assign(Object.create(null), {
         title: 'ИИ отвечает пациентам в чатах — днём и ночью',
         blurb: 'Отвечает в Telegram, Facebook и Instagram об услугах, ценах, врачах и адресах, заводит заявки в CRM и передаёт медицинские вопросы операторам.',
     },
+    // WEBSITE_V1 — редактор «Веб-сайт» (Настройки → Коммерческие инструменты):
+    // модуль `website` лицензии. Без него и порт 8001 не открывается
+    // (server/site/controller.js), и website_* RPC отвечают 402 module_missing.
+    'website-settings': {
+        key: 'website',
+        title: 'Свой сайт клиники — без подрядчиков и ежемесячной оплаты',
+        blurb: 'Врачи, услуги и цены на сайте берутся прямо из программы и всегда совпадают с прайсом. Пациент находит клинику в поиске и оставляет заявку с телефона.',
+    },
 });
 
 /** Every nav id that is gated. Used by the sidebar to decide where to draw a lock. */

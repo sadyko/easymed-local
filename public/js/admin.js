@@ -119,6 +119,7 @@ import { renderSmsSettings }      from './admin/views/sms-settings.js?v=sms1';  
 import { renderCommercePush }     from './admin/views/commerce-push.js?v=push2';   // SMS_PUSH_V1 — Push-уведомление: Telegram и SMS
 import { renderDailyReport }      from './admin/views/daily-report.js';   // DAILY_REPORT_BOT_V1 — отчёт совету директоров в Telegram
 import { renderAiAssistant }      from './admin/views/ai-assistant.js';   // AI_CHAT_V1 — ИИ-помощник: переключатель «ИИ отвечает в чатах»
+import { renderWebsiteSettings }  from './admin/views/website-settings.js';   // WEBSITE_V1 — редактор «Веб-сайт»
 import { renderCommerceHub, BOARD as COMMERCE_BOARD, visibleChats as commerceChats, visibleTools as commerceTools } from './admin/views/commerce-hub.js?v=tools1';   // COMMERCE_TOOLS_V1 — витрина инструментов; COMMERCE_RAIL_V1 — те же списки в колонке
 import { renderClinicNews }       from './admin/views/clinic-news.js';   // CLINIC_NEWS_V1 — «Информационная доска»
 import { renderNewsStrip }        from './admin/clinic-news-strip.js';   // CLINIC_NEWS_STRIP_V1 — полоса новостей стойке и call-центру
@@ -411,6 +412,7 @@ const CRUMBS = {
     'clinic-news':   ['Insights', 'Settings', 'Информационная доска'],   // CLINIC_NEWS_V1
     'meta-settings': ['Insights', 'Settings', 'Meta: заявки из рекламы'],   // META_LEADS_V1
     'telegram-deeplinks': ['Insights', 'Settings', 'Ссылки для рекламы в Telegram'],   // TG_DEEPLINK_V1
+    'website-settings': ['Insights', 'Settings', 'Веб-сайт'],   // WEBSITE_V1
     'sms-settings': ['Insights', 'Settings', 'SMS-информирование'],   // SMS_INFORM_V1
     'departments': ['Insights', 'Settings', 'Отделы'],   // DEPARTMENTS_V1
     'crm-settings': ['Insights', 'Settings', 'CRM-канбан'],   // CRM_CONFIG_V1
@@ -887,6 +889,7 @@ const PARENT_OF = {
     'services': 'settings', 'consultation-types': 'settings', 'discounts-settings': 'settings',
     'api-settings': 'settings', 'telegram-settings': 'settings', 'telephony-settings': 'settings', 'meta-settings': 'settings',
     'telegram-deeplinks': 'settings',   // TG_DEEPLINK_V1
+    'website-settings': 'settings',   // WEBSITE_V1 — плитка «Коммерческих инструментов» настроек
     'sms-settings': 'settings',   // SMS_INFORM_V1
     // COMMERCE_TOOLS_V1 — каждый инструмент витрины «Коммерческие инструменты»
     'commerce-push': 'commerce',
@@ -1593,6 +1596,9 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'clinic-news':   return void await renderClinicNews(viewRoot, ctx);   // CLINIC_NEWS_V1
             case 'commerce-push': return void renderCommercePush(viewRoot);   // SMS_PUSH_V1 — инструмент «Push-уведомления»
             case 'daily-report': return void await renderDailyReport(viewRoot);   // DAILY_REPORT_BOT_V1 — только администратор (permissions.js)
+            // WEBSITE_V1 — на «Просмотре» строки «Веб-сайт» — в рамке «только просмотр»
+            // (уровень своей строки «Ролей», как у ссылок для рекламы).
+            case 'website-settings': return void await renderWithViewOnly(viewRoot, 'commerce_website', (root) => renderWebsiteSettings(root), () => commerceToolLevel('commerce_website'));
             case 'commerce-ai': return void await renderAiAssistant(viewRoot);   // AI_CHAT_V1 — инструмент «ИИ-помощник»
             case 'employees':     return void await renderEmployees(viewRoot, ctx);   // EMPLOYEE_EDITOR_V1 — Сотрудники
             case 'documents-settings': return void await renderDocumentsSettings(viewRoot, ctx);   // DOCUMENTS_SETTINGS_V1

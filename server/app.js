@@ -19,6 +19,7 @@ import { branchSyncRoutes } from './routes/branch-sync.js';   // BRANCH_SYNC_V1
 import { lisProxyRoutes } from './routes/lisproxy.js';   // LIS_PROXY_V1
 import { actAsEndedGuard, actAsRouterGuard } from './middleware/act-as.js';   // ADMIN_ACT_AS_V1
 import { createLiveBus, liveEnabled } from './services/live/bus.js';   // LIVE_REFRESH_V1 — шина изменений для живых экранов; liveEnabled — выключатель (ревью M6)
+import { sitePreviewRoutes } from './routes/site-preview.js';   // WEBSITE_PREVIEW_V1 — стили и картинки предпросмотра сайта
 import { liveRoutes } from './routes/live.js';   // LIVE_REFRESH_V1 — GET /api/live (SSE) и /api/live/version
 import { buildOf, staticImmutable } from './services/build-id.js';   // LOCAL_SPEED_V1 — номер сборки клиента
 import { versionedStatic, versionedPages } from './middleware/versioned-static.js';   // LOCAL_SPEED_V1 — /v/<сборка>/… и страницы
@@ -252,6 +253,7 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {}, pu
   if (warmBuild) build();
   app.use(versionedPages({ root: publicDir, build, mark: markStaticFile }));
   app.use('/v/:build', versionedStatic({ root: publicDir, build, immutable: staticImmutable(process.env), mark: markStaticFile }));
+  app.use('/site-preview', sitePreviewRoutes(db, dataDir));   // WEBSITE_PREVIEW_V1 — доступ по ключу, см. site/preview.js
   app.use(express.static(publicDir, {
     extensions: ['html'],
     setHeaders: (res, filePath, stat) => {

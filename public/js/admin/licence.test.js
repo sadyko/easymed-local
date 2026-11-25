@@ -127,7 +127,9 @@ test('exactly the gated routes are listed, named to match the real nav/route ids
   // as the Meta lead poller: messages and comments, like leads, end up on the board.
   // AI_CHAT_V1 — 'commerce-ai' — экран «ИИ-помощник» (case 'commerce-ai' в
   // маршрутизаторе admin.js), продаётся модулем `ai` лицензии.
-  assert.deepEqual([...LICENSED_NAV_IDS].sort(), ['commerce-ai', 'crm', 'meta-chat', 'telegram-chat', 'telephony-settings']);
+  // WEBSITE_V1 — 'website-settings' — редактор «Веб-сайт» (плитка «Коммерческих
+  // инструментов» настроек), продаётся модулем `website` лицензии.
+  assert.deepEqual([...LICENSED_NAV_IDS].sort(), ['commerce-ai', 'crm', 'meta-chat', 'telegram-chat', 'telephony-settings', 'website-settings']);
   // marketing is deliberately NOT here: it has no NAV entry and its route renders
   // a "coming soon" overlay, so offering to sell it would sell a placeholder.
   // Re-add it in the same commit that ships the real screen.

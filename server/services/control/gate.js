@@ -20,6 +20,9 @@ import { controlState } from './state.js';
 const READ_ONLY_RPCS = new Set([
   // AI_CHAT_V1 — состояние ИИ-помощника и чаты «Нужен оператор» — чистое чтение; ai_settings_save остаётся записью.
   'ai_settings_get', 'ai_flags', 'ai_call_get', 'ai_call_scores',   // AI_CALLS_V1 — чтение
+  // WEBSITE_V1, этап 2 — редактор сайта: настройки, содержимое, список отделений.
+  // Чистое чтение: клиника с истёкшей лицензией видит, что у неё на сайте.
+  'website_settings_get', 'website_content_list', 'website_pick_lists', 'website_preview',
   'dashboard_summary', 'reports_overview', 'run_report', 'owner_report',
   // V3120_FIX — графики сводки и статистика операторов телефонии — чистое
   // чтение: без них клиника с просроченной лицензией видела пустую сводку.

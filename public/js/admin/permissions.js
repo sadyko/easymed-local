@@ -1000,6 +1000,9 @@ const COMMERCE_TOOLS = {
     // AI_CHAT_V1 — переключатель ИИ-помощника; не настроена — только администратор (как commerce_news:
     // в main администратору уровень даёт legacy, поля `top` ветки ИИ больше нет).
     commerce_ai:    { legacy: () => (actorIsAdmin() ? 'edit' : 'none') },
+    // WEBSITE_V1 — редактор «Веб-сайт»; не настроена — только администратор (adminDefault
+    // строки каталога, как commerce_ai; сервер — grantAllowsAdminOr в rpc/website.js).
+    commerce_website: { legacy: () => (actorIsAdmin() ? 'edit' : 'none') },
 };
 /** Уровень инструмента витрины: 'none' | 'view' | 'edit'. */
 export function commerceToolLevel(key) {
@@ -1219,6 +1222,9 @@ export function isRouteAllowed(view) {
     // и полный доступ проходил строкой ниже мимо «своего „Нет“» бота: заместитель,
     // которому роль закрыла «Telegram-бот», открывал ссылки. Решает их строка.
     if (view === 'telegram-deeplinks' && _effective == null) return commerceToolLevel('commerce_links') !== 'none';
+    // WEBSITE_V1 — то же для «Веб-сайта»: администратор, которому СВОЯ роль закрыла
+    // строку «Веб-сайт», не открывает редактор строкой «полный доступ» ниже.
+    if (view === 'website-settings' && _effective == null) return commerceToolLevel('commerce_website') !== 'none';
     if (_effective == null) return true;
     if (!view) return true;
     if (ALWAYS_ALLOWED.has(view)) return true;
@@ -1296,6 +1302,9 @@ export function isRouteAllowed(view) {
     if (view === 'telegram-deeplinks') return commerceToolLevel('commerce_links') !== 'none';
     // AI_CHAT_V1 — экран ИИ-помощника: строка «ИИ-помощник» (не настроена — только администратор).
     if (view === 'commerce-ai') return commerceToolLevel('commerce_ai') !== 'none';
+    // WEBSITE_V1 — редактор «Веб-сайт»: строка «Веб-сайт» (не настроена — только
+    // администратор). Сервер (rpc/website.js requireWebsite) отказывает второй раз.
+    if (view === 'website-settings') return commerceToolLevel('commerce_website') !== 'none';
     // SMS_INFORM_V1 — логин и пароль Play Mobile — право слать SMS от имени
     // клиники за её деньги: только полный доступ, как у Телефонии. Сервер
     // (rpc/sms.js) отказывает второй раз, независимо от этой строки.

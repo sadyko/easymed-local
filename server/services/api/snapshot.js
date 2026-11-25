@@ -67,7 +67,7 @@ function mediaOf(file, media) {
   return 'media/' + sha256 + '.' + ext;
 }
 const logoFile = (storageDir, rel) => (storageDir && /^(square|portrait)\/[A-Za-z0-9._~-]+\.png$/.test(rel || '') ? path.join(storageDir, 'clinic-logos', rel) : null);
-function photoFile(storageDir, url, doctorId) {
+export function photoFile(storageDir, url, doctorId) {
   const own = '/api/storage/doctor-photos/doctors/' + doctorId + '/';
   const s = text(url);
   if (!storageDir || !s.startsWith(own)) return null;
