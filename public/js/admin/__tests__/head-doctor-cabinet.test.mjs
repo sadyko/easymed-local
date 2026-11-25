@@ -425,7 +425,7 @@ test('INPATIENT_REQUIRED_V1: полоса главного врача — пос
     CAPS = { ...HEAD_CAPS, required };
     ADMISSION_ROWS = ADM;
     const host = mk('div');
-    await renderConsultation(host, { onNavigate: () => {}, payload: null });
+    await renderConsultation(host, { onNavigate: () => {}, payload: { sub: 'dashboard' } });   // CABINET_APPOINTMENTS_FIRST_V1 — дашборд теперь по своему адресу
     await tick(80);
     const st = dash.wardHeadState();
     assert.strictEqual(st.exam, 1, 'осмотра не было — ждёт осмотра: ' + JSON.stringify(required));

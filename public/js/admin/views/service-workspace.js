@@ -5598,7 +5598,7 @@ function referringDoctorId(ctx) {
 // печатает «Направление» — список рекомендованного с пометкой врача — и пишет строку в документ.
 function openReferralWizard(ctx) {
     if (!ctx.patient || !ctx.patient.id) { toast('Нет контекста пациента.', 'fail'); return; }
-    import('./visit-wizard.js?v=rec1')   // REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1 · DOCTOR_RECOMMEND_V1
+    import('./visit-wizard.js?v=ownrep4')   // REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1 · DOCTOR_RECOMMEND_V1
         .then((mod) => mod.openVisitWizard(async (res) => {
             // PASTE_SOURCES_V1 — истории пациента в кабинете больше нет: окно «Вставить результаты» читает сервер при открытии.
             if (res && res.recommended && res.recommended.length) printRouteSheet(ctx, res, { recommend: true });
