@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import { pinReferralRule322 } from '../../test-helpers/referral-rule.js';   // REFERRAL_NET_BASE_V1 — тест под правилом 3.22.0
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, pluralRu } from './reports.js';
 
 function seed() {
-  const db = openDb(':memory:'); migrate(db);
+  const db = openDb(':memory:'); migrate(db); pinReferralRule322(db);
   db.prepare("INSERT INTO users (id,username,password_hash,role) VALUES (1,'a','x','admin')").run();
   const pid = db.prepare("INSERT INTO patients (full_name, mrn, gender, branch_id, created_at) VALUES ('Ann','P-26-1','female',1,'2026-08-05T09:00:00Z')").run().lastInsertRowid;
   const vid = db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date, status) VALUES (?,1,'2026-08-05T09:00:00Z','scheduled')").run(pid).lastInsertRowid;
@@ -60,7 +61,7 @@ test('run_report returns {columns, rows} for each kind, date-filtered', () => {
 // REPORTS_HUB_RU_V1 — the seven card-grid reports
 // ---------------------------------------------------------------------------
 function seedRu() {
-  const db = openDb(':memory:'); migrate(db);
+  const db = openDb(':memory:'); migrate(db); pinReferralRule322(db);
   db.prepare("INSERT INTO users (id,username,password_hash,role,full_name) VALUES (1,'reg','x','admin','Регистратор Р.')").run();
   db.prepare("INSERT INTO users (id,username,password_hash,role,full_name) VALUES (2,'doc','x','doctor','Доктор Д.')").run();
   const payer = db.prepare("INSERT INTO payers (name, kind) VALUES ('ООО Ромашка','corporate')").run().lastInsertRowid;

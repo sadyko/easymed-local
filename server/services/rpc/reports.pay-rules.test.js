@@ -15,6 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import { pinReferralRule322 } from '../../test-helpers/referral-rule.js';   // REFERRAL_NET_BASE_V1 — тест под правилом 3.22.0
 import { runReport, doctorPaySummary, payPeriodClose, payPeriodReopen, payPeriodStatus } from './reports.js';
 import { createInvoiceForVisit, recordPayment, refundPayment } from './billing.js';
 import { voidInvoice } from './cashier.js';
@@ -44,7 +45,7 @@ const range = (m) => ({ from: m + '-01', to: lastDay(m) });
 const ONE = 28200;
 function clinic() {
   const db = openDb(':memory:');
-  migrate(db);
+  migrate(db); pinReferralRule322(db);
   const u = db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates, service_rate_default, salary_type, salary_fixed)
                         VALUES (?,?,?,?,?,1,?,?,?,?)`);
   u.run(1, 'doc', 'x', 'doctor', 'Доктор Д.', JSON.stringify([{ service_id: 1, pct: 30 }, { service_id: 2, pct: 0 }]), 10, 'percentage', 0);

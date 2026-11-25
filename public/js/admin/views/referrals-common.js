@@ -98,7 +98,7 @@ export function detailModal({ title, subtitle = '', onPrint = null }) {
     const close = () => overlay.remove();
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
     const body = h('div', { class: 'modal-body', style: { overflowY: 'auto' } }, loadingEl());
-    overlay.appendChild(h('div', { class: 'modal-card', style: { width: '900px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
+    overlay.appendChild(h('div', { class: 'modal-card', style: { width: '1120px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
         h('header', { class: 'modal-head' },
             h('div', null,
                 h('h2', null, title),

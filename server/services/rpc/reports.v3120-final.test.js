@@ -17,6 +17,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import { pinReferralRule322 } from '../../test-helpers/referral-rule.js';   // REFERRAL_NET_BASE_V1 — тест под правилом 3.22.0
 import { runReport, doctorPaySummary, doctorReferralReward, payPeriodClose } from './reports.js';
 import { createInvoiceForVisit, createInvoiceForAdmission, recordPayment, refundPayment, refundInvoiceLine } from './billing.js';
 import { today } from '../domain/day.js';
@@ -32,7 +33,7 @@ const sum = (list, col) => round2(list.reduce((n, o) => n + (Number(o[col]) || 0
 // Пакет [1, 2] — 20 %. Услуга 3 (50 000) — вне пакета.
 function clinic({ rates = null, refRates = '[]' } = {}) {
   const db = openDb(':memory:');
-  migrate(db);
+  migrate(db); pinReferralRule322(db);
   const day = today(db);
   const at = day + 'T09:00:00Z';
   const rng = { from: day.slice(0, 7) + '-01', to: day };
@@ -181,7 +182,7 @@ test('C1: возврат строки после скидки после про�
 
 function inpatient(status) {
   const db = openDb(':memory:');
-  migrate(db);
+  migrate(db); pinReferralRule322(db);
   const day = today(db);
   const rng = { from: day.slice(0, 7) + '-01', to: day };
   const u = db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates, inpatient_rates)
@@ -237,7 +238,7 @@ test('C1: стационар — возврат после выписки даё
 // сегодняшней сумме после скидки.
 function taxClinic() {
   const db = openDb(':memory:');
-  migrate(db);
+  migrate(db); pinReferralRule322(db);
   const cur = today(db).slice(0, 7);
   let y = Number(cur.slice(0, 4)); let m = Number(cur.slice(5, 7)) - 1;
   if (m < 1) { m = 12; y -= 1; }

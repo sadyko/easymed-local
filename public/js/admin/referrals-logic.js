@@ -111,11 +111,26 @@ export function serviceDetailColumns(money, { sumText, tr, tx = null }) {
         { label: 'Пациент', value: (l) => l.patient || '—' },
         { label: 'Услуга', value: (l) => (l.service_t && tx ? viaTemplate(l.service, l.service_t, tx) : (l.service || '—')) },
         { label: 'Статус', value: (l) => (l.status ? tr(LINE_STATUS_RU[l.status] || l.status) : '—') },
+        // REFERRAL_NET_BASE_V1 (владелец 2026-11-24: «here it should show sum after VAT and
+        // discount, and then it should calculate %») — цепочка строки слева направо:
+        // цена − скидка − НДС = база (оплаченная часть), от базы — ставка, и вознаграждение.
+        // Сервер: referrals.js chainOf / reports.js referralBaseAmountOf.
         ...(money ? [
-            { label: 'Получено', value: (l) => sumText(l.received), num: true, print: (l) => Math.round(l.received) },
+            { label: 'Цена', value: (l) => sumText(l.price), num: true, print: (l) => Math.round(l.price || 0) },
+            { label: 'Скидка', value: (l) => sumText(l.discount), num: true, print: (l) => Math.round(l.discount || 0) },
+            { label: 'НДС', value: (l) => sumText(l.tax), num: true, print: (l) => Math.round(l.tax || 0) },
+            { label: 'После скидки и НДС', value: (l) => sumText(l.base), num: true, print: (l) => Math.round(l.base || 0) },
+            { label: 'Ставка', value: (l) => rateText(l.rate, sumText, tr), num: true },
             { label: 'Вознаграждение', value: (l) => sumText(l.reward), num: true, print: (l) => Math.round(l.reward) },
         ] : []),
     ];
+}
+
+/** REFERRAL_NET_BASE_V1 — ставка строки: «10 %», «50 000 сум за услугу»; нет — тире. */
+export function rateText(rate, sumText, tr) {
+    if (!rate || !(Number(rate.value) > 0)) return '—';
+    if (rate.unit === 'fix') return sumText(rate.value) + ' ' + tr('за услугу');
+    return String(Math.round(Number(rate.value) * 100) / 100).replace('.', ',') + ' %';
 }
 
 /**

@@ -19,6 +19,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import { pinReferralRule322 } from '../../test-helpers/referral-rule.js';   // REFERRAL_NET_BASE_V1 — тест под правилом 3.22.0
 import { runReport, doctorPaySummary } from './reports.js';
 import { createInvoiceForAdmission } from './billing.js';
 
@@ -40,7 +41,7 @@ const TO = '2100-01-01';
 //     3 бинт 4 × 5 000 = 20 000                        → товар, НЕ в базе.
 function seed({ discount = 0 } = {}) {
   const db = openDb(':memory:');
-  migrate(db);
+  migrate(db); pinReferralRule322(db);
   const u = db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor,
                           service_rates, inpatient_rates, inpatient_referral_pct, inpatient_referral_fixed)
                         VALUES (?,?,?,?,?,?,?,?,?,?)`);

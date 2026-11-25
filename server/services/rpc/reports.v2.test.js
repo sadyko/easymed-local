@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import { pinReferralRule322 } from '../../test-helpers/referral-rule.js';   // REFERRAL_NET_BASE_V1 — тест под правилом 3.22.0
 import { runReport, doctorReferralReward, doctorInpatientShare } from './reports.js';
 import { createInvoiceForAdmission } from './billing.js';
 import { moveInpatientPct } from '../../test-helpers/inpatient-rates.js';   // INPATIENT_BONUS_V1 — фикстура по-старому
@@ -36,7 +37,7 @@ const TO = '2100-01-01';
 //   стационар: операция 1 000 000, исполнитель врач 2 (20 %), счёт оплачен.
 function seed({ rates = true } = {}) {
   const db = openDb(':memory:');
-  migrate(db);
+  migrate(db); pinReferralRule322(db);
   const u = db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates)
                         VALUES (?,?,?,?,?,?,?)`);
   u.run(1, 'vrach', 'x', 'doctor', 'Врачев В.В.', 1, JSON.stringify([{ service_id: 2, pct: 40, branches: [] }]));
@@ -319,7 +320,7 @@ const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDa
 
 function seedStock() {
   const db = openDb(':memory:');
-  migrate(db);
+  migrate(db); pinReferralRule322(db);
   db.prepare("INSERT INTO users (id, username, password_hash, role, full_name) VALUES (9,'adm','x','admin','Администратор')").run();
   db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Азизов А.')").run();
   db.prepare("INSERT INTO visits (id, patient_id, visit_date) VALUES (1,1,strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run();

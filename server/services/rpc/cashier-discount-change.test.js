@@ -19,6 +19,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import { pinReferralRule322 } from '../../test-helpers/referral-rule.js';   // REFERRAL_NET_BASE_V1 — тест под правилом 3.22.0
 import { RPC } from './index.js';
 import { isReadOnlyRpc } from '../control/gate.js';
 import { doctorPaySummary, runReport } from './reports.js';
@@ -38,7 +39,7 @@ const DAY = '2026-11-05T05:00:00Z';
 const RANGE = { from: '2026-11-01', to: '2026-11-30' };
 
 function seed() {
-  const db = openDb(':memory:'); migrate(db);
+  const db = openDb(':memory:'); migrate(db); pinReferralRule322(db);
   const u = db.prepare('INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, is_active, service_rates) VALUES (?,?,?,?,?,?,1,?)');
   u.run(1, 'adm', 'x', 'admin', 'Админ', 0, '');
   u.run(7, 'reg', 'x', 'registrar', 'Регистратор', 0, '');

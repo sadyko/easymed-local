@@ -23,7 +23,7 @@ import { tableWriteAllowed } from '../../db/write-grant.js';   // закрепл
 import { canViewSection } from '../roles.js';
 import { representativeCodes, isRepresentative } from '../representative.js';   // REP_OWN_DOCTORS_V1
 import { canSeeReportKey } from '../report-access.js';   // деньги — по группе отчётов reports.referrals (REPORT_GROUP), как у дашборда
-import { referralReportLines, resolveRange, adjustmentLabelTemplate } from './reports.js';   // adjustmentLabelTemplate: REFERRAL_ADJ_LABEL_I18N_V1
+import { referralReportLines, resolveRange, adjustmentLabelTemplate, referralBaseAmountOf } from './reports.js';   // adjustmentLabelTemplate: REFERRAL_ADJ_LABEL_I18N_V1
 import { buildingContext } from '../domain/buildings.js';   // FIX_318_V1 (L5) — строкам отчёта — контекст зданий, как у run_report
 import { today, localDate, localRangeWhere } from '../domain/day.js';
 import { EXTERNAL_LINE_ADDS_TO_EXTERNAL_BASE } from '../domain/line-referral.js';   // REFERRAL_LINE_V1 (полировка, п. 11) — счёт визитов как деньги
@@ -202,8 +202,22 @@ function moneyBy(db, { from, to }, user, scope) {
         : r.where === 'in' ? 'in:' + (r.line_kind === 'fixed' ? 'fix' + r.admission_id : r.item_id) + ':' + (r.beneficiary_key || '')
           : null;
     if (k != null) {
-      const it = acc.items.get(k) || { received: 0, reward: 0, date: r.date || null, patient: r.patient || '', service: r.service || '' };
+      const it = acc.items.get(k) || { received: 0, reward: 0, date: r.date || null, patient: r.patient || '', service: r.service || '',
+        price: 0, discount: 0, tax: 0, base: 0, rate: undefined };
       it.received += received; it.reward += num(r.reward);
+      // REFERRAL_NET_BASE_V1 (владелец 2026-11-24: «it should show sum after VAT and discount,
+      // and then it should calculate %») — цепочка строки: цена − скидка − НДС = база, от неё
+      // процент. База — по правилу строки (reports.js referralBaseAmountOf) и только оплаченная
+      // (та же доля оплаты, что у вознаграждения): база × % = вознаграждение строки. Цена,
+      // скидка и НДС — как в счёте. Корректировка закрытого месяца — не услуга: нули, без ставки.
+      if (r.where !== 'adj' && r.line_kind !== 'fixed') {
+        const after = num(r.amount) - num(r.discount);
+        it.price += num(r.amount); it.discount += num(r.discount); it.tax += after * num(r.tax_rate) / 100;
+        if (r.paid) it.base += referralBaseAmountOf(r, r.reward_base) * num(r.pay_factor);
+      }
+      // Ставка — одна на строку; две разные (строка и её корректировка) — не показывается.
+      const rate = r.rate && r.where !== 'adj' ? { unit: r.rate.unit, value: num(r.rate.value) } : null;
+      if (rate) it.rate = it.rate === undefined || (it.rate && it.rate.unit === rate.unit && it.rate.value === rate.value) ? rate : null;
       acc.items.set(k, it);
     }
     out.set(key, acc);
@@ -474,6 +488,8 @@ export function referralsSourceDetail(db, args, user) {
   const out = { source, from, to, money, visits: rows, patients: new Set(visits.map((v) => v.patient_id)).size };
   if (money) { out.received = round2(cash ? cash.received : 0); out.reward = round2(cash ? cash.reward : 0); }
   out.lines = sourceDetailLines(db, sourceId, w, money, cash);
+  // REFERRAL_NET_BASE_V1 — итог колонки «После скидки и НДС» для шапки окна.
+  if (money) out.base = round2(out.lines.reduce((a, l) => a + num(l.base), 0));
   return out;
 }
 
@@ -499,6 +515,13 @@ const LINE_STATUS = Object.freeze({
   added: 'added', queued: 'queued', collected: 'collected', in_progress: 'in_progress',
   resulted: 'resulted', completed: 'completed',
 });
+// REFERRAL_NET_BASE_V1 — цена, скидка, НДС, база и ставка строки окна (нет денег — нули, без ставки).
+function chainOf(m) {
+  return {
+    price: round2(m ? m.price : 0), discount: round2(m ? m.discount : 0), tax: round2(m ? m.tax : 0), base: round2(m ? m.base : 0),
+    rate: m && m.rate ? m.rate : null,
+  };
+}
 function sourceDetailLines(db, sourceId, w, money, cash) {
   const lines = db.prepare(`
     SELECT vs.id, vs.invoice_item_id, vs.status AS line_status, v.id AS visit_id,
@@ -527,6 +550,7 @@ function sourceDetailLines(db, sourceId, w, money, cash) {
       const m = l.invoice_item_id != null ? items.get(Number(l.invoice_item_id)) : null;
       if (m) shown.add(Number(l.invoice_item_id));
       row.received = round2(m ? m.received : 0); row.reward = round2(m ? m.reward : 0);
+      Object.assign(row, chainOf(m));   // REFERRAL_NET_BASE_V1
     }
     return row;
   });
@@ -534,7 +558,7 @@ function sourceDetailLines(db, sourceId, w, money, cash) {
     for (const [k, m] of items) {
       if (shown.has(k)) continue;
       const line = { line_id: null, visit_id: null, date: m.date, patient_id: null, patient: m.patient, service: m.service,
-        status: null, received: round2(m.received), reward: round2(m.reward) };
+        status: null, received: round2(m.received), reward: round2(m.reward), ...chainOf(m) };   // REFERRAL_NET_BASE_V1
       // REFERRAL_ADJ_LABEL_I18N_V1 (3.22.0, ревью) — «Корректировка за <месяц>»: рядом с
       // русским текстом — шаблон словаря (месяц ГГГГ-ММ словом пишет браузер), как у
       // ячейки отчёта (reports.js cells_t). Записанная подпись не меняется.

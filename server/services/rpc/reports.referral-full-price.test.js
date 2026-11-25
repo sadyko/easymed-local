@@ -27,6 +27,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import { pinReferralRule322 } from '../../test-helpers/referral-rule.js';   // REFERRAL_NET_BASE_V1 — тест под правилом 3.22.0
 import { tmpDir } from '../../test-helpers/tmpdir.js';
 import { runReport, doctorPaySummary, doctorReferralReward, payPeriodClose } from './reports.js';
 import { createInvoiceForVisit, createInvoiceForAdmission, recordPayment, refundPayment } from './billing.js';
@@ -79,7 +80,7 @@ function clinic({ upgrading = false } = {}) {
       fs.copyFileSync(path.join(MIGRATIONS, f), path.join(stage, f));
     }
     migrate(db, stage);
-  } else migrate(db);
+  } else { migrate(db); pinReferralRule322(db); }
   const u = db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates, service_rate_default)
                         VALUES (?,?,?,?,?,?,'',0)`);
   u.run(1, 'uzi', 'x', 'doctor', 'Узистов У.', 1);
@@ -123,7 +124,7 @@ function clinic({ upgrading = false } = {}) {
     assert.equal(inv.total_amount, 160000, 'скидка 20 % не легла на счёт');
     return { inv, payment: pay(inv) };
   };
-  const upgrade = () => migrate(db);   // клиника ставит 3.22.0 (мигр. 283)
+  const upgrade = () => { migrate(db); pinReferralRule322(db); };   // клиника ставит 3.22.0 (мигр. 283)
   return { db, line, bill, pay, paidWith20, partner, fixer, own: own.id, upgrade };
 }
 
@@ -152,8 +153,10 @@ test('процент — от цены до скидки: УЗИ 200 000, ски
   assert.equal(referralsDoctorDetail(c.db, { doctor_id: 2, ...range(cur) }, admin).reward, 10000);
   // Правило названо словами под отчётом — и переведено.
   const notes = run(c.db, 'referrals', range(cur)).notes;
-  assert.ok(notes.some((n) => /цены строки счёта до скидки/.test(n)), 'примечание не называет базу «до скидки»: ' + notes.join(' | '));
-  assert.ok(!notes.some((n) => /от суммы строки счёта после скидки/.test(n)), 'старое правило осталось в примечании');
+  // REFERRAL_NET_BASE_V1 — общее правило теперь «после скидки и НДС»; счета этого теста
+  // выставлены до обновления (pinReferralRule322), и правило 3.22.0 названо своим примечанием.
+  assert.ok(notes.some((n) => /по правилу 3\.22\.0: процент — от цены строки счёта до скидки/.test(n)), 'примечание не называет базу «до скидки»: ' + notes.join(' | '));
+  assert.ok(notes.some((n) => /от суммы строки счёта после скидки и НДС/.test(n)), 'общее правило не названо');
 });
 
 test('скидка 100 %: счёт закрыт при выставлении — партнёру 10 % от 200 000 = 20 000; отменённый и неоплаченный — ничего', () => {
@@ -233,7 +236,8 @@ test('стационар: процент партнёра и своего вра
   assert.equal(rewardOf(inRows, 'Направляев Н.'), 20000, 'своему врачу — 2 % от 1 000 000, а не 18 000');
   assert.equal(doctorPaySummary(c.db, { doctor_id: 2, ...range(cur) }, admin).inpatient_referral.reward, 20000);
   const notes = run(c.db, 'referrals', range(cur)).notes;
-  assert.ok(notes.some((n) => /счёта госпитализации до скидки/.test(n)), 'примечание стационара не называет базу «до скидки»');
+  assert.ok(notes.some((n) => /счёта госпитализации после скидки и НДС/.test(n)), 'нет примечания стационара');   // REFERRAL_NET_BASE_V1
+  assert.ok(notes.some((n) => /по правилу 3\.22\.0: процент — от цены строки счёта до скидки/.test(n)), 'счета до обновления — не названо правило 3.22.0');
 });
 
 // ─── ЗАКРЫТЫЕ МЕСЯЦЫ — КАК ЗАПИСАНЫ ──────────────────────────────────────────
@@ -413,10 +417,10 @@ test('примечания «Рефералов» о базе вознаграж
   const picked = [];
   for (const rep of [r, s]) {
     rep.notes.forEach((n, i) => {
-      if (/до скидки|до обновления программы до 3\.22\.0/.test(n)) picked.push({ n, t: rep.notes_t[i] });
+      if (/до скидки|после скидки и НДС|до обновления программы до 3\.22\.0/.test(n)) picked.push({ n, t: rep.notes_t[i] });   // REFERRAL_NET_BASE_V1
     });
   }
-  assert.ok(picked.some((p) => /счёта госпитализации до скидки/.test(p.n)), 'нет примечания стационара');
+  assert.ok(picked.some((p) => /счёта госпитализации после скидки и НДС/.test(p.n)), 'нет примечания стационара');   // REFERRAL_NET_BASE_V1
   assert.ok(picked.some((p) => p.t && p.t.template), 'нет шаблона «до обновления» с датой');
   assert.ok(picked.some((p) => !p.t && legacyNote([p.n])), 'нет примечания «до обновления» без даты');
   for (const { n, t } of picked) {

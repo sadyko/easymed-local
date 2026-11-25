@@ -348,6 +348,8 @@ export const TABLE_PLAN = Object.freeze({
   // REFERRAL_FULL_PRICE_V1 (мигр. 283) — момент обновления до 3.22.0: счета до него —
   // по прежнему правилу вознаграждения. Удаление тестовых счетов его не касается.
   referral_full_price_from: keep('service'),
+  // REFERRAL_NET_BASE_V1 (мигр. 300) — момент перехода на «после скидки и НДС»; так же.
+  referral_net_price_from: keep('service'),
   // Отметки разовых исправлений CRM: без них исправление прошло бы снова.
   crm_one_way_repair: keep('service'),
   crm_unify_repair: keep('service'),

@@ -25,6 +25,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import { pinReferralRule322 } from '../../test-helpers/referral-rule.js';   // REFERRAL_NET_BASE_V1 — тест под правилом 3.22.0
 import { today } from '../domain/day.js';
 import { createInvoiceForVisit, recordPayment } from './billing.js';
 import { performedPayLines, doctorReferralReward } from './reports.js';
@@ -38,7 +39,7 @@ const doctor = { id: D1, role: 'doctor', full_name: 'Врач' };
 const r2 = (n) => Math.round(n * 100) / 100;
 
 function seed({ pct = 0 } = {}) {
-  const db = openDb(':memory:'); migrate(db);
+  const db = openDb(':memory:'); migrate(db); pinReferralRule322(db);
   const u = db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, extra_roles, service_rates, service_rate_default)
                         VALUES (?,?,?,?,?,?,?,?,?)`);
   u.run(1, 'adm', 'x', 'admin', 'Админ', 0, '[]', '', 0);
