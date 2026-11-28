@@ -279,6 +279,9 @@ const READ_ONLY_RPCS = new Set([
   'rep_bot_claims_list',   // REP_BOT_CLAIMS_V1 — открытые заявки на закрепление: только SELECT (rep_bot_claim_decide — запись)
   'daily_report_settings_get', 'daily_report_preview',   // DAILY_REPORT_BOT_V1 — настройки (без токена) и текст отчёта: только SELECT
   'clinic_news_list',   // CLINIC_NEWS_V1 — доска объявлений: только SELECT
+  'hr_staff_list', 'hr_staff_card',   // HR_STAFF_V1 — список и карточка сотрудника в «HR»: только SELECT
+  'hr_recruit_board', 'hr_candidate_get', 'hr_candidate_hire_prefill',
+  'attendance_today', 'attendance_report', 'attendance_session_get', 'attendance_flags_list', 'attendance_locations_list', 'staff_links_list', 'staff_bot_settings_get',   // STAFF_ATTENDANCE_V1 — только SELECT   // HR_RECRUIT_V1 — доска воронки, карточка кандидата, данные анкеты: только SELECT
   'patient_bot_status', 'phone_bot_status',   // PATIENT_BOT_INVITE_V1 — кто подключён к боту: только SELECT
   'meta_settings_get', 'meta_leads_recent',   // META_LEADS_V1 — настройки (без токена) и журнал заявок
   // META_INBOX_V1 — чтение переписки и комментариев. Открытие помечает

@@ -21,7 +21,7 @@
 // Passed through moduleToggles() UNFILTERED (marketing included) so that
 // function's own exclusion is what actually gets exercised, rather than
 // trusting every caller to remember to filter first.
-export const SELLABLE_MODULES = ['crm', 'telegram', 'marketing', 'callcenter', 'ai'];   // AI_CHAT_V1
+export const SELLABLE_MODULES = ['crm', 'telegram', 'marketing', 'callcenter', 'ai', 'website'];   // AI_CHAT_V1; WEBSITE_V1 (было забыто — панель не могла выдать модуль)
 
 function parseDate(iso) {
   if (!iso) return null;
@@ -48,7 +48,7 @@ export function formatLastSeen(lastSeenIso, now = new Date()) {
   return `${days} day${days === 1 ? '' : 's'} ago`;
 }
 
-const MODULE_LABELS = { crm: 'CRM', telegram: 'Telegram', callcenter: 'Колл-центр', ai: 'ИИ-помощник' };   // AI_CHAT_V1
+const MODULE_LABELS = { crm: 'CRM', telegram: 'Telegram', callcenter: 'Колл-центр', ai: 'ИИ-помощник', website: 'Веб-сайт' };   // AI_CHAT_V1; WEBSITE_V1
 
 function moduleLabel(key) {
   return MODULE_LABELS[key] || (key.charAt(0).toUpperCase() + key.slice(1));

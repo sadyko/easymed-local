@@ -235,7 +235,7 @@ test('ранжирование ступеней: дошедшая > живые �
       { id: 3, stage_kind: 'open', stage_pos: 2, patient_id: null, created_at: '2026-09-20' },
     ];
     assert.equal(suggestSurvivor(mix), 3);
-    assert.deepEqual(allowedSurvivors(mix).map((c) => c.id), [2, 3]);
+    assert.deepEqual(allowedSurvivors(mix).map((c) => c.id), [1, 2, 3], 'MERGE_FREE_SURVIVOR_V1 — оставить можно любую');
     assert.equal(personName({ full_name: '+998 90 111 22 33' }), '', 'номер вместо имени считается именем');
     assert.equal(namesDiffer([{ full_name: 'Буронова  Феруза' }, { full_name: 'буронова феруза' }, { full_name: '901112233' }]), false);
     assert.equal(namesDiffer([{ full_name: 'Буронова Феруза' }, { full_name: 'Буронов Азиз' }]), true);

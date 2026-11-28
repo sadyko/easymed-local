@@ -58,7 +58,25 @@ test('I1: карточки разных номеров не сливаются �
   } finally { db.close(); }
 });
 
-test('I2: №19 «Пришёл» и №337 в работе — предложена 337; влить 337 в 19 нельзя; 19 вливается в 337 без переписывания истории', () => {
+// MERGE_FREE_SURVIVOR_V1 (2026-11-27) — владелец выбирает оставшуюся сам: живую
+// можно влить и в закрытую. «Пришёл» остаётся «Пришёл», дата и автор — свои.
+test('MERGE_FREE_SURVIVOR_V1: №337 в работе вливается в закрытую №19 по выбору человека', () => {
+  const db = seed();
+  try {
+    lead(db, { id: 19, status: 'came', patient_id: 500, created_at: '2026-01-10T09:00:00Z', created_by: 1, source: 'website' });
+    lead(db, { id: 337, status: 'recall', assigned_to: 2, created_at: '2026-09-20T08:00:00Z', created_by: 2, source: 'call' });
+    db.prepare("INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status) VALUES (337, 77, '2026-09-30', 'pending')").run();
+    const res = crmMergeLeads(db, { keep_id: 19, merge_ids: [337] }, BOSS);
+    assert.equal(res.kept_id, 19);
+    assert.equal(res.lead.status, 'came', 'выбранная закрытая потеряла свою ступень');
+    assert.equal(res.lead.created_at, '2026-01-10T09:00:00Z');
+    assert.equal(res.lead.created_by, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM crm_request_services WHERE request_id = 19').get().n, 1, 'услуга живой не переехала');
+  } finally { db.close(); }
+});
+
+test('I2: №19 «Пришёл» и №337 в работе — предложена 337; 19 вливается в 337 без переписывания истории', () => {
   const db = seed();
   try {
     lead(db, { id: 19, status: 'came', patient_id: 500, created_at: '2026-01-10T09:00:00Z', created_by: 1, note: 'Была на УЗИ', source: 'website' });
@@ -70,10 +88,6 @@ test('I2: №19 «Пришёл» и №337 в работе — предложе�
     const g = crmDuplicateGroups(db, {}, BOSS).groups[0];
     assert.equal(g.suggested_id, 337, 'предложена закрытая карточка, а живая заявка рядом');
     assert.equal(g.cards.find((c) => c.id === 337).stage_kind, 'open');
-
-    assert.throws(() => crmMergeLeads(db, { keep_id: 19, merge_ids: [337] }, BOSS),
-      (e) => e.status === 409 && /в работе/.test(e.message), 'живую заявку похоронили в закрытой');
-    assert.equal(db.prepare('SELECT COUNT(*) n FROM crm_requests').get().n, 2);
 
     const res = crmMergeLeads(db, { keep_id: 337, merge_ids: [19] }, BOSS);
     assert.equal(res.lead.status, 'recall', 'заявка в работе ушла из живых колонок');

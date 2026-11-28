@@ -115,10 +115,11 @@ export function serviceDetailColumns(money, { sumText, tr, tx = null }) {
         // discount, and then it should calculate %») — цепочка строки слева направо:
         // цена − скидка − НДС = база (оплаченная часть), от базы — ставка, и вознаграждение.
         // Сервер: referrals.js chainOf / reports.js referralBaseAmountOf.
+        // REFERRAL_DETAIL_SLIM_V1 (владелец 2026-11-27: «just show amount after VAT, and
+        // percentage and then sum of reward, no need … price discount, NDS amount») —
+        // колонки «Цена», «Скидка», «НДС» убраны; сервер по-прежнему отдаёт l.price/
+        // l.discount/l.tax, вернуть их — одна строка здесь.
         ...(money ? [
-            { label: 'Цена', value: (l) => sumText(l.price), num: true, print: (l) => Math.round(l.price || 0) },
-            { label: 'Скидка', value: (l) => sumText(l.discount), num: true, print: (l) => Math.round(l.discount || 0) },
-            { label: 'НДС', value: (l) => sumText(l.tax), num: true, print: (l) => Math.round(l.tax || 0) },
             { label: 'После скидки и НДС', value: (l) => sumText(l.base), num: true, print: (l) => Math.round(l.base || 0) },
             { label: 'Ставка', value: (l) => rateText(l.rate, sumText, tr), num: true },
             { label: 'Вознаграждение', value: (l) => sumText(l.reward), num: true, print: (l) => Math.round(l.reward) },

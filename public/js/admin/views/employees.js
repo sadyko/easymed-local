@@ -197,12 +197,54 @@ let services = [];
 let serviceTypes = [];       // RATES_FILTERS_V2 — the clinic's own types (service_types)
 let serviceCategories = [];  // and categories (service_categories)
 
-export async function renderEmployees(container) {
+export async function renderEmployees(container, ctx = {}) {
     clear(container);
     showArchive = false;   // вход в раздел — всегда со списка работающих
     const root = h('div', { class: 'fade-in emp-page' });   // DOCTOR_PROFILE_V1 — .emp-page: шапка списка переносится на ширине телефона
     container.appendChild(root);
     await paint(root);
+    // HR_RECRUIT_V1 — «HR → Подбор → Нанят → Создать сотрудника» приходит сюда
+    // с payload { hire: id кандидата }: в первый раз — ctx.payload нового окна,
+    // в уже открытое «Сотрудники» — через ctx.onPayload (панель из кэша не
+    // перерисовывается).
+    if (typeof ctx.onPayload === 'function') ctx.onPayload((p) => { if (p && p.hire) startHire(p.hire, root); });
+    if (ctx.payload && ctx.payload.hire) await startHire(ctx.payload.hire, root);
+}
+
+/**
+ * HR_RECRUIT_V1 — анкета нового сотрудника из нанятого кандидата. Это ТА ЖЕ
+ * анкета, что у кнопки «Новый сотрудник», только с заполненными ФИО,
+ * телефоном, почтой, категорией и отделом (из кандидата и его вакансии) и
+ * сегодняшней датой приёма. После сохранения кандидат запоминает сотрудника
+ * (hr_candidate_link_employee) — кнопка в «Подборе» сменяется ссылкой на него.
+ * Сервер отказывает в данных, если сотрудник из кандидата уже создан: кнопка
+ * «Назад» браузера не откроет анкету второй раз.
+ */
+async function startHire(candidateId, root) {
+    if (!empAccess().canEdit) { toast(tr('Заводить сотрудников вашей роли нельзя: нужен доступ «Изменение» к «Сотрудникам».'), 'warn'); return; }
+    let pre;
+    try {
+        const { data, error } = await supabase.rpc('hr_candidate_hire_prefill', { id: Number(candidateId) });
+        if (error) throw new Error(error.message);
+        pre = data;
+    } catch (e) { toast(e.message || String(e), 'warn'); return; }
+    const d = new Date();
+    const todayIso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    openEditor(null, root, {
+        prefill: {
+            ...employeeNameParts({ full_name: pre.full_name }),
+            phone: pre.phone || '', email: pre.email || '',
+            staff_type: pre.staff_type || '', is_doctor: pre.staff_type === 'doctor',
+            department_id: pre.department_id != null ? String(pre.department_id) : '',
+            hire_date: todayIso,
+        },
+        onCreated: async (created) => {
+            if (!created || !created.id) return;
+            const { error } = await supabase.rpc('hr_candidate_link_employee', { id: pre.candidate_id, user_id: created.id });
+            if (error) toast(trf('Сотрудник сохранён, но в «Подборе» кандидат не отмечен: {msg}', { msg: error.message }), 'warn');
+        },
+    });
+    toast(trf('Анкета заполнена из кандидата «{name}». Задайте логин, роль и сохраните.', { name: pre.full_name }), 'info');
 }
 
 async function paint(root) {
@@ -496,7 +538,7 @@ const pctOk = (v) => v != null && v !== '' && Number.isFinite(Number(v)) && Numb
 const overPct = (list) => asArr(list).find((r) => r && r.fix == null && r.pct != null && r.pct !== '' && Number(r.pct) > 100) || null;
 const serviceName = (sid) => (services.find((s) => Number(s.id) === Number(sid)) || {}).name || String(sid);
 
-function openEditor(user, root) {
+function openEditor(user, root, opts = {}) {   // HR_RECRUIT_V1 — opts.prefill / opts.onCreated: анкета из нанятого кандидата
     const isEdit = !!user;
     const emp = {
         last_name: '', first_name: '', middle_name: '', phone: '', email: '',
@@ -512,6 +554,7 @@ function openEditor(user, root) {
         // раздел «Филиалы» не требовал выбора там, где выбирать не из чего.
         // У существующего сотрудника ниже победит его собственное значение.
         ...(soleBranchId() != null ? { branch_id: String(soleBranchId()) } : {}),
+        ...(!user && opts.prefill ? opts.prefill : {}),   // HR_RECRUIT_V1 — новый сотрудник из кандидата
         ...(user ? {
             // EMPLOYEE_CARD_SAVE_V1 — у сотрудника, заведённого одной строкой
             // full_name (демо-врачи, `admin` первого запуска), частей имени нет:
@@ -1283,7 +1326,12 @@ function openEditor(user, root) {
         try {
             let saved = null;   // STAFF_EDIT_V1 — ответ PATCH: password_inactive
             if (isEdit) saved = await api('/' + user.id, { method: 'PATCH', body: JSON.stringify(payload) });
-            else await api('', { method: 'POST', body: JSON.stringify({ ...payload, username: emp.username.trim() }) });
+            else {
+                const res = await api('', { method: 'POST', body: JSON.stringify({ ...payload, username: emp.username.trim() }) });
+                // HR_RECRUIT_V1 — анкета из кандидата: отметить его в «Подборе». Отказ
+                // отметки — тост внутри onCreated, сохранение сотрудника он не отменяет.
+                if (typeof opts.onCreated === 'function') { try { await opts.onCreated(res && res.user); } catch (_) { /* тост уже показан */ } }
+            }
             // REPORTS_V2 — ставка за направления лежит на источнике врача, а не в
             // карточке: пишется своей попыткой, и её отказ не выдаётся за неудачу
             // сохранения самого сотрудника. Вкладку не открывали — не пишется вовсе.

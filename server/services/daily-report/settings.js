@@ -28,6 +28,7 @@ const OTHER_BOTS = [
   ['telegram_settings', 'пациентского бота'],
   ['doctor_bot_settings', 'бота для врачей-источников'],
   ['rep_bot_settings', 'бота для медпредставителей'],
+  ['staff_bot_settings', 'бота сотрудников'],   // STAFF_ATTENDANCE_V1
 ];
 
 /** Отказ, если id — номер другого бота клиники; '' — бот свой. */

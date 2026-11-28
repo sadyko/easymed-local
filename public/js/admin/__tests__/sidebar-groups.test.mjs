@@ -57,6 +57,8 @@ const OWNER_ORDER = [
     ['CRM',        true,  ['crm']],
     ['Operations', true,  ['cashier-shifts', 'cashier-head']],
     ['Procurement', true, ['inventory', 'my-stock', 'my-department']],
+    // HR_DEPT_V1 (2026-11-26) — раздел «HR»; HR_RECRUIT_V1 — «Сотрудники» и «Подбор персонала».
+    ['HR',         true,  ['hr', 'hr-recruiting', 'hr-attendance']],
     ['Settings',   true,  ['settings']],
     // COMMERCE_DEPT_V1 (2026-11-21) — «Коммерческие инструменты» своим разделом «Коммерция».
     ['Commerce',   true,  ['commerce']],

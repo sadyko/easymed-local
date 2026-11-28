@@ -3,7 +3,7 @@
 // data/.telegram-key, что у двух других ботов. Зеркало doctor-bot/settings.js;
 // разница — чей токен считается «чужим»: здесь и пациентский, и бот врачей.
 import { encryptToken, decryptToken, loadOrCreateKey, looksLikeBotToken, tokenHint } from '../telegram/crypto.js';
-import { botIdOfToken, storedBotId } from '../doctor-bot/settings.js';
+import { botIdOfToken, storedBotId, SAME_AS_STAFF_BOT_MESSAGE } from '../doctor-bot/settings.js';
 
 export class SettingsError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -18,6 +18,7 @@ export function clashMessage(db, id, opts = {}) {
   if (!mine) return '';
   if (mine === storedBotId(db, 'telegram_settings', opts)) return SAME_AS_PATIENT_MESSAGE;
   if (mine === storedBotId(db, 'doctor_bot_settings', opts)) return SAME_AS_DOCTOR_MESSAGE;
+  if (mine === storedBotId(db, 'staff_bot_settings', opts)) return SAME_AS_STAFF_BOT_MESSAGE;   // STAFF_ATTENDANCE_V1
   return '';
 }
 

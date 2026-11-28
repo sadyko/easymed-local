@@ -294,6 +294,8 @@ test('каждая строка справочника называет пров
     'commerce_news',   // CLINIC_NEWS_GRANT_V1 — публикация на доске
     'commerce_ai',   // AI_CHAT_V1 — ИИ-помощник: пока роль строку не настраивала — только администратор
     'commerce_website',   // WEBSITE_V1 — редактор сайта: пока роль строку не настраивала — только администратор
+    'hr_recruiting',   // HR_RECRUIT_V1 — воронка найма: пока роль строку не настраивала — только администратор
+    'hr_attendance',   // STAFF_ATTENDANCE_V1 — посещаемость по QR: то же правило
   ];
   for (const k of ADMIN_DEFAULT) {
     const r = byKey.get(k);
@@ -313,7 +315,7 @@ test('каждая строка справочника называет пров
   // «Роли» его не было вовсе (CALLCENTER_OPERATOR_V1). ROLE_REPORTS_SETTINGS_V1
   // разделов не прибавил: группы отчётов и плитки настроек — окна прежних
   // разделов «Отчёты» и «Настройки».
-  assert.equal(CATALOG.length, 25, 'в справочнике двадцать пять разделов');   // WEBSITE_V1 — + «Веб-сайт»; AI_CHAT_V1 — + «ИИ-помощник»; CLINIC_NEWS_GRANT_V1 — + «Информационная доска»; COMMERCE_BLOCK_V1 — + «Push-уведомления», «Ссылки для рекламы в Telegram»;   // REFERRALS_NAV_V1 — + «Реферирование»; META_INBOX_V1 — + «Чат Facebook и Instagram»
+  assert.equal(CATALOG.length, 27, 'в справочнике двадцать семь разделов');   // HR_RECRUIT_V1 — + «HR · Подбор персонала»; STAFF_ATTENDANCE_V1 — + «HR · Посещаемость»; WEBSITE_V1 — + «Веб-сайт»; AI_CHAT_V1 — + «ИИ-помощник»; CLINIC_NEWS_GRANT_V1 — + «Информационная доска»; COMMERCE_BLOCK_V1 — + «Push-уведомления», «Ссылки для рекламы в Telegram»;   // REFERRALS_NAV_V1 — + «Реферирование»; META_INBOX_V1 — + «Чат Facebook и Instagram»
   // JOURNALS_V1_ACCESS — девятая группа «Журналы» (журнал услуг и реестр стационарных пациентов).
   assert.equal(CATALOG.find((s) => s.key === 'reports').windows.length, 9, 'девять групп отчётов: «Журналы» — после «По услугам», Telegram-бот — последняя');
   // PACKAGES_V1 — двадцать шестая плитка «Пакеты услуг» и её «Цены и проценты».

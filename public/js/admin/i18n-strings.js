@@ -2524,6 +2524,7 @@ export const STRINGS = {
   "Ребёнок": {"en":"Child","ru":"Ребёнок","uz":"Bola"},
   "Регион": {"en":"Region","ru":"Регион","uz":"Viloyat"},
   "Регистратор": {"en":"Registrar","ru":"Регистратор","uz":"Registrator"},
+  "Записал услугу": {"en":"Service added by","ru":"Записал услугу","uz":"Xizmatni yozgan"},   // SERVICE_REGISTRAR_V1 — колонка «Общей выручки»
   "Регистрация, поиск и ведение пациентов.": {"en":"Registration, search and management of patients.","ru":"Регистрация, поиск и ведение пациентов.","uz":"Bemorlarni ro'yxatdan o'tkazish, qidirish va boshqarish."},
   "Редактирование панели": {"en":"Edit panel","ru":"Редактирование панели","uz":"Panelni tahrirlash"},
   "Режим подсказок": {"en":"Hints mode","ru":"Режим подсказок","uz":"Ko'rsatmalar rejimi"},
@@ -6467,6 +6468,7 @@ export const STRINGS = {
   "В это отделение пока ничего не выдавали.": {"en":"Nothing has been issued to this department yet.","ru":"В это отделение пока ничего не выдавали.","uz":"Bu bo'limga hali hech narsa berilmagan."},
   "Введите название поставщика.": {"en":"Enter the supplier's name.","ru":"Введите название поставщика.","uz":"Yetkazib beruvchi nomini kiriting."},
   "Все категории": {"en":"All categories","ru":"Все категории","uz":"Barcha kategoriyalar"},
+  "Несколько ({n})": {"en":"Several ({n})","ru":"Несколько ({n})","uz":"Bir nechta ({n})"},
   "Все отделы": {"en":"All departments","ru":"Все отделы","uz":"Barcha bo'limlar"},
   "Все товары из заказов на закупку (кроме отменённых), по убыванию количества.": {"en":"All items from purchase orders (except cancelled), by quantity descending.","ru":"Все товары из заказов на закупку (кроме отменённых), по убыванию количества.","uz":"Xarid buyurtmalaridagi barcha tovarlar (bekor qilinganlardan tashqari), miqdor bo'yicha kamayish tartibida."},
   "Всплывающее окно заблокировано — разрешите pop-ups для печати накладной.": {"en":"The pop-up window is blocked — allow pop-ups to print the note.","ru":"Всплывающее окно заблокировано — разрешите pop-ups для печати накладной.","uz":"Pop-up oynasi bloklangan — talabnomani chop etish uchun pop-uplarga ruxsat bering."},
@@ -10874,7 +10876,7 @@ export const STRINGS = {
   "Объединять заявку №{id}": {"en":"Merge lead #{id}","ru":"Объединять заявку №{id}","uz":"№{id} arizani birlashtirish"},
   "в работе": {"en":"in progress","ru":"в работе","uz":"ishda"},
   "Разные имена — возможно, разные люди. Снимите галочку с карточки другого человека.": {"en":"Different names — possibly different people. Untick the card of the other person.","ru":"Разные имена — возможно, разные люди. Снимите галочку с карточки другого человека.","uz":"Ismlar har xil — ehtimol, bu turli odamlar. Boshqa odamning kartochkasidan belgini olib tashlang."},
-  "Среди отмеченных есть заявка в работе — остаться может только она.": {"en":"One of the ticked cards is a lead in progress — only it can stay.","ru":"Среди отмеченных есть заявка в работе — остаться может только она.","uz":"Belgilanganlar orasida ishdagi ariza bor — faqat u qolishi mumkin."},
+  "Остаётся закрытая карточка — заявка в работе ({ids}) вольётся в неё и уйдёт с живых колонок.": {"en":"A closed card is being kept — the lead in progress ({ids}) will merge into it and leave the active columns.","ru":"Остаётся закрытая карточка — заявка в работе ({ids}) вольётся в неё и уйдёт с живых колонок.","uz":"Yopilgan kartochka qoladi — ishdagi ariza ({ids}) unga qo'shiladi va faol ustunlardan chiqadi."},
   "Задачи из вливаемых карточек перейдут в карточку, которую ведёт {name}. Исполнители задач по-прежнему их видят.": {"en":"Tasks from the merged cards will move to the card run by {name}. Their assignees still see them.","ru":"Задачи из вливаемых карточек перейдут в карточку, которую ведёт {name}. Исполнители задач по-прежнему их видят.","uz":"Qo‘shilayotgan kartochkalardagi vazifalar {name} olib borayotgan kartochkaga o‘tadi. Vazifa ijrochilari ularni avvalgidek ko‘radi."},
   "другой оператор": {"en":"another operator","ru":"другой оператор","uz":"boshqa operator"},
   "Отмеченные карточки привязаны к разным пациентам — объединить их нельзя. Снимите галочку с чужой карточки.": {"en":"The ticked cards are linked to different patients — they cannot be merged. Untick the other person's card.","ru":"Отмеченные карточки привязаны к разным пациентам — объединить их нельзя. Снимите галочку с чужой карточки.","uz":"Belgilangan kartochkalar turli bemorlarga bog‘langan — ularni birlashtirib bo‘lmaydi. Boshqa odamning kartochkasidan belgini olib tashlang."},
@@ -11221,6 +11223,18 @@ export const STRINGS = {
   // V3120_FIX (экраны и навигация) — END
   // V3120_I18N — сообщения сервера — BEGIN (2026-09-28)
   "Бота убрали из группы. Добавьте его обратно.": {"en":"The bot was removed from the group. Add it back.","ru":"Бота убрали из группы. Добавьте его обратно.","uz":"Bot guruhdan olib tashlangan. Uni qayta qo‘shing."},   // DAILY_REPORT_BOT_V1
+  "Документы сотрудников открыты администратору клиники.": {"en":"Staff documents are open to the clinic administrator only.","ru":"Документы сотрудников открыты администратору клиники.","uz":"Xodimlar hujjatlari faqat klinika administratoriga ochiq."},   // HR_STAFF_V1 — корзина hr-docs (routes/storage.js)
+  "Документ сотрудника не удаляется — его можно убрать из карточки в разделе «HR».": {"en":"A staff document cannot be deleted — it can be removed from the card in the HR section.","ru":"Документ сотрудника не удаляется — его можно убрать из карточки в разделе «HR».","uz":"Xodim hujjati o‘chirilmaydi — uni «HR» bo‘limidagi kartadan olib tashlash mumkin."},   // HR_STAFF_V1
+  "Документы кандидатов открыты тем, кому доступен «Подбор персонала».": {"en":"Candidate documents are open to those with access to Recruiting.","ru":"Документы кандидатов открыты тем, кому доступен «Подбор персонала».","uz":"Nomzodlar hujjatlari «Xodim tanlash» bo‘limiga kirish huquqi borlarga ochiq."},   // HR_CANDIDATE_DOCS_V1
+  "Файл документа не найден в папке кандидата.": {"en":"The document file was not found in the candidate's folder.","ru":"Файл документа не найден в папке кандидата.","uz":"Hujjat fayli nomzod papkasida topilmadi."},   // HR_CANDIDATE_DOCS_V1
+  "Резюме": {"en":"Resume","ru":"Резюме","uz":"Rezyume"},   // HR_CANDIDATE_DOCS_V1
+  "Раздел «HR» открыт администратору клиники.": {"en":"The HR section is open to the clinic administrator only.","ru":"Раздел «HR» открыт администратору клиники.","uz":"«HR» bo‘limi faqat klinika administratoriga ochiq."},   // HR_STAFF_V1 — rpc/hr.js
+  "Напишите название документа.": {"en":"Enter the document title.","ru":"Напишите название документа.","uz":"Hujjat nomini yozing."},   // HR_STAFF_V1
+  "Файл документа не найден в папке сотрудника.": {"en":"The document file was not found in the employee's folder.","ru":"Файл документа не найден в папке сотрудника.","uz":"Hujjat fayli xodim papkasida topilmadi."},   // HR_STAFF_V1
+  "Неизвестный вид техники.": {"en":"Unknown equipment type.","ru":"Неизвестный вид техники.","uz":"Noma’lum texnika turi."},   // HR_STAFF_V1
+  "Запись о выдаче не найдена.": {"en":"Issue record not found.","ru":"Запись о выдаче не найдена.","uz":"Berilganlik yozuvi topilmadi."},   // HR_STAFF_V1
+  "Техника уже отмечена как возвращённая.": {"en":"The equipment is already marked as returned.","ru":"Техника уже отмечена как возвращённая.","uz":"Texnika allaqachon qaytarilgan deb belgilangan."},   // HR_STAFF_V1
+  "Дата возврата раньше даты выдачи.": {"en":"The return date is earlier than the issue date.","ru":"Дата возврата раньше даты выдачи.","uz":"Qaytarish sanasi berilgan sanadan oldin."},   // HR_STAFF_V1
   "У бота нет права писать в группу. Разрешите ему отправлять сообщения.": {"en":"The bot is not allowed to post in the group. Allow it to send messages.","ru":"У бота нет права писать в группу. Разрешите ему отправлять сообщения.","uz":"Botda guruhga yozish huquqi yo‘q. Unga xabar yuborishga ruxsat bering."},   // DAILY_REPORT_BOT_V1
   "Telegram не принял токен: бот удалён или токен заменён в @BotFather.": {"en":"Telegram rejected the token: the bot was deleted or the token was replaced in @BotFather.","ru":"Telegram не принял токен: бот удалён или токен заменён в @BotFather.","uz":"Telegram tokenni qabul qilmadi: bot o‘chirilgan yoki token @BotFather’da almashtirilgan."},   // DAILY_REPORT_BOT_V1
   "Номер группы не разобран. У группы он отрицательный, например -1001234567890 — нажмите «Найти группу».": {"en":"The group number could not be read. A group number is negative, for example -1001234567890 — press “Find group”.","ru":"Номер группы не разобран. У группы он отрицательный, например -1001234567890 — нажмите «Найти группу».","uz":"Guruh raqami aniqlanmadi. Guruh raqami manfiy bo‘ladi, masalan -1001234567890 — «Guruhni topish»ni bosing."},   // DAILY_REPORT_BOT_V1
@@ -11388,7 +11402,7 @@ export const STRINGS = {
   "За один раз можно объединить не больше 20 карточек.": {"en":"You can merge at most 20 cards at a time.","ru":"За один раз можно объединить не больше 20 карточек.","uz":"Bir martada 20 tadan ortiq kartochkani birlashtirib bo'lmaydi."},
   "Объединять можно только карточки с одним и тем же номером телефона.": {"en":"Only cards with the same phone number can be merged.","ru":"Объединять можно только карточки с одним и тем же номером телефона.","uz":"Faqat bir xil telefon raqamli kartochkalarni birlashtirish mumkin."},
   "Карточки привязаны к разным пациентам — объединить их нельзя. Один номер бывает у нескольких членов семьи.": {"en":"The cards are linked to different patients — they can't be merged. Several family members may share one number.","ru":"Карточки привязаны к разным пациентам — объединить их нельзя. Один номер бывает у нескольких членов семьи.","uz":"Kartochkalar turli bemorlarga bog'langan — ularni birlashtirib bo'lmaydi. Bitta raqam bir necha oila a'zosida bo'lishi mumkin."},
-  "Среди карточек есть заявка в работе — остаться должна она (или другая карточка в работе), а не закрытая.": {"en":"One of the cards is an active lead — keep that one (or another active card), not a closed one.","ru":"Среди карточек есть заявка в работе — остаться должна она (или другая карточка в работе), а не закрытая.","uz":"Kartochkalar orasida ishdagi so'rov bor — yopilgani emas, aynan u (yoki boshqa ishdagi kartochka) qolishi kerak."},
+  "Эту карточку нельзя оставить.": {"en":"This card cannot be the one kept.","ru":"Эту карточку нельзя оставить.","uz":"Bu kartochkani qoldirib bo'lmaydi."},
   "Раздел «Cust Dev» вам не выдан.": {"en":"You don't have access to the \"Cust Dev\" section.","ru":"Раздел «Cust Dev» вам не выдан.","uz":"«Cust Dev» bo'limi sizga berilmagan."},
   "У вас доступ «Только просмотр»: оценивать карточки нельзя.": {"en":"You have \"View only\" access: you can't rate cards.","ru":"У вас доступ «Только просмотр»: оценивать карточки нельзя.","uz":"Sizda «Faqat ko'rish» ruxsati bor: kartochkalarni baholab bo'lmaydi."},
   "Не указан период.": {"en":"No period specified.","ru":"Не указан период.","uz":"Davr ko'rsatilmagan."},
@@ -14726,7 +14740,7 @@ export const STRINGS = {
   "Это действие необратимо: карточка исчезнет с публичного сайта.": {"en":"This cannot be undone: the card will disappear from the public website.","ru":"Это действие необратимо: карточка исчезнет с публичного сайта.","uz":"Bu amalni qaytarib bo‘lmaydi: karta ommaviy saytdan yo‘qoladi."},   // WEBSITE_V1
   "Не удалось удалить. {reason}": {"en":"Could not delete. {reason}","ru":"Не удалось удалить. {reason}","uz":"O‘chirib bo‘lmadi. {reason}"},   // WEBSITE_V1
   "Удалено": {"en":"Deleted","ru":"Удалено","uz":"O‘chirildi"},   // WEBSITE_V1
-  "Свой сайт клиники — без подрядчиков и ежемесячной оплаты": {"en":"Your clinic’s own website — no contractors, no monthly fees","ru":"Свой сайт клиники — без подрядчиков и ежемесячной оплаты","uz":"Klinikaning o‘z sayti — pudratchilarsiz va oylik to‘lovsiz"},   // WEBSITE_V1
+  "Свой сайт клиники — прямо из программы": {"en":"Your clinic’s own website — straight from the program","ru":"Свой сайт клиники — прямо из программы","uz":"Klinikaning o‘z sayti — to‘g‘ridan-to‘g‘ri dasturdan"},   // WEBSITE_V1
   "Врачи, услуги и цены на сайте берутся прямо из программы и всегда совпадают с прайсом. Пациент находит клинику в поиске и оставляет заявку с телефона.": {"en":"Doctors, services and prices on the website come straight from the program and always match the price list. Patients find the clinic in search and leave a request from their phone.","ru":"Врачи, услуги и цены на сайте берутся прямо из программы и всегда совпадают с прайсом. Пациент находит клинику в поиске и оставляет заявку с телефона.","uz":"Saytdagi shifokorlar, xizmatlar va narxlar to‘g‘ridan-to‘g‘ri dasturdan olinadi va doim narxlar ro‘yxatiga mos keladi. Bemor klinikani qidiruvda topadi va telefondan ariza qoldiradi."},   // WEBSITE_V1
   "Сайт клиники: включение, главная страница, врачи и услуги, отделения, отзывы, вопросы и новости": {"en":"Clinic website: turning it on, home page, doctors and services, departments, reviews, questions and news","ru":"Сайт клиники: включение, главная страница, врачи и услуги, отделения, отзывы, вопросы и новости","uz":"Klinika sayti: yoqish, bosh sahifa, shifokorlar va xizmatlar, bo‘limlar, sharhlar, savollar va yangiliklar"},   // WEBSITE_V1
   "Живой просмотр": {"en":"Live preview","ru":"Живой просмотр","uz":"Jonli ko‘rinish"},   // WEBSITE_EDITOR_V2
@@ -14765,4 +14779,263 @@ export const STRINGS = {
   "Две и больше — заголовок меняет их каждые 5 секунд; одна — стоит неподвижно. Порядок задаётся стрелками, первая показывается первой. Пока список пуст, работают два поля ниже (коллаж).": {"en":"With two or more, the heading changes them every 5 seconds; a single one stays still. Use the arrows to set the order; the first is shown first. While the list is empty, the two fields below (collage) are used.","ru":"Две и больше — заголовок меняет их каждые 5 секунд; одна — стоит неподвижно. Порядок задаётся стрелками, первая показывается первой. Пока список пуст, работают два поля ниже (коллаж).","uz":"Ikki va undan ko‘p bo‘lsa — sarlavha ularni har 5 soniyada almashtiradi; bitta bo‘lsa — qimirlamay turadi. Tartib strelkalar bilan beriladi, birinchisi birinchi ko‘rsatiladi. Ro‘yxat bo‘sh bo‘lsa, quyidagi ikki maydon (kollaj) ishlaydi."},   // WEBSITE_EDITOR_V2
   "Карточка изменена и ещё не сохранена": {"en":"The item is changed and not saved yet","ru":"Карточка изменена и ещё не сохранена","uz":"Karta o‘zgartirildi va hali saqlanmagan"},   // WEBSITE_EDITOR_V2
   "Изменений в карточке нет": {"en":"No changes in this item","ru":"Изменений в карточке нет","uz":"Kartada o‘zgarish yo‘q"},   // WEBSITE_EDITOR_V2
+  "HR": {"en":"HR","ru":"HR","uz":"HR"},   // HR_DEPT_V1 — заголовок экрана (лист CRUMBS)
+  "Сотрудники клиники: категория, отдел, дата приёма, документы и выданная техника.": {"en":"Clinic staff: category, department, hire date, documents and issued equipment.","ru":"Сотрудники клиники: категория, отдел, дата приёма, документы и выданная техника.","uz":"Klinika xodimlari: toifa, boʻlim, ishga qabul sanasi, hujjatlar va berilgan texnika."},   // HR_STAFF_V1
+  "ФИО или телефон": {"en":"Name or phone","ru":"ФИО или телефон","uz":"F.I.Sh. yoki telefon"},   // HR_STAFF_V1
+  "Принят с": {"en":"Hired from","ru":"Принят с","uz":"Qabul qilingan: dan"},   // HR_STAFF_V1
+  "Принят по": {"en":"Hired to","ru":"Принят по","uz":"Qabul qilingan: gacha"},   // HR_STAFF_V1
+  "Показать уволенных": {"en":"Show dismissed","ru":"Показать уволенных","uz":"Ishdan boʻshaganlarni koʻrsatish"},   // HR_STAFF_V1
+  "Сотрудников по этим условиям нет.": {"en":"No staff match these filters.","ru":"Сотрудников по этим условиям нет.","uz":"Bu shartlarga mos xodimlar yoʻq."},   // HR_STAFF_V1
+  "Должность / специальность": {"en":"Position / specialty","ru":"Должность / специальность","uz":"Lavozim / mutaxassislik"},   // HR_STAFF_V1
+  "Техника": {"en":"Equipment","ru":"Техника","uz":"Texnika"},   // HR_STAFF_V1
+  "уволен": {"en":"dismissed","ru":"уволен","uz":"ishdan boʻshagan"},   // HR_STAFF_V1
+  "принят {date}": {"en":"hired {date}","ru":"принят {date}","uz":"qabul qilingan {date}"},   // HR_STAFF_V1
+  "Например: Паспорт, страницы 1–2": {"en":"For example: Passport, pages 1–2","ru":"Например: Паспорт, страницы 1–2","uz":"Masalan: Pasport, 1–2-sahifalar"},   // HR_STAFF_V1
+  "Выберите файл.": {"en":"Choose a file.","ru":"Выберите файл.","uz":"Faylni tanlang."},   // HR_STAFF_V1
+  "Документ приложен.": {"en":"Document attached.","ru":"Документ приложен.","uz":"Hujjat biriktirildi."},   // HR_STAFF_V1
+  "Действует до (необязательно)": {"en":"Valid until (optional)","ru":"Действует до (необязательно)","uz":"Amal qilish muddati (ixtiyoriy)"},   // HR_STAFF_V1
+  "Документов пока нет.": {"en":"No documents yet.","ru":"Документов пока нет.","uz":"Hozircha hujjatlar yoʻq."},   // HR_STAFF_V1
+  "Загружен": {"en":"Uploaded","ru":"Загружен","uz":"Yuklangan"},   // HR_STAFF_V1
+  "Файл не открылся.": {"en":"The file did not open.","ru":"Файл не открылся.","uz":"Fayl ochilmadi."},   // HR_STAFF_V1
+  "истёк": {"en":"expired","ru":"истёк","uz":"muddati oʻtgan"},   // HR_STAFF_V1
+  "Убрать документ «{title}» из карточки?": {"en":"Remove the document “{title}” from the card?","ru":"Убрать документ «{title}» из карточки?","uz":"«{title}» hujjatini kartadan olib tashlaysizmi?"},   // HR_STAFF_V1
+  "Модель, например: Lenovo ThinkPad T14": {"en":"Model, for example: Lenovo ThinkPad T14","ru":"Модель, например: Lenovo ThinkPad T14","uz":"Model, masalan: Lenovo ThinkPad T14"},   // HR_STAFF_V1
+  "Комплектация, состояние…": {"en":"Accessories, condition…","ru":"Комплектация, состояние…","uz":"Toʻplam, holati…"},   // HR_STAFF_V1
+  "Напишите, что выдано: модель или название.": {"en":"Enter what was issued: model or name.","ru":"Напишите, что выдано: модель или название.","uz":"Nima berilganini yozing: model yoki nomi."},   // HR_STAFF_V1
+  "Выдача записана.": {"en":"Issue recorded.","ru":"Выдача записана.","uz":"Berilgani yozib qoʻyildi."},   // HR_STAFF_V1
+  "Серийный номер": {"en":"Serial number","ru":"Серийный номер","uz":"Seriya raqami"},   // HR_STAFF_V1
+  "Инвентарный номер": {"en":"Inventory number","ru":"Инвентарный номер","uz":"Inventar raqami"},   // HR_STAFF_V1
+  "Дата выдачи": {"en":"Issue date","ru":"Дата выдачи","uz":"Berilgan sana"},   // HR_STAFF_V1
+  "Техника не выдавалась.": {"en":"No equipment has been issued.","ru":"Техника не выдавалась.","uz":"Texnika berilmagan."},   // HR_STAFF_V1
+  "Серийный / инвентарный №": {"en":"Serial / inventory no.","ru":"Серийный / инвентарный №","uz":"Seriya / inventar №"},   // HR_STAFF_V1
+  "на руках": {"en":"in use","ru":"на руках","uz":"qoʻlida"},   // HR_STAFF_V1
+  "Отметить возврат «{name}» сегодняшним днём? Можно оставить примечание о состоянии.": {"en":"Mark “{name}” as returned today? You can add a note about its condition.","ru":"Отметить возврат «{name}» сегодняшним днём? Можно оставить примечание о состоянии.","uz":"«{name}» bugungi sana bilan qaytarilgan deb belgilansinmi? Holati haqida izoh qoldirish mumkin."},   // HR_STAFF_V1
+  "Диплом": {"en":"Diploma","ru":"Диплом","uz":"Diplom"},   // HR_STAFF_V1
+  "Трудовой договор": {"en":"Employment contract","ru":"Трудовой договор","uz":"Mehnat shartnomasi"},   // HR_STAFF_V1
+  "Медицинская книжка": {"en":"Medical record book","ru":"Медицинская книжка","uz":"Tibbiy daftarcha"},   // HR_STAFF_V1
+  "Приказ": {"en":"Order","ru":"Приказ","uz":"Buyruq"},   // HR_STAFF_V1
+  "Ноутбук": {"en":"Laptop","ru":"Ноутбук","uz":"Noutbuk"},   // HR_STAFF_V1
+  "Планшет": {"en":"Tablet","ru":"Планшет","uz":"Planshet"},   // HR_STAFF_V1
+  "Монитор": {"en":"Monitor","ru":"Монитор","uz":"Monitor"},   // HR_STAFF_V1
+  "SIM-карта": {"en":"SIM card","ru":"SIM-карта","uz":"SIM-karta"},   // HR_STAFF_V1
+  "Ключ / пропуск": {"en":"Key / pass","ru":"Ключ / пропуск","uz":"Kalit / ruxsatnoma"},   // HR_STAFF_V1
+  // HR_RECRUIT_V1 — «HR → Подбор»: воронка найма (views/hr-recruiting.js, hr.js, employees.js — анкета из кандидата)
+  "Все вакансии": {"en":"All vacancies","ru":"Все вакансии","uz":"Barcha vakansiyalar"},   // HR_RECRUIT_V1
+  "Резерв — без вакансии": {"en":"Reserve — no vacancy","ru":"Резерв — без вакансии","uz":"Zaxira — vakansiyasiz"},   // HR_RECRUIT_V1
+  "Вакансия": {"en":"Vacancy","ru":"Вакансия","uz":"Vakansiya"},   // HR_RECRUIT_V1
+  "Кандидат": {"en":"Candidate","ru":"Кандидат","uz":"Nomzod"},   // HR_RECRUIT_V1
+  "Изменить вакансию": {"en":"Edit vacancy","ru":"Изменить вакансию","uz":"Vakansiyani tahrirlash"},   // HR_RECRUIT_V1
+  "нанято {n} из {total}": {"en":"hired {n} of {total}","ru":"нанято {n} из {total}","uz":"{total} tadan {n} tasi ishga olindi"},   // HR_RECRUIT_V1
+  "в работе {n}": {"en":"in progress {n}","ru":"в работе {n}","uz":"jarayonda {n}"},   // HR_RECRUIT_V1
+  "Резерв": {"en":"Reserve","ru":"Резерв","uz":"Zaxira"},   // HR_RECRUIT_V1
+  "Кандидаты без вакансии": {"en":"Candidates without a vacancy","ru":"Кандидаты без вакансии","uz":"Vakansiyasiz nomzodlar"},   // HR_RECRUIT_V1
+  "всего {n}": {"en":"total {n}","ru":"всего {n}","uz":"jami {n}"},   // HR_RECRUIT_V1
+  "Кандидатов пока нет. Заведите вакансию и добавьте первого кандидата.": {"en":"No candidates yet. Create a vacancy and add the first candidate.","ru":"Кандидатов пока нет. Заведите вакансию и добавьте первого кандидата.","uz":"Hozircha nomzodlar yo‘q. Vakansiya oching va birinchi nomzodni qo‘shing."},   // HR_RECRUIT_V1
+  "Кандидатов пока нет.": {"en":"No candidates yet.","ru":"Кандидатов пока нет.","uz":"Hozircha nomzodlar yo‘q."},   // HR_RECRUIT_V1
+  "{n} дн. на этапе": {"en":"{n} d. at this stage","ru":"{n} дн. на этапе","uz":"bosqichda {n} kun"},   // HR_RECRUIT_V1
+  "Сотрудник: {name}": {"en":"Employee: {name}","ru":"Сотрудник: {name}","uz":"Xodim: {name}"},   // HR_RECRUIT_V1
+  "Создать сотрудника": {"en":"Create employee","ru":"Создать сотрудника","uz":"Xodim yaratish"},   // HR_RECRUIT_V1
+  "Не удалось открыть «Сотрудники».": {"en":"Could not open «Staff».","ru":"Не удалось открыть «Сотрудники».","uz":"«Xodimlar» bo‘limini ochib bo‘lmadi."},   // HR_RECRUIT_V1
+  "Причина отказа — {name}:": {"en":"Rejection reason — {name}:","ru":"Причина отказа — {name}:","uz":"Rad etish sababi — {name}:"},   // HR_RECRUIT_V1
+  "Напишите причину отказа.": {"en":"Enter the rejection reason.","ru":"Напишите причину отказа.","uz":"Rad etish sababini yozing."},   // HR_RECRUIT_V1
+  "{name} → {stage}": {"en":"{name} → {stage}","ru":"{name} → {stage}","uz":"{name} → {stage}"},   // HR_RECRUIT_V1
+  "Новая вакансия": {"en":"New vacancy","ru":"Новая вакансия","uz":"Yangi vakansiya"},   // HR_RECRUIT_V1
+  "Например: Медсестра процедурного кабинета": {"en":"For example: Treatment room nurse","ru":"Например: Медсестра процедурного кабинета","uz":"Masalan: Muolaja xonasi hamshirasi"},   // HR_RECRUIT_V1
+  "Требования, график, зарплата…": {"en":"Requirements, schedule, salary…","ru":"Требования, график, зарплата…","uz":"Talablar, ish jadvali, maosh…"},   // HR_RECRUIT_V1
+  "Напишите название вакансии.": {"en":"Enter the vacancy title.","ru":"Напишите название вакансии.","uz":"Vakansiya nomini yozing."},   // HR_RECRUIT_V1
+  "Вакансия сохранена.": {"en":"Vacancy saved.","ru":"Вакансия сохранена.","uz":"Vakansiya saqlandi."},   // HR_RECRUIT_V1
+  "Категория персонала": {"en":"Staff category","ru":"Категория персонала","uz":"Xodimlar toifasi"},   // HR_RECRUIT_V1
+  "Мест": {"en":"Openings","ru":"Мест","uz":"O‘rinlar"},   // HR_RECRUIT_V1
+  "Категория и отдел подставятся в анкету сотрудника, когда кандидата наймут.": {"en":"The category and department will be filled into the employee form when the candidate is hired.","ru":"Категория и отдел подставятся в анкету сотрудника, когда кандидата наймут.","uz":"Nomzod ishga olinganda toifa va bo‘lim xodim anketasiga avtomatik qo‘yiladi."},   // HR_RECRUIT_V1
+  "Опыт, ожидания по зарплате, впечатление…": {"en":"Experience, salary expectations, impression…","ru":"Опыт, ожидания по зарплате, впечатление…","uz":"Tajriba, maosh bo‘yicha kutilmalar, taassurot…"},   // HR_RECRUIT_V1
+  "Почта": {"en":"Email","ru":"Почта","uz":"Elektron pochta"},   // HR_RECRUIT_V1
+  "Собеседование": {"en":"Interview","ru":"Собеседование","uz":"Suhbat"},   // HR_RECRUIT_V1
+  "Новый кандидат": {"en":"New candidate","ru":"Новый кандидат","uz":"Yangi nomzod"},   // HR_RECRUIT_V1
+  "Напишите ФИО кандидата.": {"en":"Enter the candidate’s full name.","ru":"Напишите ФИО кандидата.","uz":"Nomzodning F.I.Sh.ni yozing."},   // HR_RECRUIT_V1
+  "Кандидат добавлен в «Отклик».": {"en":"Candidate added to «Applied».","ru":"Кандидат добавлен в «Отклик».","uz":"Nomzod «Ariza» bosqichiga qo‘shildi."},   // HR_RECRUIT_V1
+  "Сотрудник создан: {name}": {"en":"Employee created: {name}","ru":"Сотрудник создан: {name}","uz":"Xodim yaratildi: {name}"},   // HR_RECRUIT_V1
+  "Кандидат нанят. Заведите его сотрудником: откроется анкета в «Настройки → Сотрудники» с уже заполненными ФИО, телефоном, категорией и отделом.": {"en":"The candidate is hired. Create them as an employee: the form in «Settings → Staff» will open with the name, phone, category and department already filled in.","ru":"Кандидат нанят. Заведите его сотрудником: откроется анкета в «Настройки → Сотрудники» с уже заполненными ФИО, телефоном, категорией и отделом.","uz":"Nomzod ishga olindi. Uni xodim sifatida qo‘shing: «Sozlamalar → Xodimlar» bo‘limida F.I.Sh., telefon, toifa va bo‘lim to‘ldirilgan anketa ochiladi."},   // HR_RECRUIT_V1
+  "Кандидат нанят. Сотрудника заводит тот, кому открыты «Настройки → Сотрудники».": {"en":"The candidate is hired. The employee is created by someone with access to «Settings → Staff».","ru":"Кандидат нанят. Сотрудника заводит тот, кому открыты «Настройки → Сотрудники».","uz":"Nomzod ishga olindi. Xodimni «Sozlamalar → Xodimlar» bo‘limiga kirish huquqi bor kishi qo‘shadi."},   // HR_RECRUIT_V1
+  "Сохранить анкету": {"en":"Save details","ru":"Сохранить анкету","uz":"Anketani saqlash"},   // HR_RECRUIT_V1
+  "Добавлен в воронку": {"en":"Added to the funnel","ru":"Добавлен в воронку","uz":"Voronkaga qo‘shildi"},   // HR_RECRUIT_V1
+  "Создан сотрудник": {"en":"Employee created","ru":"Создан сотрудник","uz":"Xodim yaratildi"},   // HR_RECRUIT_V1
+  "Источник: {src} · добавлен {date}": {"en":"Source: {src} · added {date}","ru":"Источник: {src} · добавлен {date}","uz":"Manba: {src} · qo‘shilgan sana {date}"},   // HR_RECRUIT_V1
+  "Сотрудники клиники, их документы и выданная техника; подбор новых сотрудников.": {"en":"Clinic staff, their documents and issued equipment; recruiting new staff.","ru":"Сотрудники клиники, их документы и выданная техника; подбор новых сотрудников.","uz":"Klinika xodimlari, ularning hujjatlari va berilgan texnika; yangi xodimlarni tanlash."},   // HR_RECRUIT_V1
+  "Заводить сотрудников вашей роли нельзя: нужен доступ «Изменение» к «Сотрудникам».": {"en":"Your role cannot create employees: «Edit» access to «Staff» is required.","ru":"Заводить сотрудников вашей роли нельзя: нужен доступ «Изменение» к «Сотрудникам».","uz":"Sizning rolingiz xodim qo‘sha olmaydi: «Xodimlar» bo‘limiga «O‘zgartirish» huquqi kerak."},   // HR_RECRUIT_V1
+  "Сотрудник сохранён, но в «Подборе» кандидат не отмечен: {msg}": {"en":"The employee is saved, but the candidate was not marked in «Recruiting»: {msg}","ru":"Сотрудник сохранён, но в «Подборе» кандидат не отмечен: {msg}","uz":"Xodim saqlandi, lekin «Tanlov» bo‘limida nomzod belgilanmadi: {msg}"},   // HR_RECRUIT_V1
+  "Анкета заполнена из кандидата «{name}». Задайте логин, роль и сохраните.": {"en":"The form is filled in from candidate «{name}». Set the login and role, then save.","ru":"Анкета заполнена из кандидата «{name}». Задайте логин, роль и сохраните.","uz":"Anketa «{name}» nomzodi ma’lumotlari bilan to‘ldirildi. Login va rolni belgilab, saqlang."},   // HR_RECRUIT_V1
+  "Отклик": {"en":"Applied","ru":"Отклик","uz":"Ariza"},   // HR_RECRUIT_V1
+  "Отбор": {"en":"Screening","ru":"Отбор","uz":"Saralash"},   // HR_RECRUIT_V1
+  "Оффер": {"en":"Offer","ru":"Оффер","uz":"Taklif"},   // HR_RECRUIT_V1
+  "Нанят": {"en":"Hired","ru":"Нанят","uz":"Ishga olindi"},   // HR_RECRUIT_V1
+  "hh.uz": {"en":"hh.uz","ru":"hh.uz","uz":"hh.uz"},   // HR_RECRUIT_V1
+  "Telegram": {"en":"Telegram","ru":"Telegram","uz":"Telegram"},   // HR_RECRUIT_V1
+  "По рекомендации": {"en":"Referral","ru":"По рекомендации","uz":"Tavsiya bo‘yicha"},   // HR_RECRUIT_V1
+  "Не указана": {"en":"Not specified","ru":"Не указана","uz":"Ko‘rsatilmagan"},   // HR_RECRUIT_V1
+  "На паузе": {"en":"Paused","ru":"На паузе","uz":"To‘xtatilgan"},   // HR_RECRUIT_V1
+  "Подбор": {"en":"Recruiting","ru":"Подбор","uz":"Tanlov"},   // HR_RECRUIT_V1
+  // HR_STAFF_V1 — два пропуска списка сотрудников
+  "Категория не указана": {"en":"Category not specified","ru":"Категория не указана","uz":"Toifa ko‘rsatilmagan"},   // HR_STAFF_V1
+  "Все должности": {"en":"All positions","ru":"Все должности","uz":"Barcha lavozimlar"},   // HR_STAFF_V1
+  // HR_RECRUIT_V1 — пункт меню «Подбор персонала» под заголовком HR
+  "Recruiting": {"en":"Recruiting","ru":"Подбор персонала","uz":"Xodimlar tanlovi"},   // HR_RECRUIT_V1
+  "Подбор персонала": {"en":"Recruiting","ru":"Подбор персонала","uz":"Xodimlar tanlovi"},   // HR_RECRUIT_V1
+  "Вакансии и кандидаты: от отклика до найма. Нанятого кандидата — сразу в сотрудники.": {"en":"Vacancies and candidates, from application to hire. A hired candidate goes straight into staff.","ru":"Вакансии и кандидаты: от отклика до найма. Нанятого кандидата — сразу в сотрудники.","uz":"Vakansiyalar va nomzodlar: arizadan ishga olishgacha. Ishga olingan nomzod darhol xodimlarga qo‘shiladi."},   // HR_RECRUIT_V1
+  // STAFF_ATTENDANCE_V1 — «HR → Посещаемость» (views/hr-attendance.js)
+  "Attendance": {"en":"Attendance","ru":"Посещаемость","uz":"Davomat"},   // STAFF_ATTENDANCE_V1
+  "ч": {"en":"h","ru":"ч","uz":"soat"},   // STAFF_ATTENDANCE_V1
+  "Посещаемость": {"en":"Attendance","ru":"Посещаемость","uz":"Davomat"},   // STAFF_ATTENDANCE_V1
+  "Приход и уход по QR-коду у входа через бота EasyMed Staff: кто на работе, опоздания, отчёт за период.": {"en":"Check-in and check-out by the QR code at the entrance through the EasyMed Staff bot: who is at work, late arrivals, reports for a period.","ru":"Приход и уход по QR-коду у входа через бота EasyMed Staff: кто на работе, опоздания, отчёт за период.","uz":"Kirishdagi QR-kod orqali EasyMed Staff boti bilan kelish va ketish: kim ishda, kechikishlar, davr boʻyicha hisobot."},   // STAFF_ATTENDANCE_V1
+  "Не отмечен уход — {n}": {"en":"Check-out not recorded — {n}","ru":"Не отмечен уход — {n}","uz":"Ketish belgilanmagan — {n}"},   // STAFF_ATTENDANCE_V1
+  "приход": {"en":"check-in","ru":"приход","uz":"kelish"},   // STAFF_ATTENDANCE_V1
+  "Поправить": {"en":"Correct","ru":"Поправить","uz":"Tuzatish"},   // STAFF_ATTENDANCE_V1
+  "нет графика": {"en":"no schedule","ru":"нет графика","uz":"jadval yoʻq"},   // STAFF_ATTENDANCE_V1
+  "раньше на {n} мин": {"en":"{n} min early","ru":"раньше на {n} мин","uz":"{n} daqiqa erta"},   // STAFF_ATTENDANCE_V1
+  "Отметить вручную": {"en":"Record manually","ru":"Отметить вручную","uz":"Qoʻlda belgilash"},   // STAFF_ATTENDANCE_V1
+  "Смена — {name}": {"en":"Shift — {name}","ru":"Смена — {name}","uz":"Smena — {name}"},   // STAFF_ATTENDANCE_V1
+  "Например: забыл телефон, подтвердил старший врач": {"en":"For example: forgot phone, confirmed by the senior doctor","ru":"Например: забыл телефон, подтвердил старший врач","uz":"Masalan: telefonini unutgan, katta shifokor tasdiqladi"},   // STAFF_ATTENDANCE_V1
+  "Напишите причину правки.": {"en":"Enter the reason for the correction.","ru":"Напишите причину правки.","uz":"Tuzatish sababini yozing."},   // STAFF_ATTENDANCE_V1
+  "Аннулировать эту смену? Она перестанет считаться в часах.": {"en":"Void this shift? It will no longer count towards hours.","ru":"Аннулировать эту смену? Она перестанет считаться в часах.","uz":"Bu smena bekor qilinsinmi? U soatlarga hisoblanmaydi."},   // STAFF_ATTENDANCE_V1
+  "Уход не был отмечен: смену закрыл следующий приход. Укажите время ухода, если оно известно.": {"en":"Check-out was not recorded: the next check-in closed this shift. Enter the check-out time if it is known.","ru":"Уход не был отмечен: смену закрыл следующий приход. Укажите время ухода, если оно известно.","uz":"Ketish belgilanmagan: smenani keyingi kelish yopdi. Agar maʼlum boʻlsa, ketish vaqtini kiriting."},   // STAFF_ATTENDANCE_V1
+  "Причина правки (обязательно)": {"en":"Reason for correction (required)","ru":"Причина правки (обязательно)","uz":"Tuzatish sababi (majburiy)"},   // STAFF_ATTENDANCE_V1
+  "Аннулировать": {"en":"Void","ru":"Аннулировать","uz":"Bekor qilish"},   // STAFF_ATTENDANCE_V1
+  "История правок": {"en":"Correction history","ru":"История правок","uz":"Tuzatishlar tarixi"},   // STAFF_ATTENDANCE_V1
+  "Аннулирована": {"en":"Voided","ru":"Аннулирована","uz":"Bekor qilingan"},   // STAFF_ATTENDANCE_V1
+  "Создана вручную": {"en":"Created manually","ru":"Создана вручную","uz":"Qoʻlda yaratilgan"},   // STAFF_ATTENDANCE_V1
+  "Отметить вручную — {name}": {"en":"Record manually — {name}","ru":"Отметить вручную — {name}","uz":"Qoʻlda belgilash — {name}"},   // STAFF_ATTENDANCE_V1
+  "Например: телефон разрядился, приход подтвердил заведующий": {"en":"For example: phone battery died, check-in confirmed by the head of department","ru":"Например: телефон разрядился, приход подтвердил заведующий","uz":"Masalan: telefon quvvati tugadi, kelishni boʻlim mudiri tasdiqladi"},   // STAFF_ATTENDANCE_V1
+  "Уход (если уже ушёл)": {"en":"Check-out (if already left)","ru":"Уход (если уже ушёл)","uz":"Ketish (agar ketgan boʻlsa)"},   // STAFF_ATTENDANCE_V1
+  "Причина (обязательно)": {"en":"Reason (required)","ru":"Причина (обязательно)","uz":"Sabab (majburiy)"},   // STAFF_ATTENDANCE_V1
+  "Excel": {"en":"Excel","ru":"Excel","uz":"Excel"},   // STAFF_ATTENDANCE_V1
+  "{n} ({m} мин)": {"en":"{n} ({m} min)","ru":"{n} ({m} мин)","uz":"{n} ({m} daq)"},   // STAFF_ATTENDANCE_V1
+  "Дней по графику": {"en":"Scheduled days","ru":"Дней по графику","uz":"Jadval boʻyicha kunlar"},   // STAFF_ATTENDANCE_V1
+  "Был на работе": {"en":"Days at work","ru":"Был на работе","uz":"Ishda boʻlgan"},   // STAFF_ATTENDANCE_V1
+  "Часы": {"en":"Hours","ru":"Часы","uz":"Soatlar"},   // STAFF_ATTENDANCE_V1
+  "Опозданий": {"en":"Late arrivals","ru":"Опозданий","uz":"Kechikishlar"},   // STAFF_ATTENDANCE_V1
+  "Минут опозданий": {"en":"Minutes late","ru":"Минут опозданий","uz":"Kechikish daqiqalari"},   // STAFF_ATTENDANCE_V1
+  "Ранних уходов": {"en":"Early departures","ru":"Ранних уходов","uz":"Erta ketishlar"},   // STAFF_ATTENDANCE_V1
+  "Нет ухода": {"en":"No check-out","ru":"Нет ухода","uz":"Ketish yoʻq"},   // STAFF_ATTENDANCE_V1
+  "Прогулы": {"en":"Absences","ru":"Прогулы","uz":"Kelmaganlar"},   // STAFF_ATTENDANCE_V1
+  "Итоги": {"en":"Totals","ru":"Итоги","uz":"Jami"},   // STAFF_ATTENDANCE_V1
+  "Вход": {"en":"Entry","ru":"Вход","uz":"Kirish"},   // STAFF_ATTENDANCE_V1
+  "Выход": {"en":"Exit","ru":"Выход","uz":"Chiqish"},   // STAFF_ATTENDANCE_V1
+  "Правки": {"en":"Corrections","ru":"Правки","uz":"Tuzatishlar"},   // STAFF_ATTENDANCE_V1
+  "нет ухода": {"en":"no check-out","ru":"нет ухода","uz":"ketish yoʻq"},   // STAFF_ATTENDANCE_V1
+  "вручную": {"en":"manual","ru":"вручную","uz":"qoʻlda"},   // STAFF_ATTENDANCE_V1
+  "Один QR-код у нескольких сотрудников — возможно, код переслали": {"en":"One QR code used by several employees — the code may have been forwarded","ru":"Один QR-код у нескольких сотрудников — возможно, код переслали","uz":"Bitta QR-kod bir nechta xodimda — kod yuborilgan boʻlishi mumkin"},   // STAFF_ATTENDANCE_V1
+  "За эти дни подозрительных попыток нет.": {"en":"No suspicious attempts for these days.","ru":"За эти дни подозрительных попыток нет.","uz":"Bu kunlarda shubhali urinishlar yoʻq."},   // STAFF_ATTENDANCE_V1
+  "Telegram {id}": {"en":"Telegram {id}","ru":"Telegram {id}","uz":"Telegram {id}"},   // STAFF_ATTENDANCE_V1
+  "Точка входа — экран у входа в здание (компьютер, планшет или телевизор с браузером). На нём QR-код, который меняется каждые несколько секунд: сфотографированный код быстро перестаёт работать. Откройте ссылку экрана в браузере у входа и разверните на весь экран (F11).": {"en":"An entrance point is a screen at the building entrance (a computer, tablet or TV with a browser). It shows a QR code that changes every few seconds, so a photographed code soon stops working. Open the screen link in the browser at the entrance and switch it to full screen (F11).","ru":"Точка входа — экран у входа в здание (компьютер, планшет или телевизор с браузером). На нём QR-код, который меняется каждые несколько секунд: сфотографированный код быстро перестаёт работать. Откройте ссылку экрана в браузере у входа и разверните на весь экран (F11).","uz":"Kirish nuqtasi — bino kirishidagi ekran (brauzerli kompyuter, planshet yoki televizor). Unda har bir necha soniyada almashadigan QR-kod koʻrsatiladi: suratga olingan kod tez orada ishlamay qoladi. Ekran havolasini kirishdagi brauzerda oching va toʻliq ekranga yoying (F11)."},   // STAFF_ATTENDANCE_V1
+  "Точка входа": {"en":"Entrance point","ru":"Точка входа","uz":"Kirish nuqtasi"},   // STAFF_ATTENDANCE_V1
+  "Точек входа пока нет. Добавьте главный вход каждого здания.": {"en":"No entrance points yet. Add the main entrance of each building.","ru":"Точек входа пока нет. Добавьте главный вход каждого здания.","uz":"Hozircha kirish nuqtalari yoʻq. Har bir binoning asosiy kirishini qoʻshing."},   // STAFF_ATTENDANCE_V1
+  "код меняется раз в {n} с": {"en":"code changes every {n} s","ru":"код меняется раз в {n} с","uz":"kod har {n} soniyada almashadi"},   // STAFF_ATTENDANCE_V1
+  "Открыть экран": {"en":"Open screen","ru":"Открыть экран","uz":"Ekranni ochish"},   // STAFF_ATTENDANCE_V1
+  "Скопируйте ссылку:": {"en":"Copy the link:","ru":"Скопируйте ссылку:","uz":"Havolani nusxalang:"},   // STAFF_ATTENDANCE_V1
+  "Копировать ссылку": {"en":"Copy link","ru":"Копировать ссылку","uz":"Havolani nusxalash"},   // STAFF_ATTENDANCE_V1
+  "Выдать новую ссылку экрана? Старая ссылка и все старые коды перестанут работать — откройте новую ссылку на экране у входа.": {"en":"Issue a new screen link? The old link and all old codes will stop working — open the new link on the entrance screen.","ru":"Выдать новую ссылку экрана? Старая ссылка и все старые коды перестанут работать — откройте новую ссылку на экране у входа.","uz":"Yangi ekran havolasi berilsinmi? Eski havola va barcha eski kodlar ishlamay qoladi — yangi havolani kirishdagi ekranda oching."},   // STAFF_ATTENDANCE_V1
+  "Новая ссылка готова.": {"en":"New link is ready.","ru":"Новая ссылка готова.","uz":"Yangi havola tayyor."},   // STAFF_ATTENDANCE_V1
+  "Новая ссылка экрана": {"en":"New screen link","ru":"Новая ссылка экрана","uz":"Yangi ekran havolasi"},   // STAFF_ATTENDANCE_V1
+  "Новая точка входа": {"en":"New entrance point","ru":"Новая точка входа","uz":"Yangi kirish nuqtasi"},   // STAFF_ATTENDANCE_V1
+  "Например: Главный вход": {"en":"For example: Main entrance","ru":"Например: Главный вход","uz":"Masalan: Asosiy kirish"},   // STAFF_ATTENDANCE_V1
+  "Любой филиал": {"en":"Any branch","ru":"Любой филиал","uz":"Istalgan filial"},   // STAFF_ATTENDANCE_V1
+  "Код меняется раз в, секунд": {"en":"Code changes every, seconds","ru":"Код меняется раз в, секунд","uz":"Kod almashish oraligʻi, soniya"},   // STAFF_ATTENDANCE_V1
+  "Точка работает": {"en":"Entrance point is active","ru":"Точка работает","uz":"Nuqta ishlaydi"},   // STAFF_ATTENDANCE_V1
+  "Сотрудник с назначенным филиалом может отмечаться только у точек своего филиала.": {"en":"An employee assigned to a branch can only check in at that branch's entrance points.","ru":"Сотрудник с назначенным филиалом может отмечаться только у точек своего филиала.","uz":"Filialga biriktirilgan xodim faqat oʻz filiali nuqtalarida belgilana oladi."},   // STAFF_ATTENDANCE_V1
+  "Напишите название точки.": {"en":"Enter the entrance point name.","ru":"Напишите название точки.","uz":"Nuqta nomini yozing."},   // STAFF_ATTENDANCE_V1
+  "Подключено {n} из {total}.": {"en":"Connected {n} of {total}.","ru":"Подключено {n} из {total}.","uz":"{total} tadan {n} tasi ulangan."},   // STAFF_ATTENDANCE_V1
+  "Нажмите «Код подключения» и передайте сотруднику ссылку (лично или через рабочий чат): он откроет её в своём Telegram, и бот привяжется к нему. Ссылка одноразовая и действует 15 минут.": {"en":"Press «Connection code» and give the employee the link (in person or through a work chat): they open it in their own Telegram and the bot connects to them. The link works once and is valid for 15 minutes.","ru":"Нажмите «Код подключения» и передайте сотруднику ссылку (лично или через рабочий чат): он откроет её в своём Telegram, и бот привяжется к нему. Ссылка одноразовая и действует 15 минут.","uz":"«Ulanish kodi» tugmasini bosing va havolani xodimga bering (shaxsan yoki ish chati orqali): u havolani oʻz Telegramida ochadi va bot unga ulanadi. Havola bir martalik va 15 daqiqa amal qiladi."},   // STAFF_ATTENDANCE_V1
+  "Бот сотрудников ещё не готов: подключите его во вкладке «Бот».": {"en":"The staff bot is not ready yet: connect it on the «Bot» tab.","ru":"Бот сотрудников ещё не готов: подключите его во вкладке «Бот».","uz":"Xodimlar boti hali tayyor emas: uni «Bot» boʻlimida ulang."},   // STAFF_ATTENDANCE_V1
+  "не подключён": {"en":"not connected","ru":"не подключён","uz":"ulanmagan"},   // STAFF_ATTENDANCE_V1
+  "Код подключения": {"en":"Connection code","ru":"Код подключения","uz":"Ulanish kodi"},   // STAFF_ATTENDANCE_V1
+  "Отключить Telegram сотрудника «{name}»? Он перестанет отмечаться, пока не подключится заново.": {"en":"Disconnect the Telegram of «{name}»? They will not be able to check in until connected again.","ru":"Отключить Telegram сотрудника «{name}»? Он перестанет отмечаться, пока не подключится заново.","uz":"«{name}» xodimining Telegrami uzilsinmi? U qayta ulanmaguncha belgilana olmaydi."},   // STAFF_ATTENDANCE_V1
+  "Подключение — {name}": {"en":"Connection — {name}","ru":"Подключение — {name}","uz":"Ulanish — {name}"},   // STAFF_ATTENDANCE_V1
+  "Передайте эту ссылку сотруднику. Он должен открыть её в СВОЁМ Telegram. Ссылка одноразовая, действует 15 минут.": {"en":"Give this link to the employee. They must open it in THEIR OWN Telegram. The link works once and is valid for 15 minutes.","ru":"Передайте эту ссылку сотруднику. Он должен открыть её в СВОЁМ Telegram. Ссылка одноразовая, действует 15 минут.","uz":"Bu havolani xodimga bering. U uni OʻZ Telegramida ochishi kerak. Havola bir martalik, 15 daqiqa amal qiladi."},   // STAFF_ATTENDANCE_V1
+  "Сохранён: {hint}": {"en":"Saved: {hint}","ru":"Сохранён: {hint}","uz":"Saqlangan: {hint}"},   // STAFF_ATTENDANCE_V1
+  "Связь есть: @{name}": {"en":"Connected: @{name}","ru":"Связь есть: @{name}","uz":"Aloqa bor: @{name}"},   // STAFF_ATTENDANCE_V1
+  "Ошибка связи": {"en":"Connection error","ru":"Ошибка связи","uz":"Aloqa xatosi"},   // STAFF_ATTENDANCE_V1
+  "Связь ещё не проверяли": {"en":"Connection not checked yet","ru":"Связь ещё не проверяли","uz":"Aloqa hali tekshirilmagan"},   // STAFF_ATTENDANCE_V1
+  "В Telegram откройте @BotFather, отправьте /newbot и придумайте имя, например «Клиника — сотрудники». Это должен быть ОТДЕЛЬНЫЙ бот, не пациентский.": {"en":"In Telegram open @BotFather, send /newbot and choose a name, for example «Clinic — staff». It must be a SEPARATE bot, not the patient bot.","ru":"В Telegram откройте @BotFather, отправьте /newbot и придумайте имя, например «Клиника — сотрудники». Это должен быть ОТДЕЛЬНЫЙ бот, не пациентский.","uz":"Telegramda @BotFather ni oching, /newbot yuboring va nom tanlang, masalan «Klinika — xodimlar». Bu ALOHIDA bot boʻlishi kerak, bemorlar boti emas."},   // STAFF_ATTENDANCE_V1
+  "Скопируйте токен, который пришлёт @BotFather, вставьте ниже и сохраните.": {"en":"Copy the token that @BotFather sends, paste it below and save.","ru":"Скопируйте токен, который пришлёт @BotFather, вставьте ниже и сохраните.","uz":"@BotFather yuborgan tokenni nusxalang, quyiga qoʻying va saqlang."},   // STAFF_ATTENDANCE_V1
+  "Нажмите «Проверить связь», затем включите бота.": {"en":"Press «Check connection», then turn the bot on.","ru":"Нажмите «Проверить связь», затем включите бота.","uz":"«Aloqani tekshirish» tugmasini bosing, soʻng botni yoqing."},   // STAFF_ATTENDANCE_V1
+  "Опоздание считается после, минут": {"en":"Late after, minutes","ru":"Опоздание считается после, минут","uz":"Kechikish hisoblanadi, daqiqadan keyin"},   // STAFF_ATTENDANCE_V1
+  "Удалить токен и выключить бота? Сотрудники не смогут отмечаться, пока бот не подключат снова.": {"en":"Delete the token and turn the bot off? Employees will not be able to check in until the bot is connected again.","ru":"Удалить токен и выключить бота? Сотрудники не смогут отмечаться, пока бот не подключат снова.","uz":"Token oʻchirilib, bot oʻchirilsinmi? Bot qayta ulanmaguncha xodimlar belgilana olmaydi."},   // STAFF_ATTENDANCE_V1
+  "Связь с ботом есть.": {"en":"The bot is connected.","ru":"Связь с ботом есть.","uz":"Bot bilan aloqa bor."},   // STAFF_ATTENDANCE_V1
+  "На работе": {"en":"At work","ru":"На работе","uz":"Ishda"},   // STAFF_ATTENDANCE_V1
+  "Ушёл": {"en":"Left","ru":"Ушёл","uz":"Ketgan"},   // STAFF_ATTENDANCE_V1
+  "Выходной": {"en":"Day off","ru":"Выходной","uz":"Dam olish kuni"},   // STAFF_ATTENDANCE_V1
+  "Telegram не подключён к сотруднику": {"en":"Telegram not connected to an employee","ru":"Telegram не подключён к сотруднику","uz":"Telegram xodimga ulanmagan"},   // STAFF_ATTENDANCE_V1
+  "Поддельный или чужой QR-код": {"en":"Forged or foreign QR code","ru":"Поддельный или чужой QR-код","uz":"Soxta yoki begona QR-kod"},   // STAFF_ATTENDANCE_V1
+  "Просроченный QR-код": {"en":"Expired QR code","ru":"Просроченный QR-код","uz":"Muddati oʻtgan QR-kod"},   // STAFF_ATTENDANCE_V1
+  "Повтор того же кода": {"en":"Same code reused","ru":"Повтор того же кода","uz":"Xuddi shu kod takrorlandi"},   // STAFF_ATTENDANCE_V1
+  "Отключённая точка входа": {"en":"Disabled entrance point","ru":"Отключённая точка входа","uz":"Oʻchirilgan kirish nuqtasi"},   // STAFF_ATTENDANCE_V1
+  "Не тот филиал": {"en":"Wrong branch","ru":"Не тот филиал","uz":"Boshqa filial"},   // STAFF_ATTENDANCE_V1
+  "Уволенный сотрудник": {"en":"Dismissed employee","ru":"Уволенный сотрудник","uz":"Ishdan boʻshagan xodim"},   // STAFF_ATTENDANCE_V1
+  "Двойная отметка за минуту": {"en":"Double check within a minute","ru":"Двойная отметка за минуту","uz":"Bir daqiqada ikki marta belgi"},   // STAFF_ATTENDANCE_V1
+  "Слишком много попыток": {"en":"Too many attempts","ru":"Слишком много попыток","uz":"Urinishlar juda koʻp"},   // STAFF_ATTENDANCE_V1
+  "Подтверждение просрочено": {"en":"Confirmation expired","ru":"Подтверждение просрочено","uz":"Tasdiqlash muddati oʻtgan"},   // STAFF_ATTENDANCE_V1
+  "Не отметил уход": {"en":"Did not check out","ru":"Не отметил уход","uz":"Ketishni belgilamagan"},   // STAFF_ATTENDANCE_V1
+  "Попытка из группы": {"en":"Attempt from a group chat","ru":"Попытка из группы","uz":"Guruh chatidan urinish"},   // STAFF_ATTENDANCE_V1
+  // STAFF_ATTENDANCE_V1 — «HR → Посещаемость» (views/hr-attendance.js)
+  "Подозрительное": {"en":"Suspicious","ru":"Подозрительное","uz":"Shubhali"},   // STAFF_ATTENDANCE_V1
+  "Точки входа": {"en":"Entrance points","ru":"Точки входа","uz":"Kirish nuqtalari"},   // STAFF_ATTENDANCE_V1
+  "Сотрудники и Telegram": {"en":"Staff and Telegram","ru":"Сотрудники и Telegram","uz":"Xodimlar va Telegram"},   // STAFF_ATTENDANCE_V1
+  "Ушли": {"en":"Left","ru":"Ушли","uz":"Ketganlar"},   // STAFF_ATTENDANCE_V1
+  "Опоздали": {"en":"Late","ru":"Опоздали","uz":"Kechikkanlar"},   // STAFF_ATTENDANCE_V1
+  "Ушли раньше": {"en":"Left early","ru":"Ушли раньше","uz":"Erta ketganlar"},   // STAFF_ATTENDANCE_V1
+  "Ожидаются": {"en":"Expected","ru":"Ожидаются","uz":"Kutilmoqda"},   // STAFF_ATTENDANCE_V1
+  "График": {"en":"Schedule","ru":"График","uz":"Jadval"},   // STAFF_ATTENDANCE_V1
+  "Точка": {"en":"Entrance","ru":"Точка","uz":"Nuqta"},   // STAFF_ATTENDANCE_V1
+  "Подробно": {"en":"Details","ru":"Подробно","uz":"Batafsil"},   // STAFF_ATTENDANCE_V1
+  // STAFF_ATTENDANCE_NAV_V1 — период выпадающим списком, подпункты в меню
+  "Прошлая неделя": {"en":"Last week","ru":"Прошлая неделя","uz":"Oʻtgan hafta"},   // STAFF_ATTENDANCE_NAV_V1
+  "Бот сотрудников": {"en":"Staff bot","ru":"Бот сотрудников","uz":"Xodimlar boti"},   // STAFF_ATTENDANCE_NAV_V1
+  // ATT_TOOLBAR_V1 — плашка периода и карточки итогов
+  "Другой период": {"en":"Other period","ru":"Другой период","uz":"Boshqa davr"},
+  "Сотрудников": {"en":"Employees","ru":"Сотрудников","uz":"Xodimlar"},
+  "Отработано": {"en":"Worked","ru":"Отработано","uz":"Ishlangan"},
+  "Явка": {"en":"Attendance","ru":"Явка","uz":"Davomat"},
+  "{n} из {m} дней": {"en":"{n} of {m} days","ru":"{n} из {m} дней","uz":"{m} kundan {n}"},
+  "Опоздания": {"en":"Late arrivals","ru":"Опоздания","uz":"Kechikishlar"},
+  "Ранние уходы": {"en":"Early leaves","ru":"Ранние уходы","uz":"Erta ketishlar"},
+  // HR_CANDIDATE_CARD_V2 — подпись карточки кандидата
+  "добавлен {date}": {"en":"added {date}","ru":"добавлен {date}","uz":"qoʻshilgan {date}"},   // HR_CANDIDATE_CARD_V2
+  // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1 — сообщения сервера (rpc/hr-recruiting.js, rpc/attendance.js, staff-bot, экран у входа)
+  "Слишком часто.": {"en":"Too many requests.","ru":"Слишком часто.","uz":"Juda tez-tez."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Экран не найден. Попросите в отделе кадров новую ссылку экрана.": {"en":"Screen not found. Ask HR for a new screen link.","ru":"Экран не найден. Попросите в отделе кадров новую ссылку экрана.","uz":"Ekran topilmadi. Kadrlar boʻlimidan yangi ekran havolasini soʻrang."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Причина — не длиннее 1000 символов.": {"en":"The reason must be at most 1000 characters.","ru":"Причина — не длиннее 1000 символов.","uz":"Sabab 1000 belgidan oshmasligi kerak."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Неизвестное действие правки.": {"en":"Unknown correction action.","ru":"Неизвестное действие правки.","uz":"Nomaʼlum tuzatish amali."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Укажите время прихода.": {"en":"Enter the check-in time.","ru":"Укажите время прихода.","uz":"Kelish vaqtini kiriting."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "У сотрудника уже есть открытая смена — укажите время ухода или поправьте ту смену.": {"en":"The employee already has an open shift — enter the check-out time or correct that shift.","ru":"У сотрудника уже есть открытая смена — укажите время ухода или поправьте ту смену.","uz":"Xodimda allaqachon ochiq smena bor — ketish vaqtini kiriting yoki oʻsha smenani tuzating."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Смена уже аннулирована.": {"en":"The shift has already been voided.","ru":"Смена уже аннулирована.","uz":"Smena allaqachon bekor qilingan."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Уход раньше прихода.": {"en":"Check-out is earlier than check-in.","ru":"Уход раньше прихода.","uz":"Ketish kelishdan oldin."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Время в будущем отметить нельзя.": {"en":"A time in the future cannot be recorded.","ru":"Время в будущем отметить нельзя.","uz":"Kelajakdagi vaqtni belgilab boʻlmaydi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "У сотрудника уже есть другая открытая смена.": {"en":"The employee already has another open shift.","ru":"У сотрудника уже есть другая открытая смена.","uz":"Xodimda allaqachon boshqa ochiq smena bor."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Напишите название точки, например «Главный вход».": {"en":"Enter the entrance point name, for example «Main entrance».","ru":"Напишите название точки, например «Главный вход».","uz":"Nuqta nomini yozing, masalan «Asosiy kirish»."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Название — не длиннее 200 символов.": {"en":"The name must be at most 200 characters.","ru":"Название — не длиннее 200 символов.","uz":"Nom 200 belgidan oshmasligi kerak."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Филиал не найден.": {"en":"Branch not found.","ru":"Филиал не найден.","uz":"Filial topilmadi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Код меняется раз в 3–120 секунд.": {"en":"The code changes every 3–120 seconds.","ru":"Код меняется раз в 3–120 секунд.","uz":"Kod har 3–120 soniyada almashadi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Точка не найдена.": {"en":"Entrance point not found.","ru":"Точка не найдена.","uz":"Nuqta topilmadi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Сотрудник уволен — подключать его нельзя.": {"en":"The employee has been dismissed and cannot be connected.","ru":"Сотрудник уволен — подключать его нельзя.","uz":"Xodim ishdan boʻshagan — uni ulab boʻlmaydi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Сначала подключите бота сотрудников во вкладке «Бот» и нажмите «Проверить связь».": {"en":"First connect the staff bot in «Bot» and press «Check connection».","ru":"Сначала подключите бота сотрудников во вкладке «Бот» и нажмите «Проверить связь».","uz":"Avval «Bot» boʻlimida xodimlar botini ulang va «Aloqani tekshirish» tugmasini bosing."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "«Посещаемость» недоступна вашей роли. Доступ выдаёт администратор в «Настройки → Роли» (строка «HR · Посещаемость»).": {"en":"«Attendance» is not available to your role. An administrator grants access in «Settings → Roles» (row «HR · Attendance»).","ru":"«Посещаемость» недоступна вашей роли. Доступ выдаёт администратор в «Настройки → Роли» (строка «HR · Посещаемость»).","uz":"«Davomat» sizning rolingiz uchun mavjud emas. Ruxsatni administrator «Sozlamalar → Rollar» boʻlimida beradi («HR · Davomat» qatori)."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Сначала введите токен бота.": {"en":"Enter the bot token first.","ru":"Сначала введите токен бота.","uz":"Avval bot tokenini kiriting."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "У вас доступ «Просмотр»: менять отметки, точки и бота нельзя.": {"en":"You have «View» access: you cannot change marks, entrance points or the bot.","ru":"У вас доступ «Просмотр»: менять отметки, точки и бота нельзя.","uz":"Sizda «Koʻrish» huquqi bor: belgilar, nuqtalar va botni oʻzgartirib boʻlmaydi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Неизвестная категория персонала.": {"en":"Unknown staff category.","ru":"Неизвестная категория персонала.","uz":"Nomaʼlum xodimlar toifasi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Число мест — от 1 до 999.": {"en":"The number of openings must be 1 to 999.","ru":"Число мест — от 1 до 999.","uz":"Oʻrinlar soni 1 dan 999 gacha."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Неизвестное состояние вакансии.": {"en":"Unknown vacancy status.","ru":"Неизвестное состояние вакансии.","uz":"Nomaʼlum vakansiya holati."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Вакансия не найдена.": {"en":"Vacancy not found.","ru":"Вакансия не найдена.","uz":"Vakansiya topilmadi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Неизвестный источник кандидата.": {"en":"Unknown candidate source.","ru":"Неизвестный источник кандидата.","uz":"Nomaʼlum nomzod manbasi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Дата собеседования не разобрана.": {"en":"The interview date could not be read.","ru":"Дата собеседования не разобрана.","uz":"Suhbat sanasini tushunib boʻlmadi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Неизвестный этап воронки.": {"en":"Unknown funnel stage.","ru":"Неизвестный этап воронки.","uz":"Nomaʼlum voronka bosqichi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Из кандидата уже создан сотрудник — этап больше не меняется.": {"en":"An employee has already been created from this candidate — the stage can no longer change.","ru":"Из кандидата уже создан сотрудник — этап больше не меняется.","uz":"Bu nomzoddan xodim allaqachon yaratilgan — bosqich endi oʻzgarmaydi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Кандидат не найден.": {"en":"Candidate not found.","ru":"Кандидат не найден.","uz":"Nomzod topilmadi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Сотрудника создают из кандидата в колонке «Нанят».": {"en":"An employee is created from a candidate in the «Hired» column.","ru":"Сотрудника создают из кандидата в колонке «Нанят».","uz":"Xodim «Ishga olindi» ustunidagi nomzoddan yaratiladi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Сотрудник из этого кандидата уже создан.": {"en":"An employee has already been created from this candidate.","ru":"Сотрудник из этого кандидата уже создан.","uz":"Bu nomzoddan xodim allaqachon yaratilgan."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Сотрудника привязывают к кандидату в колонке «Нанят».": {"en":"An employee is linked to a candidate in the «Hired» column.","ru":"Сотрудника привязывают к кандидату в колонке «Нанят».","uz":"Xodim «Ishga olindi» ustunidagi nomzodga bogʻlanadi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "К этому кандидату уже привязан другой сотрудник.": {"en":"Another employee is already linked to this candidate.","ru":"К этому кандидату уже привязан другой сотрудник.","uz":"Bu nomzodga boshqa xodim allaqachon bogʻlangan."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Этот сотрудник уже привязан к другому кандидату.": {"en":"This employee is already linked to another candidate.","ru":"Этот сотрудник уже привязан к другому кандидату.","uz":"Bu xodim boshqa nomzodga allaqachon bogʻlangan."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "«Подбор персонала» недоступен вашей роли. Доступ выдаёт администратор в «Настройки → Роли» (строка «HR · Подбор персонала»).": {"en":"«Recruiting» is not available to your role. An administrator grants access in «Settings → Roles» (row «HR · Recruiting»).","ru":"«Подбор персонала» недоступен вашей роли. Доступ выдаёт администратор в «Настройки → Роли» (строка «HR · Подбор персонала»).","uz":"«Xodimlar tanlovi» sizning rolingiz uchun mavjud emas. Ruxsatni administrator «Sozlamalar → Rollar» boʻlimida beradi («HR · Xodimlar tanlovi» qatori)."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "У вас доступ «Просмотр»: двигать кандидатов и править вакансии нельзя.": {"en":"You have «View» access: you cannot move candidates or edit vacancies.","ru":"У вас доступ «Просмотр»: двигать кандидатов и править вакансии нельзя.","uz":"Sizda «Koʻrish» huquqi bor: nomzodlarni koʻchirib, vakansiyalarni tahrirlab boʻlmaydi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Настройки бота сотрудников не инициализированы.": {"en":"Staff bot settings are not initialised.","ru":"Настройки бота сотрудников не инициализированы.","uz":"Xodimlar boti sozlamalari ishga tushirilmagan."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
+  "Опоздание считается после 0–120 минут.": {"en":"Lateness counts after 0–120 minutes.","ru":"Опоздание считается после 0–120 минут.","uz":"Kechikish 0–120 daqiqadan keyin hisoblanadi."},   // HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
 };

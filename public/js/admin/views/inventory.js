@@ -42,7 +42,7 @@ import { renderPendingTab, loadPendingCount, canSettlePending } from './inventor
 // PROCUREMENT_RAIL_V1 — кнопки раздела в левой колонке (как у CRM, RAIL_TOOLS_V1).
 import { setRailTools } from '../rail-tools.js';
 
-const refs = { container: null, onNavigate: null, mounted: false, tabBarEl: null, contentEl: null };
+const refs = { container: null, onNavigate: null, mounted: false, contentEl: null };
 const state = { pane: 'sklad', pendingCount: null };   // pendingCount — ревью F6
 
 const TABS = [
@@ -87,18 +87,14 @@ async function refreshPendingCount() {
 // all the buttons on photo correctly to the navigation bar») — чипы шапки
 // (Дашборд, Отделения, Сроки годности, Инвентаризация, Журнал, Только со своих
 // полок, Не списано со склада) стоят в левой колонке вместо пункта «Закупки»
-// (admin/rail-tools.js → admin.js renderSidebar). Первым — «Закупки»: основной
-// вид с вкладками Склад · Заявки · Заказы · Товары · Поставщики. В шапке экрана
-// осталась одна кнопка — «Обновить».
-const isTabPane = (id) => TABS.some((t) => t.id === id);
+// (admin/rail-tools.js → admin.js renderSidebar). Над ними — вкладки
+// Склад · Заявки · Заказы · Товары · Поставщики (PROC_TABS_TO_RAIL_V1, ниже).
 
 function mount() {
     clear(refs.container);
     refs.mounted = true;
-    refs.tabBarEl = h('div', { class: 'proc-tabs' });
     refs.contentEl = h('div', { class: 'proc-tab-content' });
     paintChips();
-    paintTabBar();
 
     // PROCUREMENT_NO_HEAD_V1 (2026-11-21, владелец: «remove texts on top and
     // remove reload button too, use space smartly») — шапки экрана нет: имя
@@ -106,8 +102,8 @@ function mount() {
     // сложена (admin.js RAIL_NAMED_VIEWS), подзаголовок и «Обновить» сняты —
     // данные перечитываются при каждом переключении вкладки и пункта колонки.
     // Экран начинается сразу с вкладок.
+    // PROC_TABS_TO_RAIL_V1 — полосы вкладок нет: они в левой колонке.
     refs.container.appendChild(h('div', { class: 'fade-in' },
-        refs.tabBarEl,
         refs.contentEl,
     ));
 }
@@ -116,7 +112,6 @@ function setPane(id) {
     if (state.pane !== id) {
         state.pane = id;
         paintChips();
-        paintTabBar();
     }
     repaint();
 }
@@ -138,20 +133,13 @@ function paintChips() {
         chips.push(railBtn(c.label, c.icon, state.pane === c.id,
             () => (c.id === 'departments' && refs.onNavigate ? refs.onNavigate('departments') : setPane(c.id)), count));
     }
-    const groups = [[railBtn('Закупки', 'Pill', isTabPane(state.pane), () => { if (!isTabPane(state.pane)) setPane('sklad'); })], chips];
+    // PROC_TABS_TO_RAIL_V1 (2026-11-26, владелец со снимком вкладок: «bring them
+    // to the left navigation bar under Закупки») — вкладки Склад · Заявки ·
+    // Заказы на закупку · Товары · Поставщики теперь первая группа колонки
+    // вместо одного пункта «Закупки»; полосы вкладок над экраном больше нет.
+    const tabs = TABS.map((t) => railBtn(t.label, t.icon, state.pane === t.id, () => setPane(t.id)));
+    const groups = [tabs, chips];
     setRailTools('inventory', () => groups);
-}
-
-function paintTabBar() {
-    clear(refs.tabBarEl);
-    for (const t of TABS) {
-        const active = state.pane === t.id;
-        refs.tabBarEl.appendChild(h('button', {
-            class: 'proc-tab' + (active ? ' active' : ''),
-            type: 'button',
-            onclick: () => setPane(t.id),
-        }, Icon(t.icon, { size: 14 }), t.label));
-    }
 }
 
 async function repaint() {

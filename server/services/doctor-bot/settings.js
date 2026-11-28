@@ -30,7 +30,8 @@ export function botIdOfToken(token) {
 // REP_BOT_V1 — ботов у клиники три (пациентский, врачей, представителей), и
 // каждый должен быть отдельным: номер любого из них читается одинаково, из
 // своей строки настроек. Имя таблицы — только из этого списка, не из запроса.
-const BOT_TABLES = new Set(['telegram_settings', 'doctor_bot_settings', 'rep_bot_settings']);
+// STAFF_ATTENDANCE_V1 — и бот сотрудников (EasyMed Staff), и бот отчёта совету директоров.
+const BOT_TABLES = new Set(['telegram_settings', 'doctor_bot_settings', 'rep_bot_settings', 'staff_bot_settings', 'daily_report_settings']);
 
 /** Номер бота из строки настроек table: bot_id проверки связи, иначе — начало его токена; '' — бота нет. */
 export function storedBotId(db, table, { keyPath } = {}) {
@@ -70,8 +71,12 @@ export function isRepBot(db, id, opts = {}) {
 export function clashMessage(db, id, opts = {}) {
   if (isPatientBot(db, id, opts)) return SAME_BOT_MESSAGE;
   if (isRepBot(db, id, opts)) return SAME_AS_REP_BOT_MESSAGE;
+  // STAFF_ATTENDANCE_V1 — и не бот сотрудников: тот же 409 двух поллеров.
+  const mine = String(id == null ? '' : id).trim();
+  if (mine && mine === storedBotId(db, 'staff_bot_settings', opts)) return SAME_AS_STAFF_BOT_MESSAGE;
   return '';
 }
+export const SAME_AS_STAFF_BOT_MESSAGE = 'Это токен бота сотрудников (EasyMed Staff). Здесь нужен ДРУГОЙ бот: создайте его в @BotFather (команда /newbot) и вставьте его токен.';
 
 export function readSettingsRow(db) {
   return db.prepare('SELECT * FROM doctor_bot_settings WHERE id = 1').get();

@@ -630,6 +630,20 @@ function flagFromDevice(abnormal, deviceRange = '') {
 /** LIS_VENDOR_EXACT_V1 — OBX-7 с диапазоном: не пусто и не «-» (Mindray пишет «-», когда диапазона нет). */
 const hasDeviceRange = (r) => !/^-*$/.test(String(r == null ? '' : r).trim());
 
+/**
+ * LAB_FLAG_SEX_RANGE_V1 — границы показателя для пола пациента: женские/мужские,
+ * если клиника их задала, иначе общие. То же правило, что у листа ввода
+ * (public/js/admin/views/laboratory.js refFor) — бланк и флаг обязаны
+ * опираться на одну и ту же норму.
+ * @returns {{ref_low:number|null, ref_high:number|null}}
+ */
+export function sexRange(a, gender) {
+  const g = String(gender || '').toLowerCase();
+  if (a && g === 'male' && (a.ref_low_m != null || a.ref_high_m != null)) return { ref_low: a.ref_low_m, ref_high: a.ref_high_m };
+  if (a && g === 'female' && (a.ref_low_f != null || a.ref_high_f != null)) return { ref_low: a.ref_low_f, ref_high: a.ref_high_f };
+  return { ref_low: a ? a.ref_low ?? null : null, ref_high: a ? a.ref_high ?? null : null };
+}
+
 /** Инвариант 3: диапазон клиники бьёт диапазон прибора. null — клиника молчит. */
 function flagFromClinic(num, low, high) {
   if (num == null) return null;
@@ -1170,7 +1184,16 @@ function dayAnchor(db, line, ctx, observations = null, hint = '', label = '') {
  */
 function writeFills(db, orderId, fills) {
   const ids = [];
-  for (const { obs, analyte: a } of fills) {
+  // LAB_FLAG_SEX_RANGE_V1 (владелец 2026-11-27: ферритин 7.54 при норме 13–147 —
+  // «Норма») — диапазон показателя по полу пациента, как у листа ввода
+  // (laboratory.js refFor). Ферритин, гормоны заведены ТОЛЬКО с нормами
+  // женщин/мужчин; общий ref_low/ref_high у них пуст, и приём ставил «Норму»
+  // любому значению: оснований для флага не было.
+  const pt = db.prepare(`SELECT p.gender FROM visit_services vs JOIN visits v ON v.id = vs.visit_id
+                           JOIN patients p ON p.id = v.patient_id WHERE vs.id = ?`).get(orderId);
+  const gender = String((pt && pt.gender) || '').toLowerCase();
+  for (const { obs, analyte } of fills) {
+    const a = { ...analyte, ...sexRange(analyte, gender) };
     // LIS_VENDOR_EXACT_V1 (D0) — одна десятичная запятая между цифрами у
     // числовой строки — точка, на любом проводе: в бланке «9.81», окно
     // результатов (<input type=number>) его показывает, numeric_value есть,

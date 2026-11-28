@@ -1,0 +1,23 @@
+-- STAFF_ATTENDANCE_FAST_QR_V1 (2026-11-28) — QR У ВХОДА МОЖЕТ МЕНЯТЬСЯ КАЖДЫЕ 3 СЕКУНДЫ.
+--
+-- Владелец: «can you make it work for 3 seconds». Миграция 304 разрешала
+-- rotate_seconds только 10–120 (CHECK), а CHECK в SQLite не меняется
+-- ALTER TABLE — только пересборкой таблицы.
+--
+-- ПОЧЕМУ НЕ ПЕРЕСБОРКА. На attendance_locations ссылаются четыре таблицы
+-- (attendance_scans — ON DELETE CASCADE, attendance_sessions, attendance_events,
+-- attendance_flags — SET NULL). При foreign_keys = ON DROP TABLE делает неявное
+-- удаление строк: пересборка стёрла бы сканы и обнулила точки у смен — ровно
+-- авария, описанная в шапках 109 и 143. PRAGMA foreign_keys внутри транзакции
+-- миграции не действует (migrate.js), так что обойти это нечем.
+--
+-- ПОЭТОМУ — НОВАЯ КОЛОНКА rotate_secs с пределом 3–120, значения переносятся
+-- из старой. Код читает и пишет только rotate_secs; rotate_seconds остаётся в
+-- таблице прежним значением и больше ничего не значит (удалить колонку с
+-- CHECK тоже нельзя без пересборки). По умолчанию у новой точки — 3 секунды.
+--
+-- Короткое окно сервер принимает чуть дольше одного шага (tokens.js
+-- acceptedPastWindows): от скана до сообщения в боте проходит 2–6 секунд, и
+-- строго трёхсекундный код отвергал бы честных сотрудников.
+ALTER TABLE attendance_locations ADD COLUMN rotate_secs INTEGER NOT NULL DEFAULT 3 CHECK (rotate_secs BETWEEN 3 AND 120);
+UPDATE attendance_locations SET rotate_secs = rotate_seconds;

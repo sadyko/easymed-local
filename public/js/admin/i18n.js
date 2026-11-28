@@ -24,7 +24,7 @@ const I18N = {
     en: {
         sidebar: {
             newPatient: 'New patient',
-            sections: { Registration: 'Registration', Clinical: 'Clinical', Inpatient: 'Inpatient', CRM: 'CRM', Operations: 'Cashier', Procurement: 'Procurement', Settings: 'Settings', Commerce: 'Commerce', Insights: 'Reports', Soon: 'Soon' },   // NAV_GROUPS_V1 — Settings
+            sections: { Registration: 'Registration', Clinical: 'Clinical', Inpatient: 'Inpatient', CRM: 'CRM', Operations: 'Cashier', Procurement: 'Procurement', HR: 'HR', Settings: 'Settings', Commerce: 'Commerce', Insights: 'Reports', Soon: 'Soon' },   // NAV_GROUPS_V1 — Settings
             nav: {
                 patients:     'Patients',
                 appointments: 'Reception',
@@ -69,6 +69,9 @@ const I18N = {
                 'cashier-head':      'Head cashier',
                 inventory:           'Procurement',
                 'reports-hub':       'Reports',
+                hr:                  'Employees',   // HR_DEPT_V1 · HR_RECRUIT_V1 — владелец: «change left side bar HR name to Employees»
+                'hr-recruiting':     'Recruiting',   // HR_RECRUIT_V1
+                'hr-attendance':     'Attendance',   // STAFF_ATTENDANCE_V1
                 // MY_STOCK_V1 — личные экраны: свой подотчёт и своя карточка отдела
                 'my-stock':          'My stock',
                 'my-department':     'My department',
@@ -132,7 +135,7 @@ const I18N = {
     ru: {
         sidebar: {
             newPatient: 'Новый пациент',
-            sections: { Registration: 'Регистрация', Clinical: 'Клиника', Inpatient: 'Стационар', CRM: 'CRM', Operations: 'Касса', Procurement: 'Закупки', Settings: 'Настройки', Commerce: 'Коммерция', Insights: 'Отчёты', Soon: 'Скоро' },   // NAV_GROUPS_V1
+            sections: { Registration: 'Регистрация', Clinical: 'Клиника', Inpatient: 'Стационар', CRM: 'CRM', Operations: 'Касса', Procurement: 'Закупки', HR: 'HR', Settings: 'Настройки', Commerce: 'Коммерция', Insights: 'Отчёты', Soon: 'Скоро' },   // NAV_GROUPS_V1
             nav: {
                 patients:     'Пациенты',
                 appointments: 'Регистратура',
@@ -167,6 +170,9 @@ const I18N = {
                 'cashier-head':      'Старший кассир',
                 inventory:           'Закупки',
                 'reports-hub':       'Отчёты',
+                hr:                  'Сотрудники',   // HR_DEPT_V1 · HR_RECRUIT_V1 — владелец: «change left side bar HR name to Employees»
+                'hr-recruiting':     'Подбор персонала',   // HR_RECRUIT_V1
+                'hr-attendance':     'Посещаемость',   // STAFF_ATTENDANCE_V1
                 'my-stock':          'Мои запасы',   // MY_STOCK_V1
                 'my-department':     'Мой отдел',
             },
@@ -230,7 +236,7 @@ const I18N = {
     uz: {
         sidebar: {
             newPatient: 'Yangi bemor',
-            sections: { Registration: 'Roʻyxatga olish', Clinical: 'Klinika', Inpatient: 'Statsionar', CRM: 'CRM', Operations: 'Kassa', Procurement: 'Xaridlar', Settings: 'Sozlamalar', Commerce: 'Tijorat', Insights: 'Hisobotlar', Soon: 'Tez orada' },   // NAV_GROUPS_V1
+            sections: { Registration: 'Roʻyxatga olish', Clinical: 'Klinika', Inpatient: 'Statsionar', CRM: 'CRM', Operations: 'Kassa', Procurement: 'Xaridlar', HR: 'HR', Settings: 'Sozlamalar', Commerce: 'Tijorat', Insights: 'Hisobotlar', Soon: 'Tez orada' },   // NAV_GROUPS_V1
             nav: {
                 patients:     'Bemorlar',
                 appointments: 'Registratura',
@@ -265,6 +271,9 @@ const I18N = {
                 'cashier-head':      'Bosh kassir',
                 inventory:           'Xaridlar',
                 'reports-hub':       'Hisobotlar',
+                hr:                  'Xodimlar',   // HR_DEPT_V1 · HR_RECRUIT_V1 — владелец: «change left side bar HR name to Employees»
+                'hr-recruiting':     'Xodimlar tanlovi',   // HR_RECRUIT_V1
+                'hr-attendance':     'Davomat',   // STAFF_ATTENDANCE_V1
                 'my-stock':          'Mening zaxiram',   // MY_STOCK_V1
                 'my-department':     'Mening boʻlimim',
             },

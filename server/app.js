@@ -20,6 +20,7 @@ import { lisProxyRoutes } from './routes/lisproxy.js';   // LIS_PROXY_V1
 import { actAsEndedGuard, actAsRouterGuard } from './middleware/act-as.js';   // ADMIN_ACT_AS_V1
 import { createLiveBus, liveEnabled } from './services/live/bus.js';   // LIVE_REFRESH_V1 — шина изменений для живых экранов; liveEnabled — выключатель (ревью M6)
 import { sitePreviewRoutes } from './routes/site-preview.js';   // WEBSITE_PREVIEW_V1 — стили и картинки предпросмотра сайта
+import { attendanceScreenApi, attendanceScreenPage } from './routes/attendance-screen.js';   // STAFF_ATTENDANCE_V1 — экран QR у входа
 import { liveRoutes } from './routes/live.js';   // LIVE_REFRESH_V1 — GET /api/live (SSE) и /api/live/version
 import { buildOf, staticImmutable } from './services/build-id.js';   // LOCAL_SPEED_V1 — номер сборки клиента
 import { versionedStatic, versionedPages } from './middleware/versioned-static.js';   // LOCAL_SPEED_V1 — /v/<сборка>/… и страницы
@@ -181,6 +182,9 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {}, pu
   // получать прайс из-за того, что в главном филиале кто-то не сменил пароль
   // при первом входе.
   app.use('/api/branch-sync', branchSyncRoutes(db, dataDir));
+  // STAFF_ATTENDANCE_V1 — экран QR у входа: без входа в программу (у входа никто не залогинен);
+  // доступ — ключом экрана, частота ограничена (routes/attendance-screen.js).
+  app.use('/api/attendance-screen', attendanceScreenApi(db));
   // FIRST_RUN_PASSWORD_V1 — placed AFTER /api/auth (the way out of the state)
   // and BEFORE every other router, so anything mounted later is gated by
   // default instead of by someone remembering to add it.
@@ -253,7 +257,8 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data'), live = {}, pu
   if (warmBuild) build();
   app.use(versionedPages({ root: publicDir, build, mark: markStaticFile }));
   app.use('/v/:build', versionedStatic({ root: publicDir, build, immutable: staticImmutable(process.env), mark: markStaticFile }));
-  app.use('/site-preview', sitePreviewRoutes(db, dataDir));   // WEBSITE_PREVIEW_V1 — доступ по ключу, см. site/preview.js
+  app.use('/site-preview', sitePreviewRoutes(db, dataDir));
+  app.use('/attendance-screen', attendanceScreenPage());   // STAFF_ATTENDANCE_V1 — страница экрана; данные — по ключу через API выше   // WEBSITE_PREVIEW_V1 — доступ по ключу, см. site/preview.js
   app.use(express.static(publicDir, {
     extensions: ['html'],
     setHeaders: (res, filePath, stat) => {

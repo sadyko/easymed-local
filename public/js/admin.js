@@ -122,6 +122,9 @@ import { renderAiAssistant }      from './admin/views/ai-assistant.js';   // AI_
 import { renderWebsiteSettings }  from './admin/views/website-settings.js';   // WEBSITE_V1 — редактор «Веб-сайт»
 import { renderCommerceHub, BOARD as COMMERCE_BOARD, visibleChats as commerceChats, visibleTools as commerceTools } from './admin/views/commerce-hub.js?v=tools1';   // COMMERCE_TOOLS_V1 — витрина инструментов; COMMERCE_RAIL_V1 — те же списки в колонке
 import { renderClinicNews }       from './admin/views/clinic-news.js';   // CLINIC_NEWS_V1 — «Информационная доска»
+import { renderHr }               from './admin/views/hr.js';   // HR_DEPT_V1 — раздел «HR»
+import { renderRecruitingPage }   from './admin/views/hr-recruiting.js';   // HR_RECRUIT_V1 — «HR → Подбор персонала»
+import { renderAttendancePage, ATTENDANCE_SUBS } from './admin/views/hr-attendance.js';   // STAFF_ATTENDANCE_V1 — «HR → Посещаемость»
 import { renderNewsStrip }        from './admin/clinic-news-strip.js';   // CLINIC_NEWS_STRIP_V1 — полоса новостей стойке и call-центру
 import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing
 import { renderTelegramChat } from './admin/views/telegram-chat.js?v=tgc4';   // TELEGRAM_CHAT_V1
@@ -309,6 +312,17 @@ const NAV = [
     // главный врач вместо дашборда).
     { id: 'my-stock', label: 'My stock', icon: 'NavMyStock' },   // MY_STOCK_V1
     { id: 'my-department', label: 'My department', icon: 'NavDepartment' },   // MY_STOCK_V1
+    // HR_DEPT_V1 (2026-11-26, владелец: «create a HR section in here, then I will
+    // explain what to create next») — свой раздел «HR» в верхней полосе, перед
+    // «Настройками». Пока один пункт-заготовка (views/hr.js); инструменты
+    // раздела встанут пунктами под ним.
+    { section: 'HR', fold: true },
+    // HR_RECRUIT_V1 (2026-11-27, владелец: «it should be under HR place not inside, and
+    // change left side bar HR name to Employees») — пункт списка сотрудников зовётся
+    // «Сотрудники», а воронка найма — свой пункт под тем же заголовком, не вкладка.
+    { id: 'hr', label: 'Employees', icon: 'ID' },   // HR_DEPT_V1
+    { id: 'hr-recruiting', label: 'Recruiting', icon: 'Target' },   // HR_RECRUIT_V1
+    { id: 'hr-attendance', label: 'Attendance', icon: 'Clock' },   // STAFF_ATTENDANCE_V1 — EasyMed Staff: отметки по QR
     // NAV_GROUPS_V1 — группа из одного пункта, так попросил владелец
     // («Settings (it should be Folded): Setting»). Заголовок и пункт зовутся
     // одинаково; бейдж обновления остаётся на пункте.
@@ -441,6 +455,9 @@ const CRUMBS = {
     'clinic-data': ['Insights', 'Settings', 'Данные клиники'],
     'lan-address': ['Insights', 'Settings', 'Адрес в сети'],   // LAN_ADDRESS_V1 — ALWAYS_ALLOWED, как 'clinic-data'
     'reference-lists': ['Insights', 'Settings', 'Справочники'],   // REFERENCE_LISTS_V1
+    hr:            ['HR', 'Сотрудники'],   // HR_DEPT_V1 · HR_RECRUIT_V1 — пункт переименован
+    'hr-recruiting': ['HR', 'Подбор персонала'],   // HR_RECRUIT_V1
+    'hr-attendance': ['HR', 'Посещаемость'],   // STAFF_ATTENDANCE_V1
 };
 
 // SETTINGS_SPLIT_V1 — the routes that stay open through a full licence
@@ -1594,6 +1611,9 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'settings':      return void await renderSettingsHub(viewRoot, ctx);   // SETTINGS_HUB_V1
             case 'commerce':      return void renderCommerceHub(viewRoot, ctx);   // COMMERCE_TOOLS_V1 — витрина инструментов
             case 'clinic-news':   return void await renderClinicNews(viewRoot, ctx);   // CLINIC_NEWS_V1
+            case 'hr-recruiting': return void await renderRecruitingPage(viewRoot, ctx);   // HR_RECRUIT_V1 — воронка найма
+            case 'hr-attendance': return void await renderAttendancePage(viewRoot, ctx);   // STAFF_ATTENDANCE_V1 — посещаемость по QR
+            case 'hr':            return void await renderHr(viewRoot, ctx);   // HR_DEPT_V1 / HR_STAFF_V1 — раздел «HR»: сотрудники, документы, техника
             case 'commerce-push': return void renderCommercePush(viewRoot);   // SMS_PUSH_V1 — инструмент «Push-уведомления»
             case 'daily-report': return void await renderDailyReport(viewRoot);   // DAILY_REPORT_BOT_V1 — только администратор (permissions.js)
             // WEBSITE_V1 — на «Просмотре» строки «Веб-сайт» — в рамке «только просмотр»
@@ -2066,11 +2086,11 @@ function renderSidebar() {
             // INPATIENT_SUBNAV_V1 — у пункта с подпунктами залит выбранный ПОДПУНКТ,
             // а сам пункт только выделен жирным: две залитые кнопки подряд читаются
             // как «открыто два места».
-            class: 'nav-item' + (owner ? (item.id === 'admissions' ? ' nav-parent-on' : ' active') : '') + (unlicensed ? ' nav-locked' : ''),   // SUBVIEW_KEEPS_RAIL_V1
+            class: 'nav-item' + (owner ? (item.id === 'admissions' || (item.id === 'hr-attendance' && attendanceSubOpen()) ? ' nav-parent-on' : ' active') : '') + (unlicensed ? ' nav-locked' : ''),   // SUBVIEW_KEEPS_RAIL_V1
             type: 'button',
             ...(owner ? { 'aria-current': 'page' } : {}),
             title: t('sidebar.nav.' + item.id, item.label),   // SIDEBAR_RAIL_V1 — readable when collapsed
-            onclick: () => { if (isNarrow() && railIsOpen()) setRailOpen(false, { focus: false }); navigate(item.id); },
+            onclick: () => { if (isNarrow() && railIsOpen()) setRailOpen(false, { focus: false }); navigate(item.id, item.id === 'hr-attendance' ? { sub: 'board' } : undefined); },   // STAFF_ATTENDANCE_NAV_V1 — главный экран явно
         },
             h('span', { class: 'nav-icon' }, Icon(item.icon, { size: 18 })),
             h('span', null, t('sidebar.nav.' + item.id, item.label)),
@@ -2087,6 +2107,7 @@ function renderSidebar() {
             unlicensed && h('span', { class: 'nav-lock-icon' }, Icon('Lock', { size: 14 })),
         ));
         if (item.id === 'admissions' && !unlicensed) nav.appendChild(inpatientSubRail());   // INPATIENT_SUBNAV_V1
+        if (item.id === 'hr-attendance' && !unlicensed) nav.appendChild(attendanceSubRail());   // STAFF_ATTENDANCE_NAV_V1
     }
     // MESSAGES_TO_CRM_V1 — «Сообщения» и доска — под функциями раздела CRM, чертой.
     if (active && active.key === 'CRM' && crmMessagesRailGroups().some((g) => g.length)) {
@@ -2253,6 +2274,32 @@ function inpatientSubRail() {
                 // нет — открыть раздел сразу на нужной вкладке.
                 if (currentInpatientTab()) { navigate('admissions'); selectInpatientTab(t.id); renderSidebar(); return; }
                 navigate('admissions', t.id === defaultInpatientTab() ? null : { sub: t.id });
+            },
+        }, h('span', { class: 'nav-icon' }, Icon(t.icon, { size: 16 })), h('span', null, tr(t.label))));
+    }
+    return wrap;
+}
+
+// STAFF_ATTENDANCE_NAV_V1 (2026-11-28, владелец: «all other bring under attendance in
+// left navigation bar») — «Подозрительное», «Точки входа», «Сотрудники и Telegram»,
+// «Бот» — подпункты под «Посещаемостью», как вкладки «Стационара» выше (INPATIENT_SUBNAV_V1):
+// видны всегда, залит выбранный, пока открыт сам экран. Какой открыт — payload.sub;
+// navigate пересобирает панель в кэше, когда sub другой (HASH_TRUTH_V1).
+function attendanceSubOpen() {
+    return state.view === 'hr-attendance' && !!(state.payload && ATTENDANCE_SUBS.some((t) => t.id === state.payload.sub));
+}
+function attendanceSubRail() {
+    const wrap = h('div', { class: 'nav-subs', 'data-attendance-subs': '' });
+    const cur = attendanceSubOpen() ? state.payload.sub : null;
+    for (const t of ATTENDANCE_SUBS) {
+        const on = t.id === cur;
+        wrap.appendChild(h('button', {
+            class: 'nav-item nav-sub' + (on ? ' active' : ''), type: 'button', title: tr(t.label),
+            'data-attendance-sub': t.id,
+            ...(on ? { 'aria-current': 'page' } : {}),
+            onclick: () => {
+                if (isNarrow() && railIsOpen()) setRailOpen(false, { focus: false });
+                navigate('hr-attendance', { sub: t.id });
             },
         }, h('span', { class: 'nav-icon' }, Icon(t.icon, { size: 16 })), h('span', null, tr(t.label))));
     }

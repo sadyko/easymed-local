@@ -23,6 +23,7 @@
 // экранов (inventory-sklad.js, inventory-products.js, inventory-expiry.js);
 // здесь — только выбор, его память и правило «подходит ли товар».
 import { h, Icon } from '../ui.js';
+import { trf } from '../i18n.js';   // SKLAD_CAT_SELECT_V1 — «Несколько ({n})»
 import { CATEGORY_LABEL } from './inventory-shared.js';
 
 export const CATEGORY_KEYS = Object.keys(CATEGORY_LABEL);
@@ -133,6 +134,36 @@ export function categoryFilter({ selected = [], onChange } = {}) {
             : [...current, b._key]));
     }
     repaint();
+    return categoryFilterRow(allBtn, btns);
+}
+
+/**
+ * SKLAD_CAT_SELECT_V1 (2026-11-26, владелец со снимком «Склада»: «remove
+ * category filter and put it on top of category as other filters») — тот же
+ * выбор, но выпадающим списком в строке фильтров над колонкой «Категория»,
+ * как «Все ед.» и «Все поставщики». Память — та же (за вошедшим, общая для
+ * экранов закупок). Список выбирает одну категорию; если на другом экране
+ * отмечено несколько, они не теряются молча — список показывает пункт
+ * «Несколько (N)», пока человек не выберет другое.
+ */
+export function categorySelect({ selected = [], onChange, style = null } = {}) {
+    let current = cleanCategories(selected);
+    const MULTI = '__multi';
+    const value = current.length === 0 ? 'all' : current.length === 1 ? current[0] : MULTI;
+    const opts = [['all', 'Все категории'], ...CATEGORY_KEYS.map((k) => [k, CATEGORY_LABEL[k]])];
+    if (value === MULTI) opts.splice(1, 0, [MULTI, trf('Несколько ({n})', { n: current.length })]);
+    const sel = h('select', { class: 'cat-select', 'aria-label': 'Категория', style },
+        ...opts.map(([v, label]) => h('option', { value: v, selected: v === value }, label)));
+    sel.addEventListener('change', () => {
+        if (sel.value === MULTI) return;
+        current = sel.value === 'all' ? [] : cleanCategories([sel.value]);
+        saveCategories(current);
+        if (typeof onChange === 'function') onChange(current.slice());
+    });
+    return sel;
+}
+
+function categoryFilterRow(allBtn, btns) {
     return h('div', {
         class: 'cat-filter', role: 'group', 'aria-label': 'Категории',
         style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' },

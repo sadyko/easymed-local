@@ -70,6 +70,7 @@ test('moduleToggles: real sellable modules appear with their granted state', () 
     { key: 'callcenter', label: 'Колл-центр', granted: false },
     { key: 'crm', label: 'CRM', granted: true },
     { key: 'telegram', label: 'Telegram', granted: false },
+    { key: 'website', label: 'Веб-сайт', granted: false },   // WEBSITE_V1
   ]);
 });
 
@@ -80,6 +81,7 @@ test('moduleToggles: none granted', () => {
     { key: 'callcenter', label: 'Колл-центр', granted: false },
     { key: 'crm', label: 'CRM', granted: false },
     { key: 'telegram', label: 'Telegram', granted: false },
+    { key: 'website', label: 'Веб-сайт', granted: false },   // WEBSITE_V1
   ]);
 });
 
@@ -90,12 +92,13 @@ test('moduleToggles: marketing stays excluded even if the clinic somehow already
     { key: 'callcenter', label: 'Колл-центр', granted: false },
     { key: 'crm', label: 'CRM', granted: true },
     { key: 'telegram', label: 'Telegram', granted: false },
+    { key: 'website', label: 'Веб-сайт', granted: false },   // WEBSITE_V1
   ]);
 });
 
 test('moduleToggles: tolerates a granted list that is undefined', () => {
   const chips = moduleToggles(SELLABLE_MODULES, undefined);
-  assert.deepEqual(chips.map((c) => c.granted), [false, false, false, false]);   // AI_CHAT_V1 — четыре модуля
+  assert.deepEqual(chips.map((c) => c.granted), [false, false, false, false, false]);   // AI_CHAT_V1, WEBSITE_V1 — пять модулей
 });
 
 // --- hasUnmanageableMarketingGrant ----------------------------------------------

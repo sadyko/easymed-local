@@ -131,6 +131,9 @@ const { CATEGORY_LABEL } = await import('../views/inventory-shared.js');
 
 const catPill = (root, key) => walk(root).find((e) => e.tagName === 'BUTTON' && e.attrs['data-category'] === key);
 const allPill = (root) => walk(root).find((e) => e.tagName === 'BUTTON' && e.className === 'cat-pill' && !e.attrs['data-category']);
+// SKLAD_CAT_SELECT_V1 — на «Складе» категория выбирается списком в строке фильтров.
+const catSelect = (root) => walk(root).find((e) => e.tagName === 'SELECT' && e.className === 'cat-select');
+const chooseCat = (root, v) => { const s = catSelect(root); s.value = v; s.dispatchEvent({ type: 'change' }); };
 const bodyRows = (root) => findAll(findAll(root, 'TBODY')[0], 'TR');
 const firstCells = (root) => bodyRows(root).map((tr) => textOf(findAll(tr, 'TD')[0]).replace(/\s+/g, ' ').trim());
 
@@ -205,19 +208,31 @@ test('память: закрытое или испорченное хранил�
 // «Склад»
 // ───────────────────────────────────────────────────────────────────────────
 
-test('«Склад»: колонка «Категория», отметка отбирает строки', async () => {
+test('«Склад»: колонка «Категория», список над ней отбирает строки; отметок-кнопок нет', async () => {
     STORE.clear();
     const root = await openSklad();
-    const ths = findAll(findAll(root, 'THEAD')[0], 'TR')[0];
-    assert.deepEqual(findAll(ths, 'TH').slice(0, 3).map((th) => flat(th)), ['Товар', 'Категория', 'Единица']);
+    const headRows = findAll(findAll(root, 'THEAD')[0], 'TR');
+    assert.deepEqual(findAll(headRows[0], 'TH').slice(0, 3).map((th) => flat(th)), ['Товар', 'Категория', 'Единица']);
+    // список стоит во второй ячейке строки фильтров — над «Категорией»
+    assert.ok(walk(findAll(headRows[1], 'TD')[1]).includes(catSelect(root)), 'список категорий не над своей колонкой');
+    assert.equal(catPill(root, 'consumables'), undefined, 'строка отметок осталась');
     assert.equal(bodyRows(root).length, 4);
     assert.equal(textOf(findAll(bodyRows(root)[0], 'TD')[1]).trim(), 'Медикаменты');
-    catPill(root, 'consumables').click();
+    chooseCat(root, 'consumables');
     assert.deepEqual(firstCells(root), ['Перчатки', 'Шприц']);
-    catPill(root, 'dental').click();
-    assert.deepEqual(firstCells(root), ['Перчатки', 'Шприц', 'Пломба']);
-    allPill(root).click();
+    chooseCat(root, 'dental');
+    assert.deepEqual(firstCells(root), ['Пломба']);
+    chooseCat(root, 'all');
     assert.equal(bodyRows(root).length, 4);
+});
+
+test('«Склад»: несколько категорий, отмеченных на другом экране, не теряются молча', async () => {
+    STORE.clear(); asUser(41);
+    cf.saveCategories(['consumables', 'dental']);
+    const root = await openSklad(41);
+    assert.equal(catSelect(root).children.find((o) => o.attrs.value === '__multi')?.attrs.value, '__multi');
+    assert.match(flat(catSelect(root)), /Несколько \(2\)/);
+    assert.deepEqual(firstCells(root), ['Перчатки', 'Шприц', 'Пломба']);
 });
 
 test('«Склад»: итоги — позиций, сумма и «пора заказать» — считаются по ОТОБРАННЫМ строкам', async () => {
@@ -226,10 +241,9 @@ test('«Склад»: итоги — позиций, сумма и «пора з
     const summary = () => flat(walk(root).find((e) => String(e.className).includes('sklad-summary')));
     // Весь склад: 10×100 + 5×1000 + 2×50 + 3×700 = 8 200; мало у анальгина и шприца.
     assert.equal(summary(), 'Позиций: 4 · на сумму 8 200 · пора заказать: 2');
-    catPill(root, 'consumables').click();
+    chooseCat(root, 'consumables');
     assert.equal(summary(), 'Позиций: 2 · на сумму 5 100 · пора заказать: 1');
-    catPill(root, 'consumables').click();
-    catPill(root, 'dental').click();
+    chooseCat(root, 'dental');
     assert.equal(summary(), 'Позиций: 1 · на сумму 2 100 · пора заказать: 0');
     // Итог следует и за остальными фильтрами — это тот же filtered().
     assert.deepEqual(skladSummary([]), { count: 0, value: 0, reorder: 0 });
@@ -238,10 +252,10 @@ test('«Склад»: итоги — позиций, сумма и «пора з
 test('«Склад»: отметки запоминаются за человеком и встречают его при следующем открытии', async () => {
     STORE.clear();
     const a = await openSklad(31);
-    catPill(a, 'medicines').click();
+    chooseCat(a, 'medicines');
     const again = await openSklad(31);
     assert.deepEqual(firstCells(again), ['Анальгин'], 'выбор не пережил повторное открытие');
-    assert.equal(catPill(again, 'medicines').attrs['aria-pressed'], 'true');
+    assert.ok(catSelect(again).children.find((o) => o.attrs.value === 'medicines').hasAttribute('selected'), 'список не показывает выбор');
     const other = await openSklad(32);
     assert.equal(bodyRows(other).length, 4, 'отметки одного встретили другого за тем же ПК');
 });

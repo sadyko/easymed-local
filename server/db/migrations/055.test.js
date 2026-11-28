@@ -19,6 +19,8 @@ import { migrate } from '../migrate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+// HR_RECRUIT_V1 — ключи строк справочника прав (permission-catalog.js): ими выдаются HR-пункты меню.
+const catalogKeys = () => new Set([...read('public/js/shared/permission-catalog.js').matchAll(/\{\s*key:\s*'([^']+)'/g)].map((m) => m[1]));
 
 // admin.js NAV ids — the gates the sidebar actually renders.
 function navIds() {
@@ -135,6 +137,16 @@ test('every sidebar module can be granted to a role', () => {
     // инструмент (permissions.js, navId === 'commerce'). Выдаётся он ключами
     // этих инструментов — чатов и «Реферирования».
     if (id === 'commerce') return !['telegram-chat', 'meta-chat', 'referrals'].some((k) => grantable.has(k));
+    // HR_RECRUIT_V1 / STAFF_ATTENDANCE_V1 — «Подбор персонала» и «Посещаемость»
+    // выдаются не ключом NAV_MODULES, а своими строками справочника прав
+    // (permission-catalog.js `hr_recruiting`, `hr_attendance`; isRouteAllowed
+    // читает их через commerceToolLevel). Строка обязана существовать.
+    if (id === 'hr-recruiting') return !catalogKeys().has('hr_recruiting');
+    if (id === 'hr-attendance') return !catalogKeys().has('hr_attendance');
+    // HR_STAFF_V1 — «Сотрудники» раздела HR (сканы паспортов, договоры) НАРОЧНО
+    // только администратору: сервер rpc/hr.js отказывает всем остальным, так что
+    // ключ роли открыл бы пункт меню с пустым экраном.
+    if (id === 'hr') return false;
     return true;
   });
   assert.deepEqual(ungrantable, [], 'sidebar modules with no way to grant them:\n' + ungrantable.join('\n'));

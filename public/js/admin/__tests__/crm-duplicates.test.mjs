@@ -123,7 +123,7 @@ test('разные пациенты среди отмеченных: кнопк�
   window.easymed.state.user = null;
 });
 
-test('I2: есть заявка в работе — оставить можно только её, закрытые выбрать нельзя; одна отмеченная — нечего сливать', async () => {
+test('I2 + MERGE_FREE_SURVIVOR_V1: заявка в работе предложена, но оставить можно и закрытую — с предупреждением; одна отмеченная — нечего сливать', async () => {
   const OLD = card({ id: 19, status: 'came', stage_label: 'Пришёл', stage_kind: 'won', patient_id: 500, created_at: '2026-01-10T09:00:00Z', tasks: 1, assigned_to: 12, assigned_name: 'Оператор Лола' });
   const LIVE = card({ id: 337, status: 'recall', stage_label: 'Перезвонить', stage_kind: 'open', stage_color: 'warn', created_at: '2026-09-20T08:00:00Z', assigned_to: 9, assigned_name: 'Оператор Зара' });
   S.dupGroups = { groups: [{ key: '901112233', phone: '901112233', conflict: false, names_differ: false, suggested_id: 337, cards: [OLD, LIVE] }], total: 1 };
@@ -131,11 +131,23 @@ test('I2: есть заявка в работе — оставить можно 
   let g = groupIn(modal);
   const radio = (id) => byAttr(g, 'data-dup-keep').find((n) => n.getAttribute('data-dup-keep') === String(id));
   assert.equal(radio(337).checked, true);
-  assert.equal(radio(19).disabled, true, 'закрытую карточку можно оставить вместо заявки в работе');
-  assert.ok(byAttr(g, 'data-dup-open').length === 1);
+  // MERGE_FREE_SURVIVOR_V1 — владелец: «I can't choose to which one to merge».
+  assert.equal(radio(19).disabled, false, 'закрытую карточку снова нельзя выбрать оставшейся');
+  assert.equal(byAttr(g, 'data-dup-open').length, 0, 'остаётся заявка в работе — предупреждать не о чем');
   // M1 — задача №19 (Лолы) уедет на карточку, которую ведёт Зара.
   const note = byAttr(g, 'data-dup-tasks')[0];
   assert.ok(note && /Оператор Зара/.test(textOf(note)), 'не сказано, что задачи уедут к другому оператору');
+  // Выбрали закрытую — предупреждение называет заявку в работе, кнопка есть.
+  radio(19).checked = true;
+  radio(19).dispatchEvent({ type: 'change' });
+  g = groupIn(modal);
+  assert.equal(radio(19).checked, true);
+  const warnOpen = byAttr(g, 'data-dup-open')[0];
+  assert.ok(warnOpen && /№337/.test(textOf(warnOpen)), 'выбор закрытой не назван вслух');
+  assert.equal(byAttr(g, 'data-dup-merge').length, 1);
+  radio(337).checked = true;
+  radio(337).dispatchEvent({ type: 'change' });
+  g = groupIn(modal);
   untick(g, 337);
   g = groupIn(modal);
   assert.equal(byAttr(g, 'data-dup-merge').length, 0);

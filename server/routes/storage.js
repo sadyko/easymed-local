@@ -40,7 +40,12 @@ import { hasWebsiteModule } from '../services/rpc/website.js';   // WEBSITE_V1, 
 // пациента не покидает клинику).
 //
 // CLINIC_PROFILE_V1 — `clinic-logos`: два логотипа клиники («Компания»).
-const BUCKETS = new Set(['clinic-docs', 'telegram-media', 'patient-photos', 'doctor-photos', LOGO_BUCKET, 'website']);   // CLINIC_PROFILE_V1; WEBSITE_V1 — картинки сайта
+//
+// HR_STAFF_V1 — `hr-docs`: сканы паспортов, дипломов и договоров сотрудников
+// (раздел «HR», rpc/hr.js). Своя корзина, а не папка в clinic-docs, потому
+// что clinic-docs читает любой вошедший (логотип печатается на бланках), а
+// паспорт коллеги — нет: здесь и чтение, и запись — только администратор.
+const BUCKETS = new Set(['clinic-docs', 'telegram-media', 'patient-photos', 'doctor-photos', LOGO_BUCKET, 'website', 'hr-docs']);   // CLINIC_PROFILE_V1; WEBSITE_V1 — картинки сайта; HR_STAFF_V1
 
 // V3120_FIX (M6) — ЧТО ОТДАЁТСЯ «ВНУТРИ СТРАНИЦЫ». Файл из хранилища открыт
 // тем же адресом, что и само приложение, и SVG или HTML, отданные как есть,
@@ -65,6 +70,7 @@ function contentType(abs) {
 const DOC_EXT = new Set(ALLOWED_PATIENT_FILE_EXT);
 const BUCKET_EXT = {
   'clinic-docs': DOC_EXT,
+  'hr-docs': DOC_EXT,   // HR_STAFF_V1 — тот же список, что у документов клиники и пациента
   'telegram-media': new Set([...ALLOWED_PATIENT_FILE_EXT, '.mp3', '.ogg', '.oga', '.opus', '.m4a', '.wav', '.mp4', '.mov', '.webm']),
   'patient-photos': new Set(ALLOWED_PHOTO_EXT),
   'doctor-photos': new Set(ALLOWED_PHOTO_EXT),
@@ -384,6 +390,31 @@ export function storageRoutes(storageDir, db = null) {
     return { status: 403, code: 'forbidden', message: WEBSITE_DENIED };
   }
 
+  // HR_STAFF_V1 — корзина кадровых документов. Форма пути ровно одна —
+  // staff/<id сотрудника>/<файл> (views/hr.js), и rpc hr_document_add
+  // принимает только её; право — администратор (как весь раздел, rpc/hr.js).
+  // Возвращает { status, code, message } отказа или null.
+  //
+  // HR_CANDIDATE_DOCS_V1 — вторая форма: candidate/<id кандидата>/<файл>
+  // (views/hr-recruiting.js). Её право — строка «Ролей» hr_recruiting:
+  // смотреть — «Просмотр», загружать — «Изменение». Папка staff/ рекрутеру
+  // этим не открывается.
+  function hrDocsDenial(req, { write = false } = {}) {
+    const user = req.user;
+    if (!user) return { status: 401, code: 'unauthorized', message: 'Требуется вход.' };
+    const s = segmentsOf(req.params.rest);
+    if (s.length !== 3 || (s[0] !== 'staff' && s[0] !== 'candidate') || !/^[1-9]\d*$/.test(s[1])) {
+      return { status: 400, code: 'bad_request', message: 'Неверный путь к файлу.' };
+    }
+    if (s[0] === 'candidate') {
+      try { if (db && grantAllowsAdminOr(db, user, 'hr_recruiting', write ? 'edit' : 'view')) return null; }
+      catch { /* права не прочитались — отказ */ }
+      return { status: 403, code: 'forbidden', message: 'Документы кандидатов открыты тем, кому доступен «Подбор персонала».' };
+    }
+    if (isAdminUser(user)) return null;
+    return { status: 403, code: 'forbidden', message: 'Документы сотрудников открыты администратору клиники.' };
+  }
+
   // Одна дверь для обеих фотокорзин: форма пути → право. Возвращает false
   // (можно продолжать) либо уже отправленный ответ.
   function photoGate(req, res, { write }) {
@@ -450,6 +481,14 @@ export function storageRoutes(storageDir, db = null) {
         return refuse(res, 415, 'file_type_not_allowed', WEBSITE_TYPE_REFUSED);
       }
     }
+    // HR_STAFF_V1 — кадровые документы: путь и право, затем тип и предел
+    // размера теми же правилами, что у документа пациента.
+    if (req.params.bucket === 'hr-docs') {
+      const d = hrDocsDenial(req, { write: true });
+      if (d) return refuse(res, d.status, d.code, d.message);
+      const bad = patientFileRefusal({ name: path.basename(abs), size: body.length });
+      if (bad) return refuse(res, bad.code === 'file_too_large' ? 413 : 415, bad.code, refusalText(bad));
+    }
     // V3120_FIX (M8) — расширение по корзине. Фото проверяет photoRefusal
     // ниже своим, более понятным текстом, поэтому здесь — остальные корзины.
     const allowedExt = BUCKET_EXT[req.params.bucket];
@@ -493,7 +532,8 @@ export function storageRoutes(storageDir, db = null) {
     // под тем же адресом, на который ссылается карта. Флаг 'wx' — проверка и
     // создание одним действием, без окна между ними.
     const noOverwrite = underPatients(req.params.bucket, req.params.rest) || isPhotoBucket(req.params.bucket)
-      || req.params.bucket === LOGO_BUCKET;   // CLINIC_PROFILE_V1 — логотип не подменяется под тем же адресом
+      || req.params.bucket === LOGO_BUCKET   // CLINIC_PROFILE_V1 — логотип не подменяется под тем же адресом
+      || req.params.bucket === 'hr-docs';   // HR_STAFF_V1 — приложенный договор не подменяется под тем же адресом
     // V3120_FINAL — папка в пути занята ФАЙЛОМ с тем же именем
     // (misc/a.pdf/b.pdf при существующем misc/a.pdf). mkdir отвечал EEXIST, и
     // человек читал «файл с таким именем уже есть — программа даст новое имя»,
@@ -554,6 +594,10 @@ export function storageRoutes(storageDir, db = null) {
     if (req.params.bucket === 'telegram-media') {
       const denial = telegramDenial(req, { write: false });
       if (denial) return refuse(res, 403, 'forbidden', denial);
+    }
+    if (req.params.bucket === 'hr-docs') {   // HR_STAFF_V1 — читать тоже только администратору
+      const d = hrDocsDenial(req);
+      if (d) return refuse(res, d.status, d.code, d.message);
     }
     if (underPatients(req.params.bucket, req.params.rest)) {
       const denial = patientDocDenial(req, { write: false });
@@ -632,6 +676,11 @@ export function storageRoutes(storageDir, db = null) {
     if (isPhotoBucket(req.params.bucket)) {
       return refuse(res, 403, 'forbidden',
         'Фотография не удаляется — новая загрузка заменяет прежнюю.');
+    }
+    // HR_STAFF_V1 — кадровый документ не стирается: его убирают из карточки
+    // (rpc hr_document_remove), строка остаётся историей, файл — на диске.
+    if (req.params.bucket === 'hr-docs') {
+      return refuse(res, 403, 'forbidden', 'Документ сотрудника не удаляется — его можно убрать из карточки в разделе «HR».');   // и кандидата — тоже (HR_CANDIDATE_DOCS_V1)
     }
     // V3120_FINAL (I2) — удаление закрыто тем же замком, что и загрузка:
     // вложения Telegram — отвечающему в чате или настраивающему бота; файлы

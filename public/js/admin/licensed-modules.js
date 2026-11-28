@@ -57,7 +57,7 @@ export const LICENSED_MODULES = Object.assign(Object.create(null), {
     // (server/site/controller.js), и website_* RPC отвечают 402 module_missing.
     'website-settings': {
         key: 'website',
-        title: 'Свой сайт клиники — без подрядчиков и ежемесячной оплаты',
+        title: 'Свой сайт клиники — прямо из программы',
         blurb: 'Врачи, услуги и цены на сайте берутся прямо из программы и всегда совпадают с прайсом. Пациент находит клинику в поиске и оставляет заявку с телефона.',
     },
 });

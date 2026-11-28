@@ -1372,6 +1372,17 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            ias.id                             AS inpatient_line_id,
            b.name                             AS branch,
            reg.full_name                      AS registrar,
+           -- SERVICE_REGISTRAR_V1 (2026-11-27, владелец: «to total revenue report
+           -- add one more column to show who registered the service») — кто
+           -- записал УСЛУГУ: автор строки визита (visit_services.created_by —
+           -- регистратура, врач из кабинета, CRM). «Регистратор» выше — автор
+           -- СЧЁТА, а это не всегда тот же человек. У строки без визита
+           -- (стационар: у admission_services автора нет; товар, проданный прямо
+           -- в счёт) услугу в счёт добавил автор счёта — его и показываем.
+           -- Подзапрос, а не JOIN: строка счёта не должна размножиться.
+           COALESCE((SELECT su.full_name FROM visit_services sv JOIN users su ON su.id = sv.created_by
+                      WHERE sv.invoice_item_id = ii.id ORDER BY sv.id LIMIT 1),
+                    reg.full_name)            AS service_registrar,
            rs.name                            AS referral,
            -- REFERRAL_CATEGORY_RATES_V1 — id источника и ГРУППА услуги: ставка
            -- теперь своя у каждой группы, поэтому отчёт обязан различать
@@ -2716,7 +2727,7 @@ function totalRevenueReport(db, args, ctx) {
     // бухгалтер, — одинаково во всех отчётах.
     columns: [BUILDING_COL, 'Дата', '№ счёта', 'Пациент', 'МРН', 'Услуга', 'Кол-во', 'Цена', 'Сумма',
               'Скидка', 'После скидки', 'Налог %', 'Налог', 'в т.ч. НДС (товары)', ...VAT_COLUMNS, 'Врач', 'Ставка врача', 'Фикс врача', 'Доля врача',
-              'Филиал', 'Регистратор', 'Реферал', 'Статус', PAY_COLUMN, CASHIER_COLUMN],
+              'Филиал', 'Регистратор', 'Записал услугу', 'Реферал', 'Статус', PAY_COLUMN, CASHIER_COLUMN],   // SERVICE_REGISTRAR_V1
     rows: src.map((r) => {
       const after = round2(r.amount - r.discount);
       // DOCTOR_FIX_RATE_V1 — the rate column states WHICH rate applied. Printing
@@ -2734,7 +2745,7 @@ function totalRevenueReport(db, args, ctx) {
               r.tax_rate, round2(r.tax), Number(r.goods_vat_line) === 1 ? round2(r.tax) : null,
               ...vatCells(after, r.tax), doctorCell(ctx, r),
               fixed ? null : round2(r.doctor_pct), fixed ? round2(r.doctor_fix) : null,
-              round2(r.doctor_fee), r.branch || '', r.registrar || '',
+              round2(r.doctor_fee), r.branch || '', r.registrar || '', r.service_registrar || '',
               r.referral || '', INV_STATUS_RU[r.status] || r.status,
               methodLabel(r.pay_method), r.pay_cashier || ''];
     }),

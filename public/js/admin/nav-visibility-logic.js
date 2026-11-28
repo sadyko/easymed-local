@@ -30,6 +30,7 @@ export const NAV_IDS = Object.freeze([
     // они прячутся вместе с 'commerce' (PARENT_OF оболочки).
     // REFERRALS_TO_COMMERCE_V1 — 'referrals' тоже ушёл на витрину.
     'crm', 'cashier-shifts', 'cashier-head', 'inventory', 'my-stock', 'my-department',
+    'hr', 'hr-recruiting', 'hr-attendance',   // HR_DEPT_V1 · HR_RECRUIT_V1 · STAFF_ATTENDANCE_V1
     'settings', 'commerce',
     'dashboard', 'reports-hub',
 ]);

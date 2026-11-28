@@ -14,6 +14,7 @@ import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_B
 import { sweepStalePdfDirs } from './services/telegram/render.js';   // DISK_GUARD_V1
 import { startDoctorBot } from './services/doctor-bot/index.js';   // REFERRALS_CRM_V1 — второй бот: для врачей-источников
 import { startRepBot } from './services/rep-bot/index.js';   // REP_BOT_V1 — третий бот: медпредставители заводят врачей
+import { startStaffBot } from './services/staff-bot/index.js';   // STAFF_ATTENDANCE_V1 — бот сотрудников (EasyMed Staff): отметка по QR
 import { schedulePolling } from './services/telephony/poller.js';   // TELEPHONY_V1
 import { schedulePolling as scheduleMetaPolling } from './services/meta/poller.js';   // META_LEADS_V1 — опрос заявок из рекламы Meta
 import { scheduleInboxPolling } from './services/meta/inbox-poller.js';   // META_INBOX_V1 — переписка и комментарии Facebook / Instagram
@@ -313,6 +314,7 @@ if (isMain) {
   startTelegramBot(db);
   startDoctorBot(db);   // REFERRALS_CRM_V1 — свой поллер, свой токен; молчит, пока бот не включён
   startRepBot(db);      // REP_BOT_V1 — так же: свой поллер, свой токен, молчит, пока не включён
+  startStaffBot(db);    // STAFF_ATTENDANCE_V1 — так же; молчит, пока HR не включил бота сотрудников
 
   // TELEPHONY_V1 — the Binotel call poller, in this same process for the same
   // one-`npm start` reason as the bot above. Its tick decides for itself

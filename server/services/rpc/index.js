@@ -31,6 +31,9 @@ import { dailyReportSettingsGet, dailyReportSettingsSave, dailyReportTokenClear,
 import { repBotSettingsGet, repBotSettingsSave, repBotTokenClear, repBotTestConnection, repBotStats, repBotLinksList, repBotAdditionsList,
          repBotLinkConfirm, repBotLinkReject, repBotLinkRevoke, repBotClaimsList, repBotClaimDecide } from './rep-bot.js';   // REP_BOT_V1 — бот для медпредставителей
 import { clinicNewsList, clinicNewsSave, clinicNewsArchive } from './clinic-news.js';   // CLINIC_NEWS_V1 — «Информационная доска»
+import { hrStaffList, hrStaffCard, hrDocumentAdd, hrDocumentRemove, hrAssetIssue, hrAssetReturn } from './hr.js';   // HR_STAFF_V1 — раздел «HR»
+import { attendanceToday, attendanceReport, attendanceSessionGet, attendanceCorrect, attendanceFlagsList, attendanceLocationsList, attendanceLocationSave, attendanceLocationResetScreen, staffLinksList, staffLinkCodeCreate, staffLinkRevoke, staffBotSettingsGet, staffBotSettingsSave, staffBotClearToken, staffBotCheck } from './attendance.js';   // STAFF_ATTENDANCE_V1 — «HR → Посещаемость»
+import { hrRecruitBoard, hrCandidateGet, hrVacancySave, hrCandidateSave, hrCandidateMove, hrCandidateHirePrefill, hrCandidateLinkEmployee, hrCandidateDocumentAdd, hrCandidateDocumentRemove } from './hr-recruiting.js';   // HR_RECRUIT_V1 — «HR → Подбор»
 import { patientBotStatus, patientBotInvite, phoneBotStatus, phoneBotInvite } from './patient-bot.js';   // PATIENT_BOT_INVITE_V1 — бот пациента в списке пациентов
 import { navVisibilityGet, navVisibilitySave } from './nav-visibility.js';   // NAV_VISIBILITY_V1 — видимость разделов меню для всей клиники
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice, cashierRefunds } from './cashier.js';   // cashierRefunds: CASHIER_PAID_SWAP_V1
@@ -339,6 +342,39 @@ export const RPC = {
   clinic_news_list:                 (db, args, user) => clinicNewsList(db, args, user),
   clinic_news_save:                 (db, args, user) => clinicNewsSave(db, args, user),
   clinic_news_archive:              (db, args, user) => clinicNewsArchive(db, args, user),
+  // HR_STAFF_V1 — раздел «HR»: список сотрудников, документы, выданная техника (только администратор).
+  hr_staff_list:                    (db, args, user) => hrStaffList(db, args, user),
+  hr_staff_card:                    (db, args, user) => hrStaffCard(db, args, user),
+  hr_document_add:                  (db, args, user) => hrDocumentAdd(db, args, user),
+  hr_document_remove:               (db, args, user) => hrDocumentRemove(db, args, user),
+  hr_asset_issue:                   (db, args, user) => hrAssetIssue(db, args, user),
+  hr_asset_return:                  (db, args, user) => hrAssetReturn(db, args, user),
+  // HR_RECRUIT_V1 — «HR → Подбор»: воронка найма (строка «Ролей» hr_recruiting; не настроена — администратор).
+  hr_recruit_board:                 (db, args, user) => hrRecruitBoard(db, args, user),
+  hr_candidate_get:                 (db, args, user) => hrCandidateGet(db, args, user),
+  hr_candidate_hire_prefill:        (db, args, user) => hrCandidateHirePrefill(db, args, user),
+  hr_vacancy_save:                  (db, args, user) => hrVacancySave(db, args, user),
+  hr_candidate_save:                (db, args, user) => hrCandidateSave(db, args, user),
+  hr_candidate_move:                (db, args, user) => hrCandidateMove(db, args, user),
+  hr_candidate_link_employee:       (db, args, user) => hrCandidateLinkEmployee(db, args, user),
+  hr_candidate_document_add:        (db, args, user) => hrCandidateDocumentAdd(db, args, user),      // HR_CANDIDATE_DOCS_V1
+  hr_candidate_document_remove:     (db, args, user) => hrCandidateDocumentRemove(db, args, user),   // HR_CANDIDATE_DOCS_V1
+  // STAFF_ATTENDANCE_V1 — «HR → Посещаемость»: отметки по QR, точки входа, бот сотрудников (строка «Ролей» hr_attendance).
+  attendance_today:                 (db, args, user) => attendanceToday(db, args, user),
+  attendance_report:                (db, args, user) => attendanceReport(db, args, user),
+  attendance_session_get:           (db, args, user) => attendanceSessionGet(db, args, user),
+  attendance_correct:               (db, args, user) => attendanceCorrect(db, args, user),
+  attendance_flags_list:            (db, args, user) => attendanceFlagsList(db, args, user),
+  attendance_locations_list:        (db, args, user) => attendanceLocationsList(db, args, user),
+  attendance_location_save:         (db, args, user) => attendanceLocationSave(db, args, user),
+  attendance_location_reset_screen: (db, args, user) => attendanceLocationResetScreen(db, args, user),
+  staff_links_list:                 (db, args, user) => staffLinksList(db, args, user),
+  staff_link_code_create:           (db, args, user) => staffLinkCodeCreate(db, args, user),
+  staff_link_revoke:                (db, args, user) => staffLinkRevoke(db, args, user),
+  staff_bot_settings_get:           (db, args, user) => staffBotSettingsGet(db, args, user),
+  staff_bot_settings_save:          (db, args, user) => staffBotSettingsSave(db, args, user),
+  staff_bot_clear_token:            (db, args, user) => staffBotClearToken(db, args, user),
+  staff_bot_check:                  (db, args, user) => staffBotCheck(db, args, user),
   // REP_BOT_V1 — Telegram-бот для медпредставителей (вкладка «Реферирование → Бот представителей»), администратору.
   // Чтения — *_get, *_stats, *_list — в READ_ONLY_RPCS (control/gate.js); остальное — записи.
   daily_report_settings_get:        (db, args, user) => dailyReportSettingsGet(db, args, user),   // DAILY_REPORT_BOT_V1

@@ -276,6 +276,24 @@ export const TABLE_PLAN = Object.freeze({
   doctor_conditions: keep('staff'),
   virtual_doctors: keep('staff'),
   act_as_sessions: keep('staff'),
+  hr_staff_documents: keep('staff'),   // HR_STAFF_V1 — документы сотрудника
+  hr_assets: keep('staff'),            // HR_STAFF_V1 — выданная сотруднику техника
+  hr_vacancies: keep('staff'),         // HR_RECRUIT_V1 — вакансии воронки найма
+  hr_candidates: keep('staff'),        // HR_RECRUIT_V1 — кандидаты (не пациенты: чистка тестовых визитов их не касается)
+  hr_candidate_events: keep('staff'),  // HR_RECRUIT_V1 — журнал движения кандидата по воронке
+  hr_candidate_documents: keep('staff'),   // HR_CANDIDATE_DOCS_V1 — паспорт, резюме, диплом кандидата
+  // STAFF_ATTENDANCE_V1 — бот сотрудников и отметки прихода/ухода: данные о
+  // сотрудниках, а не тестовые визиты пациентов.
+  staff_bot_settings: keep('staff'),
+  staff_bot_state: keep('staff'),
+  staff_telegram_links: keep('staff'),
+  staff_link_codes: keep('staff'),
+  attendance_locations: keep('staff'),
+  attendance_scans: keep('staff'),
+  attendance_sessions: keep('staff'),
+  attendance_events: keep('staff'),
+  attendance_flags: keep('staff'),
+  attendance_corrections: keep('staff'),
   act_as_actions: keep('staff'),
 
   // ── справочники: услуги, цены, лаборатория, склад ──────────────────────

@@ -8,7 +8,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fetchGuard, loadingCard, fmtPrice, fmtMoney2, fmtQty, selStyle, isLowStock, CATEGORY_LABEL } from './inventory-shared.js';
-import { categoryFilter, loadCategories, matchesCategories } from './category-filter.js';   // PROCUREMENT_FILTERS_V1
+import { categorySelect, loadCategories, matchesCategories } from './category-filter.js';   // PROCUREMENT_FILTERS_V1; SKLAD_CAT_SELECT_V1 — список вместо отметок
 import { openReceiveModal, openAdjustModal } from './inventory-products.js';
 import { openStockIssueModal } from './stock-issue-modal.js';   // STOCK_ISSUE_MODAL_V1 — общий диалог выдачи
 import { renderInactiveHoldings } from './inventory-inactive-holdings.js';   // V3120_FIX — подотчёт отключённых
@@ -145,6 +145,8 @@ export async function renderSkladTab(container) {
     const availSel = filterSelect(
         [['all', 'Все'], ['in', 'В наличии'], ['low', 'Заканчивается'], ['out', 'Нет в наличии']],
         sklad.avail, v => { sklad.avail = v; paintRows(); });
+    const catSel = categorySelect({ selected: sklad.cats, style: smallSel,
+        onChange: (c) => { sklad.cats = c; paintRows(); } });   // SKLAD_CAT_SELECT_V1
     const flagSel = filterSelect([['all', 'Все'], ['ok', 'Хватает'], ['reorder', 'Пора заказать']], sklad.flag,
         v => { sklad.flag = v; paintRows(); });
 
@@ -164,10 +166,10 @@ export async function renderSkladTab(container) {
             h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openReceiveModal(reload) },
                 Icon('Plus', { size: 14 }), ' Принять'),
         ),
-        // PROCUREMENT_FILTERS_V1 — отметки категорий и итоги по отобранному.
+        // PROCUREMENT_FILTERS_V1 — итоги по отобранному. SKLAD_CAT_SELECT_V1 —
+        // строки отметок категорий здесь больше нет: категория выбирается
+        // списком над своей колонкой, как остальные фильтры (catSel ниже).
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px 16px', flexWrap: 'wrap', padding: '10px 16px', borderBottom: '1px solid var(--ink-100)' } },
-            categoryFilter({ selected: sklad.cats, onChange: (c) => { sklad.cats = c; paintRows(); } }),
-            h('span', { class: 'grow' }),
             sklad.summaryEl,
         ),
         h('div', { style: { overflowX: 'auto' } },
@@ -186,7 +188,7 @@ export async function renderSkladTab(container) {
                     ),
                     h('tr', null,
                         h('td', { style: { padding: '6px 10px' } }, searchInp),
-                        h('td', null, ''),
+                        h('td', { style: { padding: '6px 10px', minWidth: '140px' } }, catSel),   // SKLAD_CAT_SELECT_V1
                         h('td', { style: { padding: '6px 10px', minWidth: '90px' } }, unitSel),
                         h('td', { style: { padding: '6px 10px', minWidth: '140px' } }, supplierSel),
                         h('td', { style: { padding: '6px 10px', minWidth: '110px' } }, availSel),

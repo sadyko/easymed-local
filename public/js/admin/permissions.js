@@ -1003,6 +1003,10 @@ const COMMERCE_TOOLS = {
     // WEBSITE_V1 — редактор «Веб-сайт»; не настроена — только администратор (adminDefault
     // строки каталога, как commerce_ai; сервер — grantAllowsAdminOr в rpc/website.js).
     commerce_website: { legacy: () => (actorIsAdmin() ? 'edit' : 'none') },
+    // HR_RECRUIT_V1 — «HR → Подбор»; не настроена — только администратор (adminDefault
+    // строки каталога; сервер — grantAllowsAdminOr в rpc/hr-recruiting.js).
+    hr_recruiting: { legacy: () => (actorIsAdmin() ? 'edit' : 'none') },
+    hr_attendance: { legacy: () => (actorIsAdmin() ? 'edit' : 'none') },   // STAFF_ATTENDANCE_V1 — «HR → Посещаемость»
 };
 /** Уровень инструмента витрины: 'none' | 'view' | 'edit'. */
 export function commerceToolLevel(key) {
@@ -1225,6 +1229,9 @@ export function isRouteAllowed(view) {
     // WEBSITE_V1 — то же для «Веб-сайта»: администратор, которому СВОЯ роль закрыла
     // строку «Веб-сайт», не открывает редактор строкой «полный доступ» ниже.
     if (view === 'website-settings' && _effective == null) return commerceToolLevel('commerce_website') !== 'none';
+    // HR_RECRUIT_V1 — то же для «Подбора персонала»: своя роль администратора может строку закрыть.
+    if (view === 'hr-recruiting' && _effective == null) return commerceToolLevel('hr_recruiting') !== 'none';
+    if (view === 'hr-attendance' && _effective == null) return commerceToolLevel('hr_attendance') !== 'none';   // STAFF_ATTENDANCE_V1
     if (_effective == null) return true;
     if (!view) return true;
     if (ALWAYS_ALLOWED.has(view)) return true;
@@ -1305,6 +1312,11 @@ export function isRouteAllowed(view) {
     // WEBSITE_V1 — редактор «Веб-сайт»: строка «Веб-сайт» (не настроена — только
     // администратор). Сервер (rpc/website.js requireWebsite) отказывает второй раз.
     if (view === 'website-settings') return commerceToolLevel('commerce_website') !== 'none';
+    // HR_RECRUIT_V1 — пункт «Подбор персонала»: строка «HR · Подбор персонала». Пункт
+    // «Сотрудники» раздела HR (документы, сканы паспортов) настроенной роли не открывается
+    // (сервер rpc/hr.js — только администратор).
+    if (view === 'hr-recruiting') return commerceToolLevel('hr_recruiting') !== 'none';
+    if (view === 'hr-attendance') return commerceToolLevel('hr_attendance') !== 'none';   // STAFF_ATTENDANCE_V1
     // SMS_INFORM_V1 — логин и пароль Play Mobile — право слать SMS от имени
     // клиники за её деньги: только полный доступ, как у Телефонии. Сервер
     // (rpc/sms.js) отказывает второй раз, независимо от этой строки.

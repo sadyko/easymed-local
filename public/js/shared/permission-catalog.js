@@ -330,6 +330,15 @@ export const CATALOG = [
       // ворота issue_stock_lines. По умолчанию — администратор и снабженец.
       { key: 'procurement.issue', label: 'Выдача со склада', desc: 'Выдать товар отделу, кабинету или сотруднику.', levels: ['none', 'edit'], levelDesc: { edit: 'Выдаёт товар со склада получателю; склад списывается, получатель получает остаток.' }, roleListGate: true, enforced: 'rpc:issue_stock_lines' },
     ] },
+  // HR_RECRUIT_V1 (2026-11-27) — «HR → Подбор»: воронка найма для рекрутеров.
+  // Раздел с adminDefault, как commerce_ai: пока роль строку не настраивала —
+  // только администратор. Рекрутеру её открывают явно. Документы и техника
+  // сотрудников (остальной «HR») этой строкой НЕ открываются — там сканы
+  // паспортов, они только у администратора (rpc/hr.js). Сервер — rpc/hr-recruiting.js.
+  { key: 'hr_recruiting', label: 'HR · Подбор персонала', desc: 'Воронка найма: вакансии и кандидаты от отклика до найма. Документы и техника сотрудников этой строкой не открываются.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит вакансии, кандидатов и их движение по воронке.', edit: 'Заводит вакансии и кандидатов, двигает их по этапам, отмечает отказ и найм.' }, windows: [], actions: [], adminDefault: true, enforced: 'rpc:hr_candidate_move' },
+  // STAFF_ATTENDANCE_V1 (2026-11-27) — «HR → Посещаемость»: отметки прихода и ухода по QR,
+  // правки HR, точки входа, бот сотрудников. adminDefault — как hr_recruiting. Сервер — rpc/attendance.js.
+  { key: 'hr_attendance', label: 'HR · Посещаемость', desc: 'Кто на работе, опоздания, ранние уходы, отчёт за период; точки входа с QR и бот сотрудников EasyMed Staff.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит отметки сотрудников, отчёты и подозрительные попытки.', edit: 'Правит и аннулирует смены с причиной, заводит точки входа, подключает Telegram сотрудников, настраивает бота.' }, windows: [], actions: [], adminDefault: true, enforced: 'rpc:attendance_correct' },
   { key: 'dashboard',   label: 'Дашборд',             legacy: 'dashboard', desc: 'Сводка по клинике за день.', levels: ['none', 'view'], windows: [], actions: [] },
   // ROLE_REPORTS_SETTINGS_V1 (2026-09-25) — ОТЧЁТЫ ПО ГРУППАМ.
   //

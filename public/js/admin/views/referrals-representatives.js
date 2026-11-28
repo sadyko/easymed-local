@@ -200,7 +200,7 @@ export async function renderReferralsRepresentatives(host, ctx = {}) {
         clear(m.body);
         m.body.appendChild(h('div', { class: 'ref-detail-stats' },
             stat(String(det.visits.length), 'Визитов'), stat(String(det.patients), 'Пациентов'),
-            det.money ? stat(sumText(det.received), 'Получено') : null,
+            // REFERRAL_DETAIL_SLIM_V1 — «Получено» убрано: в окне только база, ставка, вознаграждение.
             det.money ? stat(sumText(det.base), 'После скидки и НДС') : null,   // REFERRAL_NET_BASE_V1 — база процента
             det.money ? stat(sumText(det.reward), 'Вознаграждение') : null));
         m.body.appendChild(simpleTable(detailColumns(det.money), det.lines || [], { emptyText: tr('За период визитов от этого врача не было.') }));

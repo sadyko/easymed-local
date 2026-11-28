@@ -9,21 +9,28 @@
 // Чистые функции: без DOM, сети и часов. Карточка — { id, status, stage_kind
 // ('open'|'won'|'lost'), stage_pos, patient_id, created_at, full_name }.
 //
-// ЖИВАЯ ЗАЯВКА НЕ ХОРОНИТСЯ В ЗАКРЫТОЙ (ревью I2). Если среди сливаемых есть
-// карточка в работе (ступень вида open), остаться может ТОЛЬКО карточка в
-// работе — и предлагается самая НОВАЯ из них: по ней сейчас звонят. Иначе
-// свежий лид вливался в прошлогоднюю «Пришёл», пропадал с живых колонок и
-// переписывал дату обращения задним числом.
+// ЖИВАЯ ЗАЯВКА ПРЕДЛАГАЕТСЯ ПЕРВОЙ (ревью I2). Если среди сливаемых есть
+// карточка в работе (ступень вида open), предлагается самая НОВАЯ из них: по
+// ней сейчас звонят. Иначе свежий лид вливался бы в прошлогоднюю «Пришёл» и
+// пропадал с живых колонок. С MERGE_FREE_SURVIVOR_V1 это предложение, а не
+// запрет: оставить можно любую (см. allowedSurvivors).
 
 import { nameKey, digitsOf } from './crm-phone-match.js';
 
 export const isOpenCard = (c) => !!c && c.stage_kind === 'open';
 
-/** Кого можно оставить: живые, если среди выбранных есть живые, иначе любую. */
+/**
+ * Кого можно оставить — ЛЮБУЮ из выбранных.
+ * MERGE_FREE_SURVIVOR_V1 (2026-11-27, владелец: «I want to merge but I can't
+ * choose to which one to merge») — правило I2 запрещало оставлять закрытую
+ * карточку, если среди выбранных есть заявка в работе, и переключатели закрытых
+ * были серыми. Теперь выбирает человек: живая по-прежнему ПРЕДЛАГАЕТСЯ
+ * (suggestSurvivor), а выбор закрытой экран лишь называет вслух
+ * (crm-duplicates.js, data-dup-open). Ступень оставшейся — правило сервера
+ * (crm-merge.js): закрытая сохраняет «Пришёл», проигранная поднимается до живой.
+ */
 export function allowedSurvivors(cards) {
-    const list = Array.isArray(cards) ? cards : [];
-    const open = list.filter(isOpenCard);
-    return open.length ? open : list;
+    return Array.isArray(cards) ? cards.slice() : [];
 }
 
 const byNewest = (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')) || (b.id - a.id);
